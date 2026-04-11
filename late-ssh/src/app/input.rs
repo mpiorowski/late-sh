@@ -334,7 +334,7 @@ pub fn handle(app: &mut App, data: &[u8]) {
     // paste markers, it's almost certainly pasted text. Without this, each
     // byte is processed as a key — newlines submit messages mid-paste and
     // remaining chars become navigation commands, causing chaos.
-    if !data.starts_with(b"\x1b[200~") && is_likely_paste(data) {
+    if !data.starts_with(b"\x1b[200~") && !data.starts_with(b"\x1b[<") && is_likely_paste(data) {
         handle_bracketed_paste(app, data);
         return;
     }

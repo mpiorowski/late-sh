@@ -66,23 +66,47 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         theme::AMBER
     };
 
-    // Sway: slow sine oscillation kicked by detected beats, top lines sway most
+    // Sway: slow sine oscillation kicked by detected beats, canopy lines only
+    let has_canopy = matches!(
+        stage,
+        Stage::Young | Stage::Mature | Stage::Ancient | Stage::Blossom
+    );
     let sway_time = SystemTime::UNIX_EPOCH
         .elapsed()
         .unwrap_or_default()
         .as_secs_f64();
     let sway_base = (sway_time * 2.0).sin(); // ~3s period
-    let sway_amplitude = beat.clamp(0.0, 1.0) as f64 * 3.0;
+    let sway_amplitude = beat.clamp(0.0, 1.0) as f64 * 1.5;
     let w = inner.width as usize;
 
-    for (i, art_line) in tree_art.iter().enumerate() {
-        // Top of canopy sways most, trunk/pot stay fixed
-        let line_factor = if tree_height <= 1 {
-            0.0
+    // Count canopy lines (contain @, #, or *) for per-line falloff
+    let canopy_count = if has_canopy {
+        tree_art
+            .iter()
+            .filter(|l| l.chars().any(|c| matches!(c, '@' | '#' | '*')))
+            .count()
+    } else {
+        0
+    };
+
+    for (_i, art_line) in tree_art.iter().enumerate() {
+        // Only canopy lines sway; top of canopy sways most
+        let is_canopy = has_canopy && art_line.chars().any(|c| matches!(c, '@' | '#' | '*'));
+        let offset = if is_canopy && canopy_count > 0 {
+            // Find this line's position within canopy lines (0 = topmost)
+            let canopy_idx = tree_art[.._i]
+                .iter()
+                .filter(|l| l.chars().any(|c| matches!(c, '@' | '#' | '*')))
+                .count();
+            let line_factor = if canopy_count <= 1 {
+                1.0
+            } else {
+                1.0 - (canopy_idx as f64 / (canopy_count - 1) as f64)
+            };
+            (sway_base * sway_amplitude * line_factor).round() as i32
         } else {
-            1.0 - (i as f64 / (tree_height - 1) as f64)
+            0
         };
-        let offset = (sway_base * sway_amplitude * line_factor).round() as i32;
 
         let mut spans = Vec::new();
         for ch in art_line.chars() {
