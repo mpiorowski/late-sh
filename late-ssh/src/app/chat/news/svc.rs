@@ -146,7 +146,7 @@ impl ArticleService {
 
     async fn mark_read_and_publish(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
-        ArticleFeedRead::mark_read_latest(&db_client, user_id).await?;
+        ArticleFeedRead::mark_read_now(&db_client, user_id).await?;
         self.publish_event(ArticleEvent::UnreadCountUpdated {
             user_id,
             unread_count: 0,
@@ -193,9 +193,6 @@ impl ArticleService {
                     if !is_admin && article.user_id != user_id {
                         anyhow::bail!("Article not owned by you");
                     }
-
-                    ArticleFeedRead::repoint_checkpoint_before_article_delete(&client, article_id)
-                        .await?;
 
                     let count = Article::delete(&client, article_id).await?;
                     if count == 0 {
