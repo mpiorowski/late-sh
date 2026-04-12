@@ -80,7 +80,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 || (app.game_selection == 3 && app.nonogram_state.has_puzzles())
                 || app.game_selection == 4
                 || app.game_selection == 5
-                || app.game_selection == 6
+                || (app.game_selection == 6 && app.is_admin)
             {
                 app.is_playing_game = true;
             }

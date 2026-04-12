@@ -123,6 +123,7 @@ pub struct GamesHubView<'a> {
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
     pub blackjack_state: &'a super::blackjack::state::State,
+    pub is_admin: bool,
     pub leaderboard: &'a Arc<LeaderboardData>,
 }
 
@@ -146,7 +147,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         } else if view.game_selection == 5 {
             super::solitaire::ui::draw_game(frame, area, view.solitaire_state);
             return;
-        } else if view.game_selection == 6 {
+        } else if view.game_selection == 6 && view.is_admin {
             super::blackjack::ui::draw_game(frame, area, view.blackjack_state);
             return;
         }
@@ -528,8 +529,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             6,
             "Blackjack",
             "Hit or stand against the house. Single-player chips table.",
-            true,
-            Some(format!("Balance {}", view.blackjack_state.balance)),
+            view.is_admin,
+            if view.is_admin {
+                Some(format!("Balance {}", view.blackjack_state.balance))
+            } else {
+                None
+            },
         ),
         (
             7,
@@ -594,6 +599,29 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             lines.push(Line::from(vec![
                 Span::raw("      "),
                 Span::styled(desc, Style::default().fg(theme::TEXT_DIM)),
+            ]));
+            lines.push(Line::from(""));
+        } else if idx == 6 {
+            let is_selected = idx == selection;
+            if is_selected {
+                selected_line = lines.len();
+            }
+            let padding_len = 16_usize.saturating_sub(name.len() + 4);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if is_selected { "> " } else { "  " },
+                    Style::default().fg(theme::TEXT_MUTED),
+                ),
+                Span::styled(
+                    format!("[ {} ]", name),
+                    Style::default().fg(theme::TEXT_MUTED),
+                ),
+                Span::raw(" ".repeat(padding_len)),
+                Span::styled("Admin Only", Style::default().fg(theme::TEXT_DIM)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("      "),
+                Span::styled(desc, Style::default().fg(theme::TEXT_MUTED)),
             ]));
             lines.push(Line::from(""));
         } else {
