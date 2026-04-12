@@ -8,4 +8,5 @@ pub mod solitaire;
 pub mod sudoku;
 pub mod tetris;
 pub mod twenty_forty_eight;
+pub mod blackjack;
 pub mod ui;

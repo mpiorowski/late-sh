@@ -87,7 +87,7 @@ pub struct SessionConfig {
     pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
-    pub initial_bonsai_tree: Option<crate::app::bonsai::model::Tree>,
+    pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub nonogram_library: crate::app::games::nonogram::state::Library,
 
     /// Session / connection
@@ -301,7 +301,7 @@ impl App {
             crate::app::bonsai::state::BonsaiState::new(
                 config.user_id,
                 config.bonsai_service.clone(),
-                crate::app::bonsai::model::Tree {
+                late_core::models::bonsai::Tree {
                     id: uuid::Uuid::nil(),
                     created: chrono::Utc::now(),
                     updated: chrono::Utc::now(),
