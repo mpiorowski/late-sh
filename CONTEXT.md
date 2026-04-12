@@ -568,6 +568,38 @@ Roadmap ideas:
 **Card Games:**
 - **Cribbage / Bridge / Thousand (Tysiąc):** Cozy trick-taking games, deep strategy.
 
+### Monthly chip leaderboard resets
+- Archive monthly chip leaders (top 3 get a permanent badge?)
+- Reset balances to baseline at month end
+- "Hall of Fame" display somewhere
+
+### Strategy multiplayer (Chess, Battleship)
+- No chips needed — W/L record + rating
+- Async: make a move, come back later
+- Game completion counts toward daily streaks
+- `/challenge @user chess` in chat for matchmaking
+
+### More casino games (Poker)
+- Texas Hold'em: PvP, uses chip betting
+- Needs turn management, pot logic, hand evaluation
+- Higher complexity — build after Blackjack validates the chip system
+
+### Chat-based matchmaking
+- Activity feed broadcast when someone sits at an empty table
+- `/play <game>` and `/challenge @user <game>` commands
+- Accept/decline prompts
+
+---
+
+## Game category model (unified view)
+
+| Category | Games | Win condition | Leaderboard section | Streaks | Chips |
+|----------|-------|--------------|-------------------|---------|-------|
+| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | Solve the daily | Today's Champions | Yes | +50 bonus per completion |
+| High-score | Tetris, 2048 | Personal best | All-Time High Scores | No | No |
+| Casino | Blackjack, Poker (future) | Grow your chip balance | Chip Leaders | Optional | Bet and win/lose |
+| Strategy | Chess, Battleship (future) | Beat opponent | W/L + Rating | Yes (game completed) | No |
+
 ### Persistent Multiplayer World (Big Bet) [VOLATILE]
 
 An always-running game where every connected SSH session is automatically a participant. The world ticks forward whether you're watching or not — drop in, make moves, drop out, come back tomorrow.

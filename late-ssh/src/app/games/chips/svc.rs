@@ -35,9 +35,15 @@ impl ChipService {
         Ok(())
     }
 
-    pub async fn debit_bet(&self, user_id: Uuid, amount: i64) -> anyhow::Result<(Option<i64>)> {
+    pub async fn debit_bet(&self, user_id: Uuid, amount: i64) -> anyhow::Result<Option<i64>> {
         let client = self.db.get().await?;
         let chips = UserChips::deduct(&client, user_id, amount).await?;
         Ok(chips.map(|c| c.balance))
+    }
+
+    pub async fn credit_payout(&self, user_id: Uuid, amount: i64) -> anyhow::Result<i64> {
+        let client = self.db.get().await?;
+        let chips = UserChips::add_bonus(&client, user_id, amount).await?;
+        Ok(chips.balance)
     }
 }

@@ -3,7 +3,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::games::{
-    blackjack::state::{Bet, BetError, MAX_BET, MIN_BET, Outcome},
+    blackjack::state::{Bet, BetError, MAX_BET, MIN_BET, Outcome, payout_credit},
     chips::svc::ChipService,
 };
 
@@ -11,7 +11,6 @@ use crate::app::games::{
 pub struct BlackjackService {
     chip_svc: ChipService,
     event_tx: broadcast::Sender<BlackjackEvent>,
-    db: Db,
 }
 
 #[derive(Debug, Clone)]
@@ -56,13 +55,26 @@ impl BetFailure {
     }
 }
 
-impl BlackjackService {
-    pub fn new(chip_svc: ChipService, event_tx: broadcast::Sender<BlackjackEvent>, db: Db) -> Self {
-        Self {
-            chip_svc,
-            event_tx,
-            db,
+#[derive(Debug)]
+enum SettleFailure {
+    Internal(anyhow::Error),
+}
+
+impl SettleFailure {
+    fn user_message(&self) -> &'static str {
+        match self {
+            SettleFailure::Internal(_) => "internal error",
         }
+    }
+}
+
+impl BlackjackService {
+    pub fn new(
+        chip_svc: ChipService,
+        event_tx: broadcast::Sender<BlackjackEvent>,
+        _db: Db,
+    ) -> Self {
+        Self { chip_svc, event_tx }
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<BlackjackEvent> {
@@ -119,11 +131,64 @@ impl BlackjackService {
 
     pub fn settle_hand_task(&self, room_id: Uuid, user_id: Uuid, bet: i64, outcome: Outcome) {
         let svc = self.clone();
-        tokio::spawn(async move {});
+        tokio::spawn(async move {
+            let result = svc.settle_hand(user_id, bet, outcome).await;
+            match result {
+                Ok((credit, new_balance)) => {
+                    if let Err(e) = svc.event_tx.send(BlackjackEvent::HandSettled {
+                        room_id,
+                        user_id,
+                        bet,
+                        outcome,
+                        credit,
+                        new_balance,
+                    }) {
+                        tracing::debug!(
+                            error = ?e,
+                            %room_id,
+                            %user_id,
+                            "blackjack settle event dropped (no subscribers)"
+                        );
+                    }
+                }
+                Err(failure) => {
+                    let SettleFailure::Internal(ref e) = failure;
+                    tracing::error!(
+                        error = ?e,
+                        %room_id,
+                        %user_id,
+                        bet,
+                        ?outcome,
+                        "blackjack settle_hand: internal failure"
+                    );
+                    tracing::warn!(
+                        %room_id,
+                        %user_id,
+                        bet,
+                        ?outcome,
+                        error = failure.user_message(),
+                        "blackjack settle_hand failed"
+                    );
+                }
+            }
+        });
     }
 
-    pub fn refund_bet_task(&self, room_id: Uuid, user_id: Uuid, amount: i64) {
-        let svc = self.clone();
-        tokio::spawn(async move {});
+    async fn settle_hand(
+        &self,
+        user_id: Uuid,
+        bet: i64,
+        outcome: Outcome,
+    ) -> Result<(i64, i64), SettleFailure> {
+        let bet = Bet::new(bet).map_err(|_| {
+            SettleFailure::Internal(anyhow::anyhow!("invalid settled blackjack bet"))
+        })?;
+        let credit = payout_credit(bet, outcome);
+        let new_balance = self
+            .chip_svc
+            .credit_payout(user_id, credit)
+            .await
+            .map_err(SettleFailure::Internal)?;
+        Ok((credit, new_balance))
     }
 }
