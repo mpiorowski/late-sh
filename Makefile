@@ -2,7 +2,7 @@
 # Docker
 ####################################################
 
-# --- General ---
+# --- General (Docker/dev containers) ---
 RUST_LOG ?= info,late_web=debug,late_ssh=debug,late_core=debug
 CARGO_TARGET_DIR ?= /app/target
 

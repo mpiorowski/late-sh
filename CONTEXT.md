@@ -118,9 +118,7 @@ cargo nextest run --workspace --all-targets
 - Some integration/smoke tests require Docker/testcontainers and may fail in restricted sandboxes.
 - If a feature area is intentionally WIP, temporary lint/test gaps are acceptable only when explicitly documented and tracked for cleanup.
 - **Tool bootstrap:** The repo now includes `.mise.toml` with `rust`, `mold`, and `cargo-nextest`. Prefer `mise install` before local development so the expected toolchain and test runner are available.
-- **Cargo environment setup:** The workspace requires specific directories for Cargo to avoid permission issues. Always set these environment variables when running `cargo` commands:
-  - `CARGO_TARGET_DIR=/target`
-  - `CARGO_HOME=$HOME/.cargo`
+- **Cargo environment setup:** For local host development, use Cargo's normal defaults, including the standard repo-local `target/` directory. Docker/dev containers still use `/app/target` via container configuration. `CARGO_HOME=$HOME/.cargo` remains a valid override when an environment needs it, but it is not a repo-wide requirement.
 
 ---
 
@@ -591,6 +589,7 @@ An always-running game where every connected SSH session is automatically a part
 
 ### Bonsai Tree Enhancements
 - Seasonal color shifts (real-world date), profile display for visitors, graveyard rendering on profile.
+- Fancier renderer — possibly port/adapt `cbonsai` (https://github.com/mhzawadi/homebrew-cbonsai) for richer growth animation and branching.
 
 ### GitHub Notifications Widget
 - Read-only dashboard widget showing PR reviews, mentions, issue updates via PAT.

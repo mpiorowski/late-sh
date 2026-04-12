@@ -185,27 +185,31 @@ impl ArticleService {
                 let result = async {
                     let client = service.db.get().await?;
 
-                    // Fetch article first so we can clean up the chat announcement
-                    let article = Article::get(&client, article_id).await?;
-
-                    let count = if is_admin {
-                        Article::delete(&client, article_id).await?
-                    } else {
-                        Article::delete_by_user_id(&client, user_id, article_id).await?
+                    // Fetch the article so we can (a) enforce ownership, (b)
+                    // clean up the chat announcement afterwards.
+                    let Some(article) = Article::get(&client, article_id).await? else {
+                        anyhow::bail!("Article not found");
                     };
+                    if !is_admin && article.user_id != user_id {
+                        anyhow::bail!("Article not owned by you");
+                    }
+
+                    ArticleFeedRead::repoint_checkpoint_before_article_delete(&client, article_id)
+                        .await?;
+
+                    let count = Article::delete(&client, article_id).await?;
                     if count == 0 {
-                        anyhow::bail!("Article not found or not owned by you");
+                        anyhow::bail!("Article already deleted");
                     }
 
                     // Delete the news announcement from general chat
-                    if let Some(article) = article
-                        && let Err(e) = ChatMessage::delete_news_by_user_and_url(
-                            &client,
-                            article.user_id,
-                            NEWS_MARKER,
-                            &article.url,
-                        )
-                        .await
+                    if let Err(e) = ChatMessage::delete_news_by_user_and_url(
+                        &client,
+                        article.user_id,
+                        NEWS_MARKER,
+                        &article.url,
+                    )
+                    .await
                     {
                         tracing::warn!(
                             error = ?e,
@@ -298,39 +302,13 @@ impl ArticleService {
             }
         }
 
-        // 2. Slow AI extraction + HTTP image fetch — no DB client held
-        tracing::info!(%url, "researching article via AI search");
-        let system_prompt = "You are a helpful assistant. Research the provided URL using Google Search. First, check if this is a valid article, news site, blog, or youtube video. If the link is explicitly NSFW (like PornHub), malicious, spam, or otherwise invalid, you MUST return strictly: {\"title\": \"INVALID_OR_NSFW\", \"image_url\": null, \"summary\": \"Rejected\"}. Otherwise, extract its actual title, the main image/thumbnail URL (often from og:image or youtube thumbnail), and a 3 short bullet point summary of its content. Return the result strictly as a JSON object with keys: 'title', 'image_url' (null if none found), and 'summary'.";
-
-        let json_str = self
-            .ai_service
-            .generate_json_with_search(system_prompt, url)
-            .await?
-            .context("AI failed to return extraction")?;
-
-        let mut extraction: ArticleExtraction =
-            serde_json::from_str(&json_str).context("failed to parse AI json extraction")?;
-
-        if extraction.title == "INVALID_OR_NSFW" || extraction_looks_not_found(&extraction) {
-            if is_youtube_url(url) {
-                tracing::warn!(%url, "AI extraction for YouTube looked invalid; trying oEmbed fallback");
-                extraction = self
-                    .fetch_youtube_oembed_extraction(url)
-                    .await?
-                    .context("YouTube fallback could not resolve this video")?;
-            } else if is_twitter_url(url) {
-                tracing::warn!(%url, "AI extraction for Twitter/X looked invalid; trying oEmbed fallback");
-                extraction = self
-                    .fetch_twitter_oembed_extraction(url)
-                    .await?
-                    .context("Twitter/X oEmbed fallback failed")?;
-            } else if extraction.title == "INVALID_OR_NSFW" {
-                tracing::warn!(%url, "AI rejected URL as invalid or NSFW");
-                anyhow::bail!(
-                    "Link was rejected due to content policy violations or being invalid."
-                );
-            }
-        }
+        // YouTube gets its own path: oEmbed pins identity, AI writes the
+        // summary. Everything else goes through the legacy AI-first flow.
+        let extraction = if is_youtube_url(url) {
+            self.extract_youtube(url).await?
+        } else {
+            self.extract_via_ai(url).await?
+        };
 
         // 3. Fetch og:image and convert to ASCII — still no DB client
         tracing::info!(%url, "fetching og:image and generating ASCII art");
@@ -428,11 +406,76 @@ impl ArticleService {
         Ok(())
     }
 
+    /// AI-first extraction for non-YouTube URLs, with a Twitter/X oEmbed
+    /// fallback when the AI rejects or misidentifies the link.
     #[tracing::instrument(skip(self), fields(url = %url))]
-    async fn fetch_youtube_oembed_extraction(
-        &self,
-        url: &str,
-    ) -> Result<Option<ArticleExtraction>> {
+    async fn extract_via_ai(&self, url: &str) -> Result<ArticleExtraction> {
+        tracing::info!(%url, "researching article via AI search");
+        let system_prompt = "You are a helpful assistant. Research the provided URL using Google Search. First, check if this is a valid article, news site, blog, or youtube video. If the link is explicitly NSFW (like PornHub), malicious, spam, or otherwise invalid, you MUST return strictly: {\"title\": \"INVALID_OR_NSFW\", \"image_url\": null, \"summary\": \"Rejected\"}. Otherwise, extract its actual title, the main image/thumbnail URL (often from og:image), and a 3 short bullet point summary of its content. Return the result strictly as a JSON object with keys: 'title', 'image_url' (null if none found), and 'summary'.";
+
+        let json_str = self
+            .ai_service
+            .generate_json_with_search(system_prompt, url)
+            .await?
+            .context("AI failed to return extraction")?;
+
+        let mut extraction: ArticleExtraction =
+            serde_json::from_str(&json_str).context("failed to parse AI json extraction")?;
+
+        if extraction.title == "INVALID_OR_NSFW" || extraction_looks_not_found(&extraction) {
+            if is_twitter_url(url) {
+                tracing::warn!(%url, "AI extraction for Twitter/X looked invalid; trying oEmbed fallback");
+                extraction = self
+                    .fetch_twitter_oembed_extraction(url)
+                    .await?
+                    .context("Twitter/X oEmbed fallback failed")?;
+            } else if extraction.title == "INVALID_OR_NSFW" {
+                tracing::warn!(%url, "AI rejected URL as invalid or NSFW");
+                anyhow::bail!(
+                    "Link was rejected due to content policy violations or being invalid."
+                );
+            }
+        }
+
+        Ok(extraction)
+    }
+
+    /// YouTube fast path. oEmbed gives us authoritative title/author/thumbnail
+    /// pinned to the exact URL; the AI is then asked only for a summary with
+    /// that identity injected as context. Worst case on AI failure is the
+    /// generic `youtube_fallback_summary`.
+    #[tracing::instrument(skip(self), fields(url = %url))]
+    async fn extract_youtube(&self, url: &str) -> Result<ArticleExtraction> {
+        let identity = self
+            .fetch_youtube_identity(url)
+            .await?
+            .context("YouTube oEmbed could not resolve this video")?;
+
+        let ai_summary = match self
+            .fetch_youtube_ai_summary(&identity.title, &identity.author, url)
+            .await
+        {
+            Ok(Some(summary)) if !summary.trim().is_empty() => Some(summary),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!(error = ?e, "YouTube AI summary failed, using fallback");
+                None
+            }
+        };
+
+        let summary = ai_summary.unwrap_or_else(|| youtube_fallback_summary(&identity.author));
+
+        Ok(ArticleExtraction {
+            title: identity.title,
+            image_url: identity.thumbnail_url,
+            summary,
+        })
+    }
+
+    /// Hit YouTube's oEmbed endpoint and return the video's canonical
+    /// identity. `None` on any non-success or empty-title response.
+    #[tracing::instrument(skip(self), fields(url = %url))]
+    async fn fetch_youtube_identity(&self, url: &str) -> Result<Option<YoutubeIdentity>> {
         if !is_youtube_url(url) {
             return Ok(None);
         }
@@ -448,31 +491,56 @@ impl ArticleService {
         }
 
         let payload: YoutubeOEmbedResponse = res.json().await?;
-        let title = payload.title.trim();
+        let title = payload.title.trim().to_string();
         if title.is_empty() {
             return Ok(None);
         }
-
-        let author = payload.author_name.trim();
-        let who = if author.is_empty() {
-            "Unknown channel".to_string()
-        } else {
-            author.to_string()
-        };
-        let summary = format!(
-            "• YouTube video by {who}.\n• Open the link to watch on YouTube.\n• Metadata fetched from YouTube oEmbed."
-        );
-        let image_url = if payload.thumbnail_url.trim().is_empty() {
+        let author = payload.author_name.trim().to_string();
+        let thumbnail_url = if payload.thumbnail_url.trim().is_empty() {
             None
         } else {
             Some(payload.thumbnail_url)
         };
 
-        Ok(Some(ArticleExtraction {
-            title: title.to_string(),
-            image_url,
-            summary,
+        Ok(Some(YoutubeIdentity {
+            title,
+            author,
+            thumbnail_url,
         }))
+    }
+
+    /// Ask the AI for a summary of a known video. The user message must be
+    /// just the raw URL — Gemini only invokes its Search tool when the
+    /// prompt looks like a research task, not a formatting task. Verified
+    /// title and channel go in the system prompt as context.
+    #[tracing::instrument(skip(self), fields(url = %url, title = %title, author = %author))]
+    async fn fetch_youtube_ai_summary(
+        &self,
+        title: &str,
+        author: &str,
+        url: &str,
+    ) -> Result<Option<String>> {
+        let system_prompt = format!(
+            "You are a helpful assistant. Research the provided YouTube URL using Google Search and describe the video's content. For context, the video's verified title is \"{title}\" and the channel is \"{author}\" — use this to make sure Search results refer to the correct video. Write a concise 3 bullet point summary of what the video is about. If Search results are thin, use the title and channel to infer what the video covers. Return the result strictly as a JSON object with a single key 'summary' containing either an array of 3 short bullet point strings or a single string with the bullets separated by newlines. Do not wrap the JSON in markdown."
+        );
+
+        let Some(json_str) = self
+            .ai_service
+            .generate_json_with_search(&system_prompt, url)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        tracing::debug!(%url, raw_response = %json_str, "YouTube AI summary response");
+
+        match serde_json::from_str::<AiSummaryOnly>(&json_str) {
+            Ok(parsed) => Ok(Some(parsed.summary)),
+            Err(e) => {
+                tracing::warn!(error = ?e, json = %json_str, "failed to parse YouTube AI summary JSON");
+                Ok(None)
+            }
+        }
     }
 
     #[tracing::instrument(skip(self), fields(url = %url))]
@@ -534,6 +602,20 @@ struct TwitterOEmbedResponse {
     author_name: String,
 }
 
+/// Verified YouTube video identity pulled from oEmbed.
+struct YoutubeIdentity {
+    title: String,
+    author: String,
+    thumbnail_url: Option<String>,
+}
+
+/// Slim JSON shape for the summary-only AI call in the YouTube path.
+#[derive(Deserialize)]
+struct AiSummaryOnly {
+    #[serde(with = "summary_parser")]
+    summary: String,
+}
+
 mod summary_parser {
     use serde::{Deserialize, Deserializer};
     pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -558,6 +640,18 @@ mod summary_parser {
             }
         }
     }
+}
+
+/// Placeholder summary for when the AI summary call returns nothing —
+/// usually because the API key is unset or Gemini came back empty.
+fn youtube_fallback_summary(author: &str) -> String {
+    let who = author.trim();
+    let who = if who.is_empty() {
+        "unknown channel"
+    } else {
+        who
+    };
+    format!("• YouTube video by {who}.\n• Open the link to watch on YouTube.")
 }
 
 fn display_author(usernames: &HashMap<Uuid, String>, user_id: Uuid) -> String {

@@ -90,10 +90,11 @@ cargo run -p late-ssh
 cargo run -p late-web
 ```
 
-Cargo in this repo expects:
+Local host development can use Cargo's normal defaults, including the standard
+repo-local `target/` directory. The `/app/target` path is only for Docker/dev
+containers.
 
 ```bash
-export CARGO_TARGET_DIR=/target
 export CARGO_HOME=$HOME/.cargo
 ```
 
