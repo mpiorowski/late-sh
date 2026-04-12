@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-10 (Music stack cleaned to local playlists only)
+- Last updated: 2026-04-12 (Music pairing tokens compacted to base64url)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -358,7 +358,7 @@ Current invariant:
 
 1. **Standalone crate** — `late-cli` has zero dependency on `late-core`. `AnalyzerConfig` is inlined so the crate can be built independently.
 2. **Single-process audio path** — It opens the audio stream once, decodes MP3 locally with symphonia, feeds local playback via `cpal`, and derives visualizer/analyzer data from that same decoded stream. Native output sample rate is preferred; otherwise it chooses the nearest supported device rate and applies in-process linear resampling.
-3. **PTY + token handshake** — It launches the normal SSH TUI through a pty, intercepts a one-line `LATE_SESSION_TOKEN=<uuid>` banner emitted only for `LATE_CLI_MODE=1` sessions, and keeps stdin blocked until that banner phase is complete so pre-handshake keystrokes do not leak into the app.
+3. **PTY + token handshake** — It launches the normal SSH TUI through a pty, intercepts a one-line `LATE_SESSION_TOKEN=<base64url-uuid-v7>` banner emitted only for `LATE_CLI_MODE=1` sessions, and keeps stdin blocked until that banner phase is complete so pre-handshake keystrokes do not leak into the app. The token is an unpadded URL-safe base64 encoding of the UUID bytes, which keeps QR/connect URLs shorter than canonical UUID text.
 4. **Identity + pairing** — Client identity remains SSH-key based, with an interactive fallback that can generate `~/.ssh/id_late_sh_ed25519` when no local key exists. The CLI then uses `/api/ws/pair` to forward analyzer frames, accept paired control commands, and report `client_state { client_kind, muted, volume_percent }`.
 5. **Distribution + platform notes** — The landing page advertises both `curl -fsSL https://cli.late.sh/install.sh | bash` and a source build path. CLI releases go through `deploy_cli`. The launcher is currently Unix-first (`ssh` + `cpal`), supports Linux/macOS/likely WSL, and surfaces targeted WSL audio hints by checking `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER` when startup fails.
 

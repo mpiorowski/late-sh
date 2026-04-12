@@ -1,3 +1,4 @@
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use late_core::MutexRecover;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -8,6 +9,7 @@ use std::{
     },
 };
 use tokio::sync::{RwLock, mpsc::Sender, mpsc::UnboundedSender};
+use uuid::Uuid;
 
 // WebSocket → SSH session routing for browser-sent visualization data.
 //
@@ -91,6 +93,14 @@ struct PairControlEntry {
     registration_id: u64,
     tx: UnboundedSender<PairControlMessage>,
     state: ClientAudioState,
+}
+
+pub fn new_session_token() -> String {
+    compact_uuid(Uuid::now_v7())
+}
+
+fn compact_uuid(uuid: Uuid) -> String {
+    URL_SAFE_NO_PAD.encode(uuid.as_bytes())
 }
 
 impl SessionRegistry {
@@ -321,6 +331,21 @@ mod tests {
     #[test]
     fn token_hint_redacts_full_value() {
         assert_eq!(super::token_hint("abcdefgh-ijkl"), "abcdefgh..(13)");
+    }
+
+    #[test]
+    fn new_session_token_is_compact_urlsafe_base64() {
+        let token = new_session_token();
+
+        assert_eq!(token.len(), 22);
+        assert!(
+            token
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        );
+
+        let decoded = URL_SAFE_NO_PAD.decode(token.as_bytes()).unwrap();
+        assert_eq!(decoded.len(), 16);
     }
 
     #[test]

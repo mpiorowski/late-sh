@@ -497,7 +497,7 @@ impl russh::server::Handler for ClientHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(term, col_width, row_height, "pty requested");
-        let session_token: String = uuid::Uuid::now_v7().to_string();
+        let session_token = crate::session::new_session_token();
         let (session_tx, session_rx) = tokio::sync::mpsc::channel(64);
         self.session_token = Some(session_token.clone());
 
