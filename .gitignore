@@ -1,4 +1,4 @@
-target
+target/
 node_modules
 .env
 .claude
