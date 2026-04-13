@@ -520,7 +520,8 @@ impl ChatService {
 
     pub fn ignore_user_task(&self, user_id: Uuid, target_username: String) {
         let service = self.clone();
-        let span = info_span!("chat.ignore_user_task", user_id = %user_id, target = %target_username);
+        let span =
+            info_span!("chat.ignore_user_task", user_id = %user_id, target = %target_username);
         tokio::spawn(
             async move {
                 let event = match service.ignore_user(user_id, &target_username).await {
@@ -561,7 +562,8 @@ impl ChatService {
 
     pub fn unignore_user_task(&self, user_id: Uuid, target_username: String) {
         let service = self.clone();
-        let span = info_span!("chat.unignore_user_task", user_id = %user_id, target = %target_username);
+        let span =
+            info_span!("chat.unignore_user_task", user_id = %user_id, target = %target_username);
         tokio::spawn(
             async move {
                 let event = match service.unignore_user(user_id, &target_username).await {

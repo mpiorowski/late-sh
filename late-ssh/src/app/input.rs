@@ -406,9 +406,7 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     let ctx = InputContext::from_app(app);
 
-    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-        && app.chat.has_overlay()
-    {
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
         handle_overlay_input(app, &event);
         return;
     }
@@ -517,9 +515,7 @@ fn dispatch_escape(app: &mut App) {
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
-    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-        && app.chat.has_overlay()
-    {
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
         app.chat.close_overlay();
         return;
     }

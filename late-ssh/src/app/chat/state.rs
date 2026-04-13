@@ -534,22 +534,7 @@ impl ChatState {
 
         if body.trim() == "/help" {
             self.clear_composer_after_submit();
-            self.open_overlay(
-                "Chat Commands",
-                vec![
-                    "/join #room — join a room (creates it if new, only you join)".into(),
-                    "  great for private hangouts: /join #rust-nerds".into(),
-                    "/create #room — create a room & add everyone (new users auto-join too, but anyone can /leave)".into(),
-                    "  great for shared spaces: /create #music-recs".into(),
-                    "/leave — leave the current room".into(),
-                    "/dm @user — open a direct message".into(),
-                    "/ignore [@user] — ignore a user, or list ignored users".into(),
-                    "/unignore [@user] — remove a user from your ignore list".into(),
-                    "/help — show this message".into(),
-                    String::new(),
-                    "Keys: h/l switch rooms · j/k select msg · r reply · d delete · i compose · @user mention".into(),
-                ],
-            );
+            self.open_overlay("Chat Help", chat_help_lines());
             return None;
         }
 
@@ -1242,6 +1227,51 @@ fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>
         .and_then(|id| usernames.get(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
+}
+
+fn chat_help_lines() -> Vec<String> {
+    [
+        "Commands",
+        "  /join #room        join a room (creates it if new, solo)",
+        "  /create #room      create a room and add everyone",
+        "  /leave             leave the current room",
+        "  /dm @user          open a direct message",
+        "  /ignore [@user]    ignore a user, or list ignored users",
+        "  /unignore [@user]  remove a user from your ignore list",
+        "  /help              show this help",
+        "",
+        "Rooms",
+        "  h / l              previous / next room",
+        "  Enter / i          start composing",
+        "  c                  copy a web-chat link to this session",
+        "",
+        "Messages",
+        "  j / k              select older / newer message",
+        "  ↑ / ↓              same as j / k",
+        "  Ctrl+U / Ctrl+D    half page up / down",
+        "  PageUp / PageDown  half page up / down",
+        "  End                jump to most recent",
+        "  g / G              clear selection (back to live view)",
+        "  r                  reply to selected message",
+        "  d                  delete selected message",
+        "",
+        "Compose",
+        "  Enter              send",
+        "  Alt+Enter          newline",
+        "  Esc                exit compose",
+        "  Backspace          delete char",
+        "  Ctrl+Backspace     delete word left",
+        "  Ctrl+Delete        delete word right",
+        "  Ctrl+← / Ctrl+→    move cursor by word",
+        "  @user              mention (Tab/Enter to confirm)",
+        "",
+        "Overlays (this window)",
+        "  j / k or ↑ / ↓     scroll",
+        "  q or Esc           close",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 /// Parse `/dm @username` or `/dm username` from the composer text.

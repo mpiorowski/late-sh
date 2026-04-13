@@ -202,7 +202,5 @@ fn set_ignored_user_ids(settings: &mut Value, ids: &[Uuid]) {
     if !settings.is_object() {
         *settings = json!({});
     }
-    settings[IGNORED_USER_IDS_KEY] = json!(
-        ids.iter().map(Uuid::to_string).collect::<Vec<_>>()
-    );
+    settings[IGNORED_USER_IDS_KEY] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
 }
