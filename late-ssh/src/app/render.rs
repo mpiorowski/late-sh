@@ -91,6 +91,7 @@ impl App {
             my_vote: vote_my_vote,
             chat_view: chat::ui::DashboardChatView {
                 messages: self.chat.general_messages(),
+                notices: self.chat.general_notices(),
                 rows_cache: &mut self.dashboard_chat_rows_cache,
                 usernames: chat_usernames,
                 badges: &chat_badges,
@@ -122,6 +123,7 @@ impl App {
             news_view,
             rows_cache: &mut self.active_room_rows_cache,
             chat_rooms: self.chat.rooms.as_slice(),
+            room_notices: self.chat.room_notices(),
             usernames: chat_usernames,
             badges: &chat_badges,
             unread_counts: &self.chat.unread_counts,

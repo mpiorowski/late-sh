@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use chrono::{DateTime, Utc};
 use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -27,6 +28,13 @@ pub(crate) struct ReplyTarget {
     pub preview: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalNotice {
+    pub id: Uuid,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
@@ -41,6 +49,7 @@ pub struct ChatState {
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    room_notices: HashMap<Uuid, Vec<LocalNotice>>,
     general_room_id: Option<Uuid>,
     pub(crate) general_messages: Vec<ChatMessage>,
     pub(crate) usernames: HashMap<Uuid, String>,
@@ -102,6 +111,7 @@ impl ChatState {
             snapshot_rx,
             event_rx,
             rooms: Vec::new(),
+            room_notices: HashMap::new(),
             general_room_id: None,
             general_messages: Vec::new(),
             usernames: HashMap::new(),
@@ -208,6 +218,24 @@ impl ChatState {
             .find(|(room, _)| room.id == room_id)
             .map(|(_, msgs)| msgs.iter().collect())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn general_notices(&self) -> &[LocalNotice] {
+        let Some(room_id) = self.general_room_id else {
+            return &[];
+        };
+        self.room_notices_for(room_id)
+    }
+
+    pub(crate) fn room_notices(&self) -> &HashMap<Uuid, Vec<LocalNotice>> {
+        &self.room_notices
+    }
+
+    fn room_notices_for(&self, room_id: Uuid) -> &[LocalNotice] {
+        self.room_notices
+            .get(&room_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
@@ -469,21 +497,26 @@ impl ChatState {
         self.invalidate_composer_layout();
     }
 
-    fn send_notice_message(&mut self, body: String) -> Option<Banner> {
+    fn push_room_notice(&mut self, room_id: Uuid, body: String) {
+        let notices = self.room_notices.entry(room_id).or_default();
+        notices.insert(
+            0,
+            LocalNotice {
+                id: Uuid::now_v7(),
+                body,
+                created_at: Utc::now(),
+            },
+        );
+        if notices.len() > 64 {
+            notices.truncate(64);
+        }
+    }
+
+    fn push_selected_room_notice(&mut self, body: String) -> Option<Banner> {
         let Some(room_id) = self.selected_room_id else {
             return Some(Banner::error("No room selected"));
         };
-
-        let request_id = Uuid::now_v7();
-        self.service.send_message_task(
-            self.user_id,
-            room_id,
-            self.selected_room_slug(),
-            body,
-            request_id,
-            self.is_admin,
-        );
-        self.pending_send_notices.push_back(request_id);
+        self.push_room_notice(room_id, body);
         None
     }
 
@@ -525,19 +558,19 @@ impl ChatState {
                 "\n",
                 "⌨ Keys: h/l switch rooms · j/k select msg · r reply · d delete · i compose · @user mention",
             );
-            return self.send_notice_message(help.to_string());
+            return self.push_selected_room_notice(help.to_string());
         }
 
         if let Some(command) = parse_ignore_command(&body) {
             self.clear_composer_after_submit();
             match command {
                 UserCommand::List => {
-                    return self.send_notice_message(self.format_ignore_list_message());
+                    return self.push_selected_room_notice(self.format_ignore_list_message());
                 }
                 UserCommand::Username(username) => {
                     self.service
                         .ignore_user_task(self.user_id, username.to_string());
-                    return Some(Banner::success(&format!("Ignoring @{username}...")));
+                    return None;
                 }
             }
         }
@@ -546,12 +579,12 @@ impl ChatState {
             self.clear_composer_after_submit();
             match command {
                 UserCommand::List => {
-                    return self.send_notice_message(self.format_ignore_list_message());
+                    return self.push_selected_room_notice(self.format_ignore_list_message());
                 }
                 UserCommand::Username(username) => {
                     self.service
                         .unignore_user_task(self.user_id, username.to_string());
-                    return Some(Banner::success(&format!("Unignoring @{username}...")));
+                    return None;
                 }
             }
         }
@@ -961,6 +994,8 @@ impl ChatState {
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.general_messages = self.filter_messages(snapshot.general_messages);
+        self.room_notices
+            .retain(|room_id, _| self.rooms.iter().any(|(room, _)| room.id == *room_id));
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
         self.all_usernames = snapshot.all_usernames;
         self.bonsai_glyphs = snapshot.bonsai_glyphs;
@@ -1076,7 +1111,11 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.ignored_usernames = ignored_usernames.into_iter().collect();
                     self.request_list();
-                    banner = Some(Banner::success(&message));
+                    if let Some(room_id) = self.selected_room_id {
+                        self.push_room_notice(room_id, message);
+                    } else {
+                        banner = Some(Banner::success(&message));
+                    }
                 }
                 ChatEvent::IgnoreFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));

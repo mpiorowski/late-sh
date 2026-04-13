@@ -315,6 +315,46 @@ pub(super) fn wrap_chat_entry_to_lines(
     )
 }
 
+pub(super) fn wrap_notice_to_lines(body: &str, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let divider_style = Style::default().fg(theme::TEXT_FAINT);
+    let body_style = Style::default().fg(theme::CHAT_BODY);
+    let content_width = width.saturating_sub(2).max(1);
+    let divider = "─".repeat(content_width);
+
+    lines.push(Line::from(vec![
+        Span::styled("│", divider_style),
+        Span::raw(" "),
+        Span::styled(divider.clone(), divider_style),
+    ]));
+
+    for paragraph in body.split('\n') {
+        if paragraph.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("│", divider_style),
+                Span::raw(" "),
+            ]));
+            continue;
+        }
+
+        for chunk in wrap_plain_line(paragraph, content_width) {
+            lines.push(Line::from(vec![
+                Span::styled("│", divider_style),
+                Span::raw(" "),
+                Span::styled(chunk, body_style),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("│", divider_style),
+        Span::raw(" "),
+        Span::styled(divider, divider_style),
+    ]));
+
+    lines
+}
+
 // ── News formatting ─────────────────────────────────────────
 
 #[derive(Debug, Clone)]

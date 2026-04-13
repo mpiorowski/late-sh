@@ -15,6 +15,8 @@ use uuid::Uuid;
 use crate::app::common::theme;
 use late_core::models::leaderboard::BadgeTier;
 
+use super::state::LocalNotice;
+
 // Re-export types that external modules reference via `chat::ui::`.
 pub use super::ui_text::ComposerRow;
 pub(super) use super::ui_text::build_composer_rows;
@@ -22,13 +24,14 @@ pub(crate) use super::ui_text::{composer_cursor_scroll_for_rows, composer_line_c
 
 use super::ui_text::{
     build_composer_lines, build_composer_lines_from_rows, composer_line_count,
-    wrap_chat_entry_to_lines,
+    wrap_chat_entry_to_lines, wrap_notice_to_lines,
 };
 
 // ── Dashboard chat card ─────────────────────────────────────
 
-pub struct DashboardChatView<'a> {
+pub(crate) struct DashboardChatView<'a> {
     pub messages: &'a [ChatMessage],
+    pub notices: &'a [LocalNotice],
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
@@ -46,7 +49,7 @@ pub struct DashboardChatView<'a> {
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
 }
 
-pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
+pub(crate) fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
     let block = Block::default()
         .title(" Chat ")
         .borders(Borders::ALL)
@@ -76,9 +79,10 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     } else {
         let height = messages_area.height.max(1) as usize;
         let width = messages_area.width.max(1) as usize;
+        let timeline = merged_timeline_entries(view.messages, view.notices);
         ensure_chat_rows_cache(
             view.rows_cache,
-            view.messages.iter().collect(),
+            timeline,
             width,
             ChatRowsContext {
                 current_user_id: view.current_user_id,
@@ -149,8 +153,45 @@ pub struct ChatRowsCache {
     highlighted_ranges: HashMap<Uuid, (usize, usize)>,
 }
 
+#[derive(Clone, Copy)]
+enum TimelineEntry<'a> {
+    Message(&'a ChatMessage),
+    Notice(&'a LocalNotice),
+}
+
+fn merged_timeline_entries<'a>(
+    messages: &'a [ChatMessage],
+    notices: &'a [LocalNotice],
+) -> Vec<TimelineEntry<'a>> {
+    let mut entries = Vec::with_capacity(messages.len() + notices.len());
+    let mut message_idx = 0;
+    let mut notice_idx = 0;
+
+    while message_idx < messages.len() && notice_idx < notices.len() {
+        if messages[message_idx].created >= notices[notice_idx].created_at {
+            entries.push(TimelineEntry::Message(&messages[message_idx]));
+            message_idx += 1;
+        } else {
+            entries.push(TimelineEntry::Notice(&notices[notice_idx]));
+            notice_idx += 1;
+        }
+    }
+
+    while message_idx < messages.len() {
+        entries.push(TimelineEntry::Message(&messages[message_idx]));
+        message_idx += 1;
+    }
+
+    while notice_idx < notices.len() {
+        entries.push(TimelineEntry::Notice(&notices[notice_idx]));
+        notice_idx += 1;
+    }
+
+    entries
+}
+
 fn chat_rows_fingerprint(
-    messages: &[&ChatMessage],
+    entries: &[TimelineEntry<'_>],
     ctx: &ChatRowsContext<'_>,
     width: usize,
 ) -> u64 {
@@ -160,17 +201,26 @@ fn chat_rows_fingerprint(
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
     (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
 
-    for msg in messages {
-        msg.id.hash(&mut hasher);
-        msg.user_id.hash(&mut hasher);
-        msg.created.hash(&mut hasher);
-        msg.body.hash(&mut hasher);
-        ctx.usernames.get(&msg.user_id).hash(&mut hasher);
-        ctx.badges
-            .get(&msg.user_id)
-            .map(|badge| badge.label())
-            .hash(&mut hasher);
-        ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
+    for entry in entries {
+        match entry {
+            TimelineEntry::Message(msg) => {
+                msg.id.hash(&mut hasher);
+                msg.user_id.hash(&mut hasher);
+                msg.created.hash(&mut hasher);
+                msg.body.hash(&mut hasher);
+                ctx.usernames.get(&msg.user_id).hash(&mut hasher);
+                ctx.badges
+                    .get(&msg.user_id)
+                    .map(|badge| badge.label())
+                    .hash(&mut hasher);
+                ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
+            }
+            TimelineEntry::Notice(notice) => {
+                notice.id.hash(&mut hasher);
+                notice.created_at.hash(&mut hasher);
+                notice.body.hash(&mut hasher);
+            }
+        }
     }
 
     hasher.finish()
@@ -178,11 +228,11 @@ fn chat_rows_fingerprint(
 
 fn ensure_chat_rows_cache(
     cache: &mut ChatRowsCache,
-    messages: Vec<&ChatMessage>,
+    entries: Vec<TimelineEntry<'_>>,
     width: usize,
     ctx: ChatRowsContext<'_>,
 ) {
-    let fingerprint = chat_rows_fingerprint(&messages, &ctx, width);
+    let fingerprint = chat_rows_fingerprint(&entries, &ctx, width);
     if cache.width == width && cache.fingerprint == fingerprint {
         return;
     }
@@ -198,77 +248,90 @@ fn ensure_chat_rows_cache(
     let mut prev_user_id: Option<Uuid> = None;
     let mut prev_created: Option<chrono::DateTime<chrono::Utc>> = None;
 
-    for msg in messages.into_iter().rev() {
-        let is_own = msg.user_id == ctx.current_user_id;
-        let is_continuation = prev_user_id == Some(msg.user_id)
-            && prev_created.is_some_and(|prev| (msg.created - prev).num_seconds().abs() < 120);
-        let stamp = format!(
-            "[{}]",
-            crate::app::common::primitives::format_relative_time(msg.created)
-        );
-        let author = ctx
-            .usernames
-            .get(&msg.user_id)
-            .map(|name| name.trim())
-            .filter(|name| !name.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| short_user_id(msg.user_id));
-        let is_bot = author == "bot" || author == "graybeard";
-        let badge = if !is_bot {
-            ctx.badges.get(&msg.user_id).copied()
-        } else {
-            None
-        };
-        let author_style = if is_own {
-            Style::default()
-                .fg(theme::AMBER)
-                .add_modifier(Modifier::BOLD)
-        } else if is_bot {
-            Style::default().fg(theme::BOT)
-        } else {
-            Style::default().fg(theme::CHAT_AUTHOR)
-        };
-        let body_style = Style::default().fg(theme::CHAT_BODY);
-        let streak_badge = badge.map(|b| format!(" {}", b.label())).unwrap_or_default();
-        let bonsai_badge = ctx
-            .bonsai_glyphs
-            .get(&msg.user_id)
-            .map(|g| format!(" {}", g))
-            .unwrap_or_default();
-        let prefix = format!("{author}{streak_badge}{bonsai_badge}");
+    for entry in entries.into_iter().rev() {
+        match entry {
+            TimelineEntry::Message(msg) => {
+                let is_own = msg.user_id == ctx.current_user_id;
+                let is_continuation = prev_user_id == Some(msg.user_id)
+                    && prev_created.is_some_and(|prev| (msg.created - prev).num_seconds().abs() < 120);
+                let stamp = format!(
+                    "[{}]",
+                    crate::app::common::primitives::format_relative_time(msg.created)
+                );
+                let author = ctx
+                    .usernames
+                    .get(&msg.user_id)
+                    .map(|name| name.trim())
+                    .filter(|name| !name.is_empty())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| short_user_id(msg.user_id));
+                let is_bot = author == "bot" || author == "graybeard";
+                let badge = if !is_bot {
+                    ctx.badges.get(&msg.user_id).copied()
+                } else {
+                    None
+                };
+                let author_style = if is_own {
+                    Style::default()
+                        .fg(theme::AMBER)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_bot {
+                    Style::default().fg(theme::BOT)
+                } else {
+                    Style::default().fg(theme::CHAT_AUTHOR)
+                };
+                let body_style = Style::default().fg(theme::CHAT_BODY);
+                let streak_badge = badge.map(|b| format!(" {}", b.label())).unwrap_or_default();
+                let bonsai_badge = ctx
+                    .bonsai_glyphs
+                    .get(&msg.user_id)
+                    .map(|g| format!(" {}", g))
+                    .unwrap_or_default();
+                let prefix = format!("{author}{streak_badge}{bonsai_badge}");
 
-        let mentions_us = our_mention
-            .as_ref()
-            .is_some_and(|m| msg.body.contains(m.as_str()));
+                let mentions_us = our_mention
+                    .as_ref()
+                    .is_some_and(|m| msg.body.contains(m.as_str()));
 
-        if !first && !is_continuation {
-            all_rows.push(Line::from(""));
+                if !first && !is_continuation {
+                    all_rows.push(Line::from(""));
+                }
+                first = false;
+
+                let row_start = all_rows.len();
+                let msg_lines = wrap_chat_entry_to_lines(
+                    &msg.body,
+                    &stamp,
+                    &prefix,
+                    width,
+                    author_style,
+                    body_style,
+                    mentions_us,
+                    is_continuation,
+                );
+                all_rows.extend(msg_lines);
+
+                let body_start = if is_continuation {
+                    row_start
+                } else {
+                    row_start + 1
+                };
+                selected_ranges.insert(msg.id, (body_start, all_rows.len()));
+                highlighted_ranges.insert(msg.id, (row_start, all_rows.len()));
+
+                prev_user_id = Some(msg.user_id);
+                prev_created = Some(msg.created);
+            }
+            TimelineEntry::Notice(notice) => {
+                if !first {
+                    all_rows.push(Line::from(""));
+                }
+                first = false;
+                all_rows.extend(wrap_notice_to_lines(&notice.body, width));
+                prev_user_id = None;
+                prev_created = None;
+            }
         }
-        first = false;
-
-        let row_start = all_rows.len();
-        let msg_lines = wrap_chat_entry_to_lines(
-            &msg.body,
-            &stamp,
-            &prefix,
-            width,
-            author_style,
-            body_style,
-            mentions_us,
-            is_continuation,
-        );
-        all_rows.extend(msg_lines);
-
-        let body_start = if is_continuation {
-            row_start
-        } else {
-            row_start + 1
-        };
-        selected_ranges.insert(msg.id, (body_start, all_rows.len()));
-        highlighted_ranges.insert(msg.id, (row_start, all_rows.len()));
-
-        prev_user_id = Some(msg.user_id);
-        prev_created = Some(msg.created);
     }
 
     cache.width = width;
@@ -430,7 +493,7 @@ fn draw_mention_autocomplete(frame: &mut Frame, anchor: Rect, matches: &[String]
 
 // ── Main chat screen ────────────────────────────────────────
 
-pub struct ChatRenderInput<'a> {
+pub(crate) struct ChatRenderInput<'a> {
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub news_view: super::news::ui::ArticleListView<'a>,
@@ -439,6 +502,7 @@ pub struct ChatRenderInput<'a> {
         late_core::models::chat_room::ChatRoom,
         Vec<late_core::models::chat_message::ChatMessage>,
     )],
+    pub room_notices: &'a HashMap<Uuid, Vec<LocalNotice>>,
     pub usernames: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
@@ -464,7 +528,7 @@ pub struct ChatRenderInput<'a> {
     pub notifications_view: super::notifications::ui::NotificationListView<'a>,
 }
 
-pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
+pub(crate) fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let chat_rooms = view.chat_rooms;
     let usernames = view.usernames;
     let unread_counts = view.unread_counts;
@@ -722,10 +786,16 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 };
                 let height = messages_area.height.saturating_sub(2).max(1) as usize;
                 let width = messages_area.width.saturating_sub(2).max(1) as usize;
+                let notices = view
+                    .room_notices
+                    .get(&room.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let timeline = merged_timeline_entries(messages, notices);
 
                 ensure_chat_rows_cache(
                     view.rows_cache,
-                    messages.iter().collect(),
+                    timeline,
                     width,
                     ChatRowsContext {
                         current_user_id,
