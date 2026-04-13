@@ -219,7 +219,9 @@ impl ChatState {
             .and_then(|id| ids.iter().position(|mid| *mid == id));
 
         let new_idx = match current_idx {
-            Some(idx) => (idx as isize + delta).clamp(0, ids.len() as isize - 1) as usize,
+            Some(idx) => (idx as isize)
+                .saturating_add(delta)
+                .clamp(0, ids.len() as isize - 1) as usize,
             None => 0,
         };
 

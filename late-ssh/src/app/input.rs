@@ -57,7 +57,6 @@ enum ParsedInput {
     Paste(Vec<u8>),
     PageUp,
     PageDown,
-    Home,
     End,
 }
 
