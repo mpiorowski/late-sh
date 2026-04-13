@@ -73,6 +73,9 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
+
+    /// Pending OSC 777 desktop notifications (title, body).
+    pub(crate) pending_osc777: Vec<(String, String)>,
 }
 
 impl Drop for ChatState {
@@ -127,6 +130,7 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, is_admin),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
+            pending_osc777: Vec::new(),
         }
     }
 
@@ -953,10 +957,28 @@ impl ChatState {
                     message,
                     target_user_ids,
                 } => {
+                    let is_targeted = target_user_ids.is_some();
                     if let Some(targets) = target_user_ids
                         && !targets.contains(&self.user_id)
                     {
                         continue;
+                    }
+                    // OSC 777 desktop notification for incoming DMs.
+                    // target_user_ids is Some for DM/private rooms, None for public.
+                    if is_targeted && message.user_id != self.user_id {
+                        let nickname = self
+                            .usernames
+                            .get(&message.user_id)
+                            .cloned()
+                            .unwrap_or_else(|| "someone".to_string());
+                        let preview: String = message
+                            .body
+                            .replace('\n', " ")
+                            .chars()
+                            .take(80)
+                            .collect();
+                        self.pending_osc777
+                            .push((format!("New DM from {nickname}"), preview));
                     }
                     self.push_message(message);
                 }

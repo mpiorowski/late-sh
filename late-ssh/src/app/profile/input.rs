@@ -7,8 +7,24 @@ pub fn handle_byte(app: &mut App, byte: u8) {
     }
 }
 
-pub fn handle_arrow(_app: &mut App, _key: u8) -> bool {
-    false
+pub fn handle_arrow(app: &mut App, key: u8) -> bool {
+    match key {
+        // Left/Right = cycle the selected setting value
+        b'C' | b'D' => {
+            app.profile_state.cycle_setting(key == b'C');
+            true
+        }
+        // Up/Down = move between settings rows
+        b'A' => {
+            app.profile_state.move_settings_row(-1);
+            true
+        }
+        b'B' => {
+            app.profile_state.move_settings_row(1);
+            true
+        }
+        _ => false,
+    }
 }
 
 pub fn handle_composer_input(app: &mut App, byte: u8) {

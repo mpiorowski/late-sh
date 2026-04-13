@@ -1,0 +1,102 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.6.6 Chrome/144.0.7559.236 Electron/40.8.4 Safari/537.36" version="29.6.6">
+  <diagram name="late.sh TUI" id="late-sh-tab1">
+    <mxGraphModel dx="1116" dy="778" grid="0" gridSize="10" guides="1" tooltips="1" connect="0" arrows="0" fold="0" page="0" pageScale="1" pageWidth="650" pageHeight="800" background="#000000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="iTCDg-iFh0VibbGOVL7G-1" parent="1" style="rounded=1;arcSize=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=light-dark(#44382E, #b8782c);fontColor=light-dark(#805020, #b8782c);fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=-2;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;late.sh&lt;/b&gt;" vertex="1">
+          <mxGeometry height="753" width="567" x="36" y="35" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="topinfo-border" parent="1" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=-2;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Music Stream - Press M to learn how to listen in!&lt;/b&gt;" vertex="1">
+          <mxGeometry height="112" width="364" x="47" y="49" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="votenext-border" parent="1" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=-2;spacingLeft=6;labelBackgroundColor=#000000;" value="Vote Next (L/A/C)" vertex="1">
+          <mxGeometry height="93" width="172" x="53" y="60" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="votenext-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#805020&quot;&gt;L Lofi&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;A Ambient&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;C Classic&lt;/font&gt;" vertex="1">
+          <mxGeometry height="50" width="80" x="60" y="76" as="geometry" />
+        </mxCell>
+        <mxCell id="votenext-bar" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#302010;strokeColor=none;" value="" vertex="1">
+          <mxGeometry height="13" width="22" x="124" y="84" as="geometry" />
+        </mxCell>
+        <mxCell id="votenext-counts" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=right;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingRight=6;" value="&lt;font color=&quot;#805020&quot;&gt;1&lt;br&gt;0&lt;br&gt;0&lt;/font&gt;" vertex="1">
+          <mxGeometry height="50" width="35" x="188" y="76" as="geometry" />
+        </mxCell>
+        <mxCell id="dashboard-highlight" parent="1" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=light-dark(#3333FF,#000000);strokeColor=none;fontColor=light-dark(#1E1916, #b9772c);fontSize=10;fontFamily=Courier New;align=center;verticalAlign=middle;fontStyle=0;fillStyle=solid;" value="&lt;font style=&quot;&quot;&gt;⓵&lt;/font&gt;" vertex="1">
+          <mxGeometry height="16" width="16" x="507" y="26.5" as="geometry" />
+        </mxCell>
+        <mxCell id="chat-border" parent="1" style="rounded=1;arcSize=1.5;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#303030;fontColor=#303030;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry height="573" width="364" x="47" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="chat-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;" value="&lt;br&gt;&lt;div&gt;&lt;font color=&quot;#C08030&quot;&gt;@everyone&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt; say hello to &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;&lt;b&gt;@mergepudall&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;@mello3&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;hallo... i remember reading the irc rfc by hand just to figure out how to greet a user... now it&#39;s all just bloated javascript... so tired...&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;mclark &amp;gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;Omet I&#39;m fixing CI on my Ignore PR — did you try the artboard demo?&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;jast rc &amp;gt;&lt;/font&gt;&lt;font color=&quot;#302010&quot;&gt; @mello3&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;not yet, leaving for later, jsh still need stuff writing :D&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;Migo &amp;gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;dang job always taking up time :( #1 priority tho&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;out &amp;gt;&amp;gt; @&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;we are busy today! :D thats what i love to see&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;water your tree!&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;sloom0 &amp;gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;yyyeah I hate escape strings dont know how they work at all&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;out &amp;gt;&amp;gt; @&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;send you a DM :| question about the broken audpip&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;mclark &amp;gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;slime was a late theme now&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;mclark&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt; ha&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#6688AA&quot;&gt;https://wikitext.info/sp/NbG0MD24pPflcUBCImage.png&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;@sloom0&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;#i pipelines and themes... we used to just edit .htaccess&amp;nbsp;&lt;/font&gt;&lt;div&gt;&lt;font color=&quot;#805020&quot;&gt;in vim and run make... Now you need a whole cloud&amp;nbsp;&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font color=&quot;#805020&quot;&gt;infrastructure just to change a color ... whatever...&lt;/font&gt;&lt;/div&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="422" width="337" x="53" y="171" as="geometry" />
+        </mxCell>
+        <mxCell id="shared-news" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=0;spacingLeft=4;" value="&lt;font color=&quot;#302010&quot;&gt;out &amp;gt;&amp;gt; @ shared news 125 mins ago&lt;/font&gt;" vertex="1">
+          <mxGeometry height="16" width="500" x="53" y="438" as="geometry" />
+        </mxCell>
+        <mxCell id="chat-bottom-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#C08030&quot;&gt;out &amp;gt;&amp;gt; @&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;where can I put the list of active users...&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;and dont say &quot;Activity&quot; cuz there is a space for maybe 18,&lt;/font&gt;&lt;div&gt;&lt;font color=&quot;#805020&quot;&gt;&amp;nbsp;and Ihope we get past this number fast :D&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="58" width="620" x="54" y="669" as="geometry" />
+        </mxCell>
+        <mxCell id="input-border" parent="1" style="rounded=1;arcSize=18;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#504030;fontColor=#504030;fontSize=11;fontFamily=Courier New;align=left;verticalAlign=middle;" value="" vertex="1">
+          <mxGeometry height="28" width="364" x="47" y="743" as="geometry" />
+        </mxCell>
+        <mxCell id="nowplaying-border" parent="1" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=-2;spacingLeft=6;labelBackgroundColor=#000000;" value="Now Playing" vertex="1">
+          <mxGeometry height="95" width="170" x="230" y="59" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="nowplaying-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#695848&quot;&gt;Amarent&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#C8B69E&quot;&gt;Tuesday Night&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#B8782C&quot;&gt;8:22&lt;/font&gt;&lt;font color=&quot;#322A24&quot;&gt; ───&lt;/font&gt;&lt;font color=&quot;#D29436&quot;&gt;●&lt;/font&gt;&lt;font color=&quot;#322A24&quot;&gt;──── &lt;/font&gt;&lt;font color=&quot;#4E4136&quot;&gt;8:51&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#825826&quot;&gt;- / =&lt;/font&gt;&lt;font color=&quot;#4E4136&quot;&gt; vol  &lt;/font&gt;&lt;font color=&quot;#825826&quot;&gt;m&lt;/font&gt;&lt;font color=&quot;#4E4136&quot;&gt; mute&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#4E4136&quot;&gt;No pair&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#4E4136&quot;&gt;Volume --&lt;/font&gt;" vertex="1">
+          <mxGeometry height="83" width="155" x="230" y="59.5" as="geometry" />
+        </mxCell>
+        <mxCell id="activity-border" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=-2;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Recent Activity&lt;/b&gt;" vertex="1">
+          <mxGeometry height="230" width="170" x="418" y="338" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="activity-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=9;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#648C48&quot;&gt;● &lt;/font&gt;&lt;font color=&quot;#B8782C&quot;&gt;&lt;b&gt;6&lt;/b&gt;&lt;/font&gt;&lt;font color=&quot;#695848&quot;&gt; online  &lt;/font&gt;&lt;font color=&quot;#B8782C&quot;&gt;?&lt;/font&gt;&lt;font color=&quot;#695848&quot;&gt; keys&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@mat&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  41m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;voted ambient&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@lautaro&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  70m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;watered their bonsai&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@lautaro&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt;  70m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;joined&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@fMegumin&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  86m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;solved Sudoku&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@Sir_Gay&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  94m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;joined&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@raze&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  106m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;joined&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@azuread\martintoming...&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;joined&lt;/font&gt;" vertex="1">
+          <mxGeometry height="218" width="155" x="426" y="346" as="geometry" />
+        </mxCell>
+        <mxCell id="bonsai-border" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=1;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Bonsai (5d)&lt;/b&gt;" vertex="1">
+          <mxGeometry height="201" width="170" x="418" y="573" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="bonsai-art" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontFamily=Courier New;fontSize=11;spacingTop=4;" value="&lt;font color=&quot;#649448&quot;&gt;..&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#649448&quot;&gt;.&#39;&#39;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#B8782C&quot;&gt;/|\&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#B8782C&quot;&gt; | &lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#649448&quot;&gt;.&lt;/font&gt;&lt;font color=&quot;#B8782C&quot;&gt;|&lt;/font&gt;&lt;font color=&quot;#649448&quot;&gt;.&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;[===]&lt;/font&gt;" vertex="1">
+          <mxGeometry height="80" width="130" x="438" y="593" as="geometry" />
+        </mxCell>
+        <mxCell id="bonsai-status" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;" value="&lt;font color=&quot;#8A7660&quot;&gt;&lt;b&gt;Sapling&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#648C48&quot;&gt;Watered today&lt;/font&gt;" vertex="1">
+          <mxGeometry height="30" width="130" x="438" y="698" as="geometry" />
+        </mxCell>
+        <mxCell id="iTCDg-iFh0VibbGOVL7G-5" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=#000000;align=center;verticalAlign=middle;rounded=0;fontFamily=Courier New;fontColor=light-dark(default, #302010);fontStyle=0" value="&lt;font style=&quot;color: rgb(126, 82, 32); font-size: 10px;&quot;&gt;&lt;b style=&quot;&quot;&gt;Dash&lt;/b&gt; (TAB to switch)&lt;/font&gt;" vertex="1">
+          <mxGeometry height="19" width="130" x="371" y="25" as="geometry" />
+        </mxCell>
+        <mxCell id="iTCDg-iFh0VibbGOVL7G-7" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=-2;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Online Users&lt;/b&gt;" vertex="1">
+          <mxGeometry height="281" width="170" x="418.5" y="49" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="iTCDg-iFh0VibbGOVL7G-15" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;fontColor=#805020;labelBackgroundColor=#000000;" value="&lt;font color=&quot;#805020&quot;&gt;&lt;b&gt;mat 🌳&lt;/b&gt;&amp;nbsp; &amp;nbsp;&amp;nbsp;&lt;/font&gt;&lt;div&gt;&lt;font color=&quot;#805020&quot;&gt;&lt;b&gt;mevanlc 🪾&lt;/b&gt;&lt;br&gt;&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt;&lt;b&gt;student 🍃&lt;/b&gt;&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font color=&quot;#805020&quot;&gt;&lt;b&gt;Hades 🍀&lt;/b&gt;&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="63" width="78" x="425" y="59" as="geometry" />
+        </mxCell>
+        <mxCell id="iTCDg-iFh0VibbGOVL7G-16" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;fontColor=#805020;labelBackgroundColor=#000000;" value="&lt;font color=&quot;#805020&quot;&gt;2d 4h&amp;nbsp; &amp;nbsp;&amp;nbsp;&lt;/font&gt;&lt;div&gt;&lt;font color=&quot;#805020&quot;&gt;3h&lt;br&gt;&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt;25m&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font color=&quot;#805020&quot;&gt;14m&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="63" width="63" x="514" y="59" as="geometry" />
+        </mxCell>
+        <mxCell id="v6fcyd9UbD-wMS93BcdF-1" parent="1" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=light-dark(#3333FF,#000000);strokeColor=none;fontColor=light-dark(#1E1916, #463a2f);fontSize=10;fontFamily=Courier New;align=center;verticalAlign=middle;fontStyle=0;fillStyle=solid;" value="&lt;font style=&quot;&quot;&gt;②&lt;/font&gt;" vertex="1">
+          <mxGeometry height="16" width="17" x="527" y="26.5" as="geometry" />
+        </mxCell>
+        <mxCell id="v6fcyd9UbD-wMS93BcdF-2" parent="1" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=light-dark(#3333FF,#000000);strokeColor=none;fontColor=light-dark(#1E1916, #463a2f);fontSize=10;fontFamily=Courier New;align=center;verticalAlign=middle;fontStyle=0;fillStyle=solid;" value="&lt;font style=&quot;&quot;&gt;③&lt;/font&gt;" vertex="1">
+          <mxGeometry height="16" width="17" x="548" y="26.5" as="geometry" />
+        </mxCell>
+        <mxCell id="v6fcyd9UbD-wMS93BcdF-3" parent="1" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=light-dark(#3333FF,#000000);strokeColor=none;fontColor=light-dark(#1E1916, #463a2f);fontSize=10;fontFamily=Courier New;align=center;verticalAlign=middle;fontStyle=0;fillStyle=solid;" value="&lt;font style=&quot;&quot;&gt;④&lt;/font&gt;" vertex="1">
+          <mxGeometry height="16" width="17" x="569.5" y="26.5" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

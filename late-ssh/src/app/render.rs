@@ -168,6 +168,9 @@ impl App {
             tetris_best: self.tetris_state.best_score,
             twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
             cursor_visible: self.profile_state.cursor_visible(),
+            dm_notify: &self.profile_state.profile().dm_notify,
+            dm_notify_cooldown_mins: self.profile_state.profile().dm_notify_cooldown_mins,
+            settings_row: self.profile_state.settings_row,
         };
         let online_count = self
             .active_users
@@ -224,6 +227,31 @@ impl App {
             use base64::Engine;
             let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
             let _ = write!(self.shared, "\x1b]52;c;{}\x07", encoded);
+        }
+
+        // Emit OSC 777 desktop notifications for incoming DMs,
+        // gated on the user's dm_notify preference, focus state, and cooldown.
+        if !self.chat.pending_osc777.is_empty() {
+            let should_notify = match self.profile_state.profile().dm_notify.as_str() {
+                "off" => false,
+                "always" => true,
+                _ /* "unfocused" */ => !self.terminal_focused,
+            };
+            let cooldown_secs =
+                self.profile_state.profile().dm_notify_cooldown_mins as u64 * 60;
+            let cooldown_ok = self
+                .last_dm_notify_at
+                .map(|t| t.elapsed() >= std::time::Duration::from_secs(cooldown_secs))
+                .unwrap_or(true);
+
+            if should_notify && cooldown_ok {
+                if let Some((title, body)) = self.chat.pending_osc777.first() {
+                    let _ = write!(self.shared, "\x1b]777;notify;{};{}\x07", title, body);
+                    self.last_dm_notify_at = Some(std::time::Instant::now());
+                }
+            }
+            // Always drain — notifications during cooldown are dropped, not queued.
+            self.chat.pending_osc777.clear();
         }
 
         Ok(self.shared.take())

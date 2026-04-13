@@ -58,6 +58,8 @@ enum ParsedInput {
     PageUp,
     PageDown,
     End,
+    FocusGained,
+    FocusLost,
 }
 
 /// Walk `data` and split it on inline `ESC` + `CR`/`LF` pairs (Alt+Enter).
@@ -236,6 +238,12 @@ impl Perform for VtCollector {
             'u' if p0 == Some(127) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
+            'I' if intermediates.is_empty() => {
+                self.events.push(ParsedInput::FocusGained);
+            }
+            'O' if intermediates.is_empty() => {
+                self.events.push(ParsedInput::FocusLost);
+            }
             'M' | 'm' if intermediates == [b'<'] && params.len() >= 3 => {
                 let scroll = match p0.unwrap_or_default() {
                     64 => 1,
@@ -285,6 +293,11 @@ pub fn flush_pending_escape(app: &mut App) {
 }
 
 pub fn handle(app: &mut App, data: &[u8]) {
+    // Focus events (CSI I / CSI O) must be processed even during
+    // splash, welcome, help, and QR overlays so we always know
+    // whether the terminal is focused.
+    extract_focus_events(app, data);
+
     if app.show_splash {
         // Do not process input while splash screen is showing
         return;
@@ -381,6 +394,31 @@ pub fn handle(app: &mut App, data: &[u8]) {
     }
 }
 
+/// Scan raw input for CSI I (focus gained) and CSI O (focus lost) sequences
+/// and update `app.terminal_focused`. This runs before any overlay early-returns
+/// so focus state is always accurate.
+fn extract_focus_events(app: &mut App, data: &[u8]) {
+    let mut i = 0;
+    while i + 2 < data.len() {
+        if data[i] == 0x1B && data[i + 1] == b'[' {
+            match data[i + 2] {
+                b'I' => {
+                    app.terminal_focused = true;
+                    i += 3;
+                    continue;
+                }
+                b'O' => {
+                    app.terminal_focused = false;
+                    i += 3;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+}
+
 fn handle_vt_segment(app: &mut App, data: &[u8]) {
     if data.is_empty() {
         return;
@@ -396,6 +434,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     let ctx = InputContext::from_app(app);
 
     match event {
+        // Focus events are already handled in extract_focus_events() for the
+        // raw-byte path, but the VT parser also emits them. Absorb silently.
+        ParsedInput::FocusGained | ParsedInput::FocusLost => {}
         ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
         ParsedInput::AltEnter => {
             if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing

@@ -22,6 +22,9 @@ pub struct ProfileRenderInput<'a> {
     pub tetris_best: i32,
     pub twenty_forty_eight_best: i32,
     pub cursor_visible: bool,
+    pub dm_notify: &'a str,
+    pub dm_notify_cooldown_mins: i32,
+    pub settings_row: usize,
 }
 
 pub fn draw_profile(frame: &mut Frame, area: Rect, view: &ProfileRenderInput<'_>) {
@@ -35,7 +38,11 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
 
     let mut lines: Vec<Line<'a>> = Vec::with_capacity(64);
 
-    // ── Username ──
+    // ── Your Settings ──
+    lines.push(Line::from(""));
+    lines.push(section_heading("Your Settings"));
+
+    // Username box
     lines.push(Line::from(""));
 
     let box_w = (width.saturating_sub(6) as usize).min(42);
@@ -117,6 +124,45 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
 
     let bottom_border = format!("  \u{2514}{}\u{2518}", "\u{2500}".repeat(box_w));
     lines.push(Line::from(Span::styled(bottom_border, border_style)));
+
+    // Settings rows with ▲▼ navigation hint
+    lines.push(Line::from(""));
+
+    let nav_style = Style::default().fg(theme::TEXT_FAINT);
+    let selected_label = Style::default().fg(theme::TEXT);
+    let label_pad: usize = 33; // align the ◀ value ▶ columns
+
+    // Row 0: DM Notifications
+    let dm_label = match view.dm_notify {
+        "always" => "Always",
+        "off" => "Off",
+        _ => "When unfocused",
+    };
+    let dm_row_style = if view.settings_row == 0 { selected_label } else { dim };
+    let dm_label_text = " DM Notifications";
+    let dm_pad = " ".repeat(label_pad.saturating_sub(dm_label_text.len() + 1));
+    lines.push(Line::from(vec![
+        Span::styled(" \u{25b2}", nav_style),
+        Span::styled(dm_label_text, dm_row_style),
+        Span::styled(dm_pad, dim),
+        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(dm_label, Style::default().fg(theme::AMBER)),
+        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM)),
+    ]));
+
+    // Row 1: Notification cooldown
+    let cooldown_row_style = if view.settings_row == 1 { selected_label } else { dim };
+    let cooldown_label_text = " Notification cooldown (mins)";
+    let cooldown_pad = " ".repeat(label_pad.saturating_sub(cooldown_label_text.len() + 1));
+    let cooldown_val = format!("{}", view.dm_notify_cooldown_mins);
+    lines.push(Line::from(vec![
+        Span::styled(" \u{25bc}", nav_style),
+        Span::styled(cooldown_label_text, cooldown_row_style),
+        Span::styled(cooldown_pad, dim),
+        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(cooldown_val, Style::default().fg(theme::AMBER)),
+        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM)),
+    ]));
 
     // ── Your Stats ──
     lines.push(Line::from(""));
@@ -339,6 +385,9 @@ mod tests {
             tetris_best: 1200,
             twenty_forty_eight_best: 8192,
             cursor_visible: false,
+            dm_notify: "unfocused",
+            dm_notify_cooldown_mins: 5,
+            settings_row: 0,
         };
         let lines = build_lines(&view, 80);
         let text: String = lines

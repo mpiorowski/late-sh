@@ -17,6 +17,9 @@ pub struct ProfileState {
     pub(crate) username_composer: String,
     bg_task: tokio::task::AbortHandle,
 
+    /// Which settings row is selected (0 = DM Notifications, 1 = Cooldown).
+    pub(crate) settings_row: usize,
+
     // Display config (informational)
     pub(crate) ai_model: String,
 
@@ -47,6 +50,7 @@ impl ProfileState {
             editing_username: false,
             username_composer: String::new(),
             bg_task,
+            settings_row: 0,
             ai_model,
             scroll_offset: 0,
             viewport_height: 0,
@@ -121,6 +125,52 @@ impl ProfileState {
         self.username_composer.pop();
     }
 
+    const SETTINGS_ROW_COUNT: usize = 2;
+
+    pub fn move_settings_row(&mut self, delta: isize) {
+        let row = self.settings_row as isize + delta;
+        self.settings_row = row.clamp(0, (Self::SETTINGS_ROW_COUNT - 1) as isize) as usize;
+    }
+
+    /// Cycle the currently selected setting and save immediately.
+    pub fn cycle_setting(&mut self, forward: bool) {
+        match self.settings_row {
+            0 => self.cycle_dm_notify(forward),
+            1 => self.cycle_cooldown(forward),
+            _ => {}
+        }
+    }
+
+    fn cycle_dm_notify(&mut self, forward: bool) {
+        const OPTIONS: &[&str] = &["unfocused", "always", "off"];
+        let current_idx = OPTIONS
+            .iter()
+            .position(|&o| o == self.profile.dm_notify)
+            .unwrap_or(0);
+        let next_idx = if forward {
+            (current_idx + 1) % OPTIONS.len()
+        } else {
+            (current_idx + OPTIONS.len() - 1) % OPTIONS.len()
+        };
+        self.profile.dm_notify = OPTIONS[next_idx].to_string();
+        self.save_profile();
+    }
+
+    fn cycle_cooldown(&mut self, forward: bool) {
+        const OPTIONS: &[i32] = &[1, 2, 5, 10, 15, 30, 60, 120, 240];
+        let current_idx = OPTIONS
+            .iter()
+            .position(|&o| o == self.profile.dm_notify_cooldown_mins)
+            .unwrap_or(2); // default to 5
+        let next_idx = if forward {
+            (current_idx + 1) % OPTIONS.len()
+        } else {
+            (current_idx + OPTIONS.len() - 1) % OPTIONS.len()
+        };
+        self.profile.dm_notify_cooldown_mins = OPTIONS[next_idx];
+        self.save_profile();
+    }
+
     fn save_profile(&self) {
         self.profile_service.edit_profile(
             self.user_id,
@@ -129,6 +179,8 @@ impl ProfileState {
                 user_id: self.user_id,
                 username: self.profile.username.clone(),
                 enable_ghost: self.profile.enable_ghost,
+                dm_notify: self.profile.dm_notify.clone(),
+                dm_notify_cooldown_mins: self.profile.dm_notify_cooldown_mins,
             },
         );
     }

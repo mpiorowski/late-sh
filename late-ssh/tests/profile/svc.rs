@@ -61,6 +61,8 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             user_id: user.id,
             username: "night-owl".to_string(),
             enable_ghost: true,
+            dm_notify: "unfocused".to_string(),
+            dm_notify_cooldown_mins: 5,
         },
     );
 
@@ -114,6 +116,8 @@ async fn edit_profile_does_not_modify_another_users_profile() {
             user_id: intruder.id,
             username: "hijack".to_string(),
             enable_ghost: true,
+            dm_notify: "unfocused".to_string(),
+            dm_notify_cooldown_mins: 5,
         },
     );
 
