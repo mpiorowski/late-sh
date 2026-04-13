@@ -12,6 +12,95 @@ use super::{
     svc::{ChatEvent, ChatService, ChatSnapshot},
 };
 
+/// Per-user in-memory sent-message history with Up/Down navigation.
+///
+/// Newest entry is always at index 0. `index` is the current navigation
+/// position (`None` = sentinel / not navigating). `draft` holds whatever
+/// the user had typed before navigation began so it can be restored when
+/// they press Down past the most-recent entry.
+pub(crate) struct HistoryNav {
+    entries: VecDeque<String>,
+    index: Option<usize>,
+    draft: String,
+}
+
+impl HistoryNav {
+    const MAX_ENTRIES: usize = 20;
+
+    pub fn new() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            index: None,
+            draft: String::new(),
+        }
+    }
+
+    /// Record a sent (or "pushed as sent") message. Resets navigation state.
+    pub fn on_submit(&mut self, body: &str) {
+        let body = body.trim_end();
+        if !body.trim().is_empty() {
+            self.entries.push_front(body.to_string());
+            if self.entries.len() > Self::MAX_ENTRIES {
+                self.entries.pop_back();
+            }
+        }
+        self.index = None;
+        self.draft = String::new();
+    }
+
+    /// Called when the user presses Up while composing.
+    ///
+    /// Returns `Some(text)` when the composer should be replaced, `None` when
+    /// nothing should change (history empty or already at oldest entry).
+    pub fn up(&mut self, current_composer: &str) -> Option<String> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        match self.index {
+            None => {
+                self.draft = current_composer.to_string();
+                self.index = Some(0);
+                Some(self.entries[0].clone())
+            }
+            Some(i) if i + 1 < self.entries.len() => {
+                self.index = Some(i + 1);
+                Some(self.entries[i + 1].clone())
+            }
+            _ => None, // already at oldest
+        }
+    }
+
+    /// Called when the user presses Down while composing.
+    ///
+    /// Returns `Some(text)` when the composer should be replaced (including
+    /// `Some("")` for "clear"), `None` when nothing should change.
+    pub fn down(&mut self, current_composer: &str) -> Option<String> {
+        match self.index {
+            None => {
+                let trimmed = current_composer.trim_end().to_string();
+                if trimmed.trim().is_empty() {
+                    None // empty composer — do nothing
+                } else {
+                    self.entries.push_front(trimmed);
+                    if self.entries.len() > Self::MAX_ENTRIES {
+                        self.entries.pop_back();
+                    }
+                    Some(String::new())
+                }
+            }
+            Some(0) => {
+                // Exit navigation: restore the pre-navigation draft.
+                self.index = None;
+                Some(std::mem::take(&mut self.draft))
+            }
+            Some(i) => {
+                self.index = Some(i - 1);
+                Some(self.entries[i - 1].clone())
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct MentionAutocomplete {
     pub active: bool,
@@ -75,12 +164,7 @@ pub struct ChatState {
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
 
-    /// Per-user in-memory sent-message history (newest = index 0), capped at 20.
-    composer_history: VecDeque<String>,
-    /// Index into composer_history while navigating; None when not navigating.
-    history_index: Option<usize>,
-    /// Composer text saved when navigation begins, restored when navigation exits.
-    history_draft: String,
+    history: HistoryNav,
 }
 
 impl Drop for ChatState {
@@ -136,9 +220,7 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, is_admin),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
-            composer_history: VecDeque::new(),
-            history_index: None,
-            history_draft: String::new(),
+            history: HistoryNav::new(),
         }
     }
 
@@ -472,16 +554,7 @@ impl ChatState {
     }
 
     fn clear_composer_after_submit(&mut self) {
-        // Use trim_end() to match exactly what submit_composer() sends.
-        let body = self.composer.trim_end().to_string();
-        if !body.trim().is_empty() {
-            self.composer_history.push_front(body);
-            if self.composer_history.len() > 20 {
-                self.composer_history.pop_back();
-            }
-        }
-        self.history_index = None;
-        self.history_draft = String::new();
+        self.history.on_submit(&self.composer);
         self.composer.clear();
         self.composer_cursor = 0;
         self.composing = false;
@@ -841,62 +914,23 @@ impl ChatState {
         self.composer_cursor = next.start + col.min(row_len);
     }
 
-    fn load_history_entry(&mut self, idx: usize) {
-        if let Some(entry) = self.composer_history.get(idx) {
-            self.composer = entry.clone();
-            self.composer_cursor = self.composer.chars().count();
-            self.invalidate_composer_layout();
-        }
+    fn apply_history_text(&mut self, text: String) {
+        self.composer_cursor = text.chars().count();
+        self.composer = text;
+        self.invalidate_composer_layout();
     }
 
     /// Navigate to the next older history entry (Up arrow while composing).
     pub fn history_up(&mut self) {
-        if self.composer_history.is_empty() {
-            return;
-        }
-        match self.history_index {
-            None => {
-                // Save current draft so it can be restored when navigation exits.
-                self.history_draft = self.composer.clone();
-                self.history_index = Some(0);
-                self.load_history_entry(0);
-            }
-            Some(i) if i + 1 < self.composer_history.len() => {
-                self.history_index = Some(i + 1);
-                self.load_history_entry(i + 1);
-            }
-            _ => {} // already at oldest entry
+        if let Some(text) = self.history.up(&self.composer) {
+            self.apply_history_text(text);
         }
     }
 
     /// Navigate to the next more recent history entry (Down arrow while composing).
     pub fn history_down(&mut self) {
-        match self.history_index {
-            None => {
-                // Only act if there's unsent text — push it to history and clear.
-                if !self.composer.trim().is_empty() {
-                    let text = self.composer.trim_end().to_string();
-                    self.composer_history.push_front(text);
-                    if self.composer_history.len() > 20 {
-                        self.composer_history.pop_back();
-                    }
-                    self.composer.clear();
-                    self.composer_cursor = 0;
-                    self.invalidate_composer_layout();
-                }
-                // Empty composer: do nothing.
-            }
-            Some(0) => {
-                // At the most-recent entry — exit navigation and restore the draft.
-                self.history_index = None;
-                self.composer = std::mem::take(&mut self.history_draft);
-                self.composer_cursor = self.composer.chars().count();
-                self.invalidate_composer_layout();
-            }
-            Some(i) => {
-                self.history_index = Some(i - 1);
-                self.load_history_entry(i - 1);
-            }
+        if let Some(text) = self.history.down(&self.composer) {
+            self.apply_history_text(text);
         }
     }
 
@@ -1618,5 +1652,139 @@ mod tests {
 
         let names: Vec<_> = dms.iter().map(|r| dm_sort_key(r, me, &usernames)).collect();
         assert_eq!(names, vec!["@alice", "@bob", "@charlie"]);
+    }
+
+    // --- HistoryNav ---
+
+    #[test]
+    fn history_up_does_nothing_when_empty() {
+        let mut h = HistoryNav::new();
+        assert_eq!(h.up("typing"), None);
+        assert_eq!(h.index, None);
+    }
+
+    #[test]
+    fn history_up_loads_most_recent_and_saves_draft() {
+        let mut h = HistoryNav::new();
+        h.on_submit("first");
+        h.on_submit("second"); // newest
+
+        let result = h.up("my draft");
+        assert_eq!(result.as_deref(), Some("second"));
+        assert_eq!(h.index, Some(0));
+        assert_eq!(h.draft, "my draft");
+    }
+
+    #[test]
+    fn history_up_steps_toward_older() {
+        let mut h = HistoryNav::new();
+        h.on_submit("oldest");
+        h.on_submit("middle");
+        h.on_submit("newest");
+
+        h.up(""); // index 0 → "newest"
+        let result = h.up("newest"); // index 1 → "middle"
+        assert_eq!(result.as_deref(), Some("middle"));
+        assert_eq!(h.index, Some(1));
+    }
+
+    #[test]
+    fn history_up_stops_at_oldest() {
+        let mut h = HistoryNav::new();
+        h.on_submit("only");
+
+        h.up("");
+        let result = h.up("only"); // already at oldest
+        assert_eq!(result, None);
+        assert_eq!(h.index, Some(0));
+    }
+
+    #[test]
+    fn history_down_from_sentinel_with_text_records_and_clears() {
+        let mut h = HistoryNav::new();
+        let result = h.down("unsent text");
+        assert_eq!(result.as_deref(), Some(""));
+        assert_eq!(h.index, None);
+        // The text was pushed to history
+        assert_eq!(h.up(""), Some("unsent text".to_string()));
+    }
+
+    #[test]
+    fn history_down_from_sentinel_with_empty_does_nothing() {
+        let mut h = HistoryNav::new();
+        assert_eq!(h.down(""), None);
+        assert_eq!(h.down("   "), None);
+        assert_eq!(h.index, None);
+    }
+
+    #[test]
+    fn history_down_from_most_recent_restores_draft() {
+        let mut h = HistoryNav::new();
+        h.on_submit("sent");
+
+        h.up("my draft"); // enter navigation, draft saved
+        let restored = h.down("sent"); // exit navigation
+        assert_eq!(restored.as_deref(), Some("my draft"));
+        assert_eq!(h.index, None);
+        assert_eq!(h.draft, ""); // draft consumed
+    }
+
+    #[test]
+    fn history_down_steps_toward_newer() {
+        let mut h = HistoryNav::new();
+        h.on_submit("older");
+        h.on_submit("newer");
+
+        h.up(""); // index 0 → "newer"
+        h.up(""); // index 1 → "older"
+        let result = h.down("older"); // index 0 → "newer"
+        assert_eq!(result.as_deref(), Some("newer"));
+        assert_eq!(h.index, Some(0));
+    }
+
+    #[test]
+    fn history_on_submit_pushes_newest_first_and_caps_at_20() {
+        let mut h = HistoryNav::new();
+        for i in 0..25u32 {
+            h.on_submit(&format!("msg {i}"));
+        }
+        assert_eq!(h.entries.len(), 20);
+        assert_eq!(h.entries[0], "msg 24"); // newest
+        assert_eq!(h.entries[19], "msg 5"); // oldest surviving
+    }
+
+    #[test]
+    fn history_on_submit_resets_navigation_state() {
+        let mut h = HistoryNav::new();
+        h.on_submit("first");
+        h.up("draft"); // enter navigation
+        assert_eq!(h.index, Some(0));
+
+        h.on_submit("second"); // mid-navigation submit
+        assert_eq!(h.index, None);
+        assert_eq!(h.draft, "");
+    }
+
+    #[test]
+    fn history_on_submit_ignores_whitespace_only_body() {
+        let mut h = HistoryNav::new();
+        h.on_submit("   ");
+        h.on_submit("\n\t");
+        assert!(h.entries.is_empty());
+    }
+
+    #[test]
+    fn history_on_submit_stores_trim_end_not_trim() {
+        let mut h = HistoryNav::new();
+        h.on_submit("  leading spaces kept  ");
+        // trim_end strips trailing; leading spaces survive
+        assert_eq!(h.entries[0], "  leading spaces kept");
+    }
+
+    #[test]
+    fn history_down_records_trim_end() {
+        let mut h = HistoryNav::new();
+        h.down("  hello  "); // push unsent text
+        assert_eq!(h.entries[0], "  hello"); // trailing stripped, leading kept
     }
 }
