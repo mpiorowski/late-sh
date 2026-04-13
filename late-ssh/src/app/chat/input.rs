@@ -44,46 +44,7 @@ pub fn handle_autocomplete_arrow(app: &mut App, key: u8) {
     }
 }
 
-pub fn handle_feedback_byte(app: &mut App, byte: u8) -> bool {
-    if !app.chat.has_feedback() {
-        return false;
-    }
-
-    match byte {
-        0x1B | b'q' | b'Q' => {
-            app.chat.clear_feedback();
-            true
-        }
-        b'j' | b'J' => {
-            app.chat.scroll_feedback(-1);
-            true
-        }
-        b'k' | b'K' => {
-            app.chat.scroll_feedback(1);
-            true
-        }
-        _ => true,
-    }
-}
-
-pub fn handle_feedback_arrow(app: &mut App, key: u8) -> bool {
-    if !app.chat.has_feedback() {
-        return false;
-    }
-
-    match key {
-        b'A' => app.chat.scroll_feedback(1),
-        b'B' => app.chat.scroll_feedback(-1),
-        _ => {}
-    }
-    true
-}
-
 pub fn handle_scroll(app: &mut App, delta: isize) {
-    if app.chat.has_feedback() {
-        app.chat.scroll_feedback(delta);
-        return;
-    }
     app.chat.select_message(delta);
 }
 
@@ -148,12 +109,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     // reap a run of your own messages with repeated presses. `r` enters
     // reply mode and drops the selection.
     match byte {
-        0x1B => {
-            if app.chat.has_feedback() {
-                app.chat.clear_feedback();
-                return true;
-            }
-        }
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message() {
                 app.banner = Some(b);

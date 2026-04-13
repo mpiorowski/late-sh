@@ -4,6 +4,8 @@ use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::app::common::ui_overlay::Overlay;
+
 use crate::app::common::primitives::Banner;
 
 use super::{
@@ -27,13 +29,6 @@ pub(crate) struct ReplyTarget {
     pub preview: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ChatFeedback {
-    pub title: String,
-    pub lines: Vec<String>,
-    pub scroll_offset: u16,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
@@ -52,7 +47,7 @@ pub struct ChatState {
     pub(crate) general_messages: Vec<ChatMessage>,
     pub(crate) usernames: HashMap<Uuid, String>,
     ignored_usernames: HashSet<String>,
-    feedback: Option<ChatFeedback>,
+    overlay: Option<Overlay>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
@@ -114,7 +109,7 @@ impl ChatState {
             general_messages: Vec::new(),
             usernames: HashMap::new(),
             ignored_usernames: HashSet::new(),
-            feedback: None,
+            overlay: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             room_tx,
@@ -219,8 +214,22 @@ impl ChatState {
             .unwrap_or_default()
     }
 
-    pub(crate) fn feedback(&self) -> Option<&ChatFeedback> {
-        self.feedback.as_ref()
+    pub(crate) fn overlay(&self) -> Option<&Overlay> {
+        self.overlay.as_ref()
+    }
+
+    pub(crate) fn has_overlay(&self) -> bool {
+        self.overlay.is_some()
+    }
+
+    pub fn close_overlay(&mut self) {
+        self.overlay = None;
+    }
+
+    pub fn scroll_overlay(&mut self, delta: i16) {
+        if let Some(overlay) = &mut self.overlay {
+            overlay.scroll(delta);
+        }
     }
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
@@ -494,54 +503,22 @@ impl ChatState {
         self.invalidate_composer_layout();
     }
 
-    pub fn scroll_feedback(&mut self, delta: isize) {
-        let Some(feedback) = &mut self.feedback else {
-            return;
-        };
-
-        if delta == isize::MIN {
-            feedback.scroll_offset = 0;
+    fn open_overlay(&mut self, title: &str, lines: Vec<String>) {
+        if lines.is_empty() {
             return;
         }
-
-        let offset = feedback.scroll_offset as isize - delta;
-        feedback.scroll_offset = offset.max(0).min(u16::MAX as isize) as u16;
+        self.overlay = Some(Overlay::new(title, lines));
     }
 
-    pub(crate) fn has_feedback(&self) -> bool {
-        self.feedback
-            .as_ref()
-            .is_some_and(|feedback| !feedback.lines.is_empty())
-    }
-
-    pub fn clear_feedback(&mut self) {
-        self.feedback = None;
-    }
-
-    fn show_feedback<T, I>(&mut self, title: T, lines: I)
-    where
-        T: Into<String>,
-        I: IntoIterator,
-        I::Item: Into<String>,
-    {
-        let lines: Vec<String> = lines.into_iter().map(Into::into).collect();
-        self.feedback = (!lines.is_empty()).then(|| ChatFeedback {
-            title: title.into(),
-            lines,
-            scroll_offset: 0,
-        });
-    }
-
-    fn ignore_list_feedback_lines(&self) -> Vec<String> {
+    fn ignore_list_lines(&self) -> Vec<String> {
         if self.ignored_usernames.is_empty() {
             return vec!["Ignore list is empty".to_string()];
         }
 
-        let mut ignored_usernames: Vec<&str> =
+        let mut usernames: Vec<&str> =
             self.ignored_usernames.iter().map(String::as_str).collect();
-        ignored_usernames.sort_unstable();
-
-        ignored_usernames
+        usernames.sort_unstable();
+        usernames
             .into_iter()
             .map(|username| format!("@{username}"))
             .collect()
@@ -552,20 +529,20 @@ impl ChatState {
 
         if body.trim() == "/help" {
             self.clear_composer_after_submit();
-            self.show_feedback(
+            self.open_overlay(
                 "Chat Commands",
-                [
-                    "/join #room — join a room (creates it if new, only you join)",
-                    "  great for private hangouts: /join #rust-nerds",
-                    "/create #room — create a room & add everyone (new users auto-join too, but anyone can /leave)",
-                    "  great for shared spaces: /create #music-recs",
-                    "/leave — leave the current room",
-                    "/dm @user — open a direct message",
-                    "/ignore [@user] — ignore a user, or list ignored users",
-                    "/unignore [@user] — remove a user from your ignore list",
-                    "/help — show this message",
-                    "",
-                    "Keys: h/l switch rooms · j/k select msg · r reply · d delete · i compose · @user mention",
+                vec![
+                    "/join #room — join a room (creates it if new, only you join)".into(),
+                    "  great for private hangouts: /join #rust-nerds".into(),
+                    "/create #room — create a room & add everyone (new users auto-join too, but anyone can /leave)".into(),
+                    "  great for shared spaces: /create #music-recs".into(),
+                    "/leave — leave the current room".into(),
+                    "/dm @user — open a direct message".into(),
+                    "/ignore [@user] — ignore a user, or list ignored users".into(),
+                    "/unignore [@user] — remove a user from your ignore list".into(),
+                    "/help — show this message".into(),
+                    String::new(),
+                    "Keys: h/l switch rooms · j/k select msg · r reply · d delete · i compose · @user mention".into(),
                 ],
             );
             return None;
@@ -575,7 +552,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             match command {
                 UserCommand::List => {
-                    self.show_feedback("Ignored Users", self.ignore_list_feedback_lines());
+                    self.open_overlay("Ignored Users", self.ignore_list_lines());
                     return None;
                 }
                 UserCommand::Username(username) => {
@@ -590,7 +567,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             match command {
                 UserCommand::List => {
-                    self.show_feedback("Ignored Users", self.ignore_list_feedback_lines());
+                    self.open_overlay("Ignored Users", self.ignore_list_lines());
                     return None;
                 }
                 UserCommand::Username(username) => {
@@ -1121,7 +1098,7 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.ignored_usernames = ignored_usernames.into_iter().collect();
                     self.request_list();
-                    self.show_feedback("Ignore Status", [message]);
+                    banner = Some(Banner::success(&message));
                 }
                 ChatEvent::IgnoreFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
@@ -1133,7 +1110,13 @@ impl ChatState {
     }
 
     fn push_message(&mut self, message: ChatMessage) {
-        if self.message_is_ignored(&message) {
+        let in_dm_room = self
+            .rooms
+            .iter()
+            .find(|(room, _)| room.id == message.room_id)
+            .is_some_and(|(room, _)| room.kind == "dm");
+
+        if !in_dm_room && self.message_is_ignored(&message) {
             return;
         }
 
@@ -1193,12 +1176,21 @@ impl ChatState {
         incoming
             .into_iter()
             .map(|(room, messages)| {
-                if messages.is_empty()
-                    && let Some(previous) = previous_by_room.get(&room.id)
-                {
-                    return (room, self.filter_messages((*previous).clone()));
-                }
-                (room, self.filter_messages(messages))
+                let messages = if messages.is_empty() {
+                    previous_by_room
+                        .get(&room.id)
+                        .map(|previous| (*previous).clone())
+                        .unwrap_or_default()
+                } else {
+                    messages
+                };
+                // DMs: don't filter. Users leave the DM room if they want it gone.
+                let messages = if room.kind == "dm" {
+                    messages
+                } else {
+                    self.filter_messages(messages)
+                };
+                (room, messages)
             })
             .collect()
     }

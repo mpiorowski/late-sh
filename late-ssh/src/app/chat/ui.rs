@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
@@ -12,10 +12,11 @@ use std::{
 };
 use uuid::Uuid;
 
-use crate::app::common::theme;
+use crate::app::common::{
+    theme,
+    ui_overlay::{Overlay, draw_overlay},
+};
 use late_core::models::leaderboard::BadgeTier;
-
-use super::state::ChatFeedback;
 
 // Re-export types that external modules reference via `chat::ui::`.
 pub use super::ui_text::ComposerRow;
@@ -31,7 +32,7 @@ use super::ui_text::{
 
 pub(crate) struct DashboardChatView<'a> {
     pub messages: &'a [ChatMessage],
-    pub feedback: Option<&'a ChatFeedback>,
+    pub overlay: Option<&'a Overlay>,
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
@@ -94,8 +95,8 @@ pub(crate) fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: Dash
     }
 
     frame.render_widget(Paragraph::new(lines), messages_area);
-    if let Some(feedback) = view.feedback {
-        draw_feedback_overlay(frame, messages_area, feedback);
+    if let Some(overlay) = view.overlay {
+        draw_overlay(frame, messages_area, overlay);
     }
 
     if let Some(area) = composer_area {
@@ -445,7 +446,7 @@ pub(crate) struct ChatRenderInput<'a> {
         late_core::models::chat_room::ChatRoom,
         Vec<late_core::models::chat_message::ChatMessage>,
     )],
-    pub feedback: Option<&'a ChatFeedback>,
+    pub overlay: Option<&'a Overlay>,
     pub usernames: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
@@ -769,10 +770,11 @@ pub(crate) fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>
             .title(message_title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+        let inner_area = messages_block.inner(messages_area);
         let messages_paragraph = Paragraph::new(message_lines).block(messages_block);
         frame.render_widget(messages_paragraph, messages_area);
-        if let Some(feedback) = view.feedback {
-            draw_feedback_overlay(frame, messages_area, feedback);
+        if let Some(overlay) = view.overlay {
+            draw_overlay(frame, inner_area, overlay);
         }
     }
 
@@ -867,48 +869,6 @@ pub(crate) fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>
             );
         }
     }
-}
-
-fn draw_feedback_overlay(frame: &mut Frame, anchor: Rect, feedback: &ChatFeedback) {
-    if feedback.lines.is_empty() || anchor.width < 12 || anchor.height < 6 {
-        return;
-    }
-
-    let height = 12.min(anchor.height.saturating_sub(1)).max(4);
-    let width = anchor.width.saturating_sub(4).max(10);
-    let area = Rect::new(
-        anchor.x + 2,
-        anchor.y + anchor.height.saturating_sub(height + 1),
-        width,
-        height,
-    );
-
-    let block = Block::default()
-        .title(format!(" {} (j/k scroll, q/Esc close) ", feedback.title))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
-
-    let lines: Vec<Line> = if feedback.lines.is_empty() {
-        vec![Line::from(Span::styled(
-            "No feedback.",
-            Style::default().fg(theme::TEXT_DIM),
-        ))]
-    } else {
-        feedback
-            .lines
-            .iter()
-            .map(|line| Line::from(Span::styled(line.clone(), Style::default().fg(theme::TEXT))))
-            .collect()
-    };
-
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .scroll((feedback.scroll_offset, 0)),
-        area,
-    );
 }
 
 // ── Tests ───────────────────────────────────────────────────
