@@ -1,0 +1,193 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.6.6 Chrome/144.0.7559.236 Electron/40.8.4 Safari/537.36" version="29.6.6">
+  <diagram name="late.sh TUI" id="late-sh-tab1">
+    <mxGraphModel dx="1116" dy="854" grid="0" gridSize="10" guides="1" tooltips="1" connect="0" arrows="0" fold="0" page="1" pageScale="1" pageWidth="1100" pageHeight="750" background="#000000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ======================== -->
+        <!-- TOP BAR                  -->
+        <!-- ======================== -->
+
+        <!-- Title Tab -->
+        <mxCell id="title-tab" parent="1" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#202020;strokeColor=#504030;fontColor=#C08030;fontSize=12;fontFamily=Courier New;align=center;verticalAlign=middle;fontStyle=1;" value="late.sh" vertex="1">
+          <mxGeometry x="10" y="4" width="68" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Stream Panel Border -->
+        <mxCell id="topinfo-border" parent="1" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=1;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Stream&lt;/b&gt;" vertex="1">
+          <mxGeometry x="10" y="27" width="640" height="58" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Stream Panel Text -->
+        <mxCell id="topinfo-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=1;spacingLeft=4;" value="&lt;font color=&quot;#805020&quot;&gt;CLI:     curl -fsSL https://cli.late.sh/install.sh | bash&lt;/font&gt;&lt;font color=&quot;#302010&quot;&gt;  (Enter to copy)&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;Browser: &lt;/font&gt;&lt;font color=&quot;#6688AA&quot;&gt;https://late.sh/AZ2Giwn-fcCgeanlDVYxJA&lt;/font&gt;&lt;font color=&quot;#302010&quot;&gt;  (p to copy)&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;Playing: &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;Amarent - Tuesday Night&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;Vibe: &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;Ambient&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt;  Next: Ambient  Switch in 25:00&lt;/font&gt;" vertex="1">
+          <mxGeometry x="16" y="30" width="625" height="52" as="geometry" />
+        </mxCell>
+
+        <!-- Vote Next Panel Border -->
+        <mxCell id="votenext-border" parent="1" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=1;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Vote Next (L/A/C)&lt;/b&gt;" vertex="1">
+          <mxGeometry x="655" y="10" width="258" height="75" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Vote Next Text -->
+        <mxCell id="votenext-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#805020&quot;&gt;L Lofi&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;A Ambient&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;C Classic&lt;/font&gt;" vertex="1">
+          <mxGeometry x="663" y="22" width="80" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Vote Next Lofi Bar -->
+        <mxCell id="votenext-bar" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#302010;strokeColor=none;" value="" vertex="1">
+          <mxGeometry x="740" y="25" width="120" height="13" as="geometry" />
+        </mxCell>
+
+        <!-- Vote Next Counts -->
+        <mxCell id="votenext-counts" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=right;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingRight=6;" value="&lt;font color=&quot;#805020&quot;&gt;0&lt;br&gt;0&lt;br&gt;0&lt;/font&gt;" vertex="1">
+          <mxGeometry x="870" y="22" width="35" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Dashboard Panel Border -->
+        <mxCell id="dashboard-border" parent="1" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=right;verticalAlign=top;spacingTop=1;spacingRight=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Dashboard&lt;/b&gt;" vertex="1">
+          <mxGeometry x="920" y="10" width="170" height="75" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Dashboard "1" Highlight Box -->
+        <mxCell id="dashboard-highlight" parent="1" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#B8782C;strokeColor=none;fontColor=#1E1916;fontSize=10;fontFamily=Courier New;align=center;verticalAlign=middle;fontStyle=1;" value="1" vertex="1">
+          <mxGeometry x="930" y="22" width="18" height="16" as="geometry" />
+        </mxCell>
+
+        <!-- Dashboard Text -->
+        <mxCell id="dashboard-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#302010&quot;&gt;    2  3  4&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;0&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;0&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;0&lt;/font&gt;" vertex="1">
+          <mxGeometry x="944" y="22" width="140" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- ======================== -->
+        <!-- MAIN CHAT (left side)    -->
+        <!-- ======================== -->
+
+        <!-- Main Chat Panel Border -->
+        <mxCell id="chat-border" parent="1" style="rounded=1;arcSize=3;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#303030;fontColor=#303030;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry x="10" y="90" width="640" height="610" as="geometry" />
+        </mxCell>
+
+        <!-- Chat Messages -->
+        <mxCell id="chat-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#805020&quot;&gt;ok then :D&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;@everyone&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt; say hello to &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;&lt;b&gt;@mergepudall&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;@mello3&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;hallo... i remember reading the irc rfc by hand just to figure out how to greet a user... now it's all just bloated javascript... so tired...&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;mclark &amp;gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;Omet I'm fixing CI on my Ignore PR — did you try the artboard demo?&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;jast rc &amp;gt;&lt;/font&gt;&lt;font color=&quot;#302010&quot;&gt; @mello3&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;not yet, leaving for later, jsh still need stuff writing :D&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;Migo &amp;gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;dang job always taking up time :( #1 priority tho&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;out &amp;gt;&amp;gt; @&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;we are busy today! :D thats what i love to see&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;water your tree!&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;sloom0 &amp;gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;yyyeah I hate escape strings dont know how they work at all&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;out &amp;gt;&amp;gt; @&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;send you a DM :| question about the broken audpip&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;mclark &amp;gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;slime was a late theme now&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;mclark&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt; ha&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#6688AA&quot;&gt;https://wikitext.info/sp/NbG0MD24pPflcUBCImage.png&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#C08030&quot;&gt;@sloom0&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;#i pipelines and themes... we used to just edit .htaccess in vim and run make... Now you need a whole cloud infrastructure just to change a color... whatever...&lt;/font&gt;" vertex="1">
+          <mxGeometry x="16" y="95" width="620" height="300" as="geometry" />
+        </mxCell>
+
+        <!-- Shared News Indicator -->
+        <mxCell id="shared-news" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=0;spacingLeft=4;" value="&lt;font color=&quot;#302010&quot;&gt;out &amp;gt;&amp;gt; @ shared news 125 mins ago&lt;/font&gt;" vertex="1">
+          <mxGeometry x="16" y="400" width="500" height="16" as="geometry" />
+        </mxCell>
+
+        <!-- Quoted Apple News Border -->
+        <mxCell id="quote-border" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#0D0800;strokeColor=#303030;fontColor=#303030;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry x="16" y="418" width="625" height="78" as="geometry" />
+        </mxCell>
+
+        <!-- Quoted Apple News Text -->
+        <mxCell id="quote-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=9;spacingTop=2;spacingLeft=8;" value="&lt;font color=&quot;#C08030&quot;&gt;&lt;b&gt;▪ Apple's existential must: how the &amp;quot;AI loser&amp;quot; tag end up sheeting&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#C8BBAD&quot;&gt;  · Apple is often classed as &amp;quot;AI loser&amp;quot; for lacking massive cloud-based frontier models, but it is uniquely positioned...&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#C8BBAD&quot;&gt;  · As top AI intelligence becomes commoditized and better open-weight models improve, the competitive advantage of mass...&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#C8BBAD&quot;&gt;  · Apple's &amp;quot;accidental moat&amp;quot; stems from its ecosystem of 2.5 billion connected-rich devices and its Apple Silicon unified v...&lt;/font&gt;" vertex="1">
+          <mxGeometry x="22" y="420" width="615" height="73" as="geometry" />
+        </mxCell>
+
+        <!-- Chat Messages Below Quote -->
+        <mxCell id="chat-bottom-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#C08030&quot;&gt;out &amp;gt;&amp;gt; @&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;where can I put the list of active users...&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;and dont say &amp;quot;Activity&amp;quot; cuz there is a space for maybe 18, and I hope we get past this number fast :D&lt;/font&gt;" vertex="1">
+          <mxGeometry x="16" y="502" width="620" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Input Bar Border -->
+        <mxCell id="input-border" parent="1" style="rounded=1;arcSize=18;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#504030;fontColor=#504030;fontSize=11;fontFamily=Courier New;align=left;verticalAlign=middle;" value="" vertex="1">
+          <mxGeometry x="10" y="705" width="640" height="28" as="geometry" />
+        </mxCell>
+
+        <!-- Input Bar Text -->
+        <mxCell id="input-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Courier New;fontSize=11;" value="&lt;font color=&quot;#302010&quot;&gt;&amp;gt; &lt;/font&gt;&lt;font color=&quot;#C08030&quot;&gt;Omet&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt; IMO move the install instructions to a popup&lt;/font&gt;&lt;font color=&quot;#B8782C&quot;&gt;█&lt;/font&gt;" vertex="1">
+          <mxGeometry x="18" y="705" width="620" height="28" as="geometry" />
+        </mxCell>
+
+        <!-- ======================== -->
+        <!-- RIGHT SIDEBAR            -->
+        <!-- ======================== -->
+
+        <!-- Visualizer Panel Border -->
+        <mxCell id="viz-border" parent="1" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=right;verticalAlign=top;spacingTop=1;spacingRight=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Visualizer&lt;/b&gt;" vertex="1">
+          <mxGeometry x="920" y="90" width="170" height="100" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Visualizer Bars -->
+        <mxCell id="viz-bar-1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#B8782C;strokeColor=none;" value="" vertex="1">
+          <mxGeometry x="943" y="163" width="12" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="viz-bar-2" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#B8782C;strokeColor=none;" value="" vertex="1">
+          <mxGeometry x="959" y="148" width="12" height="37" as="geometry" />
+        </mxCell>
+        <mxCell id="viz-bar-3" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#B8782C;strokeColor=none;" value="" vertex="1">
+          <mxGeometry x="975" y="130" width="12" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="viz-bar-4" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#B8782C;strokeColor=none;" value="" vertex="1">
+          <mxGeometry x="991" y="125" width="12" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="viz-bar-5" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#B8782C;strokeColor=none;" value="" vertex="1">
+          <mxGeometry x="1007" y="110" width="12" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="viz-bar-6" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#B8782C;strokeColor=none;" value="" vertex="1">
+          <mxGeometry x="1023" y="125" width="12" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="viz-bar-7" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#B8782C;strokeColor=none;" value="" vertex="1">
+          <mxGeometry x="1039" y="138" width="12" height="47" as="geometry" />
+        </mxCell>
+        <mxCell id="viz-bar-8" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#B8782C;strokeColor=none;" value="" vertex="1">
+          <mxGeometry x="1055" y="120" width="12" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- Now Playing Panel Border -->
+        <mxCell id="nowplaying-border" parent="1" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=1;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Now Playing&lt;/b&gt;" vertex="1">
+          <mxGeometry x="920" y="195" width="170" height="100" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Now Playing Text -->
+        <mxCell id="nowplaying-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#695848&quot;&gt;Amarent&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#C8B69E&quot;&gt;Tuesday Night&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#B8782C&quot;&gt;8:22&lt;/font&gt;&lt;font color=&quot;#322A24&quot;&gt; ───&lt;/font&gt;&lt;font color=&quot;#D29436&quot;&gt;●&lt;/font&gt;&lt;font color=&quot;#322A24&quot;&gt;──── &lt;/font&gt;&lt;font color=&quot;#4E4136&quot;&gt;8:51&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#825826&quot;&gt;- / =&lt;/font&gt;&lt;font color=&quot;#4E4136&quot;&gt; vol  &lt;/font&gt;&lt;font color=&quot;#825826&quot;&gt;m&lt;/font&gt;&lt;font color=&quot;#4E4136&quot;&gt; mute&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#4E4136&quot;&gt;No pair&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#4E4136&quot;&gt;Volume --&lt;/font&gt;" vertex="1">
+          <mxGeometry x="928" y="202" width="155" height="88" as="geometry" />
+        </mxCell>
+
+        <!-- Activity Panel Border -->
+        <mxCell id="activity-border" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=1;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Activity&lt;/b&gt;" vertex="1">
+          <mxGeometry x="920" y="300" width="170" height="230" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Activity Text -->
+        <mxCell id="activity-text" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontFamily=Courier New;fontSize=9;spacingTop=2;spacingLeft=4;" value="&lt;font color=&quot;#648C48&quot;&gt;● &lt;/font&gt;&lt;font color=&quot;#B8782C&quot;&gt;&lt;b&gt;6&lt;/b&gt;&lt;/font&gt;&lt;font color=&quot;#695848&quot;&gt; online  &lt;/font&gt;&lt;font color=&quot;#B8782C&quot;&gt;?&lt;/font&gt;&lt;font color=&quot;#695848&quot;&gt; keys&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@mat&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  41m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;voted ambient&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@lautaro&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  70m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;watered their bonsai&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@lautaro&lt;/font&gt;&lt;font color=&quot;#805020&quot;&gt;  70m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;joined&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@fMegumin&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  86m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;solved Sudoku&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@Sir_Gay&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  94m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;joined&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@raze&lt;/font&gt;&lt;font color=&quot;#8A7660&quot;&gt;  106m&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;joined&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#8A7660&quot;&gt;@azuread\martintoming...&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#805020&quot;&gt;joined&lt;/font&gt;" vertex="1">
+          <mxGeometry x="928" y="308" width="155" height="218" as="geometry" />
+        </mxCell>
+
+        <!-- Bonsai Panel Border -->
+        <mxCell id="bonsai-border" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#44382E;fontColor=#805020;fontSize=10;fontFamily=Courier New;align=left;verticalAlign=top;spacingTop=1;spacingLeft=6;labelBackgroundColor=#000000;" value="&lt;b&gt;Bonsai (5d)&lt;/b&gt;" vertex="1">
+          <mxGeometry x="920" y="535" width="170" height="170" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Bonsai ASCII Art -->
+        <mxCell id="bonsai-art" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontFamily=Courier New;fontSize=11;spacingTop=4;" value="&lt;font color=&quot;#649448&quot;&gt;..&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#649448&quot;&gt;.&apos;&apos;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#B8782C&quot;&gt;/|\&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#B8782C&quot;&gt; | &lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#649448&quot;&gt;.&lt;/font&gt;&lt;font color=&quot;#B8782C&quot;&gt;|&lt;/font&gt;&lt;font color=&quot;#649448&quot;&gt;.&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#695848&quot;&gt;[===]&lt;/font&gt;" vertex="1">
+          <mxGeometry x="940" y="555" width="130" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Bonsai Status (Sapling / Watered today) -->
+        <mxCell id="bonsai-status" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontFamily=Courier New;fontSize=10;spacingTop=2;" value="&lt;font color=&quot;#8A7660&quot;&gt;&lt;b&gt;Sapling&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#648C48&quot;&gt;Watered today&lt;/font&gt;" vertex="1">
+          <mxGeometry x="940" y="660" width="130" height="30" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
