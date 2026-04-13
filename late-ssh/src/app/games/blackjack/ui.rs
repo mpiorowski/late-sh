@@ -9,34 +9,39 @@ use ratatui::{
 use crate::app::{
     common::theme,
     games::{
-        blackjack::state::{Outcome, Phase, State},
+        blackjack::state::{BlackjackSnapshot, Outcome, Phase, State},
         cards::AsciiCardTheme,
         ui::{draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint},
     },
 };
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
+    let snapshot = state.snapshot();
+    draw_game_snapshot(frame, area, &snapshot);
+}
+
+fn draw_game_snapshot(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapshot) {
     let info_lines = vec![
         info_tagline("Single-player blackjack. Bet, draw, settle, repeat."),
         Line::from(""),
-        info_label_value("Balance", state.balance.to_string(), theme::SUCCESS),
+        info_label_value("Balance", snapshot.balance.to_string(), theme::SUCCESS),
         info_label_value(
             "Bet",
-            state
-                .current_bet_amount()
+            snapshot
+                .current_bet_amount
                 .map(|bet| bet.to_string())
                 .unwrap_or_else(|| {
-                    if state.bet_input.is_empty() {
+                    if snapshot.bet_input.is_empty() {
                         "—".to_string()
                     } else {
-                        state.bet_input.clone()
+                        snapshot.bet_input.clone()
                     }
                 }),
             theme::AMBER_GLOW,
         ),
-        info_label_value("Phase", state.phase.label().to_string(), theme::TEXT_BRIGHT),
+        info_label_value("Phase", snapshot.phase.label().to_string(), theme::TEXT_BRIGHT),
         Line::from(""),
-        key_line(state.phase),
+        key_line(snapshot.phase),
     ];
 
     let inner = draw_game_frame(frame, area, "Blackjack", info_lines);
@@ -50,14 +55,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
     ])
     .split(inner);
 
-    let dealer_cards = render_cards(&state.dealer_hand, state.dealer_revealed());
-    let dealer_total = state
-        .dealer_score()
+    let dealer_cards = render_cards(&snapshot.dealer_hand, snapshot.dealer_revealed);
+    let dealer_total = snapshot
+        .dealer_score
         .map(|score| score.total.to_string())
         .unwrap_or_else(|| "—".to_string());
-    let player_cards = render_cards(&state.player_hand, true);
-    let player_total = state
-        .player_score()
+    let player_cards = render_cards(&snapshot.player_hand, true);
+    let player_total = snapshot
+        .player_score
         .map(|score| score.total.to_string())
         .unwrap_or_else(|| "—".to_string());
 
@@ -78,13 +83,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
         rows[2],
     );
     frame.render_widget(
-        Paragraph::new(state.status_message.as_str())
+        Paragraph::new(snapshot.status_message.as_str())
             .block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(theme::BORDER_DIM))),
         rows[4],
     );
 
-    if let Some((title, subtitle)) = state.outcome_banner() {
-        let color = match state.last_outcome {
+    if let Some((title, subtitle)) = &snapshot.outcome_banner {
+        let color = match snapshot.last_outcome {
             Some(Outcome::PlayerBlackjack | Outcome::PlayerWin | Outcome::Push) => theme::SUCCESS,
             Some(Outcome::DealerWin) | None => theme::ERROR,
         };

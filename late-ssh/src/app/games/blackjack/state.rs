@@ -163,6 +163,23 @@ impl Phase {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct BlackjackSnapshot {
+    pub balance: i64,
+    pub dealer_hand: Vec<PlayingCard>,
+    pub player_hand: Vec<PlayingCard>,
+    pub current_bet_amount: Option<i64>,
+    pub phase: Phase,
+    pub last_outcome: Option<Outcome>,
+    pub last_net_change: i64,
+    pub bet_input: String,
+    pub status_message: String,
+    pub dealer_revealed: bool,
+    pub dealer_score: Option<HandScore>,
+    pub player_score: Option<HandScore>,
+    pub outcome_banner: Option<(String, String)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Shoe {
     cards: Vec<PlayingCard>,
@@ -331,6 +348,24 @@ impl State {
 
     pub fn current_bet_amount(&self) -> Option<i64> {
         self.bet.map(Bet::amount)
+    }
+
+    pub fn snapshot(&self) -> BlackjackSnapshot {
+        BlackjackSnapshot {
+            balance: self.balance,
+            dealer_hand: self.dealer_hand.clone(),
+            player_hand: self.player_hand.clone(),
+            current_bet_amount: self.current_bet_amount(),
+            phase: self.phase,
+            last_outcome: self.last_outcome,
+            last_net_change: self.last_net_change,
+            bet_input: self.bet_input.clone(),
+            status_message: self.status_message.clone(),
+            dealer_revealed: self.dealer_revealed(),
+            dealer_score: self.dealer_score(),
+            player_score: self.player_score(),
+            outcome_banner: self.outcome_banner(),
+        }
     }
 
     pub fn dealer_score(&self) -> Option<HandScore> {
