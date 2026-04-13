@@ -22,12 +22,6 @@ use crate::metrics;
 const HISTORY_LIMIT: i64 = 1000;
 const DELTA_LIMIT: i64 = 256;
 
-#[derive(Clone, Copy, Debug)]
-enum IgnoreOp {
-    Add,
-    Remove,
-}
-
 #[derive(Clone)]
 pub struct ChatService {
     db: Db,
@@ -126,7 +120,6 @@ pub enum ChatEvent {
     },
     IgnoreListUpdated {
         user_id: Uuid,
-        target_user_id: Uuid,
         ignored_user_ids: Vec<Uuid>,
         message: String,
     },
@@ -526,78 +519,85 @@ impl ChatService {
     }
 
     pub fn ignore_user_task(&self, user_id: Uuid, target_username: String) {
-        self.spawn_ignore_mutation(user_id, target_username, IgnoreOp::Add);
-    }
-
-    pub fn unignore_user_task(&self, user_id: Uuid, target_username: String) {
-        self.spawn_ignore_mutation(user_id, target_username, IgnoreOp::Remove);
-    }
-
-    fn spawn_ignore_mutation(&self, user_id: Uuid, target_username: String, op: IgnoreOp) {
         let service = self.clone();
-        let span = info_span!(
-            "chat.ignore_mutation_task",
-            user_id = %user_id,
-            target = %target_username,
-            op = ?op,
-        );
+        let span = info_span!("chat.ignore_user_task", user_id = %user_id, target = %target_username);
         tokio::spawn(
             async move {
-                match service.apply_ignore_mutation(user_id, &target_username, op).await {
-                    Ok((target_user_id, ignored_user_ids, message)) => {
-                        let _ = service.evt_tx.send(ChatEvent::IgnoreListUpdated {
-                            user_id,
-                            target_user_id,
-                            ignored_user_ids,
-                            message,
-                        });
-                    }
-                    Err(e) => {
-                        let _ = service.evt_tx.send(ChatEvent::IgnoreFailed {
-                            user_id,
-                            message: e.to_string(),
-                        });
-                    }
-                }
+                let event = match service.ignore_user(user_id, &target_username).await {
+                    Ok((ignored_user_ids, message)) => ChatEvent::IgnoreListUpdated {
+                        user_id,
+                        ignored_user_ids,
+                        message,
+                    },
+                    Err(e) => ChatEvent::IgnoreFailed {
+                        user_id,
+                        message: e.to_string(),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
             }
             .instrument(span),
         );
     }
 
-    async fn apply_ignore_mutation(
+    async fn ignore_user(
         &self,
         user_id: Uuid,
         target_username: &str,
-        op: IgnoreOp,
-    ) -> Result<(Uuid, Vec<Uuid>, String)> {
+    ) -> Result<(Vec<Uuid>, String)> {
         let client = &self.db.get().await?;
         let target = User::find_by_username(client, target_username)
             .await?
             .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
         if target.id == user_id {
-            match op {
-                IgnoreOp::Add => anyhow::bail!("Cannot ignore yourself"),
-                IgnoreOp::Remove => anyhow::bail!("Cannot unignore yourself"),
-            }
+            anyhow::bail!("Cannot ignore yourself");
         }
-
-        let (changed, ids) = match op {
-            IgnoreOp::Add => User::add_ignored_user_id(client, user_id, target.id).await?,
-            IgnoreOp::Remove => User::remove_ignored_user_id(client, user_id, target.id).await?,
-        };
-
+        let (changed, ids) = User::add_ignored_user_id(client, user_id, target.id).await?;
         if !changed {
-            match op {
-                IgnoreOp::Add => anyhow::bail!("@{} is already ignored", target.username),
-                IgnoreOp::Remove => anyhow::bail!("@{} is not ignored", target.username),
-            }
+            anyhow::bail!("@{} is already ignored", target.username);
         }
+        Ok((ids, format!("Ignored @{}", target.username)))
+    }
 
-        let verb = match op {
-            IgnoreOp::Add => "Ignored",
-            IgnoreOp::Remove => "Unignored",
-        };
-        Ok((target.id, ids, format!("{verb} @{}", target.username)))
+    pub fn unignore_user_task(&self, user_id: Uuid, target_username: String) {
+        let service = self.clone();
+        let span = info_span!("chat.unignore_user_task", user_id = %user_id, target = %target_username);
+        tokio::spawn(
+            async move {
+                let event = match service.unignore_user(user_id, &target_username).await {
+                    Ok((ignored_user_ids, message)) => ChatEvent::IgnoreListUpdated {
+                        user_id,
+                        ignored_user_ids,
+                        message,
+                    },
+                    Err(e) => ChatEvent::IgnoreFailed {
+                        user_id,
+                        message: e.to_string(),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn unignore_user(
+        &self,
+        user_id: Uuid,
+        target_username: &str,
+    ) -> Result<(Vec<Uuid>, String)> {
+        let client = &self.db.get().await?;
+        let target = User::find_by_username(client, target_username)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
+        if target.id == user_id {
+            anyhow::bail!("Cannot unignore yourself");
+        }
+        let (changed, ids) = User::remove_ignored_user_id(client, user_id, target.id).await?;
+        if !changed {
+            anyhow::bail!("@{} is not ignored", target.username);
+        }
+        Ok((ids, format!("Unignored @{}", target.username)))
     }
 
     pub fn join_room_task(&self, user_id: Uuid, slug: String) {

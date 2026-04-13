@@ -519,12 +519,10 @@ async fn ignore_user_task_persists_and_emits_update() {
     match event {
         ChatEvent::IgnoreListUpdated {
             user_id,
-            target_user_id,
             ignored_user_ids,
             message,
         } => {
             assert_eq!(user_id, viewer.id);
-            assert_eq!(target_user_id, target.id);
             assert_eq!(ignored_user_ids, vec![target.id]);
             assert_eq!(message, "Ignored @ignore_target");
         }
@@ -571,12 +569,10 @@ async fn unignore_user_task_persists_and_emits_update() {
     match event {
         ChatEvent::IgnoreListUpdated {
             user_id,
-            target_user_id,
             ignored_user_ids,
             message,
         } => {
             assert_eq!(user_id, viewer.id);
-            assert_eq!(target_user_id, target.id);
             assert!(ignored_user_ids.is_empty());
             assert_eq!(message, "Unignored @unignore_target");
         }

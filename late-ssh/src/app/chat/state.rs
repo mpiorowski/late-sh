@@ -14,12 +14,6 @@ use super::{
     svc::{ChatEvent, ChatService, ChatSnapshot},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IgnoreOp {
-    Add,
-    Remove,
-}
-
 #[derive(Default)]
 pub(crate) struct MentionAutocomplete {
     pub active: bool,
@@ -535,22 +529,6 @@ impl ChatState {
         labels
     }
 
-    fn handle_ignore_command(&mut self, target: Option<&str>, op: IgnoreOp) -> Option<Banner> {
-        self.clear_composer_after_submit();
-        match target {
-            None => self.open_overlay("Ignored Users", self.ignore_list_lines()),
-            Some(name) => match op {
-                IgnoreOp::Add => self
-                    .service
-                    .ignore_user_task(self.user_id, name.to_string()),
-                IgnoreOp::Remove => self
-                    .service
-                    .unignore_user_task(self.user_id, name.to_string()),
-            },
-        }
-        None
-    }
-
     pub fn submit_composer(&mut self) -> Option<Banner> {
         let body = self.composer.trim_end().to_string();
 
@@ -576,10 +554,24 @@ impl ChatState {
         }
 
         if let Some(target) = parse_user_command(&body, "/ignore") {
-            return self.handle_ignore_command(target, IgnoreOp::Add);
+            self.clear_composer_after_submit();
+            match target {
+                None => self.open_overlay("Ignored Users", self.ignore_list_lines()),
+                Some(name) => self
+                    .service
+                    .ignore_user_task(self.user_id, name.to_string()),
+            }
+            return None;
         }
         if let Some(target) = parse_user_command(&body, "/unignore") {
-            return self.handle_ignore_command(target, IgnoreOp::Remove);
+            self.clear_composer_after_submit();
+            match target {
+                None => self.open_overlay("Ignored Users", self.ignore_list_lines()),
+                Some(name) => self
+                    .service
+                    .unignore_user_task(self.user_id, name.to_string()),
+            }
+            return None;
         }
 
         if let Some(target) = parse_dm_command(&body) {
@@ -1097,7 +1089,6 @@ impl ChatState {
                 }
                 ChatEvent::IgnoreListUpdated {
                     user_id,
-                    target_user_id: _,
                     ignored_user_ids,
                     message,
                 } if self.user_id == user_id => {
