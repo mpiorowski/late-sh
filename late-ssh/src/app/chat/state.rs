@@ -1218,11 +1218,19 @@ impl ChatState {
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
-        self.usernames
-            .get(&message.user_id)
-            .and_then(|username| normalize_ignored_username(username))
-            .is_some_and(|username| self.ignored_usernames.contains(&username))
+        message_is_ignored(&self.usernames, &self.ignored_usernames, message)
     }
+}
+
+fn message_is_ignored(
+    usernames: &HashMap<Uuid, String>,
+    ignored_usernames: &HashSet<String>,
+    message: &ChatMessage,
+) -> bool {
+    usernames
+        .get(&message.user_id)
+        .and_then(|username| normalize_ignored_username(username))
+        .is_some_and(|username| ignored_usernames.contains(&username))
 }
 
 /// Sort key for DMs: resolves the other participant's username.

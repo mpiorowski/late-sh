@@ -204,11 +204,31 @@ fn parse_ctrl_backspace(data: &[u8], index: usize) -> Option<usize> {
 }
 
 fn is_likely_paste(data: &[u8]) -> bool {
+    // Terminals can coalesce a typed slash command and the final Enter into one
+    // read. Keep that path on the normal per-byte submit flow instead of
+    // inserting the newline into the composer as pasted text.
+    if is_buffered_slash_command_submit(data) {
+        return false;
+    }
+
     let printable = data
         .iter()
         .filter(|&&b| b >= 0x20 && b != 0x7f || b == b'\n' || b == b'\r' || b == b'\t')
         .count();
     printable > 8 && printable * 100 / data.len().max(1) > 80
+}
+
+fn is_buffered_slash_command_submit(data: &[u8]) -> bool {
+    let body = data
+        .strip_suffix(b"\r\n")
+        .or_else(|| data.strip_suffix(b"\n"))
+        .or_else(|| data.strip_suffix(b"\r"));
+
+    let Some(body) = body else {
+        return false;
+    };
+
+    body.first() == Some(&b'/') && !body.iter().any(|&b| matches!(b, b'\r' | b'\n'))
 }
 
 fn parse_bracketed_paste(data: &[u8], index: usize) -> Option<(usize, &[u8])> {
@@ -928,6 +948,24 @@ mod tests {
     fn parse_bracketed_paste_requires_end_marker() {
         let data = b"\x1b[200~hello\nworld";
         assert!(parse_bracketed_paste(data, 0).is_none());
+    }
+
+    #[test]
+    fn likely_paste_exempts_buffered_slash_command_submit() {
+        assert!(!is_likely_paste(b"/ignore ignore-flow-target\n"));
+        assert!(!is_likely_paste(b"/join #rust\r\n"));
+    }
+
+    #[test]
+    fn likely_paste_still_detects_long_single_line_input() {
+        assert!(is_likely_paste(
+            b"https://late.example.com/some/really/long/path"
+        ));
+    }
+
+    #[test]
+    fn likely_paste_still_detects_multiline_input() {
+        assert!(is_likely_paste(b"first line\nsecond line"));
     }
 
     #[test]

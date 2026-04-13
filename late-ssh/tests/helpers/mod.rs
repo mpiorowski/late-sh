@@ -138,6 +138,15 @@ pub fn test_app_state(db: Db, config: Config) -> State {
 }
 
 pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
+    make_app_with_chat_service(db, user_id, session_token).0
+}
+
+pub fn make_app_with_chat_service(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+) -> (App, ChatService) {
+    let chat_service = ChatService::new(db.clone(), NotificationService::new(db.clone()));
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
@@ -148,12 +157,12 @@ pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
             Arc::new(Mutex::new(HashMap::new())),
             broadcast::channel::<ActivityEvent>(64).0,
         ),
-        chat_service: ChatService::new(db.clone(), NotificationService::new(db.clone())),
+        chat_service: chat_service.clone(),
         notification_service: NotificationService::new(db.clone()),
         article_service: ArticleService::new(
             db.clone(),
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
-            ChatService::new(db.clone(), NotificationService::new(db.clone())),
+            chat_service.clone(),
         ),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
@@ -209,7 +218,7 @@ pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
     })
     .expect("app");
     app.skip_splash_for_tests();
-    app
+    (app, chat_service)
 }
 
 pub fn make_app_with_paired_client(
@@ -344,26 +353,24 @@ pub async fn assert_render_not_contains_for(app: &mut App, needle: &str, duratio
 }
 
 fn strip_ansi(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = String::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1B {
-            i += 1;
-            if i < bytes.len() && bytes[i] == b'[' {
-                i += 1;
-                while i < bytes.len() {
-                    let b = bytes[i];
-                    i += 1;
-                    if (0x40..=0x7E).contains(&b) {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
                         break;
                     }
                 }
             }
             continue;
         }
-        out.push(bytes[i] as char);
-        i += 1;
+
+        out.push(ch);
     }
+
     out
 }

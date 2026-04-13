@@ -2,7 +2,9 @@
 
 mod helpers;
 
-use helpers::{make_app, new_test_db, wait_for_render_contains};
+use helpers::{
+    make_app, make_app_with_chat_service, new_test_db, wait_for_render_contains, wait_until,
+};
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::ChatRoom,
@@ -11,6 +13,7 @@ use late_core::models::{
 };
 use late_core::test_utils::create_test_user;
 use tokio::time::Duration;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn dashboard_chat_compose_blocks_quit_shortcut() {
@@ -161,7 +164,8 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     .await
     .expect("create message");
 
-    let mut app = make_app(test_db.db.clone(), viewer.id, "ignore-command-flow-it");
+    let (mut app, chat_service) =
+        make_app_with_chat_service(test_db.db.clone(), viewer.id, "ignore-command-flow-it");
     app.handle_input(b"2");
     wait_for_render_contains(&mut app, " Rooms (h/l)").await;
     wait_for_render_contains(&mut app, "message from ignored user").await;
@@ -175,9 +179,36 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
         .expect("load ignore list");
     assert_eq!(ignored, vec!["ignore-flow-target"]);
 
+    let post_ignore_body = "fresh message from ignored user";
+    chat_service.send_message_task(
+        target.id,
+        general.id,
+        Some("general".to_string()),
+        post_ignore_body.to_string(),
+        Uuid::now_v7(),
+        false,
+    );
+    wait_until(
+        || async {
+            ChatMessage::list_recent(&client, general.id, 20)
+                .await
+                .expect("list recent messages")
+                .iter()
+                .any(|message| message.body == post_ignore_body)
+        },
+        "post-ignore message to persist",
+    )
+    .await;
+
+    helpers::assert_render_not_contains_for(&mut app, post_ignore_body, Duration::from_millis(300))
+        .await;
+
+    let mut refreshed_app = make_app(test_db.db.clone(), viewer.id, "ignore-command-refresh-it");
+    refreshed_app.handle_input(b"2");
+    wait_for_render_contains(&mut refreshed_app, " Rooms (h/l)").await;
     helpers::assert_render_not_contains_for(
-        &mut app,
-        "message from ignored user",
+        &mut refreshed_app,
+        post_ignore_body,
         Duration::from_millis(300),
     )
     .await;
