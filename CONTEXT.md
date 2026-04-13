@@ -947,7 +947,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `n` | Nonograms | Generate a fresh personal puzzle for the current size |
 | `[` / `]` | Nonograms | Switch puzzle size pack |
 | `Esc` | Nonograms | Exit back to Arcade lobby |
-| `h` / `l` | Chat | Switch room selection, including the synthetic `news` entry |
+| `h` / `l` | Chat | Switch room selection, including the synthetic `news` entry. Hidden aliases: `Ctrl+N` next room, `Ctrl+P` previous room; room switching wraps around. |
 | `j` / `k` / arrows | Chat (`news` selected) | Navigate news list |
 | `i` | Chat (`news` selected) | Start composing/pasting URL |
 | `Enter` | Chat (`news` selected) | Copy selected link / submit URL |

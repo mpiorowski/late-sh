@@ -424,7 +424,7 @@ impl ChatState {
             .iter()
             .position(|item| *item == current_item)
             .unwrap_or(0) as isize;
-        let next = (current + delta).clamp(0, order.len() as isize - 1) as usize;
+        let next = wrapped_index(current, delta, order.len());
 
         match order[next] {
             RoomSlot::News => {
@@ -1193,6 +1193,10 @@ fn parse_delete_room_command(input: &str) -> Option<&str> {
     Some(slug)
 }
 
+fn wrapped_index(current: isize, delta: isize, len: usize) -> usize {
+    (current + delta).rem_euclid(len as isize) as usize
+}
+
 fn short_user_id(user_id: Uuid) -> String {
     let id = user_id.to_string();
     id[..id.len().min(8)].to_string()
@@ -1264,6 +1268,18 @@ mod tests {
     #[test]
     fn parse_dm_trims_whitespace() {
         assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
+    }
+
+    #[test]
+    fn wrapped_index_wraps_forward() {
+        assert_eq!(wrapped_index(2, 1, 3), 0);
+        assert_eq!(wrapped_index(1, 5, 3), 0);
+    }
+
+    #[test]
+    fn wrapped_index_wraps_backward() {
+        assert_eq!(wrapped_index(0, -1, 3), 2);
+        assert_eq!(wrapped_index(1, -5, 3), 2);
     }
 
     #[test]
