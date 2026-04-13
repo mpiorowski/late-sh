@@ -50,6 +50,7 @@
             atBottom: true,
             messageHistory: [],
             historyIndex: null,
+            historyDraft: '',
 
             init() {
                 this.updateViewportHeight();
@@ -168,12 +169,14 @@
                 this.messageHistory.unshift(body);
                 if (this.messageHistory.length > 20) this.messageHistory.pop();
                 this.historyIndex = null;
+                this.historyDraft = '';
                 this.input = '';
             },
 
             historyUp() {
                 if (this.messageHistory.length === 0) return;
                 if (this.historyIndex === null) {
+                    this.historyDraft = this.input;
                     this.historyIndex = 0;
                 } else if (this.historyIndex < this.messageHistory.length - 1) {
                     this.historyIndex++;
@@ -190,14 +193,20 @@
             historyDown() {
                 if (this.historyIndex === null) {
                     if (this.input.trim()) {
-                        this.messageHistory.unshift(this.input);
+                        this.messageHistory.unshift(this.input.trimEnd());
                         if (this.messageHistory.length > 20) this.messageHistory.pop();
                         this.input = '';
                     }
                     // empty input: do nothing
                 } else if (this.historyIndex === 0) {
+                    // Exit navigation and restore the pre-navigation draft.
                     this.historyIndex = null;
-                    this.input = '';
+                    this.input = this.historyDraft;
+                    this.historyDraft = '';
+                    this.$nextTick(() => {
+                        const el = this.$refs.inputField;
+                        if (el) el.setSelectionRange(el.value.length, el.value.length);
+                    });
                 } else {
                     this.historyIndex--;
                     this.input = this.messageHistory[this.historyIndex];

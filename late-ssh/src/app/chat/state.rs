@@ -79,6 +79,8 @@ pub struct ChatState {
     composer_history: VecDeque<String>,
     /// Index into composer_history while navigating; None when not navigating.
     history_index: Option<usize>,
+    /// Composer text saved when navigation begins, restored when navigation exits.
+    history_draft: String,
 }
 
 impl Drop for ChatState {
@@ -136,6 +138,7 @@ impl ChatState {
             notifications: notifications::state::State::new(notification_service, user_id),
             composer_history: VecDeque::new(),
             history_index: None,
+            history_draft: String::new(),
         }
     }
 
@@ -469,14 +472,16 @@ impl ChatState {
     }
 
     fn clear_composer_after_submit(&mut self) {
-        let trimmed = self.composer.trim().to_string();
-        if !trimmed.is_empty() {
-            self.composer_history.push_front(trimmed);
+        // Use trim_end() to match exactly what submit_composer() sends.
+        let body = self.composer.trim_end().to_string();
+        if !body.trim().is_empty() {
+            self.composer_history.push_front(body);
             if self.composer_history.len() > 20 {
                 self.composer_history.pop_back();
             }
         }
         self.history_index = None;
+        self.history_draft = String::new();
         self.composer.clear();
         self.composer_cursor = 0;
         self.composing = false;
@@ -851,6 +856,8 @@ impl ChatState {
         }
         match self.history_index {
             None => {
+                // Save current draft so it can be restored when navigation exits.
+                self.history_draft = self.composer.clone();
                 self.history_index = Some(0);
                 self.load_history_entry(0);
             }
@@ -868,7 +875,7 @@ impl ChatState {
             None => {
                 // Only act if there's unsent text — push it to history and clear.
                 if !self.composer.trim().is_empty() {
-                    let text = self.composer.clone();
+                    let text = self.composer.trim_end().to_string();
                     self.composer_history.push_front(text);
                     if self.composer_history.len() > 20 {
                         self.composer_history.pop_back();
@@ -880,10 +887,10 @@ impl ChatState {
                 // Empty composer: do nothing.
             }
             Some(0) => {
-                // At the most-recent entry — exit navigation and clear input.
+                // At the most-recent entry — exit navigation and restore the draft.
                 self.history_index = None;
-                self.composer.clear();
-                self.composer_cursor = 0;
+                self.composer = std::mem::take(&mut self.history_draft);
+                self.composer_cursor = self.composer.chars().count();
                 self.invalidate_composer_layout();
             }
             Some(i) => {
