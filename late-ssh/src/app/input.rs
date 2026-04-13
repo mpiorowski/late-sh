@@ -1,5 +1,9 @@
 use super::{chat, dashboard, profile, state::App};
 use crate::app::common::primitives::Screen;
+use std::{mem, time::Duration};
+use vte::{Params, Parser, Perform};
+
+const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 
 #[derive(Clone, Copy)]
 struct InputContext {
@@ -41,166 +45,16 @@ enum PasteTarget {
     NewsComposer,
 }
 
-#[derive(Clone, Copy)]
-struct DecodedInput {
-    byte: u8,
-    consumed: usize,
-    arrow_key: Option<u8>,
-    ctrl_arrow_key: Option<u8>,
-    ctrl_backspace: bool,
-    ctrl_delete: bool,
-    scroll: Option<isize>,
-    alt_enter: bool,
-}
-
-fn decode_input(data: &[u8], index: usize) -> DecodedInput {
-    let byte = data[index];
-    // Alt+Enter: ESC followed by CR or LF
-    if byte == 0x1B && index + 1 < data.len() && matches!(data[index + 1], b'\r' | b'\n') {
-        return DecodedInput {
-            byte,
-            consumed: 2,
-            arrow_key: None,
-            ctrl_arrow_key: None,
-            ctrl_backspace: false,
-            ctrl_delete: false,
-            scroll: None,
-            alt_enter: true,
-        };
-    }
-    if let Some((consumed, key)) = parse_ctrl_arrow(data, index) {
-        return DecodedInput {
-            byte,
-            consumed,
-            arrow_key: None,
-            ctrl_arrow_key: Some(key),
-            ctrl_backspace: false,
-            ctrl_delete: false,
-            scroll: None,
-            alt_enter: false,
-        };
-    }
-    if let Some(consumed) = parse_ctrl_backspace(data, index) {
-        return DecodedInput {
-            byte,
-            consumed,
-            arrow_key: None,
-            ctrl_arrow_key: None,
-            ctrl_backspace: true,
-            ctrl_delete: false,
-            scroll: None,
-            alt_enter: false,
-        };
-    }
-    if let Some(consumed) = parse_ctrl_delete(data, index) {
-        return DecodedInput {
-            byte,
-            consumed,
-            arrow_key: None,
-            ctrl_arrow_key: None,
-            ctrl_backspace: false,
-            ctrl_delete: true,
-            scroll: None,
-            alt_enter: false,
-        };
-    }
-    if byte == 0x1B && index + 2 < data.len() && matches!(data[index + 1], b'[' | b'O') {
-        // SGR mouse: ESC [ < button ; col ; row M/m
-        if data[index + 1] == b'['
-            && data[index + 2] == b'<'
-            && let Some((consumed, scroll)) = parse_sgr_mouse(data, index + 3)
-        {
-            return DecodedInput {
-                byte,
-                consumed: 3 + consumed,
-                arrow_key: None,
-                ctrl_arrow_key: None,
-                ctrl_backspace: false,
-                ctrl_delete: false,
-                scroll: Some(scroll.unwrap_or(0)),
-                alt_enter: false,
-            };
-        }
-
-        return DecodedInput {
-            byte,
-            consumed: 3,
-            arrow_key: Some(data[index + 2]),
-            ctrl_arrow_key: None,
-            ctrl_backspace: false,
-            ctrl_delete: false,
-            scroll: None,
-            alt_enter: false,
-        };
-    }
-
-    // Alt+<printable key>: ESC followed by a printable byte that didn't match any
-    // known sequence above. Consume both bytes so ESC doesn't exit composing mode
-    // and the key doesn't leak through as a separate input (e.g. Alt+Q → quit).
-    if byte == 0x1B && index + 1 < data.len() && (32..127).contains(&data[index + 1]) {
-        return DecodedInput {
-            byte,
-            consumed: 2,
-            arrow_key: None,
-            ctrl_arrow_key: None,
-            ctrl_backspace: false,
-            ctrl_delete: false,
-            scroll: None,
-            alt_enter: false,
-        };
-    }
-
-    DecodedInput {
-        byte,
-        consumed: 1,
-        arrow_key: None,
-        ctrl_arrow_key: None,
-        ctrl_backspace: false,
-        ctrl_delete: false,
-        scroll: None,
-        alt_enter: false,
-    }
-}
-
-fn parse_ctrl_arrow(data: &[u8], index: usize) -> Option<(usize, u8)> {
-    const SEQUENCES: [(&[u8], u8); 4] = [
-        (b"\x1b[1;5C", b'C'),
-        (b"\x1b[1;5D", b'D'),
-        (b"\x1b[5C", b'C'),
-        (b"\x1b[5D", b'D'),
-    ];
-
-    for (seq, key) in SEQUENCES {
-        if data[index..].starts_with(seq) {
-            return Some((seq.len(), key));
-        }
-    }
-
-    None
-}
-
-fn parse_ctrl_delete(data: &[u8], index: usize) -> Option<usize> {
-    const SEQUENCES: [&[u8]; 1] = [b"\x1b[3;5~"];
-
-    for seq in SEQUENCES {
-        if data[index..].starts_with(seq) {
-            return Some(seq.len());
-        }
-    }
-
-    None
-}
-
-fn parse_ctrl_backspace(data: &[u8], index: usize) -> Option<usize> {
-    const SEQUENCES: [&[u8]; 4] = [b"\x1b[127;5u", b"\x1b[8;5~", b"\x1b\x7f", b"\x08"];
-
-    for seq in SEQUENCES {
-        if data[index..].starts_with(seq) {
-            return Some(seq.len());
-        }
-    }
-
-    None
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ParsedInput {
+    Byte(u8),
+    Arrow(u8),
+    CtrlArrow(u8),
+    CtrlBackspace,
+    CtrlDelete,
+    Scroll(isize),
+    AltEnter,
+    Paste(Vec<u8>),
 }
 
 fn is_likely_paste(data: &[u8]) -> bool {
@@ -211,70 +65,168 @@ fn is_likely_paste(data: &[u8]) -> bool {
     printable > 8 && printable * 100 / data.len().max(1) > 80
 }
 
-fn parse_bracketed_paste(data: &[u8], index: usize) -> Option<(usize, &[u8])> {
-    const START: &[u8] = b"\x1b[200~";
-    const END: &[u8] = b"\x1b[201~";
-
-    if !data[index..].starts_with(START) {
-        return None;
-    }
-
-    let body_start = index + START.len();
-    let rel_end = data[body_start..]
-        .windows(END.len())
-        .position(|window| window == END)?;
-    let body_end = body_start + rel_end;
-    let consumed = START.len() + rel_end + END.len();
-    Some((consumed, &data[body_start..body_end]))
+pub(crate) struct VtInputParser {
+    parser: Parser,
+    collector: VtCollector,
 }
 
-/// Parse SGR mouse parameters after `ESC [ <`.
-/// Returns (bytes consumed, optional scroll direction).
-fn parse_sgr_mouse(data: &[u8], start: usize) -> Option<(usize, Option<isize>)> {
-    // Find the terminator M (press) or m (release)
-    let mut end = start;
-    while end < data.len() && data[end] != b'M' && data[end] != b'm' {
-        end += 1;
+impl Default for VtInputParser {
+    fn default() -> Self {
+        Self {
+            parser: Parser::new(),
+            collector: VtCollector::default(),
+        }
     }
-    if end >= data.len() {
-        return None;
+}
+
+impl VtInputParser {
+    fn feed(&mut self, data: &[u8]) -> Vec<ParsedInput> {
+        self.parser.advance(&mut self.collector, data);
+        mem::take(&mut self.collector.events)
     }
-    let consumed = end - start + 1;
+}
 
-    // Parse button number (first parameter before the first ';')
-    let params = &data[start..end];
-    let button_end = params
-        .iter()
-        .position(|&b| b == b';')
-        .unwrap_or(params.len());
-    let button: u16 = params[..button_end].iter().fold(0u16, |acc, &b| {
-        acc.wrapping_mul(10).wrapping_add((b - b'0') as u16)
-    });
+#[derive(Default)]
+struct VtCollector {
+    events: Vec<ParsedInput>,
+    paste: Option<Vec<u8>>,
+}
 
-    let scroll = match button {
-        64 => Some(1isize),  // wheel up
-        65 => Some(-1isize), // wheel down
-        _ => None,
+impl VtCollector {
+    fn push_byte(&mut self, byte: u8) {
+        if let Some(paste) = &mut self.paste {
+            paste.push(byte);
+        } else {
+            self.events.push(ParsedInput::Byte(byte));
+        }
+    }
+
+    fn push_char(&mut self, ch: char) {
+        let mut buf = [0; 4];
+        let bytes = ch.encode_utf8(&mut buf).as_bytes();
+        if let Some(paste) = &mut self.paste {
+            paste.extend_from_slice(bytes);
+        } else {
+            for &byte in bytes {
+                self.events.push(ParsedInput::Byte(byte));
+            }
+        }
+    }
+
+    fn finish_paste(&mut self) {
+        if let Some(paste) = self.paste.take() {
+            self.events.push(ParsedInput::Paste(paste));
+        }
+    }
+}
+
+impl Perform for VtCollector {
+    fn print(&mut self, c: char) {
+        self.push_char(c);
+    }
+
+    fn execute(&mut self, byte: u8) {
+        self.push_byte(byte);
+    }
+
+    fn hook(&mut self, _: &Params, _: &[u8], _: bool, _: char) {}
+
+    fn put(&mut self, _: u8) {}
+
+    fn unhook(&mut self) {}
+
+    fn osc_dispatch(&mut self, _: &[&[u8]], _: bool) {}
+
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if ignore {
+            return;
+        }
+
+        let params: Vec<u16> = params
+            .iter()
+            .map(|param| param.first().copied().unwrap_or(0))
+            .collect();
+        let p0 = params.first().copied();
+        let p1 = params.get(1).copied();
+
+        match action {
+            '~' if p0 == Some(200) => {
+                self.paste.get_or_insert_with(Vec::new);
+            }
+            '~' if p0 == Some(201) => {
+                self.finish_paste();
+            }
+            'A' | 'B' | 'C' | 'D' => {
+                let key = action as u8;
+                if p1 == Some(5) || (p0 == Some(5) && p1.is_none()) {
+                    self.events.push(ParsedInput::CtrlArrow(key));
+                } else {
+                    self.events.push(ParsedInput::Arrow(key));
+                }
+            }
+            '~' if p0 == Some(3) && p1 == Some(5) => {
+                self.events.push(ParsedInput::CtrlDelete);
+            }
+            '~' if p0 == Some(8) && p1 == Some(5) => {
+                self.events.push(ParsedInput::CtrlBackspace);
+            }
+            // Kitty keyboard protocol: CSI 127;5u == Ctrl+Backspace.
+            'u' if p0 == Some(127) && p1 == Some(5) => {
+                self.events.push(ParsedInput::CtrlBackspace);
+            }
+            'M' | 'm' if intermediates == [b'<'] && params.len() >= 3 => {
+                let scroll = match p0.unwrap_or_default() {
+                    64 => 1,
+                    65 => -1,
+                    _ => 0,
+                };
+                self.events.push(ParsedInput::Scroll(scroll));
+            }
+            _ => {}
+        }
+    }
+
+    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        if ignore {
+            return;
+        }
+
+        if intermediates == [b'O'] && matches!(byte, b'A' | b'B' | b'C' | b'D') {
+            self.events.push(ParsedInput::Arrow(byte));
+            return;
+        }
+
+        if matches!(byte, b'\r' | b'\n') {
+            self.events.push(ParsedInput::AltEnter);
+            return;
+        }
+
+        if (0x20..=0x7e).contains(&byte) {
+            // Alt+printable: consume the ESC-prefixed sequence so ESC does not
+            // cancel a composer and the printable byte does not leak separately.
+        }
+    }
+}
+
+pub fn flush_pending_escape(app: &mut App) {
+    if !app.pending_escape {
+        return;
+    }
+
+    let Some(started_at) = app.pending_escape_started_at else {
+        return;
     };
 
-    Some((consumed, scroll))
+    if started_at.elapsed() < PENDING_ESCAPE_FLUSH_DELAY {
+        return;
+    }
+
+    app.pending_escape = false;
+    app.pending_escape_started_at = None;
+    dispatch_escape(app);
 }
 
 pub fn handle(app: &mut App, data: &[u8]) {
-    let owned_input;
-    let data = if app.pending_escape {
-        app.pending_escape = false;
-        owned_input = {
-            let mut bytes = Vec::with_capacity(data.len() + 1);
-            bytes.push(0x1B);
-            bytes.extend_from_slice(data);
-            bytes
-        };
-        owned_input.as_slice()
-    } else {
-        data
-    };
-
     if app.show_splash {
         // Do not process input while splash screen is showing
         return;
@@ -334,97 +286,83 @@ pub fn handle(app: &mut App, data: &[u8]) {
     // paste markers, it's almost certainly pasted text. Without this, each
     // byte is processed as a key — newlines submit messages mid-paste and
     // remaining chars become navigation commands, causing chaos.
-    if !data.starts_with(b"\x1b[200~") && !data.starts_with(b"\x1b[<") && is_likely_paste(data) {
+    if is_likely_paste(data) {
         handle_bracketed_paste(app, data);
         return;
     }
 
-    let mut i = 0;
-    while i < data.len() {
-        if data[i] == 0x1B && i + 1 >= data.len() {
-            // In modal/composing modes, process lone ESC immediately — a real
-            // Esc keypress always arrives as a single 0x1B byte, while escape
-            // sequences (arrow keys etc.) arrive as a complete multi-byte chunk.
-            let ctx = InputContext::from_app(app);
-            if ctx.chat_composing || ctx.news_composing || ctx.profile_composing {
-                handle_modal_input(app, ctx, 0x1B);
-                break;
-            }
-            if ctx.screen == Screen::Games && app.is_playing_game {
-                dispatch_screen_key(app, ctx.screen, 0x1B);
-                break;
-            }
-            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-                && app.chat.selected_message_id.is_some()
-            {
-                app.chat.clear_message_selection();
-                break;
-            }
-            app.pending_escape = true;
-            break;
+    if app.pending_escape {
+        if let Some(started_at) = app.pending_escape_started_at
+            && started_at.elapsed() >= PENDING_ESCAPE_FLUSH_DELAY
+        {
+            app.pending_escape = false;
+            app.pending_escape_started_at = None;
+            dispatch_escape(app);
         }
+    }
 
-        if let Some((consumed, pasted)) = parse_bracketed_paste(data, i) {
-            handle_bracketed_paste(app, pasted);
-            i += consumed;
-            continue;
-        }
+    handle_vt_segment(app, data);
 
-        let input = decode_input(data, i);
-        let ctx = InputContext::from_app(app);
+    if data.last() == Some(&0x1B) {
+        app.pending_escape = true;
+        app.pending_escape_started_at = Some(std::time::Instant::now());
+    } else {
+        app.pending_escape = false;
+        app.pending_escape_started_at = None;
+    }
+}
 
-        if input.alt_enter {
+fn handle_vt_segment(app: &mut App, data: &[u8]) {
+    if data.is_empty() {
+        return;
+    }
+
+    let events = app.vt_input.feed(data);
+    for event in events {
+        handle_parsed_input(app, event);
+    }
+}
+
+fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    let ctx = InputContext::from_app(app);
+
+    match event {
+        ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
+        ParsedInput::AltEnter => {
             if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
             {
                 app.chat.composer_push('\n');
                 app.chat.update_autocomplete();
             }
-            i += input.consumed;
-            continue;
         }
-
-        if let Some(delta) = input.scroll {
-            handle_scroll_for_screen(app, ctx.screen, delta);
-            i += input.consumed;
-            continue;
-        }
-
-        if input.ctrl_backspace
-            && (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-            && ctx.chat_composing
+        ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
+        ParsedInput::CtrlBackspace
+            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+                && ctx.chat_composing =>
         {
             app.chat.composer_delete_word_left();
             app.chat.update_autocomplete();
-            i += input.consumed;
-            continue;
         }
-
-        if input.ctrl_delete
-            && (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-            && ctx.chat_composing
+        ParsedInput::CtrlDelete
+            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+                && ctx.chat_composing =>
         {
             app.chat.composer_delete_word_right();
             app.chat.update_autocomplete();
-            i += input.consumed;
-            continue;
         }
-
-        if let Some(key) = input.ctrl_arrow_key
-            && (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-            && ctx.chat_composing
-            && !ctx.chat_ac_active
+        ParsedInput::CtrlArrow(key)
+            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+                && ctx.chat_composing
+                && !ctx.chat_ac_active =>
         {
             if key == b'C' {
                 app.chat.composer_cursor_word_right();
             } else {
                 app.chat.composer_cursor_word_left();
             }
-            i += input.consumed;
-            continue;
         }
-
-        if let Some(key) = input.arrow_key {
-            // Route arrows to composer cursor when composing
+        ParsedInput::CtrlArrow(_) | ParsedInput::CtrlBackspace | ParsedInput::CtrlDelete => {}
+        ParsedInput::Arrow(key) => {
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
                 && ctx.chat_composing
                 && !ctx.chat_ac_active
@@ -437,36 +375,43 @@ pub fn handle(app: &mut App, data: &[u8]) {
                     b'B' => app.chat.composer_cursor_down(),
                     _ => {}
                 }
-                i += input.consumed;
-                continue;
+                return;
             }
 
             if ctx.blocks_arrow_sequence() {
-                i += input.consumed;
-                continue;
+                return;
             }
 
-            // Always consume a decoded arrow sequence. Some screens intentionally
-            // return false for blocked moves; letting the raw ESC byte fall
-            // through would incorrectly trigger global/game escape handling.
             let _ = handle_arrow_for_screen(app, ctx.screen, key);
-            i += input.consumed;
-            continue;
         }
+        ParsedInput::Byte(byte) => {
+            if handle_modal_input(app, ctx, byte) {
+                return;
+            }
 
-        if handle_modal_input(app, ctx, input.byte) {
-            i += input.consumed;
-            continue;
+            if handle_global_key(app, ctx, byte) {
+                app.chat.clear_message_selection();
+                return;
+            }
+
+            dispatch_screen_key(app, ctx.screen, byte);
         }
+    }
+}
 
-        if handle_global_key(app, ctx, input.byte) {
-            app.chat.clear_message_selection();
-            i += input.consumed;
-            continue;
-        }
-
-        dispatch_screen_key(app, ctx.screen, input.byte);
-        i += input.consumed;
+fn dispatch_escape(app: &mut App) {
+    let ctx = InputContext::from_app(app);
+    if handle_modal_input(app, ctx, 0x1B) {
+        return;
+    }
+    if ctx.screen == Screen::Games && app.is_playing_game {
+        dispatch_screen_key(app, ctx.screen, 0x1B);
+        return;
+    }
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+        && app.chat.selected_message_id.is_some()
+    {
+        app.chat.clear_message_selection();
     }
 }
 
@@ -768,31 +713,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decode_input_reads_arrow_sequence() {
-        let decoded = decode_input(b"\x1B[A", 0);
-        assert_eq!(decoded.consumed, 3);
-        assert_eq!(decoded.arrow_key, Some(b'A'));
-    }
-
-    #[test]
-    fn decode_input_reads_ss3_arrow_sequence() {
-        let decoded = decode_input(b"\x1BOD", 0);
-        assert_eq!(decoded.consumed, 3);
-        assert_eq!(decoded.arrow_key, Some(b'D'));
-    }
-
-    #[test]
-    fn decode_input_reads_single_byte() {
-        let decoded = decode_input(b"x", 0);
-        assert_eq!(decoded.byte, b'x');
-        assert_eq!(decoded.consumed, 1);
-        assert_eq!(decoded.arrow_key, None);
-        assert_eq!(decoded.ctrl_arrow_key, None);
-        assert!(!decoded.ctrl_backspace);
-        assert!(!decoded.ctrl_delete);
-    }
-
-    #[test]
     fn blocks_arrow_when_chat_is_composing_on_dashboard() {
         let ctx = InputContext {
             screen: Screen::Dashboard,
@@ -829,136 +749,64 @@ mod tests {
     }
 
     #[test]
-    fn decode_input_parses_sgr_scroll_up() {
-        // ESC [ < 64 ; 10 ; 5 M  (wheel up → reversed to scroll down)
-        let data = b"\x1b[<64;10;5M";
-        let decoded = decode_input(data, 0);
-        assert_eq!(decoded.scroll, Some(1));
-        assert_eq!(decoded.consumed, data.len());
-        assert_eq!(decoded.arrow_key, None);
+    fn vt_parser_reads_arrow_sequence() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b[A"), vec![ParsedInput::Arrow(b'A')]);
     }
 
     #[test]
-    fn decode_input_parses_sgr_scroll_down() {
-        // ESC [ < 65 ; 10 ; 5 M  (wheel down → reversed to scroll up)
-        let data = b"\x1b[<65;10;5M";
-        let decoded = decode_input(data, 0);
-        assert_eq!(decoded.scroll, Some(-1));
-        assert_eq!(decoded.consumed, data.len());
+    fn vt_parser_reads_ss3_arrow_sequence() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1bOD"), vec![ParsedInput::Arrow(b'D')]);
     }
 
     #[test]
-    fn decode_input_parses_sgr_click_consumed() {
-        // ESC [ < 0 ; 10 ; 5 M  (left click — consumed as scroll 0)
-        let data = b"\x1b[<0;10;5M";
-        let decoded = decode_input(data, 0);
-        assert_eq!(decoded.scroll, Some(0));
-        assert_eq!(decoded.consumed, data.len());
+    fn vt_parser_parses_scroll_events() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b[<64;10;5M"), vec![ParsedInput::Scroll(1)]);
+        assert_eq!(
+            parser.feed(b"\x1b[<65;10;5m"),
+            vec![ParsedInput::Scroll(-1)]
+        );
     }
 
     #[test]
-    fn decode_input_sgr_release_event() {
-        // ESC [ < 64 ; 10 ; 5 m  (wheel up release → reversed)
-        let data = b"\x1b[<64;10;5m";
-        let decoded = decode_input(data, 0);
-        assert_eq!(decoded.scroll, Some(1));
-        assert_eq!(decoded.consumed, data.len());
-    }
-
-    // --- alt-enter ---
-
-    #[test]
-    fn decode_input_detects_alt_enter_cr() {
-        let data = b"\x1b\r";
-        let decoded = decode_input(data, 0);
-        assert!(decoded.alt_enter);
-        assert_eq!(decoded.consumed, 2);
-        assert_eq!(decoded.arrow_key, None);
-        assert_eq!(decoded.scroll, None);
+    fn vt_parser_parses_ctrl_sequences() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed(b"\x1b[1;5C"),
+            vec![ParsedInput::CtrlArrow(b'C')]
+        );
+        assert_eq!(parser.feed(b"\x1b[5D"), vec![ParsedInput::CtrlArrow(b'D')]);
+        assert_eq!(parser.feed(b"\x1b[3;5~"), vec![ParsedInput::CtrlDelete]);
+        assert_eq!(
+            parser.feed(b"\x1b[127;5u"),
+            vec![ParsedInput::CtrlBackspace]
+        );
+        assert_eq!(parser.feed(b"\x1b[8;5~"), vec![ParsedInput::CtrlBackspace]);
     }
 
     #[test]
-    fn decode_input_detects_alt_enter_lf() {
-        let data = b"\x1b\n";
-        let decoded = decode_input(data, 0);
-        assert!(decoded.alt_enter);
-        assert_eq!(decoded.consumed, 2);
+    fn vt_parser_keeps_split_arrow_state_across_reads() {
+        let mut parser = VtInputParser::default();
+        assert!(parser.feed(b"\x1b[").is_empty());
+        assert_eq!(parser.feed(b"A"), vec![ParsedInput::Arrow(b'A')]);
     }
 
     #[test]
-    fn decode_input_esc_alone_is_not_alt_enter() {
-        let data = b"\x1b";
-        let decoded = decode_input(data, 0);
-        assert!(!decoded.alt_enter);
-        assert_eq!(decoded.consumed, 1);
+    fn vt_parser_consumes_alt_printable_without_emitting_bytes() {
+        let mut parser = VtInputParser::default();
+        assert!(parser.feed(b"\x1bq").is_empty());
     }
 
     #[test]
-    fn decode_input_esc_bracket_is_not_alt_enter() {
-        // ESC [ A is an arrow key, not alt-enter
-        let data = b"\x1b[A";
-        let decoded = decode_input(data, 0);
-        assert!(!decoded.alt_enter);
-        assert_eq!(decoded.arrow_key, Some(b'A'));
-    }
-
-    #[test]
-    fn decode_input_parses_ctrl_right_arrow() {
-        let data = b"\x1b[1;5C";
-        let decoded = decode_input(data, 0);
-        assert_eq!(decoded.ctrl_arrow_key, Some(b'C'));
-        assert_eq!(decoded.consumed, data.len());
-        assert_eq!(decoded.arrow_key, None);
-    }
-
-    #[test]
-    fn decode_input_parses_short_ctrl_left_arrow() {
-        let data = b"\x1b[5D";
-        let decoded = decode_input(data, 0);
-        assert_eq!(decoded.ctrl_arrow_key, Some(b'D'));
-        assert_eq!(decoded.consumed, data.len());
-    }
-
-    #[test]
-    fn decode_input_parses_ctrl_delete() {
-        let data = b"\x1b[3;5~";
-        let decoded = decode_input(data, 0);
-        assert!(decoded.ctrl_delete);
-        assert_eq!(decoded.consumed, data.len());
-        assert_eq!(decoded.arrow_key, None);
-        assert_eq!(decoded.ctrl_arrow_key, None);
-    }
-
-    #[test]
-    fn decode_input_parses_ctrl_backspace_csi_u() {
-        let data = b"\x1b[127;5u";
-        let decoded = decode_input(data, 0);
-        assert!(decoded.ctrl_backspace);
-        assert_eq!(decoded.consumed, data.len());
-        assert_eq!(decoded.arrow_key, None);
-        assert_eq!(decoded.ctrl_arrow_key, None);
-    }
-
-    #[test]
-    fn decode_input_parses_ctrl_backspace_alt_del() {
-        let data = b"\x1b\x7f";
-        let decoded = decode_input(data, 0);
-        assert!(decoded.ctrl_backspace);
-        assert_eq!(decoded.consumed, data.len());
-    }
-
-    #[test]
-    fn parse_bracketed_paste_extracts_body() {
-        let data = b"\x1b[200~hello\nworld\x1b[201~";
-        let (consumed, body) = parse_bracketed_paste(data, 0).expect("paste parsed");
-        assert_eq!(consumed, data.len());
-        assert_eq!(body, b"hello\nworld");
-    }
-
-    #[test]
-    fn parse_bracketed_paste_requires_end_marker() {
-        let data = b"\x1b[200~hello\nworld";
-        assert!(parse_bracketed_paste(data, 0).is_none());
+    fn vt_parser_keeps_split_bracketed_paste_state_across_reads() {
+        let mut parser = VtInputParser::default();
+        assert!(parser.feed(b"\x1b[200~hello").is_empty());
+        assert_eq!(
+            parser.feed(b"\nworld\x1b[201~"),
+            vec![ParsedInput::Paste(b"hello\nworld".to_vec())]
+        );
     }
 
     #[test]
@@ -990,6 +838,19 @@ mod tests {
         let mut out = String::new();
         insert_pasted_text(b"hello\r\nworld\x00\rok\x7f", |ch| out.push(ch));
         assert_eq!(out, "hello\nworld\nok");
+    }
+
+    #[test]
+    fn vt_parser_emits_utf8_bytes_for_printable_non_ascii() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed("ł".as_bytes()),
+            "ł".as_bytes()
+                .iter()
+                .copied()
+                .map(ParsedInput::Byte)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -136,6 +136,8 @@ pub struct App {
     pub(crate) show_help: bool,
     pub(crate) help_scroll: u16,
     pub(crate) pending_escape: bool,
+    pub(crate) pending_escape_started_at: Option<Instant>,
+    pub(crate) vt_input: crate::app::input::VtInputParser,
 
     /// Terminal / rendering
     pub(super) terminal: Terminal<CrosstermBackend<SharedBuffer>>,
@@ -334,6 +336,8 @@ impl App {
             show_help: false,
             help_scroll: 0,
             pending_escape: false,
+            pending_escape_started_at: None,
+            vt_input: crate::app::input::VtInputParser::default(),
             terminal,
             shared,
             visualizer: Visualizer::new(),

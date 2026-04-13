@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use late_core::db::Db;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
@@ -81,11 +80,7 @@ impl ActionFailure {
 }
 
 impl BlackjackService {
-    pub fn new(
-        chip_svc: ChipService,
-        event_tx: broadcast::Sender<BlackjackEvent>,
-        _db: Db,
-    ) -> Self {
+    pub fn new(chip_svc: ChipService, event_tx: broadcast::Sender<BlackjackEvent>) -> Self {
         let initial_snapshot = SharedTableState::new().snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
         Self {

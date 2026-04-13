@@ -547,6 +547,7 @@ Known gaps/risks:
 - Time remaining is approximate (up to 5s polling delay on track change)
 - No external metrics or alerting system
 - **Single-replica assumption:** Several structures are purely in-memory and not shared across processes (see multi-replica notes below)
+- **Stateful VT parsing in `late-ssh/src/app/input.rs`:** SSH input now runs through a persistent `vte::Parser`, so CSI/SS3 sequences and bracketed paste survive split russh reads instead of assuming the whole escape sequence lands in one chunk. That removes the old split-paste failure where `[200~` / `[201~` residue or embedded newlines could leak through as live keystrokes. The app still keeps two pragmatic layers on top: `is_likely_paste` heuristically treats large printable unmarked chunks as paste for terminals without bracketed paste, and `sanitize_paste_markers`/`strip_paste_markers` still scrub stored residue defensively when copying URLs from older polluted state. Standalone `Esc` is resolved on a short tick delay so split escape sequences are not mistaken for cancel keys.
 
 Roadmap ideas:
 1. Nail one addictive loop: join -> listen -> chat -> vote -> return tomorrow.
