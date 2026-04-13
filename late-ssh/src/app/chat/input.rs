@@ -149,15 +149,17 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         0x04 => {
-            // Ctrl-D: half-page down
-            let half = (app.size.1 / 2).max(1) as isize;
-            app.chat.select_message(-half);
+            // Ctrl-D: half-page down. `select_message` delta is in MESSAGES,
+            // not rows, and chat messages wrap to ~3 rows each, so divide
+            // terminal height by 6 to feel like half a visible page.
+            let step = (app.size.1 / 6).max(1) as isize;
+            app.chat.select_message(-step);
             true
         }
         0x15 => {
-            // Ctrl-U: half-page up
-            let half = (app.size.1 / 2).max(1) as isize;
-            app.chat.select_message(half);
+            // Ctrl-U: half-page up. Same rationale as Ctrl-D above.
+            let step = (app.size.1 / 6).max(1) as isize;
+            app.chat.select_message(step);
             true
         }
         b'g' | b'G' => {

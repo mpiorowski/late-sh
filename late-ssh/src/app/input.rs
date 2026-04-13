@@ -60,14 +60,6 @@ enum ParsedInput {
     End,
 }
 
-fn is_likely_paste(data: &[u8]) -> bool {
-    let printable = data
-        .iter()
-        .filter(|&&b| b >= 0x20 && b != 0x7f || b == b'\n' || b == b'\r' || b == b'\t')
-        .count();
-    printable > 8 && printable * 100 / data.len().max(1) > 80
-}
-
 /// Walk `data` and split it on inline `ESC` + `CR`/`LF` pairs (Alt+Enter).
 ///
 /// vte routes C0 control bytes through `execute` while the parser is in
@@ -172,10 +164,6 @@ impl Perform for VtCollector {
                     self.events.push(ParsedInput::Arrow(c as u8));
                     return;
                 }
-                'H' => {
-                    self.events.push(ParsedInput::Home);
-                    return;
-                }
                 'F' => {
                     self.events.push(ParsedInput::End);
                     return;
@@ -232,17 +220,15 @@ impl Perform for VtCollector {
             '~' if p0 == Some(8) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
-            // PageUp / PageDown / Home / End (numeric form: CSI n ~).
-            // rxvt/linux console encode Home/End as 1~/4~; xterm uses 7~/8~.
-            // Standard xterm also supports the bare `H`/`F` form handled below.
+            // PageUp / PageDown / End (numeric form: CSI n ~). rxvt/linux
+            // console encode End as 4~; xterm uses 8~. Home is intentionally
+            // not bound — jumping to the oldest message in a long-lived room
+            // is rarely useful and the `End` / PageUp pair covers the real
+            // "scroll to a specific position" need.
             '~' if p0 == Some(5) => self.events.push(ParsedInput::PageUp),
             '~' if p0 == Some(6) => self.events.push(ParsedInput::PageDown),
-            '~' if p0 == Some(1) || p0 == Some(7) => self.events.push(ParsedInput::Home),
             '~' if p0 == Some(4) || p0 == Some(8) => self.events.push(ParsedInput::End),
-            // xterm bare form: CSI H / CSI F (no params, no intermediates).
-            'H' if intermediates.is_empty() && p0.unwrap_or(0) <= 1 => {
-                self.events.push(ParsedInput::Home);
-            }
+            // xterm bare form: CSI F (no params, no intermediates).
             'F' if intermediates.is_empty() && p0.unwrap_or(0) <= 1 => {
                 self.events.push(ParsedInput::End);
             }
@@ -353,18 +339,7 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-    // Heuristic: detect pastes from terminals that don't support bracketed
-    // paste mode. A single keystroke produces 1 byte (or up to ~8 for escape
-    // sequences). If we receive many printable bytes at once without bracketed
-    // paste markers, it's almost certainly pasted text. Without this, each
-    // byte is processed as a key — newlines submit messages mid-paste and
-    // remaining chars become navigation commands, causing chaos.
-    if is_likely_paste(data) {
-        handle_bracketed_paste(app, data);
-        return;
-    }
-
-    // Split-across-reads Alt+Enter: previous read ended with a lone ESC and
+// Split-across-reads Alt+Enter: previous read ended with a lone ESC and
     // this one begins with CR/LF. vte would execute the CR/LF as a plain
     // Enter while still sitting in escape state, submitting the composer
     // instead of inserting a newline. Intercept here before anything else.
@@ -431,18 +406,19 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
-        // Full-page / jump-to-end scrolling. Signs mirror the existing Ctrl-D /
-        // Ctrl-U scheme (negative = toward newer/bottom, positive = toward
-        // older/top) — see `app.chat.select_message`.
+        // Page keys mirror Ctrl-U / Ctrl-D. Signs follow the existing scheme:
+        // positive = toward older/top, negative = toward newer/bottom. See
+        // `app.chat.select_message` — its `delta` is in MESSAGES, not rows,
+        // and chat messages wrap to ~3 rows each, so we divide terminal
+        // height by 6 to get something that feels like half a visible page.
         ParsedInput::PageUp => {
-            let page = (app.size.1.saturating_sub(2)).max(1) as isize;
-            handle_scroll_for_screen(app, ctx.screen, page);
+            let step = (app.size.1 / 6).max(1) as isize;
+            handle_scroll_for_screen(app, ctx.screen, step);
         }
         ParsedInput::PageDown => {
-            let page = (app.size.1.saturating_sub(2)).max(1) as isize;
-            handle_scroll_for_screen(app, ctx.screen, -page);
+            let step = (app.size.1 / 6).max(1) as isize;
+            handle_scroll_for_screen(app, ctx.screen, -step);
         }
-        ParsedInput::Home => handle_scroll_for_screen(app, ctx.screen, isize::MAX),
         ParsedInput::End => handle_scroll_for_screen(app, ctx.screen, isize::MIN),
         ParsedInput::CtrlBackspace
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
@@ -1019,23 +995,19 @@ mod tests {
         let mut parser = VtInputParser::default();
         assert_eq!(parser.feed(b"\x1b[5~"), vec![ParsedInput::PageUp]);
         assert_eq!(parser.feed(b"\x1b[6~"), vec![ParsedInput::PageDown]);
-        assert_eq!(parser.feed(b"\x1b[1~"), vec![ParsedInput::Home]);
-        assert_eq!(parser.feed(b"\x1b[7~"), vec![ParsedInput::Home]);
         assert_eq!(parser.feed(b"\x1b[4~"), vec![ParsedInput::End]);
         assert_eq!(parser.feed(b"\x1b[8~"), vec![ParsedInput::End]);
     }
 
     #[test]
-    fn vt_parser_parses_home_end_bare_form() {
+    fn vt_parser_parses_end_bare_form() {
         let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1b[H"), vec![ParsedInput::Home]);
         assert_eq!(parser.feed(b"\x1b[F"), vec![ParsedInput::End]);
     }
 
     #[test]
-    fn vt_parser_parses_home_end_ss3_form() {
+    fn vt_parser_parses_end_ss3_form() {
         let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1bOH"), vec![ParsedInput::Home]);
         assert_eq!(parser.feed(b"\x1bOF"), vec![ParsedInput::End]);
     }
 
