@@ -84,12 +84,18 @@ impl VtInputParser {
         self.parser.advance(&mut self.collector, data);
         mem::take(&mut self.collector.events)
     }
+
+    fn reset(&mut self) {
+        self.parser = Parser::new();
+        self.collector.ss3_pending = false;
+    }
 }
 
 #[derive(Default)]
 struct VtCollector {
     events: Vec<ParsedInput>,
     paste: Option<Vec<u8>>,
+    ss3_pending: bool,
 }
 
 impl VtCollector {
@@ -122,6 +128,14 @@ impl VtCollector {
 
 impl Perform for VtCollector {
     fn print(&mut self, c: char) {
+        if self.ss3_pending {
+            self.ss3_pending = false;
+            if matches!(c, 'A' | 'B' | 'C' | 'D') {
+                self.events.push(ParsedInput::Arrow(c as u8));
+                return;
+            }
+        }
+
         self.push_char(c);
     }
 
@@ -178,7 +192,7 @@ impl Perform for VtCollector {
                 let scroll = match p0.unwrap_or_default() {
                     64 => 1,
                     65 => -1,
-                    _ => 0,
+                    _ => return,
                 };
                 self.events.push(ParsedInput::Scroll(scroll));
             }
@@ -191,8 +205,8 @@ impl Perform for VtCollector {
             return;
         }
 
-        if intermediates == [b'O'] && matches!(byte, b'A' | b'B' | b'C' | b'D') {
-            self.events.push(ParsedInput::Arrow(byte));
+        if intermediates.is_empty() && byte == b'O' {
+            self.ss3_pending = true;
             return;
         }
 
@@ -201,10 +215,8 @@ impl Perform for VtCollector {
             return;
         }
 
-        if (0x20..=0x7e).contains(&byte) {
-            // Alt+printable: consume the ESC-prefixed sequence so ESC does not
-            // cancel a composer and the printable byte does not leak separately.
-        }
+        // Alt+printable falls through and is intentionally ignored, so ESC does
+        // not cancel a composer and the printable byte does not leak separately.
     }
 }
 
@@ -223,6 +235,7 @@ pub fn flush_pending_escape(app: &mut App) {
 
     app.pending_escape = false;
     app.pending_escape_started_at = None;
+    app.vt_input.reset();
     dispatch_escape(app);
 }
 
@@ -297,6 +310,7 @@ pub fn handle(app: &mut App, data: &[u8]) {
         {
             app.pending_escape = false;
             app.pending_escape_started_at = None;
+            app.vt_input.reset();
             dispatch_escape(app);
         }
     }
@@ -797,6 +811,14 @@ mod tests {
     fn vt_parser_consumes_alt_printable_without_emitting_bytes() {
         let mut parser = VtInputParser::default();
         assert!(parser.feed(b"\x1bq").is_empty());
+    }
+
+    #[test]
+    fn vt_parser_reset_clears_pending_escape_state() {
+        let mut parser = VtInputParser::default();
+        assert!(parser.feed(b"\x1b").is_empty());
+        parser.reset();
+        assert_eq!(parser.feed(b"j"), vec![ParsedInput::Byte(b'j')]);
     }
 
     #[test]
