@@ -243,11 +243,12 @@ impl App {
                 .map(|t| t.elapsed() >= std::time::Duration::from_secs(cooldown_secs))
                 .unwrap_or(true);
 
-            if should_notify && cooldown_ok {
-                if let Some((title, body)) = self.chat.pending_osc777.first() {
-                    let _ = write!(self.shared, "\x1b]777;notify;{};{}\x07", title, body);
-                    self.last_dm_notify_at = Some(std::time::Instant::now());
-                }
+            if should_notify
+                && cooldown_ok
+                && let Some((title, body)) = self.chat.pending_osc777.first()
+            {
+                let _ = write!(self.shared, "\x1b]777;notify;{};{}\x07", title, body);
+                self.last_dm_notify_at = Some(std::time::Instant::now());
             }
             // Always drain — notifications during cooldown are dropped, not queued.
             self.chat.pending_osc777.clear();
