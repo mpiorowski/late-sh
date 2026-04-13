@@ -44,6 +44,7 @@ pub struct ChatState {
     general_room_id: Option<Uuid>,
     pub(crate) general_messages: Vec<ChatMessage>,
     pub(crate) usernames: HashMap<Uuid, String>,
+    ignored_usernames: HashSet<String>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
@@ -107,6 +108,7 @@ impl ChatState {
             general_room_id: None,
             general_messages: Vec::new(),
             usernames: HashMap::new(),
+            ignored_usernames: HashSet::new(),
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             room_tx,
@@ -475,86 +477,127 @@ impl ChatState {
         self.reply_target = None;
     }
 
+    fn clear_composer_after_submit(&mut self) {
+        self.composer.clear();
+        self.composer_cursor = 0;
+        self.composing = false;
+        self.reply_target = None;
+        self.invalidate_composer_layout();
+    }
+
+    fn send_notice_message(&mut self, body: String) -> Option<Banner> {
+        let Some(room_id) = self.selected_room_id else {
+            return Some(Banner::error("No room selected"));
+        };
+
+        let request_id = Uuid::now_v7();
+        self.service.send_message_task(
+            self.user_id,
+            room_id,
+            self.selected_room_slug(),
+            body,
+            request_id,
+            self.is_admin,
+        );
+        self.pending_send_notices.push_back(request_id);
+        None
+    }
+
+    fn format_ignore_list_message(&self) -> String {
+        if self.ignored_usernames.is_empty() {
+            return "Ignore list is empty".to_string();
+        }
+
+        let mut ignored_usernames: Vec<&str> =
+            self.ignored_usernames.iter().map(String::as_str).collect();
+        ignored_usernames.sort_unstable();
+
+        let mut body = String::from("Ignored users");
+        for username in ignored_usernames {
+            body.push('\n');
+            body.push('@');
+            body.push_str(username);
+        }
+        body
+    }
+
     pub fn submit_composer(&mut self) -> Option<Banner> {
         let body = self.composer.trim_end().to_string();
 
         if body.trim() == "/help" {
-            self.composer.clear();
-            self.composing = false;
-            self.reply_target = None;
-            self.invalidate_composer_layout();
-            if let Some(room_id) = self.selected_room_id {
-                let help = concat!(
-                    "📖 Chat Commands\n",
-                    "\n",
-                    "/join #room — join a room (creates it if new, only you join)\n",
-                    "  → great for private hangouts: /join #rust-nerds\n",
-                    "/create #room — create a room & add everyone (new users auto-join too, but anyone can /leave)\n",
-                    "  → great for shared spaces: /create #music-recs\n",
-                    "/leave — leave the current room\n",
-                    "/dm @user — open a direct message\n",
-                    "/help — show this message\n",
-                    "\n",
-                    "⌨ Keys: h/l switch rooms · j/k select msg · r reply · d delete · i compose · @user mention",
-                );
-                let request_id = Uuid::now_v7();
-                self.service.send_message_task(
-                    self.user_id,
-                    room_id,
-                    self.selected_room_slug(),
-                    help.to_string(),
-                    request_id,
-                    self.is_admin,
-                );
-                self.pending_send_notices.push_back(request_id);
-            } else {
-                return Some(Banner::error("No room selected"));
+            self.clear_composer_after_submit();
+            let help = concat!(
+                "📖 Chat Commands\n",
+                "\n",
+                "/join #room — join a room (creates it if new, only you join)\n",
+                "  → great for private hangouts: /join #rust-nerds\n",
+                "/create #room — create a room & add everyone (new users auto-join too, but anyone can /leave)\n",
+                "  → great for shared spaces: /create #music-recs\n",
+                "/leave — leave the current room\n",
+                "/dm @user — open a direct message\n",
+                "/ignore [@user] — ignore a user, or list ignored users\n",
+                "/unignore [@user] — remove a user from your ignore list\n",
+                "/help — show this message\n",
+                "\n",
+                "⌨ Keys: h/l switch rooms · j/k select msg · r reply · d delete · i compose · @user mention",
+            );
+            return self.send_notice_message(help.to_string());
+        }
+
+        if let Some(command) = parse_ignore_command(&body) {
+            self.clear_composer_after_submit();
+            match command {
+                UserCommand::List => {
+                    return self.send_notice_message(self.format_ignore_list_message());
+                }
+                UserCommand::Username(username) => {
+                    self.service
+                        .ignore_user_task(self.user_id, username.to_string());
+                    return Some(Banner::success(&format!("Ignoring @{username}...")));
+                }
             }
-            return None;
+        }
+
+        if let Some(command) = parse_unignore_command(&body) {
+            self.clear_composer_after_submit();
+            match command {
+                UserCommand::List => {
+                    return self.send_notice_message(self.format_ignore_list_message());
+                }
+                UserCommand::Username(username) => {
+                    self.service
+                        .unignore_user_task(self.user_id, username.to_string());
+                    return Some(Banner::success(&format!("Unignoring @{username}...")));
+                }
+            }
         }
 
         if let Some(target) = parse_dm_command(&body) {
             self.service.start_dm_task(self.user_id, target.to_string());
-            self.composer.clear();
-            self.composing = false;
-            self.reply_target = None;
-            self.invalidate_composer_layout();
+            self.clear_composer_after_submit();
             return Some(Banner::success(&format!("Opening DM with {target}...")));
         }
 
         if let Some(room) = parse_join_command(&body) {
             self.service.join_room_task(self.user_id, room.to_string());
-            self.composer.clear();
-            self.composing = false;
-            self.reply_target = None;
-            self.invalidate_composer_layout();
+            self.clear_composer_after_submit();
             return Some(Banner::success(&format!("Joining #{room}...")));
         }
 
         if parse_leave_command(&body) {
+            self.clear_composer_after_submit();
             if let Some(room_id) = self.selected_room_id {
                 let slug = self.selected_room_slug().unwrap_or_default();
                 self.service
                     .leave_room_task(self.user_id, room_id, slug.clone());
-                self.composer.clear();
-                self.composing = false;
-                self.reply_target = None;
-                self.invalidate_composer_layout();
                 return Some(Banner::success(&format!("Leaving #{slug}...")));
             } else {
-                self.composer.clear();
-                self.composing = false;
-                self.reply_target = None;
-                self.invalidate_composer_layout();
                 return Some(Banner::error("No room selected"));
             }
         }
 
         if let Some(slug) = parse_create_room_command(&body) {
-            self.composer.clear();
-            self.composing = false;
-            self.reply_target = None;
-            self.invalidate_composer_layout();
+            self.clear_composer_after_submit();
             if !self.is_admin {
                 return Some(Banner::error("Admin only: /create-room"));
             }
@@ -564,20 +607,14 @@ impl ChatState {
         }
 
         if let Some(slug) = parse_create_command(&body) {
-            self.composer.clear();
-            self.composing = false;
-            self.reply_target = None;
-            self.invalidate_composer_layout();
+            self.clear_composer_after_submit();
             self.service
                 .create_room_task(self.user_id, slug.to_string());
             return Some(Banner::success(&format!("Creating #{slug}...")));
         }
 
         if let Some(slug) = parse_delete_room_command(&body) {
-            self.composer.clear();
-            self.composing = false;
-            self.reply_target = None;
-            self.invalidate_composer_layout();
+            self.clear_composer_after_submit();
             if !self.is_admin {
                 return Some(Banner::error("Admin only: /delete-room"));
             }
@@ -605,11 +642,7 @@ impl ChatState {
             );
             self.pending_send_notices.push_back(request_id);
         }
-        self.composer.clear();
-        self.composer_cursor = 0;
-        self.composing = false;
-        self.reply_target = None;
-        self.invalidate_composer_layout();
+        self.clear_composer_after_submit();
         None
     }
 
@@ -939,10 +972,11 @@ impl ChatState {
             return;
         }
 
+        self.usernames = snapshot.usernames;
+        self.ignored_usernames = snapshot.ignored_usernames.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;
-        self.general_messages = snapshot.general_messages;
-        self.usernames = snapshot.usernames;
+        self.general_messages = self.filter_messages(snapshot.general_messages);
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
         self.all_usernames = snapshot.all_usernames;
         self.bonsai_glyphs = snapshot.bonsai_glyphs;
@@ -1065,6 +1099,18 @@ impl ChatState {
                 ChatEvent::DeleteFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::IgnoreListUpdated {
+                    user_id,
+                    ignored_usernames,
+                    message,
+                } if self.user_id == user_id => {
+                    self.ignored_usernames = ignored_usernames.into_iter().collect();
+                    self.request_list();
+                    banner = Some(Banner::success(&message));
+                }
+                ChatEvent::IgnoreFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
                 _ => {}
             }
         }
@@ -1072,6 +1118,10 @@ impl ChatState {
     }
 
     fn push_message(&mut self, message: ChatMessage) {
+        if self.message_is_ignored(&message) {
+            return;
+        }
+
         if Some(message.room_id) == self.general_room_id
             && !self
                 .general_messages
@@ -1131,9 +1181,9 @@ impl ChatState {
                 if messages.is_empty()
                     && let Some(previous) = previous_by_room.get(&room.id)
                 {
-                    return (room, (*previous).clone());
+                    return (room, self.filter_messages((*previous).clone()));
                 }
-                (room, messages)
+                (room, self.filter_messages(messages))
             })
             .collect()
     }
@@ -1150,6 +1200,20 @@ impl ChatState {
             });
         incoming
     }
+
+    fn filter_messages(&self, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+        messages
+            .into_iter()
+            .filter(|message| !self.message_is_ignored(message))
+            .collect()
+    }
+
+    fn message_is_ignored(&self, message: &ChatMessage) -> bool {
+        self.usernames
+            .get(&message.user_id)
+            .and_then(|username| normalize_ignored_username(username))
+            .is_some_and(|username| self.ignored_usernames.contains(&username))
+    }
 }
 
 /// Sort key for DMs: resolves the other participant's username.
@@ -1164,6 +1228,12 @@ fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>
         .and_then(|id| usernames.get(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UserCommand<'a> {
+    List,
+    Username(&'a str),
 }
 
 /// Parse `/dm @username` or `/dm username` from the composer text.
@@ -1221,6 +1291,45 @@ fn parse_delete_room_command(input: &str) -> Option<&str> {
         return None;
     }
     Some(slug)
+}
+
+fn parse_ignore_command(input: &str) -> Option<UserCommand<'_>> {
+    parse_optional_username_command(input, "/ignore")
+}
+
+fn parse_unignore_command(input: &str) -> Option<UserCommand<'_>> {
+    parse_optional_username_command(input, "/unignore")
+}
+
+fn parse_optional_username_command<'a>(input: &'a str, command: &str) -> Option<UserCommand<'a>> {
+    if input.trim() == command {
+        return Some(UserCommand::List);
+    }
+
+    let rest = input.strip_prefix(command)?;
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return Some(UserCommand::List);
+    }
+
+    let username = rest.strip_prefix('@').unwrap_or(rest).trim();
+    if username.is_empty() {
+        return Some(UserCommand::List);
+    }
+
+    Some(UserCommand::Username(username))
+}
+
+fn normalize_ignored_username(username: &str) -> Option<String> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
 }
 
 fn short_user_id(user_id: Uuid) -> String {
@@ -1306,6 +1415,62 @@ mod tests {
     #[test]
     fn parse_dm_trims_whitespace() {
         assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
+    }
+
+    #[test]
+    fn parse_ignore_with_username() {
+        assert_eq!(
+            parse_ignore_command("/ignore @alice"),
+            Some(UserCommand::Username("alice"))
+        );
+        assert_eq!(
+            parse_ignore_command("/ignore bob"),
+            Some(UserCommand::Username("bob"))
+        );
+    }
+
+    #[test]
+    fn parse_ignore_lists_when_username_missing() {
+        assert_eq!(parse_ignore_command("/ignore"), Some(UserCommand::List));
+        assert_eq!(parse_ignore_command("/ignore   "), Some(UserCommand::List));
+        assert_eq!(parse_ignore_command("/ignore @"), Some(UserCommand::List));
+    }
+
+    #[test]
+    fn parse_ignore_not_command() {
+        assert_eq!(parse_ignore_command("ignore alice"), None);
+        assert_eq!(parse_ignore_command("/ignored alice"), None);
+    }
+
+    #[test]
+    fn parse_unignore_with_username() {
+        assert_eq!(
+            parse_unignore_command("/unignore @alice"),
+            Some(UserCommand::Username("alice"))
+        );
+        assert_eq!(
+            parse_unignore_command("/unignore bob"),
+            Some(UserCommand::Username("bob"))
+        );
+    }
+
+    #[test]
+    fn parse_unignore_lists_when_username_missing() {
+        assert_eq!(parse_unignore_command("/unignore"), Some(UserCommand::List));
+        assert_eq!(
+            parse_unignore_command("/unignore   "),
+            Some(UserCommand::List)
+        );
+        assert_eq!(
+            parse_unignore_command("/unignore @"),
+            Some(UserCommand::List)
+        );
+    }
+
+    #[test]
+    fn parse_unignore_not_command() {
+        assert_eq!(parse_unignore_command("unignore alice"), None);
+        assert_eq!(parse_unignore_command("/unignored alice"), None);
     }
 
     #[test]

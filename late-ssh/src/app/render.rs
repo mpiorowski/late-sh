@@ -662,14 +662,6 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
             white,
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  Press ", white),
-            Span::styled("?", bold_cyan),
-            Span::styled(" any time to see ", white),
-            Span::styled("all keybindings", bold_cyan),
-            Span::styled(".", white),
-        ]),
-        Line::from(""),
         // ── Music ──
         Line::from(vec![
             Span::styled("  ── ", dim),

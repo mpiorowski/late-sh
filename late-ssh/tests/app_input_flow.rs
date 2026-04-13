@@ -3,8 +3,14 @@
 mod helpers;
 
 use helpers::{make_app, new_test_db, wait_for_render_contains};
-use late_core::models::{chat_room::ChatRoom, chat_room_member::ChatRoomMember};
+use late_core::models::{
+    chat_message::{ChatMessage, ChatMessageParams},
+    chat_room::ChatRoom,
+    chat_room_member::ChatRoomMember,
+    user::User,
+};
 use late_core::test_utils::create_test_user;
+use tokio::time::Duration;
 
 #[tokio::test]
 async fn dashboard_chat_compose_blocks_quit_shortcut() {
@@ -104,4 +110,51 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     // end up composing "2hey\n" instead of submitting.
     app.handle_input(b"\r");
     wait_for_render_contains(&mut app, "Compose (press i)").await;
+}
+
+#[tokio::test]
+async fn ignore_command_hides_messages_and_persists_across_refresh() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "ignore-flow-viewer").await;
+    let target = create_test_user(&test_db.db, "ignore-flow-target").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general.id, target.id)
+        .await
+        .expect("join target");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: target.id,
+            body: "message from ignored user".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "ignore-command-flow-it");
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, "message from ignored user").await;
+
+    app.handle_input(b"i/ignore ignore-flow-target\n");
+    wait_for_render_contains(&mut app, "Ignored @ignore-flow-target").await;
+
+    let ignored = User::ignored_usernames(&client, viewer.id)
+        .await
+        .expect("load ignore list");
+    assert_eq!(ignored, vec!["ignore-flow-target"]);
+
+    helpers::assert_render_not_contains_for(
+        &mut app,
+        "message from ignored user",
+        Duration::from_millis(300),
+    )
+    .await;
 }
