@@ -116,7 +116,7 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
 }
 
 #[tokio::test]
-async fn help_command_renders_local_notice_without_persisting_message() {
+async fn help_command_renders_chat_feedback_without_persisting_message() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "help-notice-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -132,7 +132,7 @@ async fn help_command_renders_local_notice_without_persisting_message() {
     wait_for_render_contains(&mut app, " Rooms (h/l)").await;
 
     app.handle_input(b"i/help\n");
-    wait_for_render_contains(&mut app, "📖 Chat Commands").await;
+    wait_for_render_contains(&mut app, "Chat Commands").await;
     wait_for_render_contains(&mut app, "/ignore [@user]").await;
 
     let messages = ChatMessage::list_recent(&client, general.id, 20)
