@@ -13,8 +13,8 @@ use std::{
 use uuid::Uuid;
 
 use crate::app::common::{
+    overlay::{Overlay, draw_overlay},
     theme,
-    ui_overlay::{Overlay, draw_overlay},
 };
 use late_core::models::leaderboard::BadgeTier;
 

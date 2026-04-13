@@ -4,7 +4,7 @@ use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::app::common::ui_overlay::Overlay;
+use crate::app::common::overlay::Overlay;
 
 use crate::app::common::primitives::Banner;
 
