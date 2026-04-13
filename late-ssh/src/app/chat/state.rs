@@ -479,7 +479,7 @@ impl ChatState {
                     "/dm @user — open a direct message\n",
                     "/help — show this message\n",
                     "\n",
-                    "⌨ Keys: h/l switch rooms · j/k select msg · r reply · d delete · i compose · @user mention",
+                    "⌨ Keys: l/h switch rooms · j/k select msg · r reply · d delete · i compose · @user mention",
                 );
                 let request_id = Uuid::now_v7();
                 self.service.send_message_task(

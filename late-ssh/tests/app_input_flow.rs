@@ -38,7 +38,7 @@ async fn screen_number_keys_switch_between_dashboard_games_and_chat() {
     let mut app = make_app(test_db.db.clone(), user.id, "screen-flow-it");
 
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, " Rooms (l/h)").await;
 
     app.handle_input(b"3");
     wait_for_render_contains(&mut app, " The Arcade ").await;
@@ -89,7 +89,7 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-compose-flow-it");
 
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, " Rooms (l/h)").await;
 
     app.handle_input(b"i2hey");
     wait_for_render_contains(&mut app, "2hey").await;

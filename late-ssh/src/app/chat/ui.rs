@@ -683,7 +683,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     )));
 
     let rooms_block = Block::default()
-        .title(" Rooms (h/l) ")
+        .title(" Rooms (l/h) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER));
     let rooms_paragraph = Paragraph::new(room_lines).block(rooms_block);

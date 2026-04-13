@@ -79,11 +79,11 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     if app.chat.notifications_selected {
         match byte {
             b'h' | b'H' => {
-                switch_room(app, 1);
+                switch_room(app, -1);
                 return true;
             }
             b'l' | b'L' => {
-                switch_room(app, -1);
+                switch_room(app, 1);
                 return true;
             }
             _ => return super::notifications::input::handle_byte(app, byte),
@@ -94,11 +94,11 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         // h/l still switch rooms even when news is selected
         match byte {
             b'h' | b'H' => {
-                switch_room(app, 1);
+                switch_room(app, -1);
                 return true;
             }
             b'l' | b'L' => {
-                switch_room(app, -1);
+                switch_room(app, 1);
                 return true;
             }
             _ => return super::news::input::handle_byte(app, byte),
@@ -136,11 +136,11 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         b'h' | b'H' => {
-            switch_room(app, 1);
+            switch_room(app, -1);
             true
         }
         b'l' | b'L' => {
-            switch_room(app, -1);
+            switch_room(app, 1);
             true
         }
         b'i' | b'I' | b'\r' | b'\n' => {
