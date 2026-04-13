@@ -253,7 +253,8 @@ fn ensure_chat_rows_cache(
             TimelineEntry::Message(msg) => {
                 let is_own = msg.user_id == ctx.current_user_id;
                 let is_continuation = prev_user_id == Some(msg.user_id)
-                    && prev_created.is_some_and(|prev| (msg.created - prev).num_seconds().abs() < 120);
+                    && prev_created
+                        .is_some_and(|prev| (msg.created - prev).num_seconds().abs() < 120);
                 let stamp = format!(
                     "[{}]",
                     crate::app::common::primitives::format_relative_time(msg.created)
