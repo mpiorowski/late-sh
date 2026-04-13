@@ -368,24 +368,26 @@ pub async fn assert_render_not_contains_for(app: &mut App, needle: &str, duratio
 }
 
 fn strip_ansi(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for next in chars.by_ref() {
-                    if ('@'..='~').contains(&next) {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1B {
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'[' {
+                i += 1;
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    i += 1;
+                    if (0x40..=0x7E).contains(&b) {
                         break;
                     }
                 }
             }
             continue;
         }
-
-        out.push(ch);
+        out.push(bytes[i] as char);
+        i += 1;
     }
-
     out
 }

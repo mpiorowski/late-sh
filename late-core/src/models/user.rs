@@ -20,27 +20,7 @@ crate::model! {
     }
 }
 
-const IGNORED_USERNAMES_KEY: &str = "ignored_usernames";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum IgnoreListMutation {
-    Added {
-        username: String,
-        ignored_usernames: Vec<String>,
-    },
-    AlreadyPresent {
-        username: String,
-        ignored_usernames: Vec<String>,
-    },
-    Removed {
-        username: String,
-        ignored_usernames: Vec<String>,
-    },
-    Missing {
-        username: String,
-        ignored_usernames: Vec<String>,
-    },
-}
+const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -132,62 +112,50 @@ impl User {
         Ok(row.map(Self::from))
     }
 
-    pub async fn ignored_usernames(client: &Client, user_id: Uuid) -> Result<Vec<String>> {
+    pub async fn ignored_user_ids(client: &Client, user_id: Uuid) -> Result<Vec<Uuid>> {
         let settings = Self::settings_for_user(client, user_id).await?;
-        Ok(extract_ignored_usernames(&settings))
+        Ok(extract_ignored_user_ids(&settings))
     }
 
-    pub async fn add_ignored_username(
+    /// Adds `target_id` to the ignore list. Returns `(changed, ids)` —
+    /// `changed` is false if the id was already present.
+    pub async fn add_ignored_user_id(
         client: &Client,
         user_id: Uuid,
-        username: &str,
-    ) -> Result<IgnoreListMutation> {
-        let username = normalize_ignored_username(username)?;
+        target_id: Uuid,
+    ) -> Result<(bool, Vec<Uuid>)> {
         let mut settings = Self::settings_for_user(client, user_id).await?;
-        let mut ignored_usernames = extract_ignored_usernames(&settings);
+        let mut ids = extract_ignored_user_ids(&settings);
 
-        if ignored_usernames.contains(&username) {
-            return Ok(IgnoreListMutation::AlreadyPresent {
-                username,
-                ignored_usernames,
-            });
+        if ids.contains(&target_id) {
+            return Ok((false, ids));
         }
 
-        ignored_usernames.push(username.clone());
-        ignored_usernames.sort();
-        set_ignored_usernames(&mut settings, &ignored_usernames);
+        ids.push(target_id);
+        ids.sort();
+        set_ignored_user_ids(&mut settings, &ids);
         Self::update_settings(client, user_id, &settings).await?;
-
-        Ok(IgnoreListMutation::Added {
-            username,
-            ignored_usernames,
-        })
+        Ok((true, ids))
     }
 
-    pub async fn remove_ignored_username(
+    /// Removes `target_id` from the ignore list. Returns `(changed, ids)` —
+    /// `changed` is false if the id was not present.
+    pub async fn remove_ignored_user_id(
         client: &Client,
         user_id: Uuid,
-        username: &str,
-    ) -> Result<IgnoreListMutation> {
-        let username = normalize_ignored_username(username)?;
+        target_id: Uuid,
+    ) -> Result<(bool, Vec<Uuid>)> {
         let mut settings = Self::settings_for_user(client, user_id).await?;
-        let mut ignored_usernames = extract_ignored_usernames(&settings);
+        let mut ids = extract_ignored_user_ids(&settings);
 
-        if !ignored_usernames.contains(&username) {
-            return Ok(IgnoreListMutation::Missing {
-                username,
-                ignored_usernames,
-            });
+        if !ids.contains(&target_id) {
+            return Ok((false, ids));
         }
 
-        ignored_usernames.retain(|entry| entry != &username);
-        set_ignored_usernames(&mut settings, &ignored_usernames);
+        ids.retain(|entry| entry != &target_id);
+        set_ignored_user_ids(&mut settings, &ids);
         Self::update_settings(client, user_id, &settings).await?;
-
-        Ok(IgnoreListMutation::Removed {
-            username,
-            ignored_usernames,
-        })
+        Ok((true, ids))
     }
 
     async fn settings_for_user(client: &Client, user_id: Uuid) -> Result<Value> {
@@ -216,43 +184,25 @@ impl User {
     }
 }
 
-fn normalize_ignored_username(username: &str) -> Result<String> {
-    let username = username.trim().trim_start_matches('@').trim();
-    if username.is_empty() {
-        bail!("Username cannot be empty");
-    }
-    Ok(username.to_ascii_lowercase())
-}
-
-fn extract_ignored_usernames(settings: &Value) -> Vec<String> {
-    let Some(entries) = settings
-        .get(IGNORED_USERNAMES_KEY)
-        .and_then(Value::as_array)
-    else {
+fn extract_ignored_user_ids(settings: &Value) -> Vec<Uuid> {
+    let Some(entries) = settings.get(IGNORED_USER_IDS_KEY).and_then(Value::as_array) else {
         return Vec::new();
     };
 
-    let mut normalized = BTreeSet::new();
+    let mut deduped = BTreeSet::new();
     for entry in entries {
-        if let Some(username) = entry.as_str() {
-            let trimmed = username.trim();
-            if !trimmed.is_empty() {
-                normalized.insert(trimmed.to_ascii_lowercase());
-            }
+        if let Some(id) = entry.as_str().and_then(|s| Uuid::parse_str(s.trim()).ok()) {
+            deduped.insert(id);
         }
     }
-
-    normalized.into_iter().collect()
+    deduped.into_iter().collect()
 }
 
-fn set_ignored_usernames(settings: &mut Value, ignored_usernames: &[String]) {
+fn set_ignored_user_ids(settings: &mut Value, ids: &[Uuid]) {
     if !settings.is_object() {
         *settings = json!({});
     }
-
-    let ignored = ignored_usernames
-        .iter()
-        .map(|username| Value::String(username.clone()))
-        .collect();
-    settings[IGNORED_USERNAMES_KEY] = Value::Array(ignored);
+    settings[IGNORED_USER_IDS_KEY] = json!(
+        ids.iter().map(Uuid::to_string).collect::<Vec<_>>()
+    );
 }

@@ -30,7 +30,7 @@ use super::ui_text::{
 
 // ── Dashboard chat card ─────────────────────────────────────
 
-pub(crate) struct DashboardChatView<'a> {
+pub struct DashboardChatView<'a> {
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
     pub rows_cache: &'a mut ChatRowsCache,
@@ -50,7 +50,7 @@ pub(crate) struct DashboardChatView<'a> {
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
 }
 
-pub(crate) fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
+pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
     let block = Block::default()
         .title(" Chat ")
         .borders(Borders::ALL)
@@ -437,7 +437,7 @@ fn draw_mention_autocomplete(frame: &mut Frame, anchor: Rect, matches: &[String]
 
 // ── Main chat screen ────────────────────────────────────────
 
-pub(crate) struct ChatRenderInput<'a> {
+pub struct ChatRenderInput<'a> {
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub news_view: super::news::ui::ArticleListView<'a>,
@@ -472,7 +472,7 @@ pub(crate) struct ChatRenderInput<'a> {
     pub notifications_view: super::notifications::ui::NotificationListView<'a>,
 }
 
-pub(crate) fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
+pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let chat_rooms = view.chat_rooms;
     let usernames = view.usernames;
     let unread_counts = view.unread_counts;

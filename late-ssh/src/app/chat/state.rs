@@ -14,6 +14,12 @@ use super::{
     svc::{ChatEvent, ChatService, ChatSnapshot},
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IgnoreOp {
+    Add,
+    Remove,
+}
+
 #[derive(Default)]
 pub(crate) struct MentionAutocomplete {
     pub active: bool,
@@ -46,7 +52,7 @@ pub struct ChatState {
     general_room_id: Option<Uuid>,
     pub(crate) general_messages: Vec<ChatMessage>,
     pub(crate) usernames: HashMap<Uuid, String>,
-    ignored_usernames: HashSet<String>,
+    ignored_user_ids: HashSet<Uuid>,
     overlay: Option<Overlay>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
@@ -108,7 +114,7 @@ impl ChatState {
             general_room_id: None,
             general_messages: Vec::new(),
             usernames: HashMap::new(),
-            ignored_usernames: HashSet::new(),
+            ignored_user_ids: HashSet::new(),
             overlay: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
@@ -511,17 +517,38 @@ impl ChatState {
     }
 
     fn ignore_list_lines(&self) -> Vec<String> {
-        if self.ignored_usernames.is_empty() {
+        if self.ignored_user_ids.is_empty() {
             return vec!["Ignore list is empty".to_string()];
         }
 
-        let mut usernames: Vec<&str> =
-            self.ignored_usernames.iter().map(String::as_str).collect();
-        usernames.sort_unstable();
-        usernames
-            .into_iter()
-            .map(|username| format!("@{username}"))
-            .collect()
+        let mut labels: Vec<String> = self
+            .ignored_user_ids
+            .iter()
+            .map(|id| {
+                self.usernames
+                    .get(id)
+                    .map(|name| format!("@{name}"))
+                    .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(*id)))
+            })
+            .collect();
+        labels.sort();
+        labels
+    }
+
+    fn handle_ignore_command(&mut self, target: Option<&str>, op: IgnoreOp) -> Option<Banner> {
+        self.clear_composer_after_submit();
+        match target {
+            None => self.open_overlay("Ignored Users", self.ignore_list_lines()),
+            Some(name) => match op {
+                IgnoreOp::Add => self
+                    .service
+                    .ignore_user_task(self.user_id, name.to_string()),
+                IgnoreOp::Remove => self
+                    .service
+                    .unignore_user_task(self.user_id, name.to_string()),
+            },
+        }
+        None
     }
 
     pub fn submit_composer(&mut self) -> Option<Banner> {
@@ -548,34 +575,11 @@ impl ChatState {
             return None;
         }
 
-        if let Some(command) = parse_ignore_command(&body) {
-            self.clear_composer_after_submit();
-            match command {
-                UserCommand::List => {
-                    self.open_overlay("Ignored Users", self.ignore_list_lines());
-                    return None;
-                }
-                UserCommand::Username(username) => {
-                    self.service
-                        .ignore_user_task(self.user_id, username.to_string());
-                    return None;
-                }
-            }
+        if let Some(target) = parse_user_command(&body, "/ignore") {
+            return self.handle_ignore_command(target, IgnoreOp::Add);
         }
-
-        if let Some(command) = parse_unignore_command(&body) {
-            self.clear_composer_after_submit();
-            match command {
-                UserCommand::List => {
-                    self.open_overlay("Ignored Users", self.ignore_list_lines());
-                    return None;
-                }
-                UserCommand::Username(username) => {
-                    self.service
-                        .unignore_user_task(self.user_id, username.to_string());
-                    return None;
-                }
-            }
+        if let Some(target) = parse_user_command(&body, "/unignore") {
+            return self.handle_ignore_command(target, IgnoreOp::Remove);
         }
 
         if let Some(target) = parse_dm_command(&body) {
@@ -979,7 +983,7 @@ impl ChatState {
         }
 
         self.usernames = snapshot.usernames;
-        self.ignored_usernames = snapshot.ignored_usernames.into_iter().collect();
+        self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.general_messages = self.filter_messages(snapshot.general_messages);
@@ -1093,11 +1097,12 @@ impl ChatState {
                 }
                 ChatEvent::IgnoreListUpdated {
                     user_id,
-                    ignored_usernames,
+                    target_user_id: _,
+                    ignored_user_ids,
                     message,
                 } if self.user_id == user_id => {
-                    self.ignored_usernames = ignored_usernames.into_iter().collect();
-                    self.request_list();
+                    self.ignored_user_ids = ignored_user_ids.into_iter().collect();
+                    self.refilter_local_messages();
                     banner = Some(Banner::success(&message));
                 }
                 ChatEvent::IgnoreFailed { user_id, message } if self.user_id == user_id => {
@@ -1113,8 +1118,7 @@ impl ChatState {
         let in_dm_room = self
             .rooms
             .iter()
-            .find(|(room, _)| room.id == message.room_id)
-            .is_some_and(|(room, _)| room.kind == "dm");
+            .any(|(room, _)| room.id == message.room_id && room.kind == "dm");
 
         if !in_dm_room && self.message_is_ignored(&message) {
             return;
@@ -1216,19 +1220,23 @@ impl ChatState {
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
-        message_is_ignored(&self.usernames, &self.ignored_usernames, message)
+        self.ignored_user_ids.contains(&message.user_id)
     }
-}
 
-fn message_is_ignored(
-    usernames: &HashMap<Uuid, String>,
-    ignored_usernames: &HashSet<String>,
-    message: &ChatMessage,
-) -> bool {
-    usernames
-        .get(&message.user_id)
-        .and_then(|username| normalize_ignored_username(username))
-        .is_some_and(|username| ignored_usernames.contains(&username))
+    /// Strip already-stored messages from any newly-ignored author.
+    /// DM rooms are exempt — leaving the DM room is the way to dismiss them.
+    fn refilter_local_messages(&mut self) {
+        let ignored = &self.ignored_user_ids;
+        self.general_messages
+            .retain(|m| !ignored.contains(&m.user_id));
+        for (room, messages) in &mut self.rooms {
+            if room.kind == "dm" {
+                continue;
+            }
+            messages.retain(|m| !ignored.contains(&m.user_id));
+        }
+        self.sync_selection();
+    }
 }
 
 /// Sort key for DMs: resolves the other participant's username.
@@ -1243,12 +1251,6 @@ fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>
         .and_then(|id| usernames.get(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UserCommand<'a> {
-    List,
-    Username(&'a str),
 }
 
 /// Parse `/dm @username` or `/dm username` from the composer text.
@@ -1308,43 +1310,22 @@ fn parse_delete_room_command(input: &str) -> Option<&str> {
     Some(slug)
 }
 
-fn parse_ignore_command(input: &str) -> Option<UserCommand<'_>> {
-    parse_optional_username_command(input, "/ignore")
-}
-
-fn parse_unignore_command(input: &str) -> Option<UserCommand<'_>> {
-    parse_optional_username_command(input, "/unignore")
-}
-
-fn parse_optional_username_command<'a>(input: &'a str, command: &str) -> Option<UserCommand<'a>> {
-    if input.trim() == command {
-        return Some(UserCommand::List);
-    }
-
+/// Parse `/<command>` or `/<command> [@]username`. Returns:
+/// - `None` if `input` is not the given command,
+/// - `Some(None)` for the bare command (caller treats as "list"),
+/// - `Some(Some(username))` for the targeted form.
+fn parse_user_command<'a>(input: &'a str, command: &str) -> Option<Option<&'a str>> {
     let rest = input.strip_prefix(command)?;
-    if !rest.chars().next().is_some_and(char::is_whitespace) {
-        return None;
-    }
-
-    let rest = rest.trim_start();
+    let rest = match rest.chars().next() {
+        None => return Some(None),
+        Some(c) if c.is_whitespace() => rest.trim(),
+        Some(_) => return None,
+    };
     if rest.is_empty() {
-        return Some(UserCommand::List);
+        return Some(None);
     }
-
     let username = rest.strip_prefix('@').unwrap_or(rest).trim();
-    if username.is_empty() {
-        return Some(UserCommand::List);
-    }
-
-    Some(UserCommand::Username(username))
-}
-
-fn normalize_ignored_username(username: &str) -> Option<String> {
-    let trimmed = username.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
+    Some((!username.is_empty()).then_some(username))
 }
 
 fn short_user_id(user_id: Uuid) -> String {
@@ -1433,59 +1414,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_ignore_with_username() {
+    fn parse_user_command_with_username() {
         assert_eq!(
-            parse_ignore_command("/ignore @alice"),
-            Some(UserCommand::Username("alice"))
+            parse_user_command("/ignore @alice", "/ignore"),
+            Some(Some("alice"))
         );
         assert_eq!(
-            parse_ignore_command("/ignore bob"),
-            Some(UserCommand::Username("bob"))
-        );
-    }
-
-    #[test]
-    fn parse_ignore_lists_when_username_missing() {
-        assert_eq!(parse_ignore_command("/ignore"), Some(UserCommand::List));
-        assert_eq!(parse_ignore_command("/ignore   "), Some(UserCommand::List));
-        assert_eq!(parse_ignore_command("/ignore @"), Some(UserCommand::List));
-    }
-
-    #[test]
-    fn parse_ignore_not_command() {
-        assert_eq!(parse_ignore_command("ignore alice"), None);
-        assert_eq!(parse_ignore_command("/ignored alice"), None);
-    }
-
-    #[test]
-    fn parse_unignore_with_username() {
-        assert_eq!(
-            parse_unignore_command("/unignore @alice"),
-            Some(UserCommand::Username("alice"))
-        );
-        assert_eq!(
-            parse_unignore_command("/unignore bob"),
-            Some(UserCommand::Username("bob"))
+            parse_user_command("/unignore bob", "/unignore"),
+            Some(Some("bob"))
         );
     }
 
     #[test]
-    fn parse_unignore_lists_when_username_missing() {
-        assert_eq!(parse_unignore_command("/unignore"), Some(UserCommand::List));
-        assert_eq!(
-            parse_unignore_command("/unignore   "),
-            Some(UserCommand::List)
-        );
-        assert_eq!(
-            parse_unignore_command("/unignore @"),
-            Some(UserCommand::List)
-        );
+    fn parse_user_command_lists_when_username_missing() {
+        assert_eq!(parse_user_command("/ignore", "/ignore"), Some(None));
+        assert_eq!(parse_user_command("/ignore   ", "/ignore"), Some(None));
+        assert_eq!(parse_user_command("/ignore @", "/ignore"), Some(None));
+        assert_eq!(parse_user_command("/unignore", "/unignore"), Some(None));
     }
 
     #[test]
-    fn parse_unignore_not_command() {
-        assert_eq!(parse_unignore_command("unignore alice"), None);
-        assert_eq!(parse_unignore_command("/unignored alice"), None);
+    fn parse_user_command_rejects_non_matches() {
+        assert_eq!(parse_user_command("ignore alice", "/ignore"), None);
+        assert_eq!(parse_user_command("/ignored alice", "/ignore"), None);
+        assert_eq!(parse_user_command("/unignored alice", "/unignore"), None);
     }
 
     #[test]

@@ -246,7 +246,7 @@ async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() 
     );
     assert_eq!(snapshot.unread_counts.get(&general_room.id), Some(&1));
     assert_eq!(snapshot.unread_counts.get(&lang_room.id), Some(&1));
-    assert!(snapshot.ignored_usernames.is_empty());
+    assert!(snapshot.ignored_user_ids.is_empty());
 
     let selected_room = snapshot
         .chat_rooms
@@ -345,7 +345,7 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
 }
 
 #[tokio::test]
-async fn publishes_snapshot_with_persisted_ignored_usernames() {
+async fn publishes_snapshot_with_persisted_ignored_user_ids() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
         test_db.db.clone(),
@@ -367,9 +367,9 @@ async fn publishes_snapshot_with_persisted_ignored_usernames() {
         .await
         .expect("join ignored user");
 
-    User::add_ignored_username(&client, target_user.id, "author_ignore_snapshot")
+    User::add_ignored_user_id(&client, target_user.id, ignored_user.id)
         .await
-        .expect("persist ignored username");
+        .expect("persist ignored user id");
 
     service.list_chats_task(target_user.id, Some(general_room.id));
 
@@ -379,7 +379,7 @@ async fn publishes_snapshot_with_persisted_ignored_usernames() {
         .expect("watch changed");
     let snapshot = state_rx.borrow_and_update().clone();
 
-    assert_eq!(snapshot.ignored_usernames, vec!["author_ignore_snapshot"]);
+    assert_eq!(snapshot.ignored_user_ids, vec![ignored_user.id]);
 }
 
 // --- delete message: regression tests for user_id on MessageDeleted ---
@@ -519,20 +519,22 @@ async fn ignore_user_task_persists_and_emits_update() {
     match event {
         ChatEvent::IgnoreListUpdated {
             user_id,
-            ignored_usernames,
+            target_user_id,
+            ignored_user_ids,
             message,
         } => {
             assert_eq!(user_id, viewer.id);
-            assert_eq!(ignored_usernames, vec!["ignore_target"]);
+            assert_eq!(target_user_id, target.id);
+            assert_eq!(ignored_user_ids, vec![target.id]);
             assert_eq!(message, "Ignored @ignore_target");
         }
         other => panic!("expected IgnoreListUpdated, got {other:?}"),
     }
 
-    let ignored = User::ignored_usernames(&client, viewer.id)
+    let ignored = User::ignored_user_ids(&client, viewer.id)
         .await
         .expect("load ignore list");
-    assert_eq!(ignored, vec!["ignore_target"]);
+    assert_eq!(ignored, vec![target.id]);
 }
 
 #[tokio::test]
@@ -556,9 +558,9 @@ async fn unignore_user_task_persists_and_emits_update() {
     ChatRoomMember::join(&client, general_room.id, target.id)
         .await
         .expect("join target");
-    User::add_ignored_username(&client, viewer.id, "unignore_target")
+    User::add_ignored_user_id(&client, viewer.id, target.id)
         .await
-        .expect("seed ignored username");
+        .expect("seed ignored user id");
 
     service.unignore_user_task(viewer.id, "unignore_target".to_string());
 
@@ -569,17 +571,19 @@ async fn unignore_user_task_persists_and_emits_update() {
     match event {
         ChatEvent::IgnoreListUpdated {
             user_id,
-            ignored_usernames,
+            target_user_id,
+            ignored_user_ids,
             message,
         } => {
             assert_eq!(user_id, viewer.id);
-            assert!(ignored_usernames.is_empty());
+            assert_eq!(target_user_id, target.id);
+            assert!(ignored_user_ids.is_empty());
             assert_eq!(message, "Unignored @unignore_target");
         }
         other => panic!("expected IgnoreListUpdated, got {other:?}"),
     }
 
-    let ignored = User::ignored_usernames(&client, viewer.id)
+    let ignored = User::ignored_user_ids(&client, viewer.id)
         .await
         .expect("load ignore list");
     assert!(ignored.is_empty());
@@ -621,9 +625,9 @@ async fn ignore_user_task_emits_error_for_self_or_duplicate() {
     ChatRoomMember::join(&client, general_room.id, target.id)
         .await
         .expect("join target");
-    User::add_ignored_username(&client, viewer.id, "ignore_dup_target")
+    User::add_ignored_user_id(&client, viewer.id, target.id)
         .await
-        .expect("seed ignored username");
+        .expect("seed ignored user id");
 
     service.ignore_user_task(viewer.id, "ignore_dup_target".to_string());
 

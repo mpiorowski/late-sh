@@ -177,10 +177,10 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     app.handle_input(b"/ignore ignore-flow-target\n");
     wait_for_render_contains(&mut app, "Ignored @ignore-flow-target").await;
 
-    let ignored = User::ignored_usernames(&client, viewer.id)
+    let ignored = User::ignored_user_ids(&client, viewer.id)
         .await
         .expect("load ignore list");
-    assert_eq!(ignored, vec!["ignore-flow-target"]);
+    assert_eq!(ignored, vec![target.id]);
 
     let post_ignore_body = "fresh message from ignored user";
     chat_service.send_message_task(

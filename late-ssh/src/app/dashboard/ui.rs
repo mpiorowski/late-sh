@@ -18,7 +18,7 @@ use crate::{
     app::vote::ui::{VoteCardView, draw_vote_card},
 };
 
-pub(crate) struct DashboardRenderInput<'a> {
+pub struct DashboardRenderInput<'a> {
     pub connect_url: &'a str,
     pub now_playing: Option<&'a str>,
     pub vote_counts: &'a VoteCount,
@@ -28,7 +28,7 @@ pub(crate) struct DashboardRenderInput<'a> {
     pub chat_view: DashboardChatView<'a>,
 }
 
-pub(crate) fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
+pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     if area.width < 52 || area.height < 16 {
         let compact = Paragraph::new("Dashboard view too small.")
             .style(Style::default().fg(theme::TEXT_DIM))
