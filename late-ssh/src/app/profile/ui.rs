@@ -138,7 +138,11 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
         "off" => "Off",
         _ => "When unfocused",
     };
-    let dm_row_style = if view.settings_row == 0 { selected_label } else { dim };
+    let dm_row_style = if view.settings_row == 0 {
+        selected_label
+    } else {
+        dim
+    };
     let dm_label_text = " DM Notifications";
     let dm_pad = " ".repeat(label_pad.saturating_sub(dm_label_text.len() + 1));
     lines.push(Line::from(vec![
@@ -151,7 +155,11 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     ]));
 
     // Row 1: Notification cooldown
-    let cooldown_row_style = if view.settings_row == 1 { selected_label } else { dim };
+    let cooldown_row_style = if view.settings_row == 1 {
+        selected_label
+    } else {
+        dim
+    };
     let cooldown_label_text = " Notification cooldown (mins)";
     let cooldown_pad = " ".repeat(label_pad.saturating_sub(cooldown_label_text.len() + 1));
     let cooldown_val = format!("{}", view.dm_notify_cooldown_mins);

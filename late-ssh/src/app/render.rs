@@ -237,8 +237,7 @@ impl App {
                 "always" => true,
                 _ /* "unfocused" */ => !self.terminal_focused,
             };
-            let cooldown_secs =
-                self.profile_state.profile().dm_notify_cooldown_mins as u64 * 60;
+            let cooldown_secs = self.profile_state.profile().dm_notify_cooldown_mins as u64 * 60;
             let cooldown_ok = self
                 .last_dm_notify_at
                 .map(|t| t.elapsed() >= std::time::Duration::from_secs(cooldown_secs))

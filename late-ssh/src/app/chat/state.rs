@@ -971,14 +971,10 @@ impl ChatState {
                             .get(&message.user_id)
                             .cloned()
                             .unwrap_or_else(|| "someone".to_string());
-                        let preview: String = message
-                            .body
-                            .replace('\n', " ")
-                            .chars()
-                            .take(80)
-                            .collect();
+                        let preview: String =
+                            message.body.replace('\n', " ").chars().take(80).collect();
                         self.pending_osc777
-                            .push((format!("New DM from {nickname}"), preview));
+                            .push((format!("late.sh: New DM from {nickname}"), preview));
                     }
                     self.push_message(message);
                 }
