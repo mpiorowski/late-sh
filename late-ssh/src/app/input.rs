@@ -392,8 +392,24 @@ fn handle_vt_segment(app: &mut App, data: &[u8]) {
     }
 }
 
+fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
+    match event {
+        ParsedInput::Byte(b'q' | b'Q') => app.chat.close_overlay(),
+        ParsedInput::Byte(b'j' | b'J') => app.chat.scroll_overlay(1),
+        ParsedInput::Byte(b'k' | b'K') => app.chat.scroll_overlay(-1),
+        ParsedInput::Arrow(b'B') => app.chat.scroll_overlay(1),
+        ParsedInput::Arrow(b'A') => app.chat.scroll_overlay(-1),
+        _ => {}
+    }
+}
+
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     let ctx = InputContext::from_app(app);
+
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
+        handle_overlay_input(app, &event);
+        return;
+    }
 
     match event {
         ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
@@ -499,6 +515,10 @@ fn dispatch_escape(app: &mut App) {
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
+        app.chat.close_overlay();
+        return;
+    }
     if ctx.screen == Screen::Games && app.is_playing_game {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
@@ -577,9 +597,7 @@ pub fn sanitize_paste_markers(s: &str) -> String {
 
 fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
     match screen {
-        Screen::Dashboard => {
-            app.chat.select_dashboard_message(delta);
-        }
+        Screen::Dashboard => app.chat.select_dashboard_message(delta),
         Screen::Chat => chat::input::handle_scroll(app, delta),
         _ => {}
     }

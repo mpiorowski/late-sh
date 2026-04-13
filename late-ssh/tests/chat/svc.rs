@@ -2,6 +2,7 @@ use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::{ChatRoom, ChatRoomParams},
     chat_room_member::ChatRoomMember,
+    user::User,
 };
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::{ChatEvent, ChatService};
@@ -245,6 +246,7 @@ async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() 
     );
     assert_eq!(snapshot.unread_counts.get(&general_room.id), Some(&1));
     assert_eq!(snapshot.unread_counts.get(&lang_room.id), Some(&1));
+    assert!(snapshot.ignored_user_ids.is_empty());
 
     let selected_room = snapshot
         .chat_rooms
@@ -340,6 +342,44 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
         other_entry.1.is_empty(),
         "non-selected room should not include messages in snapshot"
     );
+}
+
+#[tokio::test]
+async fn publishes_snapshot_with_persisted_ignored_user_ids() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut state_rx = service.subscribe_state();
+    let client = test_db.db.get().await.expect("db client");
+
+    let target_user = create_test_user(&test_db.db, "target_ignore_snapshot").await;
+    let ignored_user = create_test_user(&test_db.db, "author_ignore_snapshot").await;
+
+    let general_room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general_room.id, target_user.id)
+        .await
+        .expect("join target");
+    ChatRoomMember::join(&client, general_room.id, ignored_user.id)
+        .await
+        .expect("join ignored user");
+
+    User::add_ignored_user_id(&client, target_user.id, ignored_user.id)
+        .await
+        .expect("persist ignored user id");
+
+    service.list_chats_task(target_user.id, Some(general_room.id));
+
+    timeout(Duration::from_secs(2), state_rx.changed())
+        .await
+        .expect("state timeout")
+        .expect("watch changed");
+    let snapshot = state_rx.borrow_and_update().clone();
+
+    assert_eq!(snapshot.ignored_user_ids, vec![ignored_user.id]);
 }
 
 // --- delete message: regression tests for user_id on MessageDeleted ---
@@ -445,5 +485,209 @@ async fn admin_delete_event_carries_admin_user_id_not_author() {
             assert_eq!(message_id, msg.id);
         }
         other => panic!("expected MessageDeleted, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn ignore_user_task_persists_and_emits_update() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let viewer = create_test_user(&test_db.db, "ignore_viewer").await;
+    let target = create_test_user(&test_db.db, "ignore_target").await;
+    let general_room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general_room.id, target.id)
+        .await
+        .expect("join target");
+
+    service.ignore_user_task(viewer.id, "ignore_target".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::IgnoreListUpdated {
+            user_id,
+            ignored_user_ids,
+            message,
+        } => {
+            assert_eq!(user_id, viewer.id);
+            assert_eq!(ignored_user_ids, vec![target.id]);
+            assert_eq!(message, "Ignored @ignore_target");
+        }
+        other => panic!("expected IgnoreListUpdated, got {other:?}"),
+    }
+
+    let ignored = User::ignored_user_ids(&client, viewer.id)
+        .await
+        .expect("load ignore list");
+    assert_eq!(ignored, vec![target.id]);
+}
+
+#[tokio::test]
+async fn unignore_user_task_persists_and_emits_update() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let viewer = create_test_user(&test_db.db, "unignore_viewer").await;
+    let target = create_test_user(&test_db.db, "unignore_target").await;
+    let general_room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general_room.id, target.id)
+        .await
+        .expect("join target");
+    User::add_ignored_user_id(&client, viewer.id, target.id)
+        .await
+        .expect("seed ignored user id");
+
+    service.unignore_user_task(viewer.id, "unignore_target".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::IgnoreListUpdated {
+            user_id,
+            ignored_user_ids,
+            message,
+        } => {
+            assert_eq!(user_id, viewer.id);
+            assert!(ignored_user_ids.is_empty());
+            assert_eq!(message, "Unignored @unignore_target");
+        }
+        other => panic!("expected IgnoreListUpdated, got {other:?}"),
+    }
+
+    let ignored = User::ignored_user_ids(&client, viewer.id)
+        .await
+        .expect("load ignore list");
+    assert!(ignored.is_empty());
+}
+
+#[tokio::test]
+async fn ignore_user_task_emits_error_for_self_or_duplicate() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let viewer = create_test_user(&test_db.db, "ignore_self").await;
+
+    service.ignore_user_task(viewer.id, "ignore_self".to_string());
+
+    let first = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match first {
+        ChatEvent::IgnoreFailed { user_id, message } => {
+            assert_eq!(user_id, viewer.id);
+            assert_eq!(message, "Cannot ignore yourself");
+        }
+        other => panic!("expected IgnoreFailed, got {other:?}"),
+    }
+
+    let target = create_test_user(&test_db.db, "ignore_dup_target").await;
+    let general_room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general_room.id, target.id)
+        .await
+        .expect("join target");
+    User::add_ignored_user_id(&client, viewer.id, target.id)
+        .await
+        .expect("seed ignored user id");
+
+    service.ignore_user_task(viewer.id, "ignore_dup_target".to_string());
+
+    let second = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match second {
+        ChatEvent::IgnoreFailed { user_id, message } => {
+            assert_eq!(user_id, viewer.id);
+            assert_eq!(message, "@ignore_dup_target is already ignored");
+        }
+        other => panic!("expected IgnoreFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn unignore_user_task_emits_error_for_missing_user_or_entry() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let viewer = create_test_user(&test_db.db, "unignore_missing_viewer").await;
+
+    service.unignore_user_task(viewer.id, "no_such_user".to_string());
+
+    let first = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match first {
+        ChatEvent::IgnoreFailed { user_id, message } => {
+            assert_eq!(user_id, viewer.id);
+            assert_eq!(message, "User 'no_such_user' not found");
+        }
+        other => panic!("expected IgnoreFailed, got {other:?}"),
+    }
+
+    let target = create_test_user(&test_db.db, "unignore_missing_target").await;
+    let general_room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general_room.id, target.id)
+        .await
+        .expect("join target");
+
+    service.unignore_user_task(viewer.id, "unignore_missing_target".to_string());
+
+    let second = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match second {
+        ChatEvent::IgnoreFailed { user_id, message } => {
+            assert_eq!(user_id, viewer.id);
+            assert_eq!(message, "@unignore_missing_target is not ignored");
+        }
+        other => panic!("expected IgnoreFailed, got {other:?}"),
     }
 }
