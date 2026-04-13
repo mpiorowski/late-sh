@@ -676,7 +676,7 @@ impl russh::server::Handler for ClientHandler {
             active_users: Some(self.state.active_users.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             user_id,
-            is_admin: user.is_admin,
+            is_admin: user.is_admin || self.state.config.force_admin,
 
             // Voting
             my_vote,

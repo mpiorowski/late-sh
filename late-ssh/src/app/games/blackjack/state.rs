@@ -1,6 +1,9 @@
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast::{self, error::TryRecvError};
+use tokio::sync::{
+    broadcast::{self, error::TryRecvError},
+    watch,
+};
 use uuid::Uuid;
 
 use crate::app::games::{
@@ -178,6 +181,7 @@ pub struct BlackjackSnapshot {
     pub dealer_score: Option<HandScore>,
     pub player_score: Option<HandScore>,
     pub outcome_banner: Option<(String, String)>,
+    pub active_player_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -196,16 +200,12 @@ impl Shoe {
         shoe
     }
 
-    fn draw(&mut self) -> PlayingCard {
+    pub fn draw(&mut self) -> PlayingCard {
         if self.cards.len() <= self.penetration {
             self.cards = fresh_shoe();
             shuffle(&mut self.cards);
         }
         self.cards.pop().expect("shoe should never be empty")
-    }
-
-    pub fn remaining(&self) -> usize {
-        self.cards.len()
     }
 
     #[cfg(test)]
@@ -219,61 +219,62 @@ impl Shoe {
     }
 }
 
+impl Default for Shoe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct State {
-    room_id: Uuid,
     user_id: Uuid,
     pub(crate) balance: i64,
-    pub(crate) shoe: Shoe,
-    pub(crate) dealer_hand: Vec<PlayingCard>,
-    pub(crate) player_hand: Vec<PlayingCard>,
-    pub(crate) bet: Option<Bet>,
-    pub(crate) phase: Phase,
-    pending_request_id: Option<Uuid>,
-    pub(crate) last_outcome: Option<Outcome>,
-    pub(crate) last_net_change: i64,
     pub(crate) bet_input: String,
-    pub(crate) status_message: String,
-    svc: Option<BlackjackService>,
+    pub(crate) snapshot: BlackjackSnapshot,
+    pub(crate) private_notice: Option<String>,
+    pending_request_id: Option<Uuid>,
+    svc: BlackjackService,
+    snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_rx: broadcast::Receiver<BlackjackEvent>,
 }
 
 impl State {
     pub fn new(svc: BlackjackService, user_id: Uuid, balance: i64) -> Self {
+        let snapshot_rx = svc.subscribe_state();
+        let snapshot = snapshot_rx.borrow().clone();
         let event_rx = svc.subscribe_events();
         Self {
-            room_id: Uuid::now_v7(),
             user_id,
             balance,
-            shoe: Shoe::new(),
-            dealer_hand: Vec::new(),
-            player_hand: Vec::new(),
-            bet: None,
-            phase: Phase::Betting,
-            pending_request_id: None,
-            last_outcome: None,
-            last_net_change: 0,
             bet_input: String::new(),
-            status_message: format!("Place a bet ({MIN_BET}-{MAX_BET} chips)."),
-            svc: Some(svc),
+            snapshot,
+            private_notice: None,
+            pending_request_id: None,
+            svc,
+            snapshot_rx,
             event_rx,
         }
     }
 
     pub fn tick(&mut self) {
+        if self.snapshot_rx.has_changed().unwrap_or(false) {
+            self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+        }
+
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => self.apply_event(event),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Closed) => break,
                 Err(TryRecvError::Lagged(skipped)) => {
-                    self.status_message = format!("Blackjack updates lagged ({skipped} dropped).");
+                    self.private_notice =
+                        Some(format!("Blackjack updates lagged ({skipped} dropped)."));
                 }
             }
         }
     }
 
     pub fn append_bet_digit(&mut self, digit: char) {
-        if self.phase != Phase::Betting || !digit.is_ascii_digit() {
+        if self.snapshot.phase != Phase::Betting || !digit.is_ascii_digit() {
             return;
         }
         if self.bet_input.len() < 3 {
@@ -282,141 +283,86 @@ impl State {
     }
 
     pub fn pop_bet_digit(&mut self) {
-        if self.phase == Phase::Betting {
+        if self.snapshot.phase == Phase::Betting {
             self.bet_input.pop();
         }
     }
 
     pub fn submit_bet_from_buffer(&mut self) {
-        if self.phase != Phase::Betting {
+        if self.snapshot.phase != Phase::Betting {
             return;
         }
         let Ok(amount) = self.bet_input.parse::<i64>() else {
-            self.status_message = "Enter a bet first.".to_string();
+            self.private_notice = Some("Enter a bet first.".to_string());
             return;
         };
         self.submit_bet(amount);
     }
 
     pub fn submit_bet(&mut self, amount: i64) {
-        if self.phase != Phase::Betting {
+        if self.snapshot.phase != Phase::Betting {
             return;
         }
         let request_id = Uuid::now_v7();
-        self.bet = Bet::new(amount).ok();
         self.pending_request_id = Some(request_id);
-        self.phase = Phase::BetPending;
-        self.status_message = format!("Placing bet: {amount} chips...");
-        if let Some(svc) = &self.svc {
-            svc.place_bet_task(self.room_id, self.user_id, request_id, amount);
-        }
+        self.private_notice = Some(format!("Placing bet: {amount} chips..."));
+        self.svc.place_bet_task(self.user_id, request_id, amount);
     }
 
     pub fn hit(&mut self) {
-        if self.phase != Phase::PlayerTurn {
-            return;
-        }
-        self.player_hand.push(self.shoe.draw());
-        let total = score(&self.player_hand).total;
-        if is_bust(&self.player_hand) {
-            self.finish_hand(Outcome::DealerWin);
-        } else {
-            self.status_message = format!("You hit. Total: {total}.");
-        }
+        self.svc.hit_task(self.user_id);
     }
 
     pub fn stand(&mut self) {
-        if self.phase != Phase::PlayerTurn {
-            return;
-        }
-        self.phase = Phase::DealerTurn;
-        self.status_message = "Dealer's turn.".to_string();
-        self.run_dealer();
+        self.svc.stand_task(self.user_id);
     }
 
     pub fn next_hand(&mut self) {
-        self.bet = None;
-        self.dealer_hand.clear();
-        self.player_hand.clear();
-        self.last_outcome = None;
-        self.last_net_change = 0;
-        self.pending_request_id = None;
-        self.phase = Phase::Betting;
-        self.bet_input.clear();
-        self.status_message = format!("Place a bet ({MIN_BET}-{MAX_BET} chips).");
+        self.svc.next_hand_task(self.user_id);
     }
 
     pub fn current_bet_amount(&self) -> Option<i64> {
-        self.bet.map(Bet::amount)
+        self.snapshot.current_bet_amount
     }
 
     pub fn snapshot(&self) -> BlackjackSnapshot {
-        BlackjackSnapshot {
-            balance: self.balance,
-            dealer_hand: self.dealer_hand.clone(),
-            player_hand: self.player_hand.clone(),
-            current_bet_amount: self.current_bet_amount(),
-            phase: self.phase,
-            last_outcome: self.last_outcome,
-            last_net_change: self.last_net_change,
-            bet_input: self.bet_input.clone(),
-            status_message: self.status_message.clone(),
-            dealer_revealed: self.dealer_revealed(),
-            dealer_score: self.dealer_score(),
-            player_score: self.player_score(),
-            outcome_banner: self.outcome_banner(),
-        }
-    }
-
-    pub fn dealer_score(&self) -> Option<HandScore> {
-        if self.dealer_revealed() {
-            Some(score(&self.dealer_hand))
-        } else {
-            None
-        }
+        let mut snapshot = self.snapshot.clone();
+        snapshot.balance = self.balance;
+        snapshot.bet_input = self.bet_input.clone();
+        snapshot.status_message = self.status_message();
+        snapshot
     }
 
     pub fn player_score(&self) -> Option<HandScore> {
-        if self.player_hand.is_empty() {
-            None
-        } else {
-            Some(score(&self.player_hand))
-        }
+        self.snapshot.player_score
+    }
+
+    pub fn dealer_score(&self) -> Option<HandScore> {
+        self.snapshot.dealer_score
     }
 
     pub fn dealer_revealed(&self) -> bool {
-        matches!(self.phase, Phase::DealerTurn | Phase::Settling)
+        self.snapshot.dealer_revealed
     }
 
     pub fn outcome_banner(&self) -> Option<(String, String)> {
-        let outcome = self.last_outcome?;
-        let subtitle = match outcome {
-            Outcome::PlayerBlackjack | Outcome::PlayerWin => format!("+{}", self.last_net_change),
-            Outcome::Push => "Bet returned".to_string(),
-            Outcome::DealerWin => "No payout".to_string(),
-        };
-        let title = match outcome {
-            Outcome::PlayerBlackjack => "BLACKJACK!",
-            Outcome::PlayerWin => "You win!",
-            Outcome::Push => "Push",
-            Outcome::DealerWin if is_bust(&self.player_hand) => "Bust",
-            Outcome::DealerWin => "Dealer wins",
-        };
-        Some((title.to_string(), subtitle))
+        self.snapshot.outcome_banner.clone()
+    }
+
+    pub fn status_message(&self) -> String {
+        self.private_notice
+            .clone()
+            .unwrap_or_else(|| self.snapshot.status_message.clone())
     }
 
     fn apply_event(&mut self, event: BlackjackEvent) {
         match event {
             BlackjackEvent::BetPlaced {
-                room_id,
                 user_id,
                 request_id,
                 result,
             } => {
-                if room_id != self.room_id
-                    || user_id != self.user_id
-                    || Some(request_id) != self.pending_request_id
-                {
+                if user_id != self.user_id || Some(request_id) != self.pending_request_id {
                     return;
                 }
                 self.pending_request_id = None;
@@ -424,85 +370,27 @@ impl State {
                     Ok(new_balance) => {
                         self.balance = new_balance;
                         self.bet_input.clear();
-                        self.deal_initial();
+                        self.private_notice = None;
                     }
                     Err(message) => {
-                        self.bet = None;
-                        self.phase = Phase::Betting;
-                        self.status_message = message;
+                        self.private_notice = Some(message);
                     }
                 }
             }
             BlackjackEvent::HandSettled {
-                room_id,
                 user_id,
                 new_balance,
                 ..
             } => {
-                if room_id == self.room_id && user_id == self.user_id {
+                if user_id == self.user_id {
                     self.balance = new_balance;
                 }
             }
-            BlackjackEvent::BetRefunded { .. } => {}
-        }
-    }
-
-    fn deal_initial(&mut self) {
-        self.player_hand.clear();
-        self.dealer_hand.clear();
-        self.last_outcome = None;
-        self.last_net_change = 0;
-        if self.bet.is_none() {
-            self.bet = self
-                .bet_input
-                .parse::<i64>()
-                .ok()
-                .and_then(|amount| Bet::new(amount).ok());
-        }
-
-        self.player_hand.push(self.shoe.draw());
-        self.dealer_hand.push(self.shoe.draw());
-        self.player_hand.push(self.shoe.draw());
-        self.dealer_hand.push(self.shoe.draw());
-
-        let player_blackjack = is_natural_blackjack(&self.player_hand);
-        let dealer_blackjack = is_natural_blackjack(&self.dealer_hand);
-        if player_blackjack || dealer_blackjack {
-            self.finish_hand(settle(&self.player_hand, &self.dealer_hand));
-            return;
-        }
-
-        self.phase = Phase::PlayerTurn;
-        self.status_message = "Hit or stand.".to_string();
-    }
-
-    fn run_dealer(&mut self) {
-        while dealer_must_hit(&self.dealer_hand) {
-            self.dealer_hand.push(self.shoe.draw());
-        }
-        let outcome = settle(&self.player_hand, &self.dealer_hand);
-        self.finish_hand(outcome);
-    }
-
-    fn finish_hand(&mut self, outcome: Outcome) {
-        let Some(bet) = self.bet else {
-            self.phase = Phase::Betting;
-            return;
-        };
-        let credit = payout_credit(bet, outcome);
-        self.last_outcome = Some(outcome);
-        self.last_net_change = credit - bet.amount();
-        self.balance += credit;
-        self.phase = Phase::Settling;
-        self.status_message = match outcome {
-            Outcome::PlayerBlackjack => "Blackjack pays 3:2.".to_string(),
-            Outcome::PlayerWin => "You beat the dealer.".to_string(),
-            Outcome::Push => "Push. Bet returned.".to_string(),
-            Outcome::DealerWin if is_bust(&self.player_hand) => "You busted.".to_string(),
-            Outcome::DealerWin => "Dealer takes the hand.".to_string(),
-        };
-        if let Some(svc) = &self.svc {
-            svc.settle_hand_task(self.room_id, self.user_id, bet.amount(), outcome);
+            BlackjackEvent::ActionError { user_id, message } => {
+                if user_id == self.user_id {
+                    self.private_notice = Some(message);
+                }
+            }
         }
     }
 }
@@ -573,62 +461,59 @@ mod tests {
     fn nine() -> PlayingCard {
         c(CardRank::Number(9), CardSuit::Clubs)
     }
-    fn eight() -> PlayingCard {
-        c(CardRank::Number(8), CardSuit::Hearts)
-    }
     fn seven() -> PlayingCard {
         c(CardRank::Number(7), CardSuit::Spades)
-    }
-    fn six() -> PlayingCard {
-        c(CardRank::Number(6), CardSuit::Clubs)
     }
     fn five() -> PlayingCard {
         c(CardRank::Number(5), CardSuit::Hearts)
     }
 
-    fn test_state(top_cards: Vec<PlayingCard>, balance: i64) -> State {
-        let (_, event_rx) = broadcast::channel(8);
-        State {
-            room_id: Uuid::nil(),
-            user_id: Uuid::nil(),
-            balance,
-            shoe: Shoe::from_top(top_cards),
-            dealer_hand: Vec::new(),
-            player_hand: Vec::new(),
-            bet: None,
-            phase: Phase::Betting,
-            pending_request_id: None,
-            last_outcome: None,
-            last_net_change: 0,
-            bet_input: String::new(),
-            status_message: String::new(),
-            svc: None,
-            event_rx,
-        }
-    }
-
     #[test]
     fn ace_plus_king_is_soft_21() {
         let s = score(&[ace(), king()]);
-        assert_eq!(s, HandScore { total: 21, soft: true });
+        assert_eq!(
+            s,
+            HandScore {
+                total: 21,
+                soft: true
+            }
+        );
     }
 
     #[test]
     fn pair_of_aces_is_soft_12() {
         let s = score(&[ace(), ace()]);
-        assert_eq!(s, HandScore { total: 12, soft: true });
+        assert_eq!(
+            s,
+            HandScore {
+                total: 12,
+                soft: true
+            }
+        );
     }
 
     #[test]
     fn triple_ace_plus_nine_is_soft_21() {
         let s = score(&[ace(), ace(), nine()]);
-        assert_eq!(s, HandScore { total: 21, soft: true });
+        assert_eq!(
+            s,
+            HandScore {
+                total: 21,
+                soft: true
+            }
+        );
     }
 
     #[test]
     fn ace_plus_ace_plus_king_is_hard_12() {
         let s = score(&[ace(), ace(), king()]);
-        assert_eq!(s, HandScore { total: 12, soft: false });
+        assert_eq!(
+            s,
+            HandScore {
+                total: 12,
+                soft: false
+            }
+        );
     }
 
     #[test]
@@ -701,63 +586,22 @@ mod tests {
 
     #[test]
     fn settle_higher_total_wins() {
-        let outcome = settle(&[ten(), nine()], &[ten(), eight()]);
+        let outcome = settle(&[ten(), nine()], &[ten(), seven()]);
         assert_eq!(outcome, Outcome::PlayerWin);
     }
 
     #[test]
     fn payout_credit_rounds_blackjack_bonus_toward_zero() {
-        assert_eq!(payout_credit(Bet::new(25).unwrap(), Outcome::PlayerBlackjack), 62);
+        assert_eq!(
+            payout_credit(Bet::new(25).unwrap(), Outcome::PlayerBlackjack),
+            62
+        );
     }
 
     #[test]
-    fn hit_to_bust_transitions_to_settling() {
-        let mut state = test_state(vec![ten()], 500);
-        state.phase = Phase::PlayerTurn;
-        state.bet = Some(Bet::new(50).unwrap());
-        state.player_hand = vec![king(), queen()];
-        state.hit();
-
-        assert_eq!(state.phase, Phase::Settling);
-        assert_eq!(state.last_outcome, Some(Outcome::DealerWin));
-        assert_eq!(state.balance, 500);
-    }
-
-    #[test]
-    fn natural_vs_natural_push_keeps_round_alive_until_next_hand() {
-        let mut state = test_state(vec![ace(), ace(), king(), queen()], 400);
-        state.bet_input = "50".to_string();
-        state.deal_initial();
-
-        assert_eq!(state.phase, Phase::Settling);
-        assert_eq!(state.last_outcome, Some(Outcome::Push));
-        assert_eq!(state.last_net_change, 0);
-        assert_eq!(state.balance, 450);
-    }
-
-    #[test]
-    fn dealer_stands_on_seventeen_loop() {
-        let mut state = test_state(vec![], 350);
-        state.bet = Some(Bet::new(50).unwrap());
-        state.phase = Phase::DealerTurn;
-        state.player_hand = vec![ten(), seven()];
-        state.dealer_hand = vec![ten(), seven()];
-        state.run_dealer();
-
-        assert_eq!(state.dealer_hand.len(), 2);
-        assert_eq!(state.last_outcome, Some(Outcome::Push));
-    }
-
-    #[test]
-    fn ace_promotion_updates_live_totals() {
-        let mut state = test_state(vec![nine()], 500);
-        state.phase = Phase::PlayerTurn;
-        state.bet = Some(Bet::new(50).unwrap());
-        state.player_hand = vec![ace(), six()];
-
-        assert_eq!(state.player_score().unwrap().total, 17);
-        state.hit();
-        assert_eq!(state.player_score().unwrap().total, 16);
-        assert_eq!(state.phase, Phase::PlayerTurn);
+    fn shoe_draws_top_card() {
+        let mut shoe = Shoe::from_top(vec![ten(), ace()]);
+        assert_eq!(shoe.draw(), ten());
+        assert_eq!(shoe.draw(), ace());
     }
 }

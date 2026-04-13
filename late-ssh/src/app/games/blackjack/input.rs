@@ -7,7 +7,7 @@ pub enum InputAction {
 }
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
-    match state.phase {
+    match state.snapshot.phase {
         Phase::Betting => match byte {
             b'0'..=b'9' => {
                 state.append_bet_digit(byte as char);

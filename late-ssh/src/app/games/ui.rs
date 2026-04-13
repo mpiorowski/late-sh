@@ -564,7 +564,13 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             false,
             None,
         ),
-        (11, "Battleship", "Fire a shot, check back tomorrow.", false, None),
+        (
+            11,
+            "Battleship",
+            "Fire a shot, check back tomorrow.",
+            false,
+            None,
+        ),
         (
             12,
             "Tron",

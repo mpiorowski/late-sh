@@ -1,8 +1,8 @@
 # PLAN.md — Arcade Economy & Multiplayer Roadmap
 
-## Phase 1: Blackjack MVP (Single-Player)
+## Phase 1: Blackjack MVP
 
-**Goal:** single-player-per-session blackjack. Sit at your own table, bet 10–100 chips, hit/stand against a dealer, chips debited/credited via the existing economy. First step toward multiplayer table games — proves the game loop, the chip economy under active play, and the state/svc/input/ui module shape for future table games.
+**Goal:** ship a playable blackjack loop that validates the chip economy, service/state/input/ui boundaries, and the path toward shared multiplayer table games.
 
 ### Why Blackjack first
 
@@ -16,7 +16,7 @@
 
 | Decision | Choice |
 |---|---|
-| Seats per table | 1 (single-player-per-session, each SSH session has its own table) |
+| Seats per table | 1 active player in the current implementation |
 | Shoe | 6-deck casino shoe, reshuffles at penetration |
 | Bet range | 10–100 chips (from `state.rs` `MIN_BET`/`MAX_BET`) |
 | Dealer rule | Stands on soft 17 |
@@ -25,104 +25,72 @@
 | Doubles | Not in MVP |
 | Insurance / even money | Not in MVP |
 | Settlement | Optimistic — local balance updates the moment `settle()` returns; `credit_payout` runs fire-and-forget; `HandSettled` event is confirmation only |
-| Arcade placement | Existing games picker, Enter on "Blackjack" enters the game |
-| Chat room wiring | Deferred — migration 024 stays parked, unused in MVP |
+| Arcade placement | Existing games picker, but admin-only until Phase 2 lands |
+| Chat room wiring | Deferred — migration 024 stays parked for Phase 2 |
 | `refund_bet_task` | Dropped for MVP — no abandonment path exists |
 
 ### Already shipped
 
-- `blackjack/state.rs` — pure math: `Bet`, `Outcome`, `score`, `settle`, `payout_credit`, `dealer_must_hit`, 16 inline unit tests
-- `blackjack/svc.rs` — `BlackjackService` + `BlackjackEvent` broadcast; `place_bet_task` fully wired with `BetFailure` / tracing split
-- `BlackjackEvent` is `Debug + Clone`, ready to subscribe from state
-- Migration `024_add_game_rooms.sql` — present but unused in MVP (supports `kind='game'` + `game_kind` column + partial unique index on `(game_kind, slug)`)
+- `blackjack/state.rs` — pure math helpers plus a thin client-side blackjack view state. The app-local state now mainly owns UI input, current user balance, pending request tracking, and subscribed receivers.
+- `blackjack/svc.rs` — `BlackjackService` now owns the authoritative shared table state in-memory, publishes `BlackjackSnapshot` via `watch`, and emits per-user action/result events via `broadcast` following the `vote/svc.rs` pattern.
+- `BlackjackSnapshot` is now the read model for the UI. The game screen renders from snapshots instead of reading mutable blackjack internals directly.
+- Arcade wiring is in place, but Blackjack is currently gated behind `is_admin` and shown grayed out for non-admin users.
+- Migration `024_add_game_rooms.sql` — present but still unused in code (supports `kind='game'` + `game_kind` column + partial unique index on `(game_kind, slug)`).
 
-### Work ahead, in dependency order
+### MVP shipped
 
-**1. `ChipService` additions** (~16 lines in `games/chips/svc.rs`)
-```rust
-pub async fn debit_bet(&self, user_id, amount)     -> Result<Option<i64>>;
-pub async fn credit_payout(&self, user_id, amount) -> Result<i64>;
-```
-Thin wrappers around `UserChips::deduct` / `UserChips::add_bonus`. Prereq for `svc.rs`.
+- `ChipService` has `debit_bet` and `credit_payout`.
+- `BlackjackService` owns the shared table and handles bet/deal/hit/stand/settle transitions.
+- `watch` snapshots publish the latest table view; `broadcast` events publish per-user results/errors.
+- App-local blackjack state is now a thin client wrapper with local input buffer, local balance, pending request tracking, and subscribed receivers.
+- Input/UI/app-shell wiring is complete.
+- Blackjack is admin-gated in the arcade while the shared table remains incomplete.
 
-**2. Finish `blackjack/svc.rs`** (~40 lines)
-- `settle_hand_task`: compute credit via `payout_credit(bet, outcome)`, call `credit_payout`, broadcast `HandSettled`. Follow the `place_bet` shape — private `settle_hand` helper returning `Result<i64, SettleFailure>`, tracing at task layer.
-- `refund_bet_task`: **delete** — no caller in MVP.
+### Verification shipped
 
-**3. `blackjack/state.rs` — mutable runtime** (biggest chunk, ~200 lines)
-- `Shoe` — 6-deck shuffled `Vec<PlayingCard>`, draws from top, reshuffles at penetration threshold
-- `Phase` — `Betting | BetPending | PlayerTurn | DealerTurn | Settling`
-- `BlackjackState` — holds shoe, dealer hand, player hand, bet, phase, `pending_request_id`, `last_outcome`, bet-input buffer, status message, svc clone, events receiver
-- Methods:
-  - `new(svc, user_id, balance)` — subscribes to events
-  - `tick(&mut self)` — drains `BlackjackEvent`, matches by `request_id`, transitions phase
-  - `submit_bet(amount)` — mints `request_id`, fires `place_bet_task`, phase → `BetPending`
-  - `deal_initial()` — on successful `BetPlaced`, deal 2+2, check naturals, transition to `PlayerTurn` or straight to `Settling`
-  - `hit()` — draws card, checks bust
-  - `stand()` — phase → `DealerTurn`, then immediately `run_dealer`
-  - `run_dealer()` — draws until `!dealer_must_hit()`, runs `settle()`, fires `settle_hand_task`, phase → `Settling`, updates local balance optimistically
-  - `next_hand()` — clears hands, phase → `Betting`
-- Unit tests for: bust transitions, natural-vs-natural push, dealer-stands-on-17 loop, ace promotion in live play
-
-**4. `blackjack/input.rs`** (~80 lines)
-- **Betting:** digits → bet buffer, Backspace removes, Enter → `submit_bet`, Esc → leave
-- **BetPending:** ignore all input
-- **PlayerTurn:** `h` or Space → hit, `s` → stand, Esc → auto-stand + leave
-- **DealerTurn:** ignore (auto-running, instantaneous in MVP)
-- **Settling:** any key → `next_hand`, Esc → leave
-
-**5. `blackjack/ui.rs`** (~120 lines)
-Dead-simple 3-section layout. Uses `games::cards::AsciiCardTheme::Minimal` for compact one-row cards.
-
-```
-╭── BLACKJACK ─────────────────────────────╮
-│                                          │
-│  Dealer:  [A♠] [??]         (—)          │
-│                                          │
-│  You:     [10♥] [7♣]        (17)         │
-│                                          │
-│  Balance: 450    Bet: 50    PlayerTurn   │
-│  [h]it   [s]tand   [Esc] leave           │
-╰──────────────────────────────────────────╯
-```
-
-Hole card shown as `??` until `DealerTurn`. Outcome banner during `Settling`: **BLACKJACK! +75** / **You win! +50** / **Push** / **Bust** / **Dealer wins**. No animation, no split panes, no chat panel.
-
-**6. `blackjack/mod.rs`** (4 lines declaring submodules)
-
-**7. Wiring into the app shell** (~30 lines, scattered — *risky*)
-- `games/mod.rs` — `pub mod blackjack;`
-- Games-level state — add `blackjack: BlackjackState` field
-- Games picker — add "Blackjack" entry; Enter routes into the game
-- Games input router — route to `blackjack::input` when active
-- Games UI router — route to `blackjack::ui` when active
-- `main.rs` / startup — instantiate `BlackjackService` alongside existing services
-- Session config — plumb the service into `BlackjackState::new` at session init
-
-Haven't yet surveyed how the current games picker owns per-game state — a quick read of `games/mod.rs` + one existing game's wiring is needed before this step.
-
-### Milestones
-
-| M | Deliverable | Verification |
-|---|---|---|
-| **M1** | `ChipService::debit_bet` + `credit_payout` added | `cargo check -p late-ssh` clean |
-| **M2** | `svc.rs` complete (`settle_hand_task` landed, `refund_bet_task` removed) | compiles |
-| **M3** | `state.rs` runtime types + methods, unit tests for phase transitions | unit tests pass (pure logic, no DB) |
-| **M4** | `input.rs` + `ui.rs` + `mod.rs` — module compiles as a unit | compiles in isolation |
-| **M5** | Wired into Games screen, navigable (placeholder OK) | reachable over SSH |
-| **M6** | Full playable loop: bet → deal → hit/stand → settle → next hand | actually play a hand end-to-end |
-
-Estimated ~500–700 LoC across 5 files plus ~30 LoC of wiring.
+- `cargo check -p late-ssh`
+- `cargo check -p late-ssh --tests`
+- `cargo test -p late-ssh blackjack --lib`
 
 ---
 
-## Phase 2: Multi-Seat Blackjack (after MVP ships)
+## Current status
 
-Turn the MVP single-player table into a true multi-seat table. This is where the chat room wiring, migration 024, seat management, turn timers, and AFK handling all land — pattern-matching the earlier architecture discussion.
+The code has already moved past strict per-session MVP architecture in one important way:
+
+- Blackjack is no longer owned as authoritative state by each SSH session.
+- The service is now the authority and publishes snapshots/events.
+- Clients subscribe to the shared table snapshot and keep only thin local UI state.
+
+That means the app now has **shared-state multiplayer plumbing**, but **not full multi-seat blackjack yet**.
+
+### What exists right now
+
+- One shared in-memory blackjack table owned by `BlackjackService`
+- `watch` snapshots for latest table state
+- `broadcast` events for per-user async results/errors
+- One active player at a time
+- Other connected clients can observe the same shared table state
+- Admin-only gate in the arcade while this remains unfinished
+
+### What is still missing before this counts as true multiplayer blackjack
+
+- Seat map (`seat -> user`)
+- Sit/leave flow
+- Multiple simultaneous bets before a hand starts
+- Per-seat hands and settlement
+- Turn order across seated players
+- AFK/disconnect handling
+- Multiple tables / table IDs
+- Game-room/chat binding via migration 024
+
+## Phase 2: Multi-Seat Blackjack
+
+Turn the current shared single-table implementation into a true multi-seat table game. This is where chat room wiring, migration 024, seat management, timers, and disconnect handling all land.
 
 **Scope of Phase 2:**
 - Bind a table to a `ChatRoom` of `kind='game'`, `game_kind='blackjack'`, single permanent row seeded at startup (slug `bj-001`, not `game-blackjack`, so the 1→N path is free)
-- Move `BlackjackTable` from per-session `BlackjackState` into a shared `Arc<Mutex<HashMap<RoomId, BlackjackTable>>>` owned by `BlackjackService`
+- Expand the current single shared table into `Arc<Mutex<HashMap<RoomId, BlackjackTable>>>` owned by `BlackjackService`
 - Seat management: 5 seats, sit/leave independent from chat membership
 - Turn timers: 15s per action, 20s for betting, 3-strike AFK unseat
 - Hard-disconnect hook via `SessionRegistry` drop → auto-stand + free seat at end of round
@@ -130,6 +98,14 @@ Turn the MVP single-player table into a true multi-seat table. This is where the
 - Split-pane UI: game table on top, scoped chat on bottom
 - Activity feed broadcasts for big wins (`🃏 @mat won 80 chips at Blackjack`)
 - Extract shared host concerns (seat state, turn timer, disconnect handling) into `app/games/table_host.rs` — wait for Poker to confirm the abstraction
+
+### First concrete steps from the current code
+
+- Replace `active_player_id` with a seat model
+- Change snapshot shape from single-player hand/bet fields to per-seat table fields
+- Add join/sit/leave actions and events
+- Add round phases for multi-player betting and player turn rotation
+- Keep the current `watch` snapshot + `broadcast` event split
 
 **Still deferred to Phase 3+:**
 - Splits, doubles, insurance

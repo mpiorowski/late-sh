@@ -39,7 +39,11 @@ fn draw_game_snapshot(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapsho
                 }),
             theme::AMBER_GLOW,
         ),
-        info_label_value("Phase", snapshot.phase.label().to_string(), theme::TEXT_BRIGHT),
+        info_label_value(
+            "Phase",
+            snapshot.phase.label().to_string(),
+            theme::TEXT_BRIGHT,
+        ),
         Line::from(""),
         key_line(snapshot.phase),
     ];
@@ -83,8 +87,11 @@ fn draw_game_snapshot(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapsho
         rows[2],
     );
     frame.render_widget(
-        Paragraph::new(snapshot.status_message.as_str())
-            .block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(theme::BORDER_DIM))),
+        Paragraph::new(snapshot.status_message.as_str()).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(theme::BORDER_DIM)),
+        ),
         rows[4],
     );
 
@@ -109,7 +116,8 @@ fn key_line(phase: Phase) -> Line<'static> {
 
 fn render_cards(cards: &[crate::app::games::cards::PlayingCard], reveal_all: bool) -> String {
     let theme = AsciiCardTheme::Minimal;
-    cards.iter()
+    cards
+        .iter()
         .enumerate()
         .map(|(idx, card)| {
             if !reveal_all && idx == 1 {

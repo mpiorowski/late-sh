@@ -61,7 +61,8 @@ impl App {
         {
             self.leaderboard = rx.borrow_and_update().clone();
             if let Some(&balance) = self.leaderboard.user_chips.get(&self.user_id)
-                && self.blackjack_state.phase == crate::app::games::blackjack::state::Phase::Betting
+                && self.blackjack_state.snapshot.phase
+                    == crate::app::games::blackjack::state::Phase::Betting
             {
                 self.chip_balance = balance;
                 self.blackjack_state.balance = balance;

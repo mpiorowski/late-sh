@@ -1014,7 +1014,10 @@ mod tests {
             sanitize_paste_markers("\x1b[200~https://example.com\x1b[201~"),
             "https://example.com"
         );
-        assert_eq!(sanitize_paste_markers("https://example.com"), "https://example.com");
+        assert_eq!(
+            sanitize_paste_markers("https://example.com"),
+            "https://example.com"
+        );
     }
 
     // --- autocomplete arrow routing ---
