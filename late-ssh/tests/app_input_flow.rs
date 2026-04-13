@@ -99,6 +99,9 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     )
     .await;
 
-    app.handle_input(b"\n");
+    // Real terminals send CR (0x0D) for Enter in raw mode. Bare LF (0x0A) is
+    // Ctrl+J and is aliased to "insert newline in chat composer", so we'd
+    // end up composing "2hey\n" instead of submitting.
+    app.handle_input(b"\r");
     wait_for_render_contains(&mut app, "Compose (press i)").await;
 }

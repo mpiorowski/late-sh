@@ -255,7 +255,6 @@ impl Perform for VtCollector {
 
         if intermediates.is_empty() && byte == b'O' {
             self.ss3_pending = true;
-            return;
         }
 
         // Alt+printable falls through and is intentionally ignored, so ESC does
@@ -339,7 +338,7 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-// Split-across-reads Alt+Enter: previous read ended with a lone ESC and
+    // Split-across-reads Alt+Enter: previous read ended with a lone ESC and
     // this one begins with CR/LF. vte would execute the CR/LF as a plain
     // Enter while still sitting in escape state, submitting the composer
     // instead of inserting a newline. Intercept here before anything else.
