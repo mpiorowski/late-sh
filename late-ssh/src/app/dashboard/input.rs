@@ -24,7 +24,6 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             if let Some(b) = app.chat.delete_selected_message() {
                 app.banner = Some(b);
             }
-            app.chat.clear_message_selection();
             return true;
         }
         b'r' | b'R' => {

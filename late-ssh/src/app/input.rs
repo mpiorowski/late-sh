@@ -55,6 +55,10 @@ enum ParsedInput {
     Scroll(isize),
     AltEnter,
     Paste(Vec<u8>),
+    PageUp,
+    PageDown,
+    Home,
+    End,
 }
 
 fn is_likely_paste(data: &[u8]) -> bool {
@@ -63,6 +67,40 @@ fn is_likely_paste(data: &[u8]) -> bool {
         .filter(|&&b| b >= 0x20 && b != 0x7f || b == b'\n' || b == b'\r' || b == b'\t')
         .count();
     printable > 8 && printable * 100 / data.len().max(1) > 80
+}
+
+/// Walk `data` and split it on inline `ESC` + `CR`/`LF` pairs (Alt+Enter).
+///
+/// vte routes C0 control bytes through `execute` while the parser is in
+/// escape state, which means `esc_dispatch` never sees `\r` or `\n` as the
+/// final byte of an `ESC <byte>` sequence. Without this pre-scan, Alt+Enter
+/// would be emitted as a plain Enter keypress and submit the composer.
+#[derive(Debug, Eq, PartialEq)]
+enum AltEnterChunk<'a> {
+    Bytes(&'a [u8]),
+    AltEnter,
+}
+
+fn split_alt_enter(data: &[u8]) -> Vec<AltEnterChunk<'_>> {
+    let mut out = Vec::new();
+    let mut seg_start = 0;
+    let mut i = 0;
+    while i + 1 < data.len() {
+        if data[i] == 0x1B && matches!(data[i + 1], b'\r' | b'\n') {
+            if i > seg_start {
+                out.push(AltEnterChunk::Bytes(&data[seg_start..i]));
+            }
+            out.push(AltEnterChunk::AltEnter);
+            i += 2;
+            seg_start = i;
+        } else {
+            i += 1;
+        }
+    }
+    if seg_start < data.len() {
+        out.push(AltEnterChunk::Bytes(&data[seg_start..]));
+    }
+    out
 }
 
 pub(crate) struct VtInputParser {
@@ -130,9 +168,20 @@ impl Perform for VtCollector {
     fn print(&mut self, c: char) {
         if self.ss3_pending {
             self.ss3_pending = false;
-            if matches!(c, 'A' | 'B' | 'C' | 'D') {
-                self.events.push(ParsedInput::Arrow(c as u8));
-                return;
+            match c {
+                'A' | 'B' | 'C' | 'D' => {
+                    self.events.push(ParsedInput::Arrow(c as u8));
+                    return;
+                }
+                'H' => {
+                    self.events.push(ParsedInput::Home);
+                    return;
+                }
+                'F' => {
+                    self.events.push(ParsedInput::End);
+                    return;
+                }
+                _ => {}
             }
         }
 
@@ -184,6 +233,20 @@ impl Perform for VtCollector {
             '~' if p0 == Some(8) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
+            // PageUp / PageDown / Home / End (numeric form: CSI n ~).
+            // rxvt/linux console encode Home/End as 1~/4~; xterm uses 7~/8~.
+            // Standard xterm also supports the bare `H`/`F` form handled below.
+            '~' if p0 == Some(5) => self.events.push(ParsedInput::PageUp),
+            '~' if p0 == Some(6) => self.events.push(ParsedInput::PageDown),
+            '~' if p0 == Some(1) || p0 == Some(7) => self.events.push(ParsedInput::Home),
+            '~' if p0 == Some(4) || p0 == Some(8) => self.events.push(ParsedInput::End),
+            // xterm bare form: CSI H / CSI F (no params, no intermediates).
+            'H' if intermediates.is_empty() && p0.unwrap_or(0) <= 1 => {
+                self.events.push(ParsedInput::Home);
+            }
+            'F' if intermediates.is_empty() && p0.unwrap_or(0) <= 1 => {
+                self.events.push(ParsedInput::End);
+            }
             // Kitty keyboard protocol: CSI 127;5u == Ctrl+Backspace.
             'u' if p0 == Some(127) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
@@ -210,13 +273,11 @@ impl Perform for VtCollector {
             return;
         }
 
-        if matches!(byte, b'\r' | b'\n') {
-            self.events.push(ParsedInput::AltEnter);
-            return;
-        }
-
         // Alt+printable falls through and is intentionally ignored, so ESC does
         // not cancel a composer and the printable byte does not leak separately.
+        // Alt+Enter (ESC + CR/LF) is NOT dispatched here: vte executes C0
+        // control bytes via `execute` while staying in escape state, so it
+        // never reaches esc_dispatch. It's pre-scanned in `handle()` instead.
     }
 }
 
@@ -304,18 +365,39 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-    if app.pending_escape {
-        if let Some(started_at) = app.pending_escape_started_at
-            && started_at.elapsed() >= PENDING_ESCAPE_FLUSH_DELAY
-        {
-            app.pending_escape = false;
-            app.pending_escape_started_at = None;
-            app.vt_input.reset();
-            dispatch_escape(app);
-        }
+    // Split-across-reads Alt+Enter: previous read ended with a lone ESC and
+    // this one begins with CR/LF. vte would execute the CR/LF as a plain
+    // Enter while still sitting in escape state, submitting the composer
+    // instead of inserting a newline. Intercept here before anything else.
+    let mut start = 0;
+    if app.pending_escape && matches!(data.first(), Some(b'\r') | Some(b'\n')) {
+        app.pending_escape = false;
+        app.pending_escape_started_at = None;
+        app.vt_input.reset();
+        handle_parsed_input(app, ParsedInput::AltEnter);
+        start = 1;
     }
 
-    handle_vt_segment(app, data);
+    if app.pending_escape
+        && let Some(started_at) = app.pending_escape_started_at
+        && started_at.elapsed() >= PENDING_ESCAPE_FLUSH_DELAY
+    {
+        app.pending_escape = false;
+        app.pending_escape_started_at = None;
+        app.vt_input.reset();
+        dispatch_escape(app);
+    }
+
+    // Inline Alt+Enter: pre-scan and split on ESC+CR/LF pairs. Each segment
+    // is fed to vte independently and an AltEnter event is emitted at each
+    // split point. See `split_alt_enter` for why this can't live in the
+    // `Perform` impl.
+    for chunk in split_alt_enter(&data[start..]) {
+        match chunk {
+            AltEnterChunk::Bytes(bytes) => handle_vt_segment(app, bytes),
+            AltEnterChunk::AltEnter => handle_parsed_input(app, ParsedInput::AltEnter),
+        }
+    }
 
     if data.last() == Some(&0x1B) {
         app.pending_escape = true;
@@ -350,6 +432,19 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
+        // Full-page / jump-to-end scrolling. Signs mirror the existing Ctrl-D /
+        // Ctrl-U scheme (negative = toward newer/bottom, positive = toward
+        // older/top) — see `app.chat.select_message`.
+        ParsedInput::PageUp => {
+            let page = (app.size.1.saturating_sub(2)).max(1) as isize;
+            handle_scroll_for_screen(app, ctx.screen, page);
+        }
+        ParsedInput::PageDown => {
+            let page = (app.size.1.saturating_sub(2)).max(1) as isize;
+            handle_scroll_for_screen(app, ctx.screen, -page);
+        }
+        ParsedInput::Home => handle_scroll_for_screen(app, ctx.screen, isize::MAX),
+        ParsedInput::End => handle_scroll_for_screen(app, ctx.screen, isize::MIN),
         ParsedInput::CtrlBackspace
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
                 && ctx.chat_composing =>
@@ -397,6 +492,18 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
 
             let _ = handle_arrow_for_screen(app, ctx.screen, key);
+        }
+        // Ctrl+J sends bare LF (0x0A). In the chat composer we alias it to
+        // Alt+Enter so users have a one-handed way to insert a newline
+        // without reaching for Alt. Plain Enter stays as bare CR (0x0D),
+        // which still submits. News composer keeps its submit-on-LF
+        // behavior since it only ever holds a single URL.
+        ParsedInput::Byte(b'\n')
+            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat)
+                && ctx.chat_composing =>
+        {
+            app.chat.composer_push('\n');
+            app.chat.update_autocomplete();
         }
         ParsedInput::Byte(byte) => {
             if handle_modal_input(app, ctx, byte) {
@@ -860,6 +967,77 @@ mod tests {
         let mut out = String::new();
         insert_pasted_text(b"hello\r\nworld\x00\rok\x7f", |ch| out.push(ch));
         assert_eq!(out, "hello\nworld\nok");
+    }
+
+    #[test]
+    fn split_alt_enter_returns_plain_bytes_when_no_trigger() {
+        let chunks = split_alt_enter(b"hello");
+        assert_eq!(chunks, vec![AltEnterChunk::Bytes(b"hello")]);
+    }
+
+    #[test]
+    fn split_alt_enter_splits_on_inline_escape_cr() {
+        let chunks = split_alt_enter(b"ab\x1b\rcd");
+        assert_eq!(
+            chunks,
+            vec![
+                AltEnterChunk::Bytes(b"ab"),
+                AltEnterChunk::AltEnter,
+                AltEnterChunk::Bytes(b"cd"),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_alt_enter_handles_escape_lf_variant() {
+        let chunks = split_alt_enter(b"\x1b\n");
+        assert_eq!(chunks, vec![AltEnterChunk::AltEnter]);
+    }
+
+    #[test]
+    fn split_alt_enter_handles_consecutive_triggers() {
+        let chunks = split_alt_enter(b"\x1b\r\x1b\nx");
+        assert_eq!(
+            chunks,
+            vec![
+                AltEnterChunk::AltEnter,
+                AltEnterChunk::AltEnter,
+                AltEnterChunk::Bytes(b"x"),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_alt_enter_leaves_trailing_lone_escape_for_pending_logic() {
+        // A bare ESC at the end of the buffer is left in the byte stream so
+        // handle()'s trailing-ESC bookkeeping can set pending_escape.
+        let chunks = split_alt_enter(b"ab\x1b");
+        assert_eq!(chunks, vec![AltEnterChunk::Bytes(b"ab\x1b")]);
+    }
+
+    #[test]
+    fn vt_parser_parses_page_keys_numeric_form() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b[5~"), vec![ParsedInput::PageUp]);
+        assert_eq!(parser.feed(b"\x1b[6~"), vec![ParsedInput::PageDown]);
+        assert_eq!(parser.feed(b"\x1b[1~"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1b[7~"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1b[4~"), vec![ParsedInput::End]);
+        assert_eq!(parser.feed(b"\x1b[8~"), vec![ParsedInput::End]);
+    }
+
+    #[test]
+    fn vt_parser_parses_home_end_bare_form() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b[H"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1b[F"), vec![ParsedInput::End]);
+    }
+
+    #[test]
+    fn vt_parser_parses_home_end_ss3_form() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1bOH"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1bOF"), vec![ParsedInput::End]);
     }
 
     #[test]

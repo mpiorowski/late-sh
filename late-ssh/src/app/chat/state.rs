@@ -290,7 +290,17 @@ impl ChatState {
         }
         self.service
             .delete_message_task(self.user_id, selected_id, self.is_admin);
-        self.selected_message_id = None;
+
+        // Move selection to the adjacent message (prefer the next/older one,
+        // fall back to the previous/newer one) so pressing `d` repeatedly
+        // cleanly reaps a run of own messages without the cursor jumping
+        // back to the newest every time.
+        self.selected_message_id = adjacent_message_id(&self.general_messages, selected_id)
+            .or_else(|| {
+                self.rooms
+                    .iter()
+                    .find_map(|(_, msgs)| adjacent_message_id(msgs, selected_id))
+            });
         Some(Banner::success("Deleting message..."))
     }
 
@@ -1198,6 +1208,18 @@ fn short_user_id(user_id: Uuid) -> String {
     id[..id.len().min(8)].to_string()
 }
 
+/// Given a message list containing `current`, return the id of the message
+/// that should take over the selection when `current` is deleted: prefer the
+/// next index (older message, since the list is ordered newest-first), fall
+/// back to the previous index if `current` was the last item, or `None` if
+/// `current` is not in the list.
+fn adjacent_message_id(msgs: &[ChatMessage], current: Uuid) -> Option<Uuid> {
+    let idx = msgs.iter().position(|m| m.id == current)?;
+    msgs.get(idx + 1)
+        .map(|m| m.id)
+        .or_else(|| idx.checked_sub(1).and_then(|i| msgs.get(i).map(|m| m.id)))
+}
+
 fn reply_preview_text(body: &str) -> String {
     let body_without_reply_quote = match body.split_once('\n') {
         Some((first_line, rest))
@@ -1318,6 +1340,59 @@ mod tests {
     #[test]
     fn parse_delete_room_not_command() {
         assert_eq!(parse_delete_room_command("hello"), None);
+    }
+
+    // --- adjacent_message_id (delete-and-advance) ---
+
+    fn make_msg(id: Uuid) -> ChatMessage {
+        ChatMessage {
+            id,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            room_id: Uuid::from_u128(999),
+            user_id: Uuid::from_u128(999),
+            body: String::new(),
+        }
+    }
+
+    #[test]
+    fn adjacent_message_id_returns_none_for_empty_list() {
+        assert_eq!(adjacent_message_id(&[], Uuid::from_u128(1)), None);
+    }
+
+    #[test]
+    fn adjacent_message_id_returns_none_when_not_in_list() {
+        let msgs = vec![make_msg(Uuid::from_u128(1))];
+        assert_eq!(adjacent_message_id(&msgs, Uuid::from_u128(99)), None);
+    }
+
+    #[test]
+    fn adjacent_message_id_prefers_next_index_older_message() {
+        // List is newest-first: [0]=newest, [1]=middle, [2]=oldest.
+        // Deleting the middle should land on the oldest (idx+1).
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let msgs = vec![make_msg(a), make_msg(b), make_msg(c)];
+        assert_eq!(adjacent_message_id(&msgs, b), Some(c));
+    }
+
+    #[test]
+    fn adjacent_message_id_falls_back_to_previous_for_last_item() {
+        // Deleting the oldest (last index) should land on the previous-older
+        // message (idx-1), i.e., the next-oldest remaining.
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let msgs = vec![make_msg(a), make_msg(b), make_msg(c)];
+        assert_eq!(adjacent_message_id(&msgs, c), Some(b));
+    }
+
+    #[test]
+    fn adjacent_message_id_returns_none_for_sole_item() {
+        let a = Uuid::from_u128(1);
+        let msgs = vec![make_msg(a)];
+        assert_eq!(adjacent_message_id(&msgs, a), None);
     }
 
     // --- dm_sort_key (regression: nav order must match UI order) ---
