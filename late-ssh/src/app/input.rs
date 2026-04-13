@@ -433,8 +433,8 @@ pub fn handle(app: &mut App, data: &[u8]) {
                 match key {
                     b'C' => app.chat.composer_cursor_right(),
                     b'D' => app.chat.composer_cursor_left(),
-                    b'A' => app.chat.composer_cursor_up(),
-                    b'B' => app.chat.composer_cursor_down(),
+                    b'A' => app.chat.history_up(),
+                    b'B' => app.chat.history_down(),
                     _ => {}
                 }
                 i += input.consumed;

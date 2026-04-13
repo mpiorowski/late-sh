@@ -74,6 +74,11 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
+
+    /// Per-user in-memory sent-message history (newest = index 0), capped at 20.
+    composer_history: VecDeque<String>,
+    /// Index into composer_history while navigating; None when not navigating.
+    history_index: Option<usize>,
 }
 
 impl Drop for ChatState {
@@ -129,6 +134,8 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, is_admin),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
+            composer_history: VecDeque::new(),
+            history_index: None,
         }
     }
 
@@ -462,6 +469,14 @@ impl ChatState {
     }
 
     fn clear_composer_after_submit(&mut self) {
+        let trimmed = self.composer.trim().to_string();
+        if !trimmed.is_empty() {
+            self.composer_history.push_front(trimmed);
+            if self.composer_history.len() > 20 {
+                self.composer_history.pop_back();
+            }
+        }
+        self.history_index = None;
         self.composer.clear();
         self.composer_cursor = 0;
         self.composing = false;
@@ -819,6 +834,63 @@ impl ChatState {
         let next = &rows[row_idx + 1];
         let row_len = next.text.chars().count();
         self.composer_cursor = next.start + col.min(row_len);
+    }
+
+    fn load_history_entry(&mut self, idx: usize) {
+        if let Some(entry) = self.composer_history.get(idx) {
+            self.composer = entry.clone();
+            self.composer_cursor = self.composer.chars().count();
+            self.invalidate_composer_layout();
+        }
+    }
+
+    /// Navigate to the next older history entry (Up arrow while composing).
+    pub fn history_up(&mut self) {
+        if self.composer_history.is_empty() {
+            return;
+        }
+        match self.history_index {
+            None => {
+                self.history_index = Some(0);
+                self.load_history_entry(0);
+            }
+            Some(i) if i + 1 < self.composer_history.len() => {
+                self.history_index = Some(i + 1);
+                self.load_history_entry(i + 1);
+            }
+            _ => {} // already at oldest entry
+        }
+    }
+
+    /// Navigate to the next more recent history entry (Down arrow while composing).
+    pub fn history_down(&mut self) {
+        match self.history_index {
+            None => {
+                // Only act if there's unsent text — push it to history and clear.
+                if !self.composer.trim().is_empty() {
+                    let text = self.composer.clone();
+                    self.composer_history.push_front(text);
+                    if self.composer_history.len() > 20 {
+                        self.composer_history.pop_back();
+                    }
+                    self.composer.clear();
+                    self.composer_cursor = 0;
+                    self.invalidate_composer_layout();
+                }
+                // Empty composer: do nothing.
+            }
+            Some(0) => {
+                // At the most-recent entry — exit navigation and clear input.
+                self.history_index = None;
+                self.composer.clear();
+                self.composer_cursor = 0;
+                self.invalidate_composer_layout();
+            }
+            Some(i) => {
+                self.history_index = Some(i - 1);
+                self.load_history_entry(i - 1);
+            }
+        }
     }
 
     pub fn tick(&mut self) -> Option<Banner> {

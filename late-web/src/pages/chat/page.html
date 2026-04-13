@@ -48,6 +48,8 @@
             username: '',
             userId: '',
             atBottom: true,
+            messageHistory: [],
+            historyIndex: null,
 
             init() {
                 this.updateViewportHeight();
@@ -163,7 +165,47 @@
                 const body = this.input.trim();
                 if (!body || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
                 this.ws.send(JSON.stringify({ event: 'send', body }));
+                this.messageHistory.unshift(body);
+                if (this.messageHistory.length > 20) this.messageHistory.pop();
+                this.historyIndex = null;
                 this.input = '';
+            },
+
+            historyUp() {
+                if (this.messageHistory.length === 0) return;
+                if (this.historyIndex === null) {
+                    this.historyIndex = 0;
+                } else if (this.historyIndex < this.messageHistory.length - 1) {
+                    this.historyIndex++;
+                } else {
+                    return; // already at oldest
+                }
+                this.input = this.messageHistory[this.historyIndex];
+                this.$nextTick(() => {
+                    const el = this.$refs.inputField;
+                    if (el) el.setSelectionRange(el.value.length, el.value.length);
+                });
+            },
+
+            historyDown() {
+                if (this.historyIndex === null) {
+                    if (this.input.trim()) {
+                        this.messageHistory.unshift(this.input);
+                        if (this.messageHistory.length > 20) this.messageHistory.pop();
+                        this.input = '';
+                    }
+                    // empty input: do nothing
+                } else if (this.historyIndex === 0) {
+                    this.historyIndex = null;
+                    this.input = '';
+                } else {
+                    this.historyIndex--;
+                    this.input = this.messageHistory[this.historyIndex];
+                    this.$nextTick(() => {
+                        const el = this.$refs.inputField;
+                        if (el) el.setSelectionRange(el.value.length, el.value.length);
+                    });
+                }
             },
 
             scrollToBottom() {
@@ -248,6 +290,9 @@
     <div class="pt-2 pb-1 border-t border-gray-700 shrink-0">
         <form @submit.prevent.stop="send()" class="flex gap-2">
             <input x-model="input"
+                   x-ref="inputField"
+                   @keydown.up.prevent="historyUp()"
+                   @keydown.down.prevent="historyDown()"
                    :disabled="status !== 'ready'"
                    placeholder="say something..."
                    autocomplete="off"
