@@ -24,6 +24,11 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
                 app.banner = Some(b);
             }
         }
+        0x15 => {
+            // Ctrl-U: clear composer
+            app.chat.composer_clear();
+            app.chat.update_autocomplete();
+        }
         0x7F => {
             app.chat.composer_backspace();
             app.chat.update_autocomplete();

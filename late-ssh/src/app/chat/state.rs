@@ -630,6 +630,12 @@ impl ChatState {
         None
     }
 
+    pub fn composer_clear(&mut self) {
+        self.composer.clear();
+        self.composer_cursor = 0;
+        self.invalidate_composer_layout();
+    }
+
     pub fn composer_backspace(&mut self) {
         if self.composer_cursor == 0 {
             return;

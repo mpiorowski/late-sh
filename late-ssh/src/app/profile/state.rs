@@ -117,6 +117,10 @@ impl ProfileState {
         }
     }
 
+    pub fn composer_clear(&mut self) {
+        self.username_composer.clear();
+    }
+
     pub fn composer_backspace(&mut self) {
         self.username_composer.pop();
     }
