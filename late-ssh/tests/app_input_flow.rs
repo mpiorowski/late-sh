@@ -140,7 +140,8 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     wait_for_render_contains(&mut app, " Rooms (h/l)").await;
     wait_for_render_contains(&mut app, "message from ignored user").await;
 
-    app.handle_input(b"i/ignore ignore-flow-target\n");
+    app.handle_input(b"i");
+    app.handle_input(b"/ignore ignore-flow-target\n");
     wait_for_render_contains(&mut app, "Ignored @ignore-flow-target").await;
 
     let ignored = User::ignored_usernames(&client, viewer.id)
