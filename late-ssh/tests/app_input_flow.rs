@@ -131,8 +131,8 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     app.handle_input(b"2");
     wait_for_render_contains(&mut app, " Rooms (h/l)").await;
 
-    app.handle_input(b"i/help\n");
-    wait_for_render_contains(&mut app, "Chat Commands").await;
+    app.handle_input(b"i/help\r");
+    wait_for_render_contains(&mut app, "Chat Help").await;
     wait_for_render_contains(&mut app, "/ignore [@user]").await;
 
     let messages = ChatMessage::list_recent(&client, general.id, 20)
@@ -174,7 +174,7 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     wait_for_render_contains(&mut app, "message from ignored user").await;
 
     app.handle_input(b"i");
-    app.handle_input(b"/ignore ignore-flow-target\n");
+    app.handle_input(b"/ignore ignore-flow-target\r");
     wait_for_render_contains(&mut app, "Ignored @ignore-flow-target").await;
 
     let ignored = User::ignored_user_ids(&client, viewer.id)

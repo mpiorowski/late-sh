@@ -53,7 +53,12 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
     let lines: Vec<Line> = overlay
         .lines
         .iter()
-        .map(|line| Line::from(Span::styled(line.clone(), Style::default().fg(theme::TEXT))))
+        .map(|line| {
+            Line::from(Span::styled(
+                format!(" {line}"),
+                Style::default().fg(theme::TEXT),
+            ))
+        })
         .collect();
 
     frame.render_widget(Clear, area);
