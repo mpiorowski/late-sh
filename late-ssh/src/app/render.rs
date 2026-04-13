@@ -37,6 +37,7 @@ struct DrawContext<'a> {
     nonogram_state: &'a crate::app::games::nonogram::state::State,
     solitaire_state: &'a crate::app::games::solitaire::state::State,
     minesweeper_state: &'a crate::app::games::minesweeper::state::State,
+    blackjack_state: &'a crate::app::games::blackjack::state::State,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
@@ -46,6 +47,7 @@ struct DrawContext<'a> {
     activity: &'a std::collections::VecDeque<crate::state::ActivityEvent>,
     banner: Option<&'a Banner>,
     username: &'a str,
+    is_admin: bool,
     show_welcome: bool,
     show_help: bool,
     help_scroll: u16,
@@ -192,6 +194,7 @@ impl App {
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
+                        blackjack_state: &self.blackjack_state,
                         leaderboard: &self.leaderboard,
                         visualizer,
                         now_playing: now_playing.as_ref(),
@@ -201,6 +204,7 @@ impl App {
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         username: &self.profile_state.profile().username,
+                        is_admin: self.is_admin,
                         show_welcome: self.show_welcome,
                         show_help: self.show_help,
                         help_scroll: self.help_scroll,
@@ -321,6 +325,8 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
+                    blackjack_state: ctx.blackjack_state,
+                    is_admin: ctx.is_admin,
                     leaderboard: ctx.leaderboard,
                 },
             ),
@@ -604,15 +610,11 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
     use ratatui::widgets::{Clear, Paragraph, Wrap};
 
     let dim = Style::default().fg(theme::TEXT_DIM);
-    let cyan = Style::default().fg(theme::AMBER);
     let bold_cyan = Style::default()
         .fg(theme::AMBER)
         .add_modifier(Modifier::BOLD);
     let white = Style::default().fg(theme::TEXT_BRIGHT);
-    let yellow = Style::default().fg(theme::AMBER_DIM);
     let green = Style::default().fg(theme::SUCCESS);
-    let key = |k: &str| Span::styled(k.to_string(), yellow);
-    let sep = || Span::styled(" ~ ", dim);
 
     let greeting = format!("Welcome back, @{username}.");
 
@@ -632,80 +634,68 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
             white,
         )),
         Line::from(""),
-        // ── Getting Started ──
+        // ── Music ──
         Line::from(vec![
             Span::styled("  ── ", dim),
-            Span::styled("Getting Started", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("    Listen    ", cyan),
-            Span::styled("Use CLI or connect via web", dim),
-        ]),
-        Line::from(vec![
-            Span::styled("    Vote      ", cyan),
-            key("l"),
-            Span::styled("ofi ", dim),
-            key("a"),
-            Span::styled("mbient ", dim),
-            key("c"),
-            Span::styled("lassic ", dim),
-            Span::styled("jaz", dim),
-            key("z"),
-        ]),
-        Line::from(vec![
-            Span::styled("    Chat      ", cyan),
-            key("h/l"),
-            Span::styled(" rooms", dim),
-            sep(),
-            key("i"),
-            Span::styled(" compose", dim),
-            sep(),
-            key("Enter"),
-            Span::styled(" send", dim),
-        ]),
-        Line::from(vec![
-            Span::styled("    News      ", cyan),
-            Span::styled("share links & articles", dim),
-        ]),
-        Line::from(vec![
-            Span::styled("    Games     ", cyan),
-            Span::styled("2048 highscores, daily puzzles, arcade", dim),
-        ]),
-        Line::from(vec![
-            Span::styled("    Bonsai    ", cyan),
-            key("w"),
-            Span::styled(" water your tree daily", dim),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("    Tab", yellow),
-            Span::styled(" switch screens", dim),
-            sep(),
-            key("1-4"),
-            Span::styled(" jump to", dim),
-            sep(),
-            key("?"),
-            Span::styled(" keys", dim),
-        ]),
-        Line::from(""),
-        // ── The Arcade ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("The Arcade", bold_cyan),
+            Span::styled("Music", bold_cyan),
             Span::styled(" ──", dim),
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "    High-score runs for 2048, daily streak games for puzzles.",
-            dim,
+            "    Lofi, ambient, classical & jazz streams.",
+            white,
+        )),
+        Line::from(vec![
+            Span::styled("    Listen via ", dim),
+            Span::styled("CLI", green),
+            Span::styled(" (recommended) or the ", dim),
+            Span::styled("web player", green),
+            Span::styled(".", dim),
+        ]),
+        Line::from(""),
+        // ── Chat ──
+        Line::from(vec![
+            Span::styled("  ── ", dim),
+            Span::styled("Chat", bold_cyan),
+            Span::styled(" ──", dim),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "    Hang out in rooms with other devs.",
+            white,
         )),
         Line::from(Span::styled(
-            "    Tetris is live as an endless score-chasing arcade game.",
-            Style::default()
-                .fg(theme::TEXT_MUTED)
-                .add_modifier(Modifier::ITALIC),
+            "    Tied to your SSH key, same chats anywhere.",
+            dim,
+        )),
+        Line::from(""),
+        // ── Arcade ──
+        Line::from(vec![
+            Span::styled("  ── ", dim),
+            Span::styled("Arcade", bold_cyan),
+            Span::styled(" ──", dim),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "    2048, Tetris & daily puzzles with leaderboards.",
+            white,
+        )),
+        Line::from(Span::styled("    Multiplayer coming soon.", dim)),
+        Line::from(""),
+        // ── News ──
+        Line::from(vec![
+            Span::styled("  ── ", dim),
+            Span::styled("News", bold_cyan),
+            Span::styled(" ──", dim),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "    Share links and watch the community feed.",
+            white,
+        )),
+        Line::from(Span::styled(
+            "    Auto-generated summaries keep you in the loop.",
+            dim,
         )),
         Line::from(""),
         // ── Your Identity ──
@@ -721,9 +711,15 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
         )),
         Line::from(Span::styled("    Your SSH key is your identity.", white)),
         Line::from(""),
-        Line::from(Span::styled("    Chats are tied to your public key", dim)),
-        Line::from(Span::styled("    fingerprint. Same key, same data", dim)),
-        Line::from(Span::styled("    from any machine.", dim)),
+        Line::from(Span::styled(
+            "    Chats, scores, leaderboards, badges, your bonsai,",
+            dim,
+        )),
+        Line::from(Span::styled(
+            "    all tied to your public key fingerprint.",
+            dim,
+        )),
+        Line::from(Span::styled("    Same key, same data anywhere.", dim)),
         Line::from(""),
         Line::from(vec![
             Span::styled("    Back up ", dim),
@@ -745,7 +741,7 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
         Line::from(""),
     ];
 
-    let w = 54u16.min(area.width.saturating_sub(4));
+    let w = 64u16.min(area.width.saturating_sub(4));
     let content_h = lines.len() as u16;
     let h = (content_h + 2).min(area.height.saturating_sub(4));
     let x = area.x + (area.width.saturating_sub(w)) / 2;

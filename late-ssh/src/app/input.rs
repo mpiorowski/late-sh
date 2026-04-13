@@ -495,13 +495,44 @@ fn paste_target(ctx: InputContext) -> PasteTarget {
 }
 
 fn insert_pasted_text(pasted: &[u8], mut push: impl FnMut(char)) {
-    let normalized = String::from_utf8_lossy(pasted).replace("\r\n", "\n");
+    // Strip any residual bracketed-paste markers. If a paste arrives split
+    // across reads, the outer parser may miss the ESC[200~ / ESC[201~ envelope
+    // and we end up seeing the markers inline. ESC itself gets filtered as a
+    // control char below, but the literal `[200~` / `[201~` would otherwise
+    // survive as printable text in the composer.
+    let cleaned = strip_paste_markers(pasted);
+    let normalized = String::from_utf8_lossy(&cleaned).replace("\r\n", "\n");
     let normalized = normalized.replace('\r', "\n");
     for ch in normalized.chars() {
         if ch == '\n' || (!ch.is_control() && ch != '\u{7f}') {
             push(ch);
         }
     }
+}
+
+fn strip_paste_markers(input: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        if input[i..].starts_with(b"\x1b[200~") || input[i..].starts_with(b"\x1b[201~") {
+            i += 6;
+            continue;
+        }
+        if input[i..].starts_with(b"[200~") || input[i..].starts_with(b"[201~") {
+            i += 5;
+            continue;
+        }
+        out.push(input[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Remove any bracketed-paste marker residue from a string. Used when a URL
+/// is about to be copied to the clipboard, so stored data that was polluted
+/// before the input-side fix still gets cleaned up at copy time.
+pub fn sanitize_paste_markers(s: &str) -> String {
+    String::from_utf8_lossy(&strip_paste_markers(s.as_bytes())).into_owned()
 }
 
 fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
@@ -959,6 +990,34 @@ mod tests {
         let mut out = String::new();
         insert_pasted_text(b"hello\r\nworld\x00\rok\x7f", |ch| out.push(ch));
         assert_eq!(out, "hello\nworld\nok");
+    }
+
+    #[test]
+    fn insert_pasted_text_strips_bracketed_paste_markers() {
+        let mut out = String::new();
+        insert_pasted_text(b"\x1b[200~https://example.com\x1b[201~", |ch| out.push(ch));
+        assert_eq!(out, "https://example.com");
+
+        // Literal residue (ESC already stripped by an earlier stage).
+        let mut out = String::new();
+        insert_pasted_text(b"[200~https://example.com[201~", |ch| out.push(ch));
+        assert_eq!(out, "https://example.com");
+    }
+
+    #[test]
+    fn sanitize_paste_markers_cleans_stored_urls() {
+        assert_eq!(
+            sanitize_paste_markers("[200~https://example.com[201~"),
+            "https://example.com"
+        );
+        assert_eq!(
+            sanitize_paste_markers("\x1b[200~https://example.com\x1b[201~"),
+            "https://example.com"
+        );
+        assert_eq!(
+            sanitize_paste_markers("https://example.com"),
+            "https://example.com"
+        );
     }
 
     // --- autocomplete arrow routing ---

@@ -86,6 +86,16 @@ impl Tree {
             .await?;
         Ok(())
     }
+
+    pub async fn cut(client: &Client, user_id: Uuid, new_seed: i64, cost: i32) -> Result<()> {
+        client
+            .execute(
+                "UPDATE bonsai_trees SET seed = $2, growth_points = GREATEST(growth_points - $3, 0), updated = current_timestamp WHERE user_id = $1",
+                &[&user_id, &new_seed, &cost],
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 impl Grave {

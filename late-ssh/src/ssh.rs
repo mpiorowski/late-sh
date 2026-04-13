@@ -625,9 +625,13 @@ impl russh::server::Handler for ClientHandler {
         };
 
         // Grant daily chip stipend on login
-        if let Err(e) = self.state.chip_service.ensure_chips(user_id).await {
-            tracing::warn!(error = ?e, "failed to grant daily chip stipend");
-        }
+        let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
+            Ok(chips) => chips.balance,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to grant daily chip stipend");
+                0
+            }
+        };
 
         let app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
@@ -654,9 +658,11 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             minesweeper_service: self.state.minesweeper_service.clone(),
             initial_minesweeper_games,
+            blackjack_service: self.state.blackjack_service.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             nonogram_library,
+            initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),
 
             // Session / connection
@@ -670,7 +676,7 @@ impl russh::server::Handler for ClientHandler {
             active_users: Some(self.state.active_users.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             user_id,
-            is_admin: user.is_admin,
+            is_admin: user.is_admin || self.state.config.force_admin,
 
             // Voting
             my_vote,

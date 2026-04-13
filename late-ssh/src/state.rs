@@ -3,6 +3,7 @@ use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
+use crate::app::games::blackjack::svc::BlackjackService;
 use crate::app::games::chips::svc::ChipService;
 use crate::app::games::leaderboard::svc::LeaderboardService;
 use crate::app::games::minesweeper::svc::MinesweeperService;
@@ -62,6 +63,7 @@ pub struct State {
     pub bonsai_service: BonsaiService,
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
+    pub blackjack_service: BlackjackService,
     pub leaderboard_service: LeaderboardService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,

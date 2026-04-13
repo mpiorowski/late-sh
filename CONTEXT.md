@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-12 (Music pairing tokens compacted to base64url)
+- Last updated: 2026-04-13 (Blackjack moved to service-owned shared snapshot/event model; admin-gated while unfinished)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, Profile, The Arcade), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat, link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire), and a persistent bonsai tree in the sidebar.
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, Profile, The Arcade), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat, link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), and a persistent bonsai tree in the sidebar.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -58,7 +58,7 @@ The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-
 - Test input/output transformations, state transitions, parsing, formatting, validation math.
 - If you need a `Db`, `Service`, `State`, or any I/O — it is NOT a unit test. Move it to `tests/`.
 - Good examples: `rate_limit.rs` (in-memory limiter logic), `state.rs` (enum transitions), `input.rs` (key → action mapping).
-- Preferred source layout for a domain is `src/.../<domain>/mod.rs` plus adjacent `state.rs`, `input.rs`, `ui.rs`, `svc.rs`, `model.rs` as needed. `mod.rs` files must only contain `pub mod` declarations — never `pub use` re-exports.
+- Preferred source layout for a domain is `src/.../<domain>/mod.rs` plus adjacent `state.rs`, `input.rs`, `ui.rs`, `svc.rs` as needed. `mod.rs` files must only contain `pub mod` declarations — never `pub use` re-exports.
 - Keep pure unit tests inline in those source files. Do NOT create `src/.../<domain>/tests/` folders just to split unit tests.
 
 **Integration tests (`late-ssh/tests/`, `late-web/tests/`, `late-core/tests/`):**
@@ -119,6 +119,7 @@ cargo nextest run --workspace --all-targets
 - If a feature area is intentionally WIP, temporary lint/test gaps are acceptable only when explicitly documented and tracked for cleanup.
 - **Tool bootstrap:** The repo now includes `.mise.toml` with `rust`, `mold`, and `cargo-nextest`. Prefer `mise install` before local development so the expected toolchain and test runner are available.
 - **Cargo environment setup:** For local host development, use Cargo's normal defaults, including the standard repo-local `target/` directory. Docker/dev containers still use `/app/target` via container configuration. `CARGO_HOME=$HOME/.cargo` remains a valid override when an environment needs it, but it is not a repo-wide requirement.
+- **`LATE_FORCE_ADMIN=1`** — dev-only escape hatch: OR'd with `users.is_admin` at session init (`late-ssh/src/ssh.rs`), so every SSH session lands as admin. Must stay `0` in prod — enforced by `required_bool` and hardcoded to `"0"` in `infra/service-ssh.tf`.
 
 ---
 
@@ -212,6 +213,8 @@ flowchart LR
     CS -->|"holds"| NS
     PS["ProfileService"] -->|"watch"| PSS["ProfileSnapshot"]
     PS -->|"broadcast"| PSE["ProfileEvent"]
+    BJS["BlackjackService"] -->|"watch"| BJSS["BlackjackSnapshot"]
+    BJS -->|"broadcast"| BJSE["BlackjackEvent"]
     AF["Activity Feed"] -->|"broadcast"| AFE["ActivityEvent"]
     LB["LeaderboardService"] -->|"watch"| LBS["Arc&lt;LeaderboardData&gt;"]
 
@@ -225,6 +228,8 @@ flowchart LR
     NSE --> APP
     PSS --> APP
     PSE --> APP
+    BJSS --> APP
+    BJSE --> APP
     AFE --> APP
     LBS --> APP
 ```
@@ -233,6 +238,7 @@ flowchart LR
 - `ProfileService` (in `app/profile/svc.rs`) exposes per-user `watch` snapshots backed by service-owned maps (`subscribe_snapshot(user_id)`).
 - `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, streak leaders, per-user streak map (used for chat badges and profile achievements), all-time high scores (Tetris + 2048), and chip leaders (top balances).
 - `ChipService` (in `app/games/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` grants the daily 500-chip stipend on login, `grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips on daily puzzle completion. All 4 daily game services hold a `ChipService` clone and call it in `record_win_task()`.
+- `BlackjackService` (in `app/games/blackjack/svc.rs`) owns the current shared blackjack table in-memory, publishes `BlackjackSnapshot` via `watch`, and emits per-user `BlackjackEvent` messages via `broadcast`. The SSH app's blackjack state is now a thin client wrapper, not the game authority.
 - Events remain `broadcast` for all subscribers; targeted variants carry `user_id` and are filtered in UI state.
 
 ### 2.5 TUI Rendering and State Architecture (Sync vs Async Boundary)
@@ -524,7 +530,9 @@ late-sh/
 ## 6. Current Work [VOLATILE]
 
 In progress:
-- See PLAN.md for roadmap (Blackjack/multiplayer).
+- Blackjack now uses service-owned shared state with `watch` snapshots and `broadcast` events, but it is still a single shared table with one active player at a time.
+- Blackjack remains admin-gated in the arcade until multi-seat/table semantics land.
+- See PLAN.md for the concrete multiplayer follow-up roadmap.
 
 Future:
 - **Nonograms (v2)**: Replace random generation with pixel-art-to-nonogram pipeline or bulk-curate from webpbn.com.
@@ -554,8 +562,8 @@ Roadmap ideas:
 - ~~Minesweeper~~ ✓ Classic logic puzzle with daily seeded boards and personal infinite play.
 - ~~2048~~ ✓ ~~Sudoku~~ ✓ ~~Nonograms~~ ✓ ~~Solitaire~~ ✓
 
-**Table Games (next):**
-- **Blackjack (PvE Multiplayer):** Multiple players at a table vs server. Stepping stone for multiplayer state and Late Chips economy.
+**Table Games (active buildout):**
+- **Blackjack:** Shared-table implementation is live behind admin gate. Service owns truth; clients subscribe to snapshots/events. Still missing seats, turn rotation, table identity, and room wiring.
 - **Texas Hold'em Poker (PvP):** The ultimate late-night clubhouse game. Table-scoped chat, robust turn state.
 
 **Async 1v1:**
@@ -567,6 +575,38 @@ Roadmap ideas:
 
 **Card Games:**
 - **Cribbage / Bridge / Thousand (Tysiąc):** Cozy trick-taking games, deep strategy.
+
+### Monthly chip leaderboard resets
+- Archive monthly chip leaders (top 3 get a permanent badge?)
+- Reset balances to baseline at month end
+- "Hall of Fame" display somewhere
+
+### Strategy multiplayer (Chess, Battleship)
+- No chips needed — W/L record + rating
+- Async: make a move, come back later
+- Game completion counts toward daily streaks
+- `/challenge @user chess` in chat for matchmaking
+
+### More casino games (Poker)
+- Texas Hold'em: PvP, uses chip betting
+- Needs turn management, pot logic, hand evaluation
+- Higher complexity — build after Blackjack validates the chip system
+
+### Chat-based matchmaking
+- Activity feed broadcast when someone sits at an empty table
+- `/play <game>` and `/challenge @user <game>` commands
+- Accept/decline prompts
+
+---
+
+## Game category model (unified view)
+
+| Category | Games | Win condition | Leaderboard section | Streaks | Chips |
+|----------|-------|--------------|-------------------|---------|-------|
+| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | Solve the daily | Today's Champions | Yes | +50 bonus per completion |
+| High-score | Tetris, 2048 | Personal best | All-Time High Scores | No | No |
+| Casino | Blackjack, Poker (future) | Grow your chip balance | Chip Leaders | Optional | Bet and win/lose |
+| Strategy | Chess, Battleship (future) | Beat opponent | W/L + Rating | Yes (game completed) | No |
 
 ### Persistent Multiplayer World (Big Bet) [VOLATILE]
 
@@ -826,7 +866,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Stream URL + now playing + voting + dashboard chat (The Lounge Hub) |
 | **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`) with grouped room sections and a synthetic `news` entry in the room list |
-| **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`) and daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`) plus coming-soon multiplayer. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
+| **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
 | **Profile** | 4 | Active | User profile: username, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info, chat colors |
 
 ### Layout

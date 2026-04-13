@@ -19,7 +19,6 @@ impl ChipService {
         UserChips::ensure(&client, user_id).await
     }
 
-    /// Fire-and-forget: grant bonus chips for completing a daily puzzle.
     pub fn grant_daily_bonus_task(&self, user_id: Uuid, difficulty_key: String) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -34,5 +33,17 @@ impl ChipService {
         let client = self.db.get().await?;
         UserChips::add_bonus(&client, user_id, amount).await?;
         Ok(())
+    }
+
+    pub async fn debit_bet(&self, user_id: Uuid, amount: i64) -> anyhow::Result<Option<i64>> {
+        let client = self.db.get().await?;
+        let chips = UserChips::deduct(&client, user_id, amount).await?;
+        Ok(chips.map(|c| c.balance))
+    }
+
+    pub async fn credit_payout(&self, user_id: Uuid, amount: i64) -> anyhow::Result<i64> {
+        let client = self.db.get().await?;
+        let chips = UserChips::add_bonus(&client, user_id, amount).await?;
+        Ok(chips.balance)
     }
 }

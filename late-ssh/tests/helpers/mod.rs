@@ -11,6 +11,7 @@ use late_ssh::app::bonsai::svc::BonsaiService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
+use late_ssh::app::games::blackjack::svc::BlackjackService;
 use late_ssh::app::games::chips::svc::ChipService;
 use late_ssh::app::games::leaderboard::svc::LeaderboardService;
 use late_ssh::app::games::minesweeper::svc::MinesweeperService;
@@ -45,6 +46,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         icecast_url: "http://localhost:8000".to_string(),
         web_url: "http://localhost:3000".to_string(),
         open_access: true,
+        force_admin: false,
         db: db_config,
         max_conns_global: 100,
         max_conns_per_ip: 3,
@@ -95,6 +97,9 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = TetrisService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
+    let (blackjack_event_tx, _) = broadcast::channel(64);
+    let blackjack_service =
+        BlackjackService::new(chip_service.clone(), blackjack_event_tx, db.clone());
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let nonogram_service =
         NonogramService::new(db.clone(), activity_tx.clone(), chip_service.clone());
@@ -125,6 +130,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         bonsai_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service,
+        blackjack_service,
         leaderboard_service,
         now_playing_rx,
         activity_feed: activity_tx,
@@ -186,9 +192,15 @@ pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
             ChipService::new(db.clone()),
         ),
         initial_minesweeper_games: Vec::new(),
+        blackjack_service: BlackjackService::new(
+            ChipService::new(db.clone()),
+            broadcast::channel(64).0,
+            db.clone(),
+        ),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         nonogram_library: NonogramLibrary::default(),
+        initial_chip_balance: 0,
         leaderboard_rx: None,
         web_url: "http://localhost:3000".to_string(),
         session_token: session_token.to_string(),
@@ -272,9 +284,15 @@ pub fn make_app_with_paired_client(
             ChipService::new(db.clone()),
         ),
         initial_minesweeper_games: Vec::new(),
+        blackjack_service: BlackjackService::new(
+            ChipService::new(db.clone()),
+            broadcast::channel(64).0,
+            db.clone(),
+        ),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         nonogram_library: NonogramLibrary::default(),
+        initial_chip_balance: 0,
         leaderboard_rx: None,
         web_url: "http://localhost:3000".to_string(),
         session_token: session_token.to_string(),

@@ -1,11 +1,11 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use late_core::db::Db;
+use late_core::models::bonsai::{Grave, Tree};
 use rand_core::{OsRng, RngCore};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use super::model::{Grave, Tree};
 use crate::state::ActivityEvent;
 
 #[derive(Clone)]
@@ -24,7 +24,7 @@ impl BonsaiService {
         let client = self.db.get().await?;
         let today = chrono::Utc::now().date_naive();
 
-        if let Some(mut tree) = Tree::find_by_user(&client, user_id).await? {
+        if let Some(mut tree) = Tree::find_by_user_id(&client, user_id).await? {
             // Check if tree should die (7+ days without watering)
             // If never watered, use created date as the reference point
             if tree.is_alive {
@@ -70,7 +70,7 @@ impl BonsaiService {
         let client = self.db.get().await?;
         let today = chrono::Utc::now().date_naive();
 
-        let tree = Tree::find_by_user(&client, user_id).await?;
+        let tree = Tree::find_by_user_id(&client, user_id).await?;
         let Some(tree) = tree else {
             return Ok(false);
         };
@@ -139,13 +139,7 @@ impl BonsaiService {
 
     async fn cut(&self, user_id: Uuid, new_seed: i64, cost: i32) -> Result<()> {
         let client = self.db.get().await?;
-        client
-            .execute(
-                "UPDATE bonsai_trees SET seed = $2, growth_points = GREATEST(growth_points - $3, 0), updated = current_timestamp WHERE user_id = $1",
-                &[&user_id, &new_seed, &cost],
-            )
-            .await?;
-        Ok(())
+        Tree::cut(&client, user_id, new_seed, cost).await
     }
 
     /// Add connection-time growth (called periodically from tick)

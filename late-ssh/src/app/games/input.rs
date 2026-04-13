@@ -1,6 +1,6 @@
 use crate::app::state::App;
 
-const LOBBY_GAME_COUNT: usize = 6;
+const LOBBY_GAME_COUNT: usize = 7;
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.is_playing_game {
@@ -44,6 +44,20 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return true;
             }
             return super::solitaire::input::handle_key(&mut app.solitaire_state, byte);
+        } else if app.game_selection == 6 {
+            let action = if byte == b'q' || byte == b'Q' {
+                super::blackjack::input::handle_key(&mut app.blackjack_state, 0x1B)
+            } else {
+                super::blackjack::input::handle_key(&mut app.blackjack_state, byte)
+            };
+            match action {
+                super::blackjack::input::InputAction::Ignored => return false,
+                super::blackjack::input::InputAction::Handled => return true,
+                super::blackjack::input::InputAction::Leave => {
+                    app.is_playing_game = false;
+                    return true;
+                }
+            }
         }
         return false;
     }
@@ -66,6 +80,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 || (app.game_selection == 3 && app.nonogram_state.has_puzzles())
                 || app.game_selection == 4
                 || app.game_selection == 5
+                || (app.game_selection == 6 && app.is_admin)
             {
                 app.is_playing_game = true;
             }
