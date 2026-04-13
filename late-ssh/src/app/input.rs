@@ -276,7 +276,10 @@ pub fn handle(app: &mut App, data: &[u8]) {
     };
 
     if app.show_splash {
-        // Do not process input while splash screen is showing
+        // Escape skips the rest of the intro animation
+        if data.contains(&0x1B) {
+            app.show_splash = false;
+        }
         return;
     }
 
