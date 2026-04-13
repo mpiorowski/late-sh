@@ -17,6 +17,7 @@ pub struct Config {
     pub icecast_url: String,
     pub web_url: String,
     pub open_access: bool,
+    pub force_admin: bool,
     pub db: DbConfig,
     pub max_conns_global: usize,
     pub max_conns_per_ip: usize,
@@ -60,7 +61,8 @@ impl Config {
             ssh_port = self.ssh_port,
             api_port = self.api_port,
             open_access = self.open_access,
-            "network: SSH listener port, internal API port, open-access auth mode"
+            force_admin = self.force_admin,
+            "network: SSH listener port, internal API port, open-access auth mode, dev force-admin"
         );
         tracing::info!(
             db_host = %self.db.host,
@@ -129,6 +131,7 @@ impl Config {
             icecast_url: required("LATE_ICECAST_URL")?,
             web_url: required("LATE_WEB_URL")?,
             open_access: required_bool("LATE_SSH_OPEN")?,
+            force_admin: required_bool("LATE_FORCE_ADMIN")?,
             db,
             max_conns_global: required_parse("LATE_MAX_CONNS_GLOBAL")?,
             max_conns_per_ip: required_parse("LATE_MAX_CONNS_PER_IP")?,

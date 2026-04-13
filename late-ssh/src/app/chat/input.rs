@@ -79,11 +79,11 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     if app.chat.notifications_selected {
         match byte {
             b'h' | b'H' => {
-                switch_room(app, 1);
+                switch_room(app, -1);
                 return true;
             }
             b'l' | b'L' => {
-                switch_room(app, -1);
+                switch_room(app, 1);
                 return true;
             }
             _ => return super::notifications::input::handle_byte(app, byte),
@@ -94,24 +94,25 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         // h/l still switch rooms even when news is selected
         match byte {
             b'h' | b'H' => {
-                switch_room(app, 1);
+                switch_room(app, -1);
                 return true;
             }
             b'l' | b'L' => {
-                switch_room(app, -1);
+                switch_room(app, 1);
                 return true;
             }
             _ => return super::news::input::handle_byte(app, byte),
         }
     }
 
-    // d/r act on the selection then deselect
+    // `d` deletes and keeps the cursor on the adjacent message so you can
+    // reap a run of your own messages with repeated presses. `r` enters
+    // reply mode and drops the selection.
     match byte {
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message() {
                 app.banner = Some(b);
             }
-            app.chat.clear_message_selection();
             return true;
         }
         b'r' | b'R' => {
@@ -136,11 +137,11 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         b'h' | b'H' => {
-            switch_room(app, 1);
+            switch_room(app, -1);
             true
         }
         b'l' | b'L' => {
-            switch_room(app, -1);
+            switch_room(app, 1);
             true
         }
         b'i' | b'I' | b'\r' | b'\n' => {
@@ -148,15 +149,17 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         0x04 => {
-            // Ctrl-D: half-page down
-            let half = (app.size.1 / 2).max(1) as isize;
-            app.chat.select_message(-half);
+            // Ctrl-D: half-page down. `select_message` delta is in MESSAGES,
+            // not rows, and chat messages wrap to ~3 rows each, so divide
+            // terminal height by 6 to feel like half a visible page.
+            let step = (app.size.1 / 6).max(1) as isize;
+            app.chat.select_message(-step);
             true
         }
         0x15 => {
-            // Ctrl-U: half-page up
-            let half = (app.size.1 / 2).max(1) as isize;
-            app.chat.select_message(half);
+            // Ctrl-U: half-page up. Same rationale as Ctrl-D above.
+            let step = (app.size.1 / 6).max(1) as isize;
+            app.chat.select_message(step);
             true
         }
         b'g' | b'G' => {

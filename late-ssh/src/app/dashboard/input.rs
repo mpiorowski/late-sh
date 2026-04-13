@@ -24,7 +24,6 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             if let Some(b) = app.chat.delete_selected_message() {
                 app.banner = Some(b);
             }
-            app.chat.clear_message_selection();
             return true;
         }
         b'r' | b'R' => {
@@ -50,15 +49,17 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             true
         }
         0x04 => {
-            // Ctrl-D: half-page down
-            let half = (app.size.1 / 2).max(1) as isize;
-            app.chat.select_dashboard_message(-half);
+            // Ctrl-D: half-page down. `select_dashboard_message` delta is in
+            // MESSAGES, not rows; dividing by 6 approximates half a visible
+            // page given wrapped messages ~3 rows tall.
+            let step = (app.size.1 / 6).max(1) as isize;
+            app.chat.select_dashboard_message(-step);
             true
         }
         0x15 => {
-            // Ctrl-U: half-page up
-            let half = (app.size.1 / 2).max(1) as isize;
-            app.chat.select_dashboard_message(half);
+            // Ctrl-U: half-page up. Same rationale as Ctrl-D above.
+            let step = (app.size.1 / 6).max(1) as isize;
+            app.chat.select_dashboard_message(step);
             true
         }
         b'g' | b'G' => {

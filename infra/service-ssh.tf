@@ -173,6 +173,10 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             value = var.SSH_OPEN
           }
           env {
+            name  = "LATE_FORCE_ADMIN"
+            value = "0"
+          }
+          env {
             name  = "LATE_MAX_CONNS_GLOBAL"
             value = var.MAX_CONNS_GLOBAL
           }

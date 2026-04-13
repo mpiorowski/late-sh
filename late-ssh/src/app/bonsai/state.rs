@@ -2,7 +2,8 @@ use chrono::NaiveDate;
 use rand_core::{OsRng, RngCore};
 use uuid::Uuid;
 
-use super::model::Tree;
+use late_core::models::bonsai::Tree;
+
 use super::svc::BonsaiService;
 
 /// How many ticks between passive growth grants (1 point per ~10 minutes at 15fps)
@@ -181,9 +182,9 @@ fn can_water_on(is_alive: bool, last_watered: Option<NaiveDate>, today: NaiveDat
 
 fn share_label(is_alive: bool, age_days: i64) -> String {
     if is_alive {
-        format!("Admire my tree (Day {age_days})")
+        format!("ADMIRE my tree (Day {age_days})")
     } else {
-        "Admire my tree [RIP]".to_string()
+        "ADMIRE my tree [RIP]".to_string()
     }
 }
 
@@ -304,7 +305,7 @@ mod tests {
 
     #[test]
     fn share_label_reflects_alive_and_dead_states() {
-        assert_eq!(share_label(true, 12), "Admire my tree (Day 12)");
-        assert_eq!(share_label(false, 12), "Admire my tree [RIP]");
+        assert_eq!(share_label(true, 12), "ADMIRE my tree (Day 12)");
+        assert_eq!(share_label(false, 12), "ADMIRE my tree [RIP]");
     }
 }

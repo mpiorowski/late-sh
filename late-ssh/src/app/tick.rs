@@ -8,6 +8,8 @@ use crate::session::{BrowserVizFrame, SessionMessage};
 
 impl App {
     pub fn tick(&mut self) {
+        crate::app::input::flush_pending_escape(self);
+
         if self.show_splash {
             self.splash_ticks = self.splash_ticks.saturating_add(1);
             if self.splash_ticks > 90 {
@@ -52,14 +54,20 @@ impl App {
         if self.screen == Screen::Games && self.is_playing_game && self.game_selection == 1 {
             self.tetris_state.tick();
         }
+        self.blackjack_state.tick();
+        self.chip_balance = self.blackjack_state.balance;
 
         // Leaderboard
         if let Some(rx) = &mut self.leaderboard_rx
             && rx.has_changed().unwrap_or(false)
         {
             self.leaderboard = rx.borrow_and_update().clone();
-            if let Some(&balance) = self.leaderboard.user_chips.get(&self.user_id) {
+            if let Some(&balance) = self.leaderboard.user_chips.get(&self.user_id)
+                && self.blackjack_state.snapshot.phase
+                    == crate::app::games::blackjack::state::Phase::Betting
+            {
                 self.chip_balance = balance;
+                self.blackjack_state.balance = balance;
             }
         }
 

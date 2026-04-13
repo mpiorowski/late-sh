@@ -1,4 +1,4 @@
-use late_ssh::app::bonsai::model::{Grave, Tree};
+use late_core::models::bonsai::{Grave, Tree};
 use late_ssh::app::bonsai::svc::BonsaiService;
 use late_ssh::state::ActivityEvent;
 use tokio::sync::broadcast;

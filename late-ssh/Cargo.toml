@@ -32,6 +32,7 @@ crossterm = "0.29"
 ratatui = "0.30"
 rand_core = { version = "0.6", features = ["std"] }
 base64 = "0.22"
+vte = "0.15"
 
 # SSH
 russh = "0.56.0"

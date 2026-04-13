@@ -86,9 +86,11 @@ pub struct SessionConfig {
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
     pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
+    pub blackjack_service: crate::app::games::blackjack::svc::BlackjackService,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
-    pub initial_bonsai_tree: Option<crate::app::bonsai::model::Tree>,
+    pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub nonogram_library: crate::app::games::nonogram::state::Library,
+    pub initial_chip_balance: i64,
 
     /// Session / connection
     pub web_url: String,
@@ -134,6 +136,8 @@ pub struct App {
     pub(crate) show_help: bool,
     pub(crate) help_scroll: u16,
     pub(crate) pending_escape: bool,
+    pub(crate) pending_escape_started_at: Option<Instant>,
+    pub(crate) vt_input: crate::app::input::VtInputParser,
 
     /// Terminal / rendering
     pub(super) terminal: Terminal<CrosstermBackend<SharedBuffer>>,
@@ -156,6 +160,7 @@ pub struct App {
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) activity: VecDeque<ActivityEvent>,
     pub(crate) user_id: Uuid,
+    pub(crate) is_admin: bool,
 
     /// Voting
     pub(crate) vote: vote::state::VoteState,
@@ -184,6 +189,7 @@ pub struct App {
     pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
+    pub(crate) blackjack_state: crate::app::games::blackjack::state::State,
 
     /// Late Chips balance (loaded on login, updated via leaderboard refresh)
     pub(crate) chip_balance: i64,
@@ -289,6 +295,11 @@ impl App {
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
         );
+        let blackjack_state = crate::app::games::blackjack::state::State::new(
+            config.blackjack_service.clone(),
+            config.user_id,
+            config.initial_chip_balance,
+        );
 
         let bonsai_state = if let Some(tree) = config.initial_bonsai_tree {
             crate::app::bonsai::state::BonsaiState::new(
@@ -301,7 +312,7 @@ impl App {
             crate::app::bonsai::state::BonsaiState::new(
                 config.user_id,
                 config.bonsai_service.clone(),
-                crate::app::bonsai::model::Tree {
+                late_core::models::bonsai::Tree {
                     id: uuid::Uuid::nil(),
                     created: chrono::Utc::now(),
                     updated: chrono::Utc::now(),
@@ -325,6 +336,8 @@ impl App {
             show_help: false,
             help_scroll: 0,
             pending_escape: false,
+            pending_escape_started_at: None,
+            vt_input: crate::app::input::VtInputParser::default(),
             terminal,
             shared,
             visualizer: Visualizer::new(),
@@ -343,6 +356,7 @@ impl App {
             activity_feed_rx: config.activity_feed_rx,
             activity: VecDeque::new(),
             user_id: config.user_id,
+            is_admin: config.is_admin,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
                 config.chat_service,
@@ -369,7 +383,8 @@ impl App {
             nonogram_state,
             solitaire_state,
             minesweeper_state,
-            chip_balance: 0,
+            blackjack_state,
+            chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
             is_draining: config.is_draining,
         })
