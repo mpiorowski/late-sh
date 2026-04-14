@@ -131,10 +131,16 @@ impl Notification {
     }
 
     /// Resolve @usernames to user IDs, excluding the actor.
+    ///
+    /// For DM rooms, only resolves usernames that belong to one of the two DM
+    /// participants — mentioning a third party in a DM is silently dropped.
+    /// For non-DM rooms (including private rooms), no membership check is
+    /// performed.
     pub async fn resolve_mentioned_user_ids(
         client: &Client,
         usernames: &[String],
         exclude_user_id: Uuid,
+        room_id: Uuid,
     ) -> Result<Vec<Uuid>> {
         if usernames.is_empty() {
             return Ok(Vec::new());
@@ -143,8 +149,13 @@ impl Notification {
         let lower: Vec<String> = usernames.iter().map(|u| u.to_ascii_lowercase()).collect();
         let rows = client
             .query(
-                "SELECT user_id FROM profiles WHERE LOWER(username) = ANY($1) AND user_id != $2",
-                &[&lower, &exclude_user_id],
+                "SELECT p.user_id \
+                 FROM profiles p \
+                 JOIN chat_rooms r ON r.id = $3 \
+                 WHERE LOWER(p.username) = ANY($1) \
+                   AND p.user_id <> $2 \
+                   AND (r.kind <> 'dm' OR p.user_id IN (r.dm_user_a, r.dm_user_b))",
+                &[&lower, &exclude_user_id, &room_id],
             )
             .await?;
 

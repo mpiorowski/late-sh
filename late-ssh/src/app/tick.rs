@@ -8,6 +8,8 @@ use crate::session::{BrowserVizFrame, SessionMessage};
 
 impl App {
     pub fn tick(&mut self) {
+        crate::app::input::flush_pending_escape(self);
+
         if self.show_splash {
             self.splash_ticks = self.splash_ticks.saturating_add(1);
             if self.splash_ticks > 90 {

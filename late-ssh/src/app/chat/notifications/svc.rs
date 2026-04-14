@@ -178,7 +178,7 @@ impl NotificationService {
         let client = self.db.get().await?;
 
         let user_ids =
-            Notification::resolve_mentioned_user_ids(&client, usernames, actor_id).await?;
+            Notification::resolve_mentioned_user_ids(&client, usernames, actor_id, room_id).await?;
         if user_ids.is_empty() {
             return Ok(());
         }
