@@ -19,7 +19,7 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar},
         theme,
     },
-    dashboard, profile,
+    dashboard, emoji, profile,
     state::App,
     visualizer::Visualizer,
 };
@@ -56,6 +56,9 @@ struct DrawContext<'a> {
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
     is_draining: bool,
+    emoji_picker_open: bool,
+    emoji_picker_state: &'a emoji::EmojiPickerState,
+    icon_catalog: Option<&'a emoji::catalog::IconCatalogData>,
 }
 
 impl App {
@@ -215,6 +218,9 @@ impl App {
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
+                        emoji_picker_open: self.emoji_picker_open,
+                        emoji_picker_state: &self.emoji_picker_state,
+                        icon_catalog: self.icon_catalog.as_ref(),
                     },
                 )
             })
@@ -408,6 +414,12 @@ impl App {
                 ("Pair", "Scan to pair audio")
             };
             super::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
+        }
+
+        if ctx.emoji_picker_open
+            && let Some(catalog) = ctx.icon_catalog
+        {
+            emoji::picker::render(frame, area, ctx.emoji_picker_state, catalog);
         }
     }
 }

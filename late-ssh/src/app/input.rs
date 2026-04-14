@@ -1,4 +1,4 @@
-use super::{chat, dashboard, profile, state::App};
+use super::{chat, dashboard, emoji, profile, state::App};
 use crate::app::common::primitives::Screen;
 use std::{mem, time::Duration};
 use vte::{Params, Parser, Perform};
@@ -53,6 +53,7 @@ enum ParsedInput {
     CtrlBackspace,
     CtrlDelete,
     Scroll(isize),
+    MousePress { x: u16, y: u16 },
     AltEnter,
     Paste(Vec<u8>),
     PageUp,
@@ -238,12 +239,18 @@ impl Perform for VtCollector {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
             'M' | 'm' if intermediates == [b'<'] && params.len() >= 3 => {
-                let scroll = match p0.unwrap_or_default() {
-                    64 => 1,
-                    65 => -1,
-                    _ => return,
-                };
-                self.events.push(ParsedInput::Scroll(scroll));
+                let button = p0.unwrap_or_default();
+                let x = params.get(1).copied().unwrap_or(0);
+                let y = params.get(2).copied().unwrap_or(0);
+                match button {
+                    64 => self.events.push(ParsedInput::Scroll(1)),
+                    65 => self.events.push(ParsedInput::Scroll(-1)),
+                    // Left-button press only; release (action == 'm') ignored for now.
+                    0 if action == 'M' => {
+                        self.events.push(ParsedInput::MousePress { x, y });
+                    }
+                    _ => {}
+                }
             }
             _ => {}
         }
@@ -405,6 +412,12 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    // Picker intercepts all input when open (ESC is handled via dispatch_escape).
+    if app.emoji_picker_open {
+        handle_emoji_picker_input(app, event);
+        return;
+    }
+
     let ctx = InputContext::from_app(app);
 
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
@@ -422,6 +435,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
+        // Mouse clicks only matter inside the emoji picker today; ignore here.
+        ParsedInput::MousePress { .. } => {}
         // Page keys mirror Ctrl-U / Ctrl-D. Signs follow the existing scheme:
         // positive = toward older/top, negative = toward newer/bottom. See
         // `app.chat.select_message` — its `delta` is in MESSAGES, not rows,
@@ -506,6 +521,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.chat.composer_push('\n');
             app.chat.update_autocomplete();
         }
+        ParsedInput::Byte(0x1D) => try_open_emoji_picker(app),
         ParsedInput::Byte(byte) => {
             if handle_modal_input(app, ctx, byte) {
                 return;
@@ -522,6 +538,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 }
 
 fn dispatch_escape(app: &mut App) {
+    if app.emoji_picker_open {
+        app.emoji_picker_open = false;
+        return;
+    }
     let ctx = InputContext::from_app(app);
     if handle_modal_input(app, ctx, 0x1B) {
         return;
@@ -829,6 +849,233 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Games => {
             crate::app::games::input::handle_key(app, byte);
         }
+    }
+}
+
+fn try_open_emoji_picker(app: &mut App) {
+    let ctx = InputContext::from_app(app);
+    let can_open = match ctx.screen {
+        Screen::Dashboard => true,
+        Screen::Chat => ctx.chat_composing || ctx.news_composing,
+        Screen::Profile => true,
+        Screen::Games => false,
+    };
+    if can_open {
+        if app.icon_catalog.is_none() {
+            app.icon_catalog = Some(emoji::catalog::IconCatalogData::load());
+        }
+        app.emoji_picker_state = emoji::EmojiPickerState::default();
+        app.emoji_picker_open = true;
+    }
+}
+
+fn handle_emoji_picker_input(app: &mut App, event: ParsedInput) {
+    match event {
+        ParsedInput::Byte(b'\r') => apply_emoji_selection(app, false),
+        ParsedInput::AltEnter => apply_emoji_selection(app, true),
+        ParsedInput::Byte(b'\t') => {
+            app.emoji_picker_state.tab.move_next();
+            app.emoji_picker_state.selected_index = 0;
+            app.emoji_picker_state.scroll_offset = 0;
+        }
+        ParsedInput::Byte(0x7f) => {
+            if app.emoji_picker_state.search_cursor > 0 {
+                let byte_pos = app
+                    .emoji_picker_state
+                    .search_query
+                    .char_indices()
+                    .nth(app.emoji_picker_state.search_cursor - 1)
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                app.emoji_picker_state.search_query.remove(byte_pos);
+                app.emoji_picker_state.search_cursor -= 1;
+                app.emoji_picker_state.selected_index = 0;
+                app.emoji_picker_state.scroll_offset = 0;
+            }
+        }
+        ParsedInput::Arrow(b'A') => picker_move_selection(app, -1),
+        ParsedInput::Arrow(b'B') => picker_move_selection(app, 1),
+        ParsedInput::Byte(b'k') | ParsedInput::Byte(b'K') => picker_move_selection(app, -1),
+        ParsedInput::Byte(b'j') | ParsedInput::Byte(b'J') => picker_move_selection(app, 1),
+        ParsedInput::Scroll(delta) => picker_move_selection(app, -delta * 3),
+        ParsedInput::Arrow(b'C') => {
+            let len = app.emoji_picker_state.search_query.chars().count();
+            if app.emoji_picker_state.search_cursor < len {
+                app.emoji_picker_state.search_cursor += 1;
+            }
+        }
+        ParsedInput::Arrow(b'D') => {
+            app.emoji_picker_state.search_cursor =
+                app.emoji_picker_state.search_cursor.saturating_sub(1);
+        }
+        ParsedInput::PageUp => {
+            let page = app.emoji_picker_state.visible_height.get().max(1) as isize;
+            picker_move_selection(app, -page);
+        }
+        ParsedInput::PageDown => {
+            let page = app.emoji_picker_state.visible_height.get().max(1) as isize;
+            picker_move_selection(app, page);
+        }
+        ParsedInput::MousePress { x, y } => handle_emoji_picker_click(app, x, y),
+        ParsedInput::Byte(byte) if (b' '..=b'~').contains(&byte) => {
+            let c = byte as char;
+            let byte_pos = app
+                .emoji_picker_state
+                .search_query
+                .char_indices()
+                .nth(app.emoji_picker_state.search_cursor)
+                .map(|(i, _)| i)
+                .unwrap_or(app.emoji_picker_state.search_query.len());
+            app.emoji_picker_state.search_query.insert(byte_pos, c);
+            app.emoji_picker_state.search_cursor += 1;
+            app.emoji_picker_state.selected_index = 0;
+            app.emoji_picker_state.scroll_offset = 0;
+        }
+        _ => {}
+    }
+}
+
+fn picker_selectable_count(app: &App) -> usize {
+    let Some(catalog) = app.icon_catalog.as_ref() else {
+        return 0;
+    };
+    let tab = *app.emoji_picker_state.tab.current();
+    let sections = catalog.sections(tab, &app.emoji_picker_state.search_query);
+    emoji::picker::selectable_count(&sections)
+}
+
+fn picker_move_selection(app: &mut App, delta: isize) {
+    let max = picker_selectable_count(app);
+    if max == 0 {
+        return;
+    }
+    let cur = app.emoji_picker_state.selected_index as isize;
+    let next = cur.saturating_add(delta).clamp(0, (max - 1) as isize) as usize;
+    app.emoji_picker_state.selected_index = next;
+    if let Some(catalog) = app.icon_catalog.as_ref() {
+        let state = &mut app.emoji_picker_state;
+        adjust_emoji_picker_scroll(state, catalog);
+    }
+}
+
+/// Handle a left-button press at SGR 1-based coordinates (x, y).
+/// A click on a visible icon row selects it; a second click on the
+/// same item within DOUBLE_CLICK_WINDOW_MS inserts it (keeps the picker open).
+fn handle_emoji_picker_click(app: &mut App, _x: u16, y: u16) {
+    let list = app.emoji_picker_state.list_inner.get();
+    // SGR coords are 1-based; ratatui Rect is 0-based.
+    let row_0based = y.saturating_sub(1);
+    if list.height == 0 || row_0based < list.y || row_0based >= list.y + list.height {
+        return;
+    }
+    let offset_in_list = (row_0based - list.y) as usize;
+    let flat_idx = app.emoji_picker_state.scroll_offset + offset_in_list;
+
+    let Some(catalog) = app.icon_catalog.as_ref() else {
+        return;
+    };
+    let tab = *app.emoji_picker_state.tab.current();
+    let sections = catalog.sections(tab, &app.emoji_picker_state.search_query);
+
+    // Clicks on headers are ignored.
+    let Some(selectable_idx) = emoji::picker::flat_to_selectable(&sections, flat_idx) else {
+        return;
+    };
+
+    let now = std::time::Instant::now();
+    let is_double = match app.emoji_picker_state.last_click {
+        Some((prev, prev_idx)) => {
+            prev_idx == selectable_idx
+                && now.duration_since(prev).as_millis() <= emoji::DOUBLE_CLICK_WINDOW_MS
+        }
+        None => false,
+    };
+
+    app.emoji_picker_state.selected_index = selectable_idx;
+    if let Some(catalog) = app.icon_catalog.as_ref() {
+        let state = &mut app.emoji_picker_state;
+        adjust_emoji_picker_scroll(state, catalog);
+    }
+
+    if is_double {
+        app.emoji_picker_state.last_click = None;
+        apply_emoji_selection(app, true);
+    } else {
+        app.emoji_picker_state.last_click = Some((now, selectable_idx));
+    }
+}
+
+fn adjust_emoji_picker_scroll(
+    state: &mut emoji::EmojiPickerState,
+    catalog: &emoji::catalog::IconCatalogData,
+) {
+    let tab = *state.tab.current();
+    let sections = catalog.sections(tab, &state.search_query);
+    let flat_idx = emoji::picker::selectable_to_flat(&sections, state.selected_index).unwrap_or(0);
+
+    let visible = state.visible_height.get().max(1);
+    if flat_idx < state.scroll_offset {
+        state.scroll_offset = flat_idx;
+    } else if flat_idx >= state.scroll_offset + visible {
+        state.scroll_offset = flat_idx.saturating_sub(visible - 1);
+    }
+}
+
+fn apply_emoji_selection(app: &mut App, keep_open: bool) {
+    let tab = *app.emoji_picker_state.tab.current();
+    let selected = app.emoji_picker_state.selected_index;
+    let query = app.emoji_picker_state.search_query.clone();
+
+    let icon_str = {
+        let Some(catalog) = app.icon_catalog.as_ref() else {
+            app.emoji_picker_open = false;
+            return;
+        };
+        let sections = catalog.sections(tab, &query);
+        match emoji::picker::entry_at_selectable(&sections, selected) {
+            Some(entry) => entry.icon.clone(),
+            None => {
+                if !keep_open {
+                    app.emoji_picker_open = false;
+                }
+                return;
+            }
+        }
+    };
+
+    if !keep_open {
+        app.emoji_picker_open = false;
+    }
+
+    if icon_str.is_empty() {
+        return;
+    }
+
+    let ctx = InputContext::from_app(app);
+    match ctx.screen {
+        Screen::Dashboard => {
+            for ch in icon_str.chars() {
+                app.chat.composer_push(ch);
+            }
+            app.chat.update_autocomplete();
+        }
+        Screen::Chat if ctx.chat_composing => {
+            for ch in icon_str.chars() {
+                app.chat.composer_push(ch);
+            }
+            app.chat.update_autocomplete();
+        }
+        Screen::Chat if ctx.news_composing => {
+            for ch in icon_str.chars() {
+                app.chat.news.composer_push(ch);
+            }
+        }
+        Screen::Profile => {
+            for ch in icon_str.chars() {
+                app.profile_state.composer_push(ch);
+            }
+        }
+        _ => {}
     }
 }
 

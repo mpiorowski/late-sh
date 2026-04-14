@@ -199,6 +199,11 @@ pub struct App {
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+
+    /// Emoji / Unicode / Nerd Font picker
+    pub(crate) emoji_picker_open: bool,
+    pub(crate) emoji_picker_state: super::emoji::EmojiPickerState,
+    pub(crate) icon_catalog: Option<super::emoji::catalog::IconCatalogData>,
 }
 
 impl App {
@@ -387,6 +392,9 @@ impl App {
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
             is_draining: config.is_draining,
+            emoji_picker_open: false,
+            emoji_picker_state: super::emoji::EmojiPickerState::default(),
+            icon_catalog: None,
         })
     }
 

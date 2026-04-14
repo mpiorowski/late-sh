@@ -3,6 +3,7 @@ pub mod bonsai;
 pub mod chat;
 pub mod common;
 pub mod dashboard;
+pub(crate) mod emoji;
 pub mod games;
 pub mod input;
 pub mod profile;

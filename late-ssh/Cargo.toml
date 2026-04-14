@@ -30,6 +30,8 @@ tokio-postgres = { workspace = true }
 # Terminal UI
 crossterm = "0.29"
 ratatui = "0.30"
+emojis = "0.7"
+unicode_names2 = "2"
 rand_core = { version = "0.6", features = ["std"] }
 base64 = "0.22"
 vte = "0.15"
