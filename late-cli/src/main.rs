@@ -300,7 +300,9 @@ fn read_until_mp3_sync<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
     let mut chunk = [0u8; CHUNK_SIZE];
 
     while buf.len() < MAX_SCAN_BYTES {
-        let read = reader.read(&mut chunk).context("failed to read from audio stream")?;
+        let read = reader
+            .read(&mut chunk)
+            .context("failed to read from audio stream")?;
         if read == 0 {
             break;
         }
@@ -319,7 +321,7 @@ fn find_mp3_sync_offset(bytes: &[u8]) -> Option<usize> {
         return Some(0);
     }
 
-    for i in 0..bytes.len().saturating_sub(3) {
+    for i in 0..=bytes.len().saturating_sub(3) {
         let b0 = bytes[i];
         let b1 = bytes[i + 1];
         let b2 = bytes[i + 2];
@@ -1740,6 +1742,12 @@ mod tests {
     #[test]
     fn find_mp3_sync_offset_accepts_id3_header() {
         assert_eq!(find_mp3_sync_offset(b"ID3\x04\x00\x00"), Some(0));
+    }
+
+    #[test]
+    fn find_mp3_sync_offset_checks_last_possible_offset() {
+        let bytes = [0x00, 0xFF, 0xFB, 0x90];
+        assert_eq!(find_mp3_sync_offset(&bytes), Some(1));
     }
 
     #[test]
