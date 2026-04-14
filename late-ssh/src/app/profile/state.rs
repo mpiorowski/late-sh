@@ -111,9 +111,13 @@ impl ProfileState {
 
     pub fn submit_username(&mut self) {
         self.editing_username = false;
-        self.profile.username = self.username_composer.clone();
-        self.save_profile();
+        let normalized =
+            normalize_username_submission(&self.username_composer, &self.profile.username);
         self.username_composer.clear();
+        if let Some(next) = normalized {
+            self.profile.username = next;
+            self.save_profile();
+        }
     }
 
     pub fn composer_push(&mut self, ch: char) {
@@ -138,41 +142,19 @@ impl ProfileState {
 
     pub fn move_settings_row(&mut self, delta: isize) {
         let last = Self::cooldown_row_index() as isize;
-        let row = self.settings_row as isize + delta;
-        self.settings_row = row.clamp(0, last) as usize;
+        self.settings_row = clamp_settings_row(self.settings_row as isize + delta, last);
     }
 
     /// Cycle the currently selected setting and save immediately.
     pub fn cycle_setting(&mut self, forward: bool) {
         if self.settings_row == Self::cooldown_row_index() {
-            self.cycle_cooldown(forward);
+            self.profile.notify_cooldown_mins =
+                cycle_cooldown_value(self.profile.notify_cooldown_mins, forward);
+            self.save_profile();
         } else if let Some(kind) = Self::NOTIFY_KINDS.get(self.settings_row) {
-            self.toggle_kind(kind);
+            toggle_notify_kind(&mut self.profile.notify_kinds, kind);
+            self.save_profile();
         }
-    }
-
-    fn toggle_kind(&mut self, kind: &str) {
-        if let Some(idx) = self.profile.notify_kinds.iter().position(|k| k == kind) {
-            self.profile.notify_kinds.remove(idx);
-        } else {
-            self.profile.notify_kinds.push(kind.to_string());
-        }
-        self.save_profile();
-    }
-
-    fn cycle_cooldown(&mut self, forward: bool) {
-        const OPTIONS: &[i32] = &[0, 1, 2, 5, 10, 15, 30, 60, 120, 240];
-        let current_idx = OPTIONS
-            .iter()
-            .position(|&o| o == self.profile.notify_cooldown_mins)
-            .unwrap_or(0);
-        let next_idx = if forward {
-            (current_idx + 1) % OPTIONS.len()
-        } else {
-            (current_idx + OPTIONS.len() - 1) % OPTIONS.len()
-        };
-        self.profile.notify_cooldown_mins = OPTIONS[next_idx];
-        self.save_profile();
     }
 
     fn save_profile(&self) {
@@ -239,6 +221,49 @@ impl ProfileState {
     }
 }
 
+/// Cooldown values cycled through on the profile screen, in display order.
+/// `0` is rendered as "Off".
+const COOLDOWN_OPTIONS: &[i32] = &[0, 1, 2, 5, 10, 15, 30, 60, 120, 240];
+
+/// Returns the new username to persist, or `None` if the submission is empty
+/// after trimming or unchanged from the current value.
+fn normalize_username_submission(composer: &str, current: &str) -> Option<String> {
+    let trimmed = composer.trim();
+    if trimmed.is_empty() || trimmed == current {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Toggle `kind` in `kinds`: remove it if present, otherwise append it.
+fn toggle_notify_kind(kinds: &mut Vec<String>, kind: &str) {
+    if let Some(idx) = kinds.iter().position(|k| k == kind) {
+        kinds.remove(idx);
+    } else {
+        kinds.push(kind.to_string());
+    }
+}
+
+/// Return the next cooldown value in the configured cycle, wrapping at both
+/// ends. Unknown values snap back to the start of the cycle.
+fn cycle_cooldown_value(current: i32, forward: bool) -> i32 {
+    let idx = COOLDOWN_OPTIONS
+        .iter()
+        .position(|&o| o == current)
+        .unwrap_or(0);
+    let next = if forward {
+        (idx + 1) % COOLDOWN_OPTIONS.len()
+    } else {
+        (idx + COOLDOWN_OPTIONS.len() - 1) % COOLDOWN_OPTIONS.len()
+    };
+    COOLDOWN_OPTIONS[next]
+}
+
+fn clamp_settings_row(row: isize, last: isize) -> usize {
+    row.clamp(0, last) as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +271,100 @@ mod tests {
     #[test]
     fn username_max_len_constant_is_12() {
         assert_eq!(USERNAME_MAX_LEN, 12);
+    }
+
+    #[test]
+    fn normalize_username_submission_trims_whitespace() {
+        assert_eq!(
+            normalize_username_submission("  alice  ", "old"),
+            Some("alice".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_username_submission_skips_when_empty_after_trim() {
+        assert_eq!(normalize_username_submission("", "old"), None);
+        assert_eq!(normalize_username_submission("   ", "old"), None);
+    }
+
+    #[test]
+    fn normalize_username_submission_skips_when_unchanged() {
+        assert_eq!(normalize_username_submission("alice", "alice"), None);
+        // Trim then compare — whitespace-padded copy of current still skips.
+        assert_eq!(normalize_username_submission("  alice ", "alice"), None);
+    }
+
+    #[test]
+    fn toggle_notify_kind_adds_when_absent() {
+        let mut kinds: Vec<String> = Vec::new();
+        toggle_notify_kind(&mut kinds, "dms");
+        assert_eq!(kinds, vec!["dms".to_string()]);
+    }
+
+    #[test]
+    fn toggle_notify_kind_removes_when_present() {
+        let mut kinds = vec!["dms".to_string(), "mentions".to_string()];
+        toggle_notify_kind(&mut kinds, "dms");
+        assert_eq!(kinds, vec!["mentions".to_string()]);
+    }
+
+    #[test]
+    fn toggle_notify_kind_preserves_order_of_other_kinds() {
+        let mut kinds = vec![
+            "dms".to_string(),
+            "mentions".to_string(),
+            "game_events".to_string(),
+        ];
+        toggle_notify_kind(&mut kinds, "mentions");
+        assert_eq!(kinds, vec!["dms".to_string(), "game_events".to_string()]);
+    }
+
+    #[test]
+    fn cycle_cooldown_value_steps_forward() {
+        assert_eq!(cycle_cooldown_value(0, true), 1);
+        assert_eq!(cycle_cooldown_value(5, true), 10);
+    }
+
+    #[test]
+    fn cycle_cooldown_value_steps_backward() {
+        assert_eq!(cycle_cooldown_value(1, false), 0);
+        assert_eq!(cycle_cooldown_value(10, false), 5);
+    }
+
+    #[test]
+    fn cycle_cooldown_value_wraps_at_both_ends() {
+        assert_eq!(cycle_cooldown_value(0, false), 240);
+        assert_eq!(cycle_cooldown_value(240, true), 0);
+    }
+
+    #[test]
+    fn cycle_cooldown_value_snaps_unknown_value_to_start() {
+        // 7 is not in the option list → treat as index 0 and advance.
+        assert_eq!(cycle_cooldown_value(7, true), 1);
+    }
+
+    #[test]
+    fn clamp_settings_row_clamps_below_zero() {
+        assert_eq!(clamp_settings_row(-1, 3), 0);
+    }
+
+    #[test]
+    fn clamp_settings_row_clamps_above_last() {
+        assert_eq!(clamp_settings_row(9, 3), 3);
+    }
+
+    #[test]
+    fn clamp_settings_row_passes_through_in_range() {
+        assert_eq!(clamp_settings_row(2, 3), 2);
+    }
+
+    #[test]
+    fn notify_kinds_constant_matches_ui_expectations() {
+        // If you add a kind here, also update the UI tuple in profile/ui.rs
+        // and the render-side matcher in render.rs.
+        assert_eq!(
+            ProfileState::NOTIFY_KINDS,
+            &["dms", "mentions", "game_events"]
+        );
     }
 }

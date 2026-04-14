@@ -370,7 +370,16 @@ pub async fn assert_render_not_contains_for(app: &mut App, needle: &str, duratio
     }
 }
 
-fn strip_ansi(input: &str) -> String {
+/// Render one frame, tick once beforehand so async state drains, strip ANSI,
+/// and return the plain-text buffer for substring/line assertions.
+pub fn render_plain(app: &mut App) -> String {
+    app.tick();
+    app.reset_render();
+    let frame = app.render().expect("render");
+    strip_ansi(&String::from_utf8_lossy(&frame))
+}
+
+pub fn strip_ansi(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(bytes.len());
     let mut i = 0;

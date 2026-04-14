@@ -482,7 +482,7 @@ late-sh/
 | Article | `articles` | `url` UNIQUE, `user_id` FK |
 | ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
-| Profile | `profiles` | `user_id` UNIQUE, username (trimmed length 1-32, case-insensitive UNIQUE, canonical public handle), dashboard widget toggles |
+| Profile | `profiles` | `user_id` UNIQUE, username (trimmed length 1-32, case-insensitive UNIQUE, canonical public handle), `notify_kinds TEXT[]` (desktop-notification kinds the user opted in to: `dms`, `mentions`, `game_events`), `notify_cooldown_mins INT CHECK >= 0` (0 = no throttle) |
 | SudokuDailyWin | `sudoku_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, score tracked |
 | NonogramDailyWin | `nonogram_daily_wins` | `UNIQUE(user_id, size_key, puzzle_date)`, binary completion |
 | MinesweeperGame | `minesweeper_games` | `UNIQUE(user_id, difficulty_key, mode)`, stores seeded mine_map + player_grid + lives (3-life system) |
@@ -762,6 +762,10 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Bonsai chat glyph is current-user only:** The bonsai stage glyph (· ⚘ 🌲 🌳 🌸) is only shown next to the current user's own messages. Other users' bonsai stages are not queried or displayed in chat (would require a new cross-user lookup).
 - **Bonsai cut changes seed optimistically:** The `cut()` method updates `self.seed` in memory immediately and fires a background DB task. If the DB write fails, the in-memory seed diverges from persisted until next login.
 - **Help modal (`?`) intercepts all input:** When `show_help` is true, the input handler dismisses the modal on any keypress before any other input processing. This includes `?` itself (toggle off) and `Esc`.
+- **Desktop notifications bypass the frame diff:** OSC 777 (kitty/Ghostty/rxvt-unicode/foot/wezterm/konsole) and OSC 9 (iTerm2 fallback) payloads are written to `App::pending_terminal_commands`, not into the ratatui frame. `late-ssh::ssh::render_once` drains that buffer **after** pushing the frame diff and sends each payload as a separate `handle.data` call. Writing them inline with `write!(self.shared, …)` would slip them into the diff and get re-emitted on every redraw. Same rule applies to OSC 52 clipboard copies.
+- **Notification pipeline is kind-tagged and throttled server-side:** `ChatState::pending_notifications` holds `PendingNotification { kind: &'static str, title, body }` entries drained each render. `render.rs` picks the first pending whose `kind` is in `profiles.notify_kinds` and honors the shared `notify_cooldown_mins` via `App::last_notify_at`. Adding a new kind means: (1) append to `ProfileState::NOTIFY_KINDS`, (2) add a row in `profile/ui.rs` `kinds` tuple, (3) enqueue it from the relevant event handler, (4) update the unit test `notify_kinds_constant_matches_ui_expectations` in `profile/state.rs`. No tmux DCS wrapping — tmux is explicitly unsupported.
+- **Profile notifications default to all-off:** Migration 025 ships `notify_kinds = '{}'` and `notify_cooldown_mins = 0`. `render.rs` only fires if the kind string is present in the user's array, so a brand-new account is silent until they opt in on the profile screen. A focus-tracking `"unfocused"` policy used to exist (DEC mode 1004) but was removed — `notify_kinds` is the whole model now.
+- **`Profile::save_profile` needs a loaded profile id:** `submit_username` and the notification toggles all go through `save_profile`, which calls `Profile::update_by_user_id(… profile.id …)`. `ProfileState` seeds with `Profile::default()` (id = `Uuid::nil()`) until the async `find_profile` snapshot lands. If you save before the snapshot arrives, the UPDATE matches zero rows and silently succeeds. Integration tests must `wait_for_render_contains` on the current username (not just a static label) before asserting persistence.
 
 ---
 
@@ -878,7 +882,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | **Dashboard** | 1 | Active | Stream URL + now playing + voting + dashboard chat (The Lounge Hub) |
 | **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`, `/ignore [@user]`, `/unignore [@user]`, `/help`) with grouped room sections and a synthetic `news` entry in the room list |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Profile** | 4 | Active | User profile: username, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info, chat colors |
+| **Profile** | 4 | Active | User profile: username, Notifications (OSC 777/9 desktop notifications — opt-in checkboxes for DMs / `@mentions` / game events, plus a shared cooldown; no tmux support), Your Stats (streak + badge, chips, high scores), @bot/@graybeard info, chat colors |
 
 ### Layout
 
@@ -972,9 +976,10 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
 | `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
 | `q` / `Esc` | Chat overlay (`/help`, ignore list) | Close overlay |
-| `j` / `k` / arrows | Profile | Navigate fields |
-| `Space` / `Enter` | Profile | Toggle checkbox / edit username |
-| `e` | Profile | Edit username |
+| `↑` / `↓` | Profile | Move between settings rows |
+| `←` / `→` | Profile | Adjust the current row (cycles the cooldown value; also toggles a checkbox) |
+| `Space` / `Enter` | Profile | Toggle the currently selected notification checkbox (or bump the cooldown forward) |
+| `i` | Profile | Edit username (Enter saves, Esc cancels; whitespace is trimmed on save) |
 | `Esc` | Any modal | Close/cancel |
 | `c` | Chat (not composing) | Open web chat QR link |
 
