@@ -1,4 +1,4 @@
-use std::{io::Write, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Context;
 use late_core::MutexRecover;
@@ -24,6 +24,27 @@ use super::{
     visualizer::Visualizer,
 };
 use crate::session::ClientAudioState;
+
+fn sanitize_notification_field(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| match ch {
+            '\x1b' | '\x07' | '\n' | '\r' => ' ',
+            ';' => '|',
+            _ => ch,
+        })
+        .collect()
+}
+
+fn desktop_notification_bytes(title: &str, body: &str) -> Vec<u8> {
+    // OSC 777 carries (title, body) separately — kitty, Ghostty, rxvt-unicode,
+    // foot, wezterm, konsole. OSC 9 is iTerm2's single-string variant and acts
+    // as a fallback for terminals that don't parse 777. Terminals that don't
+    // recognize either sequence silently drop it.
+    let title = sanitize_notification_field(title);
+    let body = sanitize_notification_field(body);
+    format!("\x1b]777;notify;{title};{body}\x1b\\\x1b]9;{title}: {body}\x1b\\").into_bytes()
+}
 
 struct DrawContext<'a> {
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -170,9 +191,8 @@ impl App {
             tetris_best: self.tetris_state.best_score,
             twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
             cursor_visible: self.profile_state.cursor_visible(),
-            dm_notify: &self.profile_state.profile().dm_notify,
-            dm_notify_cooldown_mins: self.profile_state.profile().dm_notify_cooldown_mins,
-            tmux_passthrough: self.profile_state.profile().tmux_passthrough,
+            notify_kinds: &self.profile_state.profile().notify_kinds,
+            notify_cooldown_mins: self.profile_state.profile().notify_cooldown_mins,
             settings_row: self.profile_state.settings_row,
         };
         let online_count = self
@@ -229,19 +249,16 @@ impl App {
         if let Some(text) = self.pending_clipboard.take() {
             use base64::Engine;
             let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-            let _ = write!(self.shared, "\x1b]52;c;{}\x07", encoded);
+            self.pending_terminal_commands
+                .push(format!("\x1b]52;c;{}\x07", encoded).into_bytes());
         }
 
-        // Emit desktop notifications for incoming DMs.
-        // We send both OSC 777 (urxvt/kitty/Ghostty) and OSC 9 (iTerm2/kitty fallback).
-        // Terminals that don't recognize one ignore it; kitty parses 777 first so no double-fire.
+        // Emit OSC 777 desktop notifications for incoming DMs.
+        // Terminals that don't recognize OSC 777 silently ignore it.
         if !self.chat.pending_osc777.is_empty() {
-            let should_notify = match self.profile_state.profile().dm_notify.as_str() {
-                "off" => false,
-                "always" => true,
-                _ /* "unfocused" */ => !self.terminal_focused,
-            };
-            let cooldown_secs = self.profile_state.profile().dm_notify_cooldown_mins as u64 * 60;
+            let profile = self.profile_state.profile();
+            let should_notify = profile.notify_kinds.iter().any(|k| k == "dms");
+            let cooldown_secs = profile.notify_cooldown_mins as u64 * 60;
             let cooldown_ok = self
                 .last_dm_notify_at
                 .map(|t| t.elapsed() >= std::time::Duration::from_secs(cooldown_secs))
@@ -251,29 +268,9 @@ impl App {
                 && cooldown_ok
                 && let Some((title, body)) = self.chat.pending_osc777.first()
             {
-                tracing::info!(
-                    ?title,
-                    ?body,
-                    tmux_passthrough = self.profile_state.profile().tmux_passthrough,
-                    "emitting desktop notification"
-                );
-                if self.profile_state.profile().tmux_passthrough {
-                    // tmux DCS passthrough: \ePtmux;<body with escapes doubled>\e\\
-                    // Inner OSC ST (BEL \x07) is fine; we only need to double ESC bytes.
-                    let _ = write!(
-                        self.shared,
-                        "\x1bPtmux;\x1b\x1b]777;notify;{};{}\x07\x1b\\",
-                        title, body
-                    );
-                    let _ = write!(
-                        self.shared,
-                        "\x1bPtmux;\x1b\x1b]9;{}: {}\x07\x1b\\",
-                        title, body
-                    );
-                } else {
-                    let _ = write!(self.shared, "\x1b]777;notify;{};{}\x07", title, body);
-                    let _ = write!(self.shared, "\x1b]9;{}: {}\x07", title, body);
-                }
+                tracing::info!(?title, ?body, "emitting desktop notification");
+                let payload = desktop_notification_bytes(title, body);
+                self.pending_terminal_commands.push(payload);
                 self.last_dm_notify_at = Some(std::time::Instant::now());
             } else if !self.chat.pending_osc777.is_empty() {
                 tracing::info!(
@@ -808,4 +805,26 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
     frame.render_widget(block, popup_area);
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desktop_notification_bytes;
+
+    #[test]
+    fn desktop_notification_bytes_emits_osc_777_and_osc_9_with_st_terminators() {
+        let got =
+            String::from_utf8(desktop_notification_bytes("DM title", "hello")).expect("valid utf8");
+        assert_eq!(
+            got,
+            "\x1b]777;notify;DM title;hello\x1b\\\x1b]9;DM title: hello\x1b\\"
+        );
+    }
+
+    #[test]
+    fn desktop_notification_bytes_sanitize_control_bytes_and_separators() {
+        let got = String::from_utf8(desktop_notification_bytes("hey;\x07", "a\nb\x1bc"))
+            .expect("valid utf8");
+        assert_eq!(got, "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\");
+    }
 }

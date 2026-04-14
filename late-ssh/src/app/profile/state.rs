@@ -17,7 +17,8 @@ pub struct ProfileState {
     pub(crate) username_composer: String,
     bg_task: tokio::task::AbortHandle,
 
-    /// Which settings row is selected (0 = DM Notifications, 1 = Cooldown, 2 = tmux passthrough).
+    /// Which settings row is selected. Rows 0..NOTIFY_KINDS.len() are the
+    /// kind checkboxes; the last row is the cooldown selector.
     pub(crate) settings_row: usize,
 
     // Display config (informational)
@@ -128,55 +129,49 @@ impl ProfileState {
         self.username_composer.pop();
     }
 
-    const SETTINGS_ROW_COUNT: usize = 3;
+    /// Notification kinds the user can toggle on the profile screen, in display order.
+    pub(crate) const NOTIFY_KINDS: &'static [&'static str] = &["dms", "mentions", "game_events"];
+
+    fn cooldown_row_index() -> usize {
+        Self::NOTIFY_KINDS.len()
+    }
 
     pub fn move_settings_row(&mut self, delta: isize) {
+        let last = Self::cooldown_row_index() as isize;
         let row = self.settings_row as isize + delta;
-        self.settings_row = row.clamp(0, (Self::SETTINGS_ROW_COUNT - 1) as isize) as usize;
+        self.settings_row = row.clamp(0, last) as usize;
     }
 
     /// Cycle the currently selected setting and save immediately.
     pub fn cycle_setting(&mut self, forward: bool) {
-        match self.settings_row {
-            0 => self.cycle_dm_notify(forward),
-            1 => self.cycle_cooldown(forward),
-            2 => self.cycle_tmux_passthrough(),
-            _ => {}
+        if self.settings_row == Self::cooldown_row_index() {
+            self.cycle_cooldown(forward);
+        } else if let Some(kind) = Self::NOTIFY_KINDS.get(self.settings_row) {
+            self.toggle_kind(kind);
         }
     }
 
-    fn cycle_tmux_passthrough(&mut self) {
-        self.profile.tmux_passthrough = !self.profile.tmux_passthrough;
+    fn toggle_kind(&mut self, kind: &str) {
+        if let Some(idx) = self.profile.notify_kinds.iter().position(|k| k == kind) {
+            self.profile.notify_kinds.remove(idx);
+        } else {
+            self.profile.notify_kinds.push(kind.to_string());
+        }
         self.save_profile();
     }
 
-    fn cycle_dm_notify(&mut self, forward: bool) {
-        const OPTIONS: &[&str] = &["unfocused", "always", "off"];
+    fn cycle_cooldown(&mut self, forward: bool) {
+        const OPTIONS: &[i32] = &[0, 1, 2, 5, 10, 15, 30, 60, 120, 240];
         let current_idx = OPTIONS
             .iter()
-            .position(|&o| o == self.profile.dm_notify)
+            .position(|&o| o == self.profile.notify_cooldown_mins)
             .unwrap_or(0);
         let next_idx = if forward {
             (current_idx + 1) % OPTIONS.len()
         } else {
             (current_idx + OPTIONS.len() - 1) % OPTIONS.len()
         };
-        self.profile.dm_notify = OPTIONS[next_idx].to_string();
-        self.save_profile();
-    }
-
-    fn cycle_cooldown(&mut self, forward: bool) {
-        const OPTIONS: &[i32] = &[1, 2, 5, 10, 15, 30, 60, 120, 240];
-        let current_idx = OPTIONS
-            .iter()
-            .position(|&o| o == self.profile.dm_notify_cooldown_mins)
-            .unwrap_or(2); // default to 5
-        let next_idx = if forward {
-            (current_idx + 1) % OPTIONS.len()
-        } else {
-            (current_idx + OPTIONS.len() - 1) % OPTIONS.len()
-        };
-        self.profile.dm_notify_cooldown_mins = OPTIONS[next_idx];
+        self.profile.notify_cooldown_mins = OPTIONS[next_idx];
         self.save_profile();
     }
 
@@ -188,9 +183,8 @@ impl ProfileState {
                 user_id: self.user_id,
                 username: self.profile.username.clone(),
                 enable_ghost: self.profile.enable_ghost,
-                dm_notify: self.profile.dm_notify.clone(),
-                dm_notify_cooldown_mins: self.profile.dm_notify_cooldown_mins,
-                tmux_passthrough: self.profile.tmux_passthrough,
+                notify_kinds: self.profile.notify_kinds.clone(),
+                notify_cooldown_mins: self.profile.notify_cooldown_mins,
             },
         );
     }

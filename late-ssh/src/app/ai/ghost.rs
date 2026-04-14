@@ -590,9 +590,8 @@ impl GhostService {
                     user_id: user.id,
                     username: username.to_string(),
                     enable_ghost: profile.enable_ghost,
-                    dm_notify: profile.dm_notify.clone(),
-                    dm_notify_cooldown_mins: profile.dm_notify_cooldown_mins,
-                    tmux_passthrough: profile.tmux_passthrough,
+                    notify_kinds: profile.notify_kinds.clone(),
+                    notify_cooldown_mins: profile.notify_cooldown_mins,
                 },
             )
             .await?;

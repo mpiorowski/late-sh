@@ -197,10 +197,10 @@ pub struct App {
     /// Pending OSC 52 clipboard payload (written once, cleared after render)
     pub(crate) pending_clipboard: Option<String>,
 
-    /// Whether the terminal currently has focus (updated by CSI I / CSI O).
-    pub(crate) terminal_focused: bool,
+    /// Terminal control sequences that should be emitted after the frame diff.
+    pub(crate) pending_terminal_commands: Vec<Vec<u8>>,
 
-    /// Last time an OSC 777 DM notification was emitted (5-minute cooldown).
+    /// Last time an OSC 777 DM notification was emitted (cooldown).
     pub(crate) last_dm_notify_at: Option<Instant>,
 
     /// Server state
@@ -392,7 +392,7 @@ impl App {
             blackjack_state,
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
-            terminal_focused: true,
+            pending_terminal_commands: Vec::new(),
             last_dm_notify_at: None,
             is_draining: config.is_draining,
         })
@@ -455,14 +455,13 @@ impl App {
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
         // 1006h = SGR extended encoding (ESC[< sequences instead of legacy X11)
         // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~)
-        // 1004h = focus reporting (CSI I = gained, CSI O = lost)
-        buf.extend_from_slice(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[?1004h");
+        buf.extend_from_slice(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h");
         buf
     }
 
     pub fn leave_alt_screen() -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.extend_from_slice(b"\x1b[?1004l\x1b[?2004l\x1b[?1006l\x1b[?1000l");
+        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1000l");
         crossterm::execute!(buf, cursor::Show, terminal::LeaveAlternateScreen)
             .expect("failed to leave alt screen");
         buf

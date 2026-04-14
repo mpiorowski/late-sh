@@ -11,9 +11,8 @@ crate::user_scoped_model! {
         pub user_id: Uuid,
         pub username: String,
         pub enable_ghost: bool,
-        pub dm_notify: String,
-        pub dm_notify_cooldown_mins: i32,
-        pub tmux_passthrough: bool,
+        pub notify_kinds: Vec<String>,
+        pub notify_cooldown_mins: i32,
     }
 }
 
@@ -26,9 +25,8 @@ impl Default for Profile {
             user_id: Uuid::nil(),
             username: String::new(),
             enable_ghost: true,
-            dm_notify: "unfocused".to_string(),
-            dm_notify_cooldown_mins: 5,
-            tmux_passthrough: false,
+            notify_kinds: Vec::new(),
+            notify_cooldown_mins: 0,
         }
     }
 }

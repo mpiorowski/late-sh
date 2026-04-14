@@ -2,7 +2,8 @@ use crate::app::state::App;
 
 pub fn handle_byte(app: &mut App, byte: u8) {
     match byte {
-        b' ' | b'\r' | b'i' => app.profile_state.start_username_edit(),
+        b'i' => app.profile_state.start_username_edit(),
+        b' ' | b'\r' => app.profile_state.cycle_setting(true),
         _ => {}
     }
 }
