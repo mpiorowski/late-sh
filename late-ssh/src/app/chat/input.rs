@@ -195,17 +195,17 @@ mod tests {
 
     #[test]
     fn next_room_keys_include_ctrl_n() {
-        assert!(is_next_room_key(b'h'));
-        assert!(is_next_room_key(b'H'));
+        assert!(is_next_room_key(b'l'));
+        assert!(is_next_room_key(b'L'));
         assert!(is_next_room_key(0x0E));
-        assert!(!is_next_room_key(b'l'));
+        assert!(!is_next_room_key(b'h'));
     }
 
     #[test]
     fn prev_room_keys_include_ctrl_p() {
-        assert!(is_prev_room_key(b'l'));
-        assert!(is_prev_room_key(b'L'));
+        assert!(is_prev_room_key(b'h'));
+        assert!(is_prev_room_key(b'H'));
         assert!(is_prev_room_key(0x10));
-        assert!(!is_prev_room_key(b'h'));
+        assert!(!is_prev_room_key(b'l'));
     }
 }
