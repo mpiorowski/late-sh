@@ -78,8 +78,15 @@ pub struct ChatState {
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
 
-    /// Pending OSC 777/9 desktop notifications (title, body) drained on render.
-    pub(crate) pending_osc777: Vec<(String, String)>,
+    /// Pending desktop notifications drained on render. `kind` matches the
+    /// string identifiers stored in `profiles.notify_kinds` ("dms", "mentions").
+    pub(crate) pending_notifications: Vec<PendingNotification>,
+}
+
+pub(crate) struct PendingNotification {
+    pub kind: &'static str,
+    pub title: String,
+    pub body: String,
 }
 
 impl Drop for ChatState {
@@ -136,7 +143,7 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, is_admin),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
-            pending_osc777: Vec::new(),
+            pending_notifications: Vec::new(),
         }
     }
 
@@ -993,9 +1000,10 @@ impl ChatState {
                     {
                         continue;
                     }
-                    // OSC 777/9 desktop notification for incoming DMs.
-                    // target_user_ids is Some for DM/private rooms, None for public.
-                    if is_targeted && message.user_id != self.user_id {
+                    // Desktop notification queueing. target_user_ids is Some for
+                    // DM/private rooms, None for public rooms. Don't notify on
+                    // messages we authored ourselves.
+                    if message.user_id != self.user_id {
                         let nickname = self
                             .usernames
                             .get(&message.user_id)
@@ -1003,8 +1011,26 @@ impl ChatState {
                             .unwrap_or_else(|| "someone".to_string());
                         let preview: String =
                             message.body.replace('\n', " ").chars().take(80).collect();
-                        self.pending_osc777
-                            .push((format!("New DM from {nickname}"), preview));
+
+                        if is_targeted {
+                            self.pending_notifications.push(PendingNotification {
+                                kind: "dms",
+                                title: format!("New DM from {nickname}"),
+                                body: preview,
+                            });
+                        } else if let Some(me) = self.usernames.get(&self.user_id) {
+                            let me_lc = me.to_ascii_lowercase();
+                            if super::mentions::extract_mentions(&message.body)
+                                .iter()
+                                .any(|m| m == &me_lc)
+                            {
+                                self.pending_notifications.push(PendingNotification {
+                                    kind: "mentions",
+                                    title: format!("{nickname} mentioned you"),
+                                    body: preview,
+                                });
+                            }
+                        }
                     }
                     self.push_message(message);
                 }

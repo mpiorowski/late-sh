@@ -253,35 +253,42 @@ impl App {
                 .push(format!("\x1b]52;c;{}\x07", encoded).into_bytes());
         }
 
-        // Emit OSC 777 desktop notifications for incoming DMs.
-        // Terminals that don't recognize OSC 777 silently ignore it.
-        if !self.chat.pending_osc777.is_empty() {
+        // Emit OSC 777/OSC 9 desktop notifications for pending chat events.
+        // Kind strings ("dms", "mentions", …) must match profiles.notify_kinds.
+        if !self.chat.pending_notifications.is_empty() {
             let profile = self.profile_state.profile();
-            let should_notify = profile.notify_kinds.iter().any(|k| k == "dms");
+            let enabled_kinds = profile.notify_kinds.clone();
             let cooldown_secs = profile.notify_cooldown_mins as u64 * 60;
             let cooldown_ok = self
-                .last_dm_notify_at
+                .last_notify_at
                 .map(|t| t.elapsed() >= std::time::Duration::from_secs(cooldown_secs))
                 .unwrap_or(true);
 
-            if should_notify
-                && cooldown_ok
-                && let Some((title, body)) = self.chat.pending_osc777.first()
+            if cooldown_ok
+                && let Some(notif) = self
+                    .chat
+                    .pending_notifications
+                    .iter()
+                    .find(|n| enabled_kinds.iter().any(|k| k == n.kind))
             {
-                tracing::info!(?title, ?body, "emitting desktop notification");
-                let payload = desktop_notification_bytes(title, body);
-                self.pending_terminal_commands.push(payload);
-                self.last_dm_notify_at = Some(std::time::Instant::now());
-            } else if !self.chat.pending_osc777.is_empty() {
                 tracing::info!(
-                    ?should_notify,
+                    kind = notif.kind,
+                    title = notif.title,
+                    body = notif.body,
+                    "emitting desktop notification"
+                );
+                let payload = desktop_notification_bytes(&notif.title, &notif.body);
+                self.pending_terminal_commands.push(payload);
+                self.last_notify_at = Some(std::time::Instant::now());
+            } else {
+                tracing::debug!(
                     ?cooldown_ok,
-                    pending_count = self.chat.pending_osc777.len(),
+                    pending_count = self.chat.pending_notifications.len(),
                     "dropping pending desktop notifications"
                 );
             }
             // Always drain — notifications during cooldown are dropped, not queued.
-            self.chat.pending_osc777.clear();
+            self.chat.pending_notifications.clear();
         }
 
         Ok(self.shared.take())
@@ -825,6 +832,9 @@ mod tests {
     fn desktop_notification_bytes_sanitize_control_bytes_and_separators() {
         let got = String::from_utf8(desktop_notification_bytes("hey;\x07", "a\nb\x1bc"))
             .expect("valid utf8");
-        assert_eq!(got, "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\");
+        assert_eq!(
+            got,
+            "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\"
+        );
     }
 }

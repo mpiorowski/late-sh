@@ -200,8 +200,8 @@ pub struct App {
     /// Terminal control sequences that should be emitted after the frame diff.
     pub(crate) pending_terminal_commands: Vec<Vec<u8>>,
 
-    /// Last time an OSC 777 DM notification was emitted (cooldown).
-    pub(crate) last_dm_notify_at: Option<Instant>,
+    /// Last time a desktop notification was emitted (shared cooldown).
+    pub(crate) last_notify_at: Option<Instant>,
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -393,7 +393,7 @@ impl App {
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
             pending_terminal_commands: Vec::new(),
-            last_dm_notify_at: None,
+            last_notify_at: None,
             is_draining: config.is_draining,
         })
     }
