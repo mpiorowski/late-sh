@@ -206,10 +206,10 @@ pub struct App {
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
 
-    /// Emoji / Unicode / Nerd Font picker
-    pub(crate) emoji_picker_open: bool,
-    pub(crate) emoji_picker_state: super::emoji::EmojiPickerState,
-    pub(crate) icon_catalog: Option<super::emoji::catalog::IconCatalogData>,
+    /// Emoji + Nerd Font picker
+    pub(crate) icon_picker_open: bool,
+    pub(crate) icon_picker_state: super::icon_picker::IconPickerState,
+    pub(crate) icon_catalog: Option<super::icon_picker::catalog::IconCatalogData>,
 }
 
 impl App {
@@ -400,8 +400,8 @@ impl App {
             pending_terminal_commands: Vec::new(),
             last_notify_at: None,
             is_draining: config.is_draining,
-            emoji_picker_open: false,
-            emoji_picker_state: super::emoji::EmojiPickerState::default(),
+            icon_picker_open: false,
+            icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
         })
     }

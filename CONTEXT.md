@@ -404,6 +404,7 @@ late-sh/
 │   │       ├── chat/           # Rooms, messages, mentions, and embedded news feed
 │   │       ├── dashboard/      # Landing screen layout + shortcuts
 │   │       ├── games/          # Arcade hub, leaderboards, and game subdomains
+│   │       ├── icon_picker/    # Ctrl+] emoji + nerd font overlay (chat composer only)
 │   │       ├── profile/        # Username/profile settings and stats
 │   │       └── vote/           # Genre vote state, service, and Liquidsoap control
 │   ├── assets/nonograms/       # Prebuilt puzzle packs
@@ -740,6 +741,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Chat room list order is UI-defined:** The chat sidebar order is hardcoded as `core` (`general`, `announcements`, `suggestions`, any other permanent rooms, then synthetic `news`) → `public` → `private` → `dm`, with divider rows rendered in the UI. The synthetic `news` row now carries its own unread badge sourced from `article_feed_reads`, not `chat_room_members`.
 - **Transcript render cost is cache-sensitive:** `late-ssh` fetches up to 1000 messages for the selected room and up to 1000 for general. The chat UI therefore caches wrapped transcript rows for the dashboard general card and the active room; invalidation must track width, message content/order, usernames, badges, and bonsai glyphs.
 - **Composer render cost is cache-sensitive:** The chat composer caches wrapped `ComposerRow`s in `ChatState`; any change to composer text or width must invalidate that cache before render/cursor-up/down.
+- **Icon picker is chat-composer-only:** `Ctrl+]` (byte `0x1D`) opens `app::icon_picker` as a modal overlay, lazy-loads the catalog on first open (two sections each for Emoji and Nerd Font — no Unicode tab, no `unicode_names2` dep), and auto-starts `ChatState::start_composing` if the user isn't already composing. Selected icons are only ever pushed into `app.chat.composer`; Profile and news composers are intentionally not targets. The picker intercepts all input via an early return in `handle_parsed_input`, so while it is open nothing else on screen receives keys.
 - **@mention detection:** Uses simple `@username` substring match in message body. The `all_usernames` field on `ChatSnapshot` is loaded from profiles DB every refresh (10s) via `User::list_all_usernames` — includes all users, not just online ones.
 - **Reply persistence is currently body-encoded:** There is no reply DB column yet. Replies are stored as a quoted first line in `body` and rendered back out in the TUI. If/when true threaded metadata is added, both send and render paths need coordinated migration.
 - **All services are singletons** shared across SSH sessions. `ProfileService` snapshots are per-user channels keyed by `user_id`; events still require `user_id` filtering in UI state. Per-user background refresh tasks are spawned on session init and aborted on `Drop`, and profile snapshot channels are pruned when receivers go away.
@@ -982,6 +984,14 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `i` | Profile | Edit username (Enter saves, Esc cancels; whitespace is trimmed on save) |
 | `Esc` | Any modal | Close/cancel |
 | `c` | Chat (not composing) | Open web chat QR link |
+| `Ctrl+]` | Dashboard / Chat | Open icon picker (emoji + nerd font). Auto-starts the composer if not already composing. Inserts into the chat composer only. |
+| `↑` / `↓` / `j` / `k` | Icon picker | Move selection |
+| `Ctrl+U` / `Ctrl+D` | Icon picker | Half-page up / down |
+| `PageUp` / `PageDown` | Icon picker | Full-page jump |
+| `Enter` | Icon picker | Insert selected icon and close |
+| `Alt+Enter` | Icon picker | Insert selected icon and keep picker open |
+| click / wheel / dbl-click | Icon picker | Select row / scroll / insert + keep open |
+| `Esc` | Icon picker | Close without inserting |
 
 ### Keybinding change checklist
 
