@@ -10,3 +10,4 @@ server_key.pub
 # draw.io temp/backup files
 *.bkp
 *.dtmp
+*.drawio
