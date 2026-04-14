@@ -861,13 +861,15 @@ async fn render_once(
     channel_id: ChannelId,
     frame_drop_log_every: u64,
 ) -> anyhow::Result<bool> {
-    let frame = {
+    let (frame, terminal_commands) = {
         let mut app = app.lock().await;
         if !app.running {
             return Ok(true);
         }
         app.tick();
-        app.render().context("rendering frame")?
+        let frame = app.render().context("rendering frame")?;
+        let terminal_commands = std::mem::take(&mut app.pending_terminal_commands);
+        (frame, terminal_commands)
     };
 
     match timeout(
@@ -891,6 +893,31 @@ async fn render_once(
             }
         }
     }
+
+    for command in terminal_commands {
+        match timeout(
+            Duration::from_millis(50),
+            handle.data(channel_id, CryptoVec::from(command)),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                return Err(anyhow::anyhow!(
+                    "render_once: terminal command send failed: {:?}",
+                    err
+                ));
+            }
+            Err(_) => {
+                let drops = FRAME_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                metrics::record_render_frame_drop();
+                if drops.is_multiple_of(frame_drop_log_every) {
+                    tracing::debug!(drops, "frame drops (handle busy)");
+                }
+            }
+        }
+    }
+
     Ok(false)
 }
 

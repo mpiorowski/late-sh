@@ -9,6 +9,10 @@ pub fn handle_composer_input(app: &mut App, byte: u8) {
         b'\r' | b'\n' => {
             app.chat.news.submit_composer();
         }
+        0x15 => {
+            // Ctrl-U: clear composer
+            app.chat.news.composer_clear();
+        }
         0x7F | 0x08 => {
             app.chat.news.composer_pop();
         }

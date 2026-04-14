@@ -77,6 +77,16 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
+
+    /// Pending desktop notifications drained on render. `kind` matches the
+    /// string identifiers stored in `profiles.notify_kinds` ("dms", "mentions").
+    pub(crate) pending_notifications: Vec<PendingNotification>,
+}
+
+pub(crate) struct PendingNotification {
+    pub kind: &'static str,
+    pub title: String,
+    pub body: String,
 }
 
 impl Drop for ChatState {
@@ -133,6 +143,7 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, is_admin),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
+            pending_notifications: Vec::new(),
         }
     }
 
@@ -460,7 +471,7 @@ impl ChatState {
             .iter()
             .position(|item| *item == current_item)
             .unwrap_or(0) as isize;
-        let next = (current + delta).clamp(0, order.len() as isize - 1) as usize;
+        let next = wrapped_index(current, delta, order.len());
 
         match order[next] {
             RoomSlot::News => {
@@ -633,6 +644,11 @@ impl ChatState {
         None
     }
 
+    pub fn composer_clear(&mut self) {
+        self.composer.clear();
+        self.composer_cursor = 0;
+        self.invalidate_composer_layout();
+    }
     pub fn composer_backspace(&mut self) {
         if self.composer_cursor == 0 {
             return;
@@ -978,10 +994,43 @@ impl ChatState {
                     message,
                     target_user_ids,
                 } => {
+                    let is_targeted = target_user_ids.is_some();
                     if let Some(targets) = target_user_ids
                         && !targets.contains(&self.user_id)
                     {
                         continue;
+                    }
+                    // Desktop notification queueing. target_user_ids is Some for
+                    // DM/private rooms, None for public rooms. Don't notify on
+                    // messages we authored ourselves.
+                    if message.user_id != self.user_id {
+                        let nickname = self
+                            .usernames
+                            .get(&message.user_id)
+                            .cloned()
+                            .unwrap_or_else(|| "someone".to_string());
+                        let preview: String =
+                            message.body.replace('\n', " ").chars().take(80).collect();
+
+                        if is_targeted {
+                            self.pending_notifications.push(PendingNotification {
+                                kind: "dms",
+                                title: format!("New DM from {nickname}"),
+                                body: preview,
+                            });
+                        } else if let Some(me) = self.usernames.get(&self.user_id) {
+                            let me_lc = me.to_ascii_lowercase();
+                            if super::mentions::extract_mentions(&message.body)
+                                .iter()
+                                .any(|m| m == &me_lc)
+                            {
+                                self.pending_notifications.push(PendingNotification {
+                                    kind: "mentions",
+                                    title: format!("{nickname} mentioned you"),
+                                    body: preview,
+                                });
+                            }
+                        }
                     }
                     self.push_message(message);
                 }
@@ -1262,6 +1311,7 @@ fn chat_help_lines() -> Vec<String> {
         "  Backspace          delete char",
         "  Ctrl+Backspace     delete word left",
         "  Ctrl+Delete        delete word right",
+        "  Ctrl+U             clear composer",
         "  Ctrl+← / Ctrl+→    move cursor by word",
         "  @user              mention (Tab/Enter to confirm)",
         "",
@@ -1329,6 +1379,10 @@ fn parse_delete_room_command(input: &str) -> Option<&str> {
         return None;
     }
     Some(slug)
+}
+
+fn wrapped_index(current: isize, delta: isize, len: usize) -> usize {
+    (current + delta).rem_euclid(len as isize) as usize
 }
 
 /// Parse `/<command>` or `/<command> [@]username`. Returns:
@@ -1432,6 +1486,18 @@ mod tests {
     #[test]
     fn parse_dm_trims_whitespace() {
         assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
+    }
+
+    #[test]
+    fn wrapped_index_wraps_forward() {
+        assert_eq!(wrapped_index(2, 1, 3), 0);
+        assert_eq!(wrapped_index(1, 5, 3), 0);
+    }
+
+    #[test]
+    fn wrapped_index_wraps_backward() {
+        assert_eq!(wrapped_index(0, -1, 3), 2);
+        assert_eq!(wrapped_index(1, -5, 3), 2);
     }
 
     #[test]

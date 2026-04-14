@@ -1,4 +1,4 @@
-use std::{io::Write, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Context;
 use late_core::MutexRecover;
@@ -24,6 +24,27 @@ use super::{
     visualizer::Visualizer,
 };
 use crate::session::ClientAudioState;
+
+fn sanitize_notification_field(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| match ch {
+            '\x1b' | '\x07' | '\n' | '\r' => ' ',
+            ';' => '|',
+            _ => ch,
+        })
+        .collect()
+}
+
+fn desktop_notification_bytes(title: &str, body: &str) -> Vec<u8> {
+    // OSC 777 carries (title, body) separately — kitty, Ghostty, rxvt-unicode,
+    // foot, wezterm, konsole. OSC 9 is iTerm2's single-string variant and acts
+    // as a fallback for terminals that don't parse 777. Terminals that don't
+    // recognize either sequence silently drop it.
+    let title = sanitize_notification_field(title);
+    let body = sanitize_notification_field(body);
+    format!("\x1b]777;notify;{title};{body}\x1b\\\x1b]9;{title}: {body}\x1b\\").into_bytes()
+}
 
 struct DrawContext<'a> {
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -173,6 +194,9 @@ impl App {
             tetris_best: self.tetris_state.best_score,
             twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
             cursor_visible: self.profile_state.cursor_visible(),
+            notify_kinds: &self.profile_state.profile().notify_kinds,
+            notify_cooldown_mins: self.profile_state.profile().notify_cooldown_mins,
+            settings_row: self.profile_state.settings_row,
         };
         let online_count = self
             .active_users
@@ -231,7 +255,46 @@ impl App {
         if let Some(text) = self.pending_clipboard.take() {
             use base64::Engine;
             let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-            let _ = write!(self.shared, "\x1b]52;c;{}\x07", encoded);
+            self.pending_terminal_commands
+                .push(format!("\x1b]52;c;{}\x07", encoded).into_bytes());
+        }
+
+        // Emit OSC 777/OSC 9 desktop notifications for pending chat events.
+        // Kind strings ("dms", "mentions", …) must match profiles.notify_kinds.
+        if !self.chat.pending_notifications.is_empty() {
+            let profile = self.profile_state.profile();
+            let enabled_kinds = profile.notify_kinds.clone();
+            let cooldown_secs = profile.notify_cooldown_mins as u64 * 60;
+            let cooldown_ok = self
+                .last_notify_at
+                .map(|t| t.elapsed() >= std::time::Duration::from_secs(cooldown_secs))
+                .unwrap_or(true);
+
+            if cooldown_ok
+                && let Some(notif) = self
+                    .chat
+                    .pending_notifications
+                    .iter()
+                    .find(|n| enabled_kinds.iter().any(|k| k == n.kind))
+            {
+                tracing::info!(
+                    kind = notif.kind,
+                    title = notif.title,
+                    body = notif.body,
+                    "emitting desktop notification"
+                );
+                let payload = desktop_notification_bytes(&notif.title, &notif.body);
+                self.pending_terminal_commands.push(payload);
+                self.last_notify_at = Some(std::time::Instant::now());
+            } else {
+                tracing::debug!(
+                    ?cooldown_ok,
+                    pending_count = self.chat.pending_notifications.len(),
+                    "dropping pending desktop notifications"
+                );
+            }
+            // Always drain — notifications during cooldown are dropped, not queued.
+            self.chat.pending_notifications.clear();
         }
 
         Ok(self.shared.take())
@@ -637,14 +700,6 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
             white,
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  Press ", white),
-            Span::styled("?", bold_cyan),
-            Span::styled(" any time to see ", white),
-            Span::styled("all keybindings", bold_cyan),
-            Span::styled(".", white),
-        ]),
-        Line::from(""),
         // ── Music ──
         Line::from(vec![
             Span::styled("  ── ", dim),
@@ -769,4 +824,29 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
     frame.render_widget(block, popup_area);
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desktop_notification_bytes;
+
+    #[test]
+    fn desktop_notification_bytes_emits_osc_777_and_osc_9_with_st_terminators() {
+        let got =
+            String::from_utf8(desktop_notification_bytes("DM title", "hello")).expect("valid utf8");
+        assert_eq!(
+            got,
+            "\x1b]777;notify;DM title;hello\x1b\\\x1b]9;DM title: hello\x1b\\"
+        );
+    }
+
+    #[test]
+    fn desktop_notification_bytes_sanitize_control_bytes_and_separators() {
+        let got = String::from_utf8(desktop_notification_bytes("hey;\x07", "a\nb\x1bc"))
+            .expect("valid utf8");
+        assert_eq!(
+            got,
+            "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\"
+        );
+    }
 }

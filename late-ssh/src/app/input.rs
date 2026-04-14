@@ -60,6 +60,8 @@ enum ParsedInput {
     PageUp,
     PageDown,
     End,
+    FocusGained,
+    FocusLost,
 }
 
 /// Walk `data` and split it on inline `ESC` + `CR`/`LF` pairs (Alt+Enter).
@@ -243,6 +245,12 @@ impl Perform for VtCollector {
             'Z' if intermediates.is_empty() => {
                 self.events.push(ParsedInput::BackTab);
             }
+            'I' if intermediates.is_empty() => {
+                self.events.push(ParsedInput::FocusGained);
+            }
+            'O' if intermediates.is_empty() => {
+                self.events.push(ParsedInput::FocusLost);
+            }
             'M' | 'm' if intermediates == [b'<'] && params.len() >= 3 => {
                 let button = p0.unwrap_or_default();
                 let x = params.get(1).copied().unwrap_or(0);
@@ -300,6 +308,10 @@ pub fn flush_pending_escape(app: &mut App) {
 pub fn handle(app: &mut App, data: &[u8]) {
     if app.show_splash {
         // Do not process input while splash screen is showing
+        // Escape skips the rest of the intro animation
+        if data.contains(&0x1B) {
+            app.show_splash = false;
+        }
         return;
     }
 
@@ -431,6 +443,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     }
 
     match event {
+        ParsedInput::FocusGained | ParsedInput::FocusLost => {}
         ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
         ParsedInput::AltEnter => {
             if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing

@@ -63,10 +63,14 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     let dash_composer_scroll =
         composer_cursor_scroll_for_rows(view.composer_rows, view.composer_cursor, 5);
     let composer_height = visible_composer_lines as u16 + 2;
-    let layout =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(inner);
+    let layout = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(composer_height),
+    ])
+    .split(inner);
     let messages_area = layout[0];
-    let composer_area = Some(layout[1]);
+    let composer_area = Some(layout[2]);
 
     let mut lines = Vec::new();
     if view.messages.is_empty() {

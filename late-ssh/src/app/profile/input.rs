@@ -2,19 +2,37 @@ use crate::app::state::App;
 
 pub fn handle_byte(app: &mut App, byte: u8) {
     match byte {
-        b' ' | b'\r' | b'i' => app.profile_state.start_username_edit(),
+        b'i' => app.profile_state.start_username_edit(),
+        b' ' | b'\r' => app.profile_state.cycle_setting(true),
         _ => {}
     }
 }
 
-pub fn handle_arrow(_app: &mut App, _key: u8) -> bool {
-    false
+pub fn handle_arrow(app: &mut App, key: u8) -> bool {
+    match key {
+        // Left/Right = cycle the selected setting value
+        b'C' | b'D' => {
+            app.profile_state.cycle_setting(key == b'C');
+            true
+        }
+        // Up/Down = move between settings rows
+        b'A' => {
+            app.profile_state.move_settings_row(-1);
+            true
+        }
+        b'B' => {
+            app.profile_state.move_settings_row(1);
+            true
+        }
+        _ => false,
+    }
 }
 
 pub fn handle_composer_input(app: &mut App, byte: u8) {
     match byte {
         b'\r' => app.profile_state.submit_username(),
         0x1B => app.profile_state.cancel_username_edit(),
+        0x15 => app.profile_state.composer_clear(),
         0x7F => app.profile_state.composer_backspace(),
         b => {
             if let Some(ch) = composer_char_from_byte(b) {

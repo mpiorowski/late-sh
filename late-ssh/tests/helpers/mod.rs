@@ -98,7 +98,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let tetris_service = TetrisService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
     let (blackjack_event_tx, _) = broadcast::channel(64);
-    let blackjack_service = BlackjackService::new(chip_service.clone(), blackjack_event_tx);
+    let blackjack_service =
+        BlackjackService::new(chip_service.clone(), blackjack_event_tx, db.clone());
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let nonogram_service =
         NonogramService::new(db.clone(), activity_tx.clone(), chip_service.clone());
@@ -203,6 +204,7 @@ pub fn make_app_with_chat_service(
         blackjack_service: BlackjackService::new(
             ChipService::new(db.clone()),
             broadcast::channel(64).0,
+            db.clone(),
         ),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
@@ -294,6 +296,7 @@ pub fn make_app_with_paired_client(
         blackjack_service: BlackjackService::new(
             ChipService::new(db.clone()),
             broadcast::channel(64).0,
+            db.clone(),
         ),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
@@ -367,7 +370,16 @@ pub async fn assert_render_not_contains_for(app: &mut App, needle: &str, duratio
     }
 }
 
-fn strip_ansi(input: &str) -> String {
+/// Render one frame, tick once beforehand so async state drains, strip ANSI,
+/// and return the plain-text buffer for substring/line assertions.
+pub fn render_plain(app: &mut App) -> String {
+    app.tick();
+    app.reset_render();
+    let frame = app.render().expect("render");
+    strip_ansi(&String::from_utf8_lossy(&frame))
+}
+
+pub fn strip_ansi(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(bytes.len());
     let mut i = 0;

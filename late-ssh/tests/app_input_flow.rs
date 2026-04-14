@@ -116,6 +116,30 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
 }
 
 #[tokio::test]
+async fn chat_room_switch_ctrl_keys_wrap() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "chat-room-switch-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    let mut app = make_app(test_db.db.clone(), user.id, "chat-room-switch-flow-it");
+
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, "> general").await;
+
+    app.handle_input(b"\x10");
+    wait_for_render_contains(&mut app, "> mentions").await;
+
+    app.handle_input(b"\x0e");
+    wait_for_render_contains(&mut app, "> general").await;
+}
+
+#[tokio::test]
 async fn help_command_renders_chat_feedback_without_persisting_message() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "help-notice-it").await;

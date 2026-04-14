@@ -197,6 +197,12 @@ pub struct App {
     /// Pending OSC 52 clipboard payload (written once, cleared after render)
     pub(crate) pending_clipboard: Option<String>,
 
+    /// Terminal control sequences that should be emitted after the frame diff.
+    pub(crate) pending_terminal_commands: Vec<Vec<u8>>,
+
+    /// Last time a desktop notification was emitted (shared cooldown).
+    pub(crate) last_notify_at: Option<Instant>,
+
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
 
@@ -391,6 +397,8 @@ impl App {
             blackjack_state,
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
+            pending_terminal_commands: Vec::new(),
+            last_notify_at: None,
             is_draining: config.is_draining,
             emoji_picker_open: false,
             emoji_picker_state: super::emoji::EmojiPickerState::default(),

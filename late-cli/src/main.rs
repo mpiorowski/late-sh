@@ -14,7 +14,7 @@ use shlex::Shlex;
 use std::{
     collections::VecDeque,
     env, fs,
-    io::{self, IsTerminal, Read, Write},
+    io::{self, Cursor, IsTerminal, Read, Write},
     os::fd::AsRawFd,
     path::{Path, PathBuf},
     process::Stdio,
@@ -164,6 +164,30 @@ struct SymphoniaStreamDecoder {
     spec: AudioSpec,
 }
 
+struct PrefixThenRead<R> {
+    prefix: Cursor<Vec<u8>>,
+    inner: R,
+}
+
+impl<R> PrefixThenRead<R> {
+    fn new(prefix: Vec<u8>, inner: R) -> Self {
+        Self {
+            prefix: Cursor::new(prefix),
+            inner,
+        }
+    }
+}
+
+impl<R: Read> Read for PrefixThenRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.prefix.read(buf)?;
+        if n > 0 {
+            return Ok(n);
+        }
+        self.inner.read(buf)
+    }
+}
+
 struct StreamingLinearResampler {
     channels: usize,
     source_rate: u32,
@@ -195,8 +219,13 @@ impl PtyResizeHandle {
 impl SymphoniaStreamDecoder {
     fn new_http(url: &str) -> Result<Self> {
         let stream_url = url.to_string() + "/stream";
-        let resp = reqwest::blocking::get(stream_url).context("http get")?;
-        let source = ReadOnlySource::new(resp);
+        let mut resp = reqwest::blocking::get(&stream_url)
+            .context("http get")?
+            .error_for_status()
+            .with_context(|| format!("stream request failed for {stream_url}"))?;
+        let prefix = read_until_mp3_sync(&mut resp)
+            .with_context(|| format!("failed to align MP3 stream from {stream_url}"))?;
+        let source = ReadOnlySource::new(PrefixThenRead::new(prefix, resp));
 
         let mss = MediaSourceStream::new(Box::new(source), Default::default());
         let mut hint = Hint::new();
@@ -261,6 +290,65 @@ impl SymphoniaStreamDecoder {
     fn spec(&self) -> AudioSpec {
         self.spec
     }
+}
+
+fn read_until_mp3_sync<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
+    const MAX_SCAN_BYTES: usize = 64 * 1024;
+    const CHUNK_SIZE: usize = 4096;
+
+    let mut buf = Vec::with_capacity(CHUNK_SIZE * 2);
+    let mut chunk = [0u8; CHUNK_SIZE];
+
+    while buf.len() < MAX_SCAN_BYTES {
+        let read = reader
+            .read(&mut chunk)
+            .context("failed to read from audio stream")?;
+        if read == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..read]);
+
+        if let Some(offset) = find_mp3_sync_offset(&buf) {
+            return Ok(buf.split_off(offset));
+        }
+    }
+
+    anyhow::bail!("could not find MP3 frame sync in first {} bytes", buf.len())
+}
+
+fn find_mp3_sync_offset(bytes: &[u8]) -> Option<usize> {
+    if bytes.starts_with(b"ID3") {
+        return Some(0);
+    }
+
+    for i in 0..=bytes.len().saturating_sub(3) {
+        let b0 = bytes[i];
+        let b1 = bytes[i + 1];
+        let b2 = bytes[i + 2];
+
+        if b0 != 0xFF || (b1 & 0xE0) != 0xE0 {
+            continue;
+        }
+
+        let version = (b1 >> 3) & 0x03;
+        let layer = (b1 >> 1) & 0x03;
+        let bitrate_idx = (b2 >> 4) & 0x0F;
+        let sample_rate_idx = (b2 >> 2) & 0x03;
+
+        if version == 0x01 || layer == 0x00 {
+            continue;
+        }
+        if bitrate_idx == 0x00 || bitrate_idx == 0x0F {
+            continue;
+        }
+        if sample_rate_idx == 0x03 {
+            continue;
+        }
+
+        return Some(i);
+    }
+
+    None
 }
 
 impl StreamingLinearResampler {
@@ -1642,6 +1730,24 @@ mod tests {
             trim_stream_suffix("http://audio.late.sh/"),
             "http://audio.late.sh"
         );
+    }
+
+    #[test]
+    fn find_mp3_sync_offset_finds_frame_after_garbage() {
+        let mut bytes = vec![0x12, 0x34, 0x56, 0x78];
+        bytes.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64, 0x00, 0x00]);
+        assert_eq!(find_mp3_sync_offset(&bytes), Some(4));
+    }
+
+    #[test]
+    fn find_mp3_sync_offset_accepts_id3_header() {
+        assert_eq!(find_mp3_sync_offset(b"ID3\x04\x00\x00"), Some(0));
+    }
+
+    #[test]
+    fn find_mp3_sync_offset_checks_last_possible_offset() {
+        let bytes = [0x00, 0xFF, 0xFB, 0x90];
+        assert_eq!(find_mp3_sync_offset(&bytes), Some(1));
     }
 
     #[test]

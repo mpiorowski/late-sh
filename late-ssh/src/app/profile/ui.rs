@@ -22,6 +22,9 @@ pub struct ProfileRenderInput<'a> {
     pub tetris_best: i32,
     pub twenty_forty_eight_best: i32,
     pub cursor_visible: bool,
+    pub notify_kinds: &'a [String],
+    pub notify_cooldown_mins: i32,
+    pub settings_row: usize,
 }
 
 pub fn draw_profile(frame: &mut Frame, area: Rect, view: &ProfileRenderInput<'_>) {
@@ -35,7 +38,11 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
 
     let mut lines: Vec<Line<'a>> = Vec::with_capacity(64);
 
-    // ── Username ──
+    // ── Your Settings ──
+    lines.push(Line::from(""));
+    lines.push(section_heading("Your Settings"));
+
+    // Username box
     lines.push(Line::from(""));
 
     let box_w = (width.saturating_sub(6) as usize).min(42);
@@ -117,6 +124,96 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
 
     let bottom_border = format!("  \u{2514}{}\u{2518}", "\u{2500}".repeat(box_w));
     lines.push(Line::from(Span::styled(bottom_border, border_style)));
+
+    // ── Notifications ──
+    lines.push(Line::from(""));
+    lines.push(section_heading("Notifications"));
+
+    lines.push(Line::from(Span::styled(
+        "  Desktop notifications delivered to your terminal via",
+        dim,
+    )));
+    lines.push(Line::from(vec![
+        Span::styled("  ", dim),
+        Span::styled("OSC 777", Style::default().fg(theme::TEXT)),
+        Span::styled(" (kitty, Ghostty, rxvt-unicode, foot,", dim),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  wezterm, konsole) and ", dim),
+        Span::styled("OSC 9", Style::default().fg(theme::TEXT)),
+        Span::styled(" (iTerm2). Unsupported", dim),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "  terminals silently ignore both.",
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  tmux is not supported — run directly in a terminal.",
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Space / Enter toggles a kind; ◀ ▶ adjusts cooldown.",
+        dim,
+    )));
+
+    lines.push(Line::from(""));
+
+    let nav_style = Style::default().fg(theme::TEXT_FAINT);
+    let selected_label = Style::default().fg(theme::TEXT);
+    let label_pad: usize = 33;
+
+    // Kind checkboxes. Keep this list in sync with ProfileState::NOTIFY_KINDS.
+    let kinds: [(&str, &str); 3] = [
+        ("dms", "Direct messages"),
+        ("mentions", "@mentions"),
+        ("game_events", "Game events"),
+    ];
+
+    for (row_idx, (kind, label)) in kinds.iter().enumerate() {
+        let enabled = view.notify_kinds.iter().any(|k| k == *kind);
+        let row_style = if view.settings_row == row_idx {
+            selected_label
+        } else {
+            dim
+        };
+        let label_text = format!(" {label}");
+        let pad = " ".repeat(label_pad.saturating_sub(label_text.len() + 1));
+        let checkbox = if enabled { "[x]" } else { "[ ]" };
+        let checkbox_style = if enabled {
+            Style::default().fg(theme::AMBER)
+        } else {
+            Style::default().fg(theme::TEXT_DIM)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(" \u{2022}", nav_style),
+            Span::styled(label_text, row_style),
+            Span::styled(pad, dim),
+            Span::styled(checkbox, checkbox_style),
+        ]));
+    }
+
+    // Cooldown row (last).
+    let cooldown_row = kinds.len();
+    let cooldown_row_style = if view.settings_row == cooldown_row {
+        selected_label
+    } else {
+        dim
+    };
+    let cooldown_label_text = " Cooldown (mins)";
+    let cooldown_pad = " ".repeat(label_pad.saturating_sub(cooldown_label_text.len() + 1));
+    let cooldown_val = if view.notify_cooldown_mins == 0 {
+        "Off".to_string()
+    } else {
+        format!("{}", view.notify_cooldown_mins)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(" \u{25bc}", nav_style),
+        Span::styled(cooldown_label_text, cooldown_row_style),
+        Span::styled(cooldown_pad, dim),
+        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(cooldown_val, Style::default().fg(theme::AMBER)),
+        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM)),
+    ]));
 
     // ── Your Stats ──
     lines.push(Line::from(""));
@@ -328,6 +425,7 @@ mod tests {
     #[test]
     fn build_lines_contains_expected_sections() {
         let profile = Profile::default();
+        let kinds: Vec<String> = Vec::new();
         let view = ProfileRenderInput {
             profile: &profile,
             editing_username: false,
@@ -339,6 +437,9 @@ mod tests {
             tetris_best: 1200,
             twenty_forty_eight_best: 8192,
             cursor_visible: false,
+            notify_kinds: &kinds,
+            notify_cooldown_mins: 0,
+            settings_row: 0,
         };
         let lines = build_lines(&view, 80);
         let text: String = lines
