@@ -17,7 +17,7 @@ pub struct ProfileState {
     pub(crate) username_composer: String,
     bg_task: tokio::task::AbortHandle,
 
-    /// Which settings row is selected (0 = DM Notifications, 1 = Cooldown).
+    /// Which settings row is selected (0 = DM Notifications, 1 = Cooldown, 2 = tmux passthrough).
     pub(crate) settings_row: usize,
 
     // Display config (informational)
@@ -128,7 +128,7 @@ impl ProfileState {
         self.username_composer.pop();
     }
 
-    const SETTINGS_ROW_COUNT: usize = 2;
+    const SETTINGS_ROW_COUNT: usize = 3;
 
     pub fn move_settings_row(&mut self, delta: isize) {
         let row = self.settings_row as isize + delta;
@@ -140,8 +140,14 @@ impl ProfileState {
         match self.settings_row {
             0 => self.cycle_dm_notify(forward),
             1 => self.cycle_cooldown(forward),
+            2 => self.cycle_tmux_passthrough(),
             _ => {}
         }
+    }
+
+    fn cycle_tmux_passthrough(&mut self) {
+        self.profile.tmux_passthrough = !self.profile.tmux_passthrough;
+        self.save_profile();
     }
 
     fn cycle_dm_notify(&mut self, forward: bool) {
@@ -184,6 +190,7 @@ impl ProfileState {
                 enable_ghost: self.profile.enable_ghost,
                 dm_notify: self.profile.dm_notify.clone(),
                 dm_notify_cooldown_mins: self.profile.dm_notify_cooldown_mins,
+                tmux_passthrough: self.profile.tmux_passthrough,
             },
         );
     }

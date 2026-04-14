@@ -24,6 +24,7 @@ pub struct ProfileRenderInput<'a> {
     pub cursor_visible: bool,
     pub dm_notify: &'a str,
     pub dm_notify_cooldown_mins: i32,
+    pub tmux_passthrough: bool,
     pub settings_row: usize,
 }
 
@@ -169,6 +170,24 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
         Span::styled(cooldown_pad, dim),
         Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM)),
         Span::styled(cooldown_val, Style::default().fg(theme::AMBER)),
+        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM)),
+    ]));
+
+    // Row 2: tmux passthrough
+    let tmux_row_style = if view.settings_row == 2 {
+        selected_label
+    } else {
+        dim
+    };
+    let tmux_label_text = " tmux passthrough (DCS wrap)";
+    let tmux_pad = " ".repeat(label_pad.saturating_sub(tmux_label_text.len() + 1));
+    let tmux_val = if view.tmux_passthrough { "On" } else { "Off" };
+    lines.push(Line::from(vec![
+        Span::styled(" \u{25bc}", nav_style),
+        Span::styled(tmux_label_text, tmux_row_style),
+        Span::styled(tmux_pad, dim),
+        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(tmux_val, Style::default().fg(theme::AMBER)),
         Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM)),
     ]));
 
@@ -395,6 +414,7 @@ mod tests {
             cursor_visible: false,
             dm_notify: "unfocused",
             dm_notify_cooldown_mins: 5,
+            tmux_passthrough: false,
             settings_row: 0,
         };
         let lines = build_lines(&view, 80);

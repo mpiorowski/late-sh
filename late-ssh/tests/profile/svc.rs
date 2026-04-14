@@ -63,6 +63,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             enable_ghost: true,
             dm_notify: "unfocused".to_string(),
             dm_notify_cooldown_mins: 5,
+            tmux_passthrough: false,
         },
     );
 
@@ -118,6 +119,7 @@ async fn edit_profile_does_not_modify_another_users_profile() {
             enable_ghost: true,
             dm_notify: "unfocused".to_string(),
             dm_notify_cooldown_mins: 5,
+            tmux_passthrough: false,
         },
     );
 

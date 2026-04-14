@@ -592,6 +592,7 @@ impl GhostService {
                     enable_ghost: profile.enable_ghost,
                     dm_notify: profile.dm_notify.clone(),
                     dm_notify_cooldown_mins: profile.dm_notify_cooldown_mins,
+                    tmux_passthrough: profile.tmux_passthrough,
                 },
             )
             .await?;

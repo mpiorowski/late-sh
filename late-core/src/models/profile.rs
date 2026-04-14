@@ -13,6 +13,7 @@ crate::user_scoped_model! {
         pub enable_ghost: bool,
         pub dm_notify: String,
         pub dm_notify_cooldown_mins: i32,
+        pub tmux_passthrough: bool,
     }
 }
 
@@ -27,6 +28,7 @@ impl Default for Profile {
             enable_ghost: true,
             dm_notify: "unfocused".to_string(),
             dm_notify_cooldown_mins: 5,
+            tmux_passthrough: false,
         }
     }
 }

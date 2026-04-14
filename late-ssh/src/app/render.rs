@@ -172,6 +172,7 @@ impl App {
             cursor_visible: self.profile_state.cursor_visible(),
             dm_notify: &self.profile_state.profile().dm_notify,
             dm_notify_cooldown_mins: self.profile_state.profile().dm_notify_cooldown_mins,
+            tmux_passthrough: self.profile_state.profile().tmux_passthrough,
             settings_row: self.profile_state.settings_row,
         };
         let online_count = self
@@ -250,9 +251,37 @@ impl App {
                 && cooldown_ok
                 && let Some((title, body)) = self.chat.pending_osc777.first()
             {
-                let _ = write!(self.shared, "\x1b]777;notify;{};{}\x07", title, body);
-                let _ = write!(self.shared, "\x1b]9;{}: {}\x07", title, body);
+                tracing::info!(
+                    ?title,
+                    ?body,
+                    tmux_passthrough = self.profile_state.profile().tmux_passthrough,
+                    "emitting desktop notification"
+                );
+                if self.profile_state.profile().tmux_passthrough {
+                    // tmux DCS passthrough: \ePtmux;<body with escapes doubled>\e\\
+                    // Inner OSC ST (BEL \x07) is fine; we only need to double ESC bytes.
+                    let _ = write!(
+                        self.shared,
+                        "\x1bPtmux;\x1b\x1b]777;notify;{};{}\x07\x1b\\",
+                        title, body
+                    );
+                    let _ = write!(
+                        self.shared,
+                        "\x1bPtmux;\x1b\x1b]9;{}: {}\x07\x1b\\",
+                        title, body
+                    );
+                } else {
+                    let _ = write!(self.shared, "\x1b]777;notify;{};{}\x07", title, body);
+                    let _ = write!(self.shared, "\x1b]9;{}: {}\x07", title, body);
+                }
                 self.last_dm_notify_at = Some(std::time::Instant::now());
+            } else if !self.chat.pending_osc777.is_empty() {
+                tracing::info!(
+                    ?should_notify,
+                    ?cooldown_ok,
+                    pending_count = self.chat.pending_osc777.len(),
+                    "dropping pending desktop notifications"
+                );
             }
             // Always drain — notifications during cooldown are dropped, not queued.
             self.chat.pending_osc777.clear();
