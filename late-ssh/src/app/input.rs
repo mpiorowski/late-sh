@@ -54,6 +54,7 @@ enum ParsedInput {
     CtrlDelete,
     Scroll(isize),
     MousePress { x: u16, y: u16 },
+    BackTab,
     AltEnter,
     Paste(Vec<u8>),
     PageUp,
@@ -237,6 +238,10 @@ impl Perform for VtCollector {
             // codepoint 127, others as 8 (BS). Accept both for Ctrl+Backspace.
             'u' if (p0 == Some(127) || p0 == Some(8)) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
+            }
+            // Shift+Tab: xterm `CSI Z`.
+            'Z' if intermediates.is_empty() => {
+                self.events.push(ParsedInput::BackTab);
             }
             'M' | 'm' if intermediates == [b'<'] && params.len() >= 3 => {
                 let button = p0.unwrap_or_default();
@@ -437,6 +442,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
         // Mouse clicks only matter inside the emoji picker today; ignore here.
         ParsedInput::MousePress { .. } => {}
+        // Shift+Tab is only meaningful inside the emoji picker.
+        ParsedInput::BackTab => {}
         // Page keys mirror Ctrl-U / Ctrl-D. Signs follow the existing scheme:
         // positive = toward older/top, negative = toward newer/bottom. See
         // `app.chat.select_message` — its `delta` is in MESSAGES, not rows,
@@ -878,6 +885,11 @@ fn handle_emoji_picker_input(app: &mut App, event: ParsedInput) {
             app.emoji_picker_state.selected_index = 0;
             app.emoji_picker_state.scroll_offset = 0;
         }
+        ParsedInput::BackTab => {
+            app.emoji_picker_state.tab.move_prev();
+            app.emoji_picker_state.selected_index = 0;
+            app.emoji_picker_state.scroll_offset = 0;
+        }
         ParsedInput::Byte(0x7f) => {
             if app.emoji_picker_state.search_cursor > 0 {
                 let byte_pos = app
@@ -961,10 +973,26 @@ fn picker_move_selection(app: &mut App, delta: isize) {
 /// Handle a left-button press at SGR 1-based coordinates (x, y).
 /// A click on a visible icon row selects it; a second click on the
 /// same item within DOUBLE_CLICK_WINDOW_MS inserts it (keeps the picker open).
-fn handle_emoji_picker_click(app: &mut App, _x: u16, y: u16) {
-    let list = app.emoji_picker_state.list_inner.get();
+fn handle_emoji_picker_click(app: &mut App, x: u16, y: u16) {
     // SGR coords are 1-based; ratatui Rect is 0-based.
     let row_0based = y.saturating_sub(1);
+    let col_0based = x.saturating_sub(1);
+
+    // Tab strip: clicking a category switches to it.
+    let tabs = app.emoji_picker_state.tabs_inner.get();
+    if tabs.height > 0
+        && row_0based >= tabs.y
+        && row_0based < tabs.y + tabs.height
+        && let Some(idx) = emoji::picker::tab_at_x(tabs, col_0based)
+    {
+        app.emoji_picker_state.tab.set_index(idx);
+        app.emoji_picker_state.selected_index = 0;
+        app.emoji_picker_state.scroll_offset = 0;
+        app.emoji_picker_state.last_click = None;
+        return;
+    }
+
+    let list = app.emoji_picker_state.list_inner.get();
     if list.height == 0 || row_0based < list.y || row_0based >= list.y + list.height {
         return;
     }

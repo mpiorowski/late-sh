@@ -26,6 +26,8 @@ pub struct EmojiPickerState {
     pub visible_height: Cell<usize>,
     /// Last-rendered icon-list inner area (0-based, ratatui coords).
     pub list_inner: Cell<Rect>,
+    /// Last-rendered tab-strip inner area (0-based, ratatui coords).
+    pub tabs_inner: Cell<Rect>,
     /// (time, selectable_index) of the previous left-click, for double-click detection.
     pub last_click: Option<(Instant, usize)>,
 }
@@ -44,6 +46,7 @@ impl Default for EmojiPickerState {
             scroll_offset: 0,
             visible_height: Cell::new(DEFAULT_VISIBLE_HEIGHT),
             list_inner: Cell::new(Rect::new(0, 0, 0, 0)),
+            tabs_inner: Cell::new(Rect::new(0, 0, 0, 0)),
             last_click: None,
         }
     }

@@ -125,16 +125,55 @@ pub fn render(f: &mut Frame, area: Rect, state: &EmojiPickerState, catalog: &Ico
     );
 }
 
-fn render_tabs(f: &mut Frame, area: Rect, state: &EmojiPickerState) {
-    let tabs = [
-        ("Emoji", IconPickerTab::Emoji),
-        ("Unicode", IconPickerTab::Unicode),
-        ("Nerd Font", IconPickerTab::NerdFont),
-    ];
+/// Labels and corresponding tab values, in render order.
+pub const TAB_LABELS: &[(&str, IconPickerTab)] = &[
+    ("Emoji", IconPickerTab::Emoji),
+    ("Unicode", IconPickerTab::Unicode),
+    ("Nerd Font", IconPickerTab::NerdFont),
+];
 
+/// Leading space before the first tab cell.
+const TAB_STRIP_LEAD: u16 = 1;
+/// Gap rendered between tab cells.
+const TAB_STRIP_GAP: u16 = 2;
+
+/// Width of a rendered tab cell: "[x] " + label chars.
+fn tab_cell_width(label: &str) -> u16 {
+    4 + label.chars().count() as u16
+}
+
+/// Given the tab-strip inner Rect and a click x in screen coords, return the
+/// clicked tab index. Trailing gaps are included in each cell's hitbox.
+pub fn tab_at_x(tabs_inner: Rect, x: u16) -> Option<usize> {
+    if tabs_inner.width == 0 || x < tabs_inner.x {
+        return None;
+    }
+    let rel = x - tabs_inner.x;
+    if rel < TAB_STRIP_LEAD {
+        return None;
+    }
+    let mut cursor = TAB_STRIP_LEAD;
+    for (i, (label, _)) in TAB_LABELS.iter().enumerate() {
+        let w = tab_cell_width(label);
+        let cell_end = cursor
+            + w
+            + if i + 1 < TAB_LABELS.len() {
+                TAB_STRIP_GAP
+            } else {
+                0
+            };
+        if rel < cell_end {
+            return Some(i);
+        }
+        cursor = cell_end;
+    }
+    None
+}
+
+fn render_tabs(f: &mut Frame, area: Rect, state: &EmojiPickerState) {
     let mut spans: Vec<Span> = Vec::new();
     spans.push(Span::raw(" "));
-    for (i, (label, tab)) in tabs.iter().enumerate() {
+    for (i, (label, tab)) in TAB_LABELS.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled("  ", Style::default().fg(theme::BORDER_DIM)));
         }
@@ -159,6 +198,8 @@ fn render_tabs(f: &mut Frame, area: Rect, state: &EmojiPickerState) {
             Style::default().fg(theme::TEXT_MUTED),
         ));
 
+    let inner = block.inner(area);
+    state.tabs_inner.set(inner);
     let line = Line::from(spans);
     let para = Paragraph::new(line).block(block);
     f.render_widget(para, area);

@@ -21,6 +21,17 @@ impl<T> RingCursor<T> {
         self.index = (self.index + 1) % self.items.len();
         self.current()
     }
+
+    pub fn move_prev(&mut self) -> &T {
+        self.index = (self.index + self.items.len() - 1) % self.items.len();
+        self.current()
+    }
+
+    pub fn set_index(&mut self, index: usize) {
+        if index < self.items.len() {
+            self.index = index;
+        }
+    }
 }
 
 impl<T: PartialEq> PartialEq<T> for RingCursor<T> {
