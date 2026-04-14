@@ -106,6 +106,11 @@ impl State {
         }
     }
 
+    pub fn composer_clear(&mut self) {
+        if !self.processing {
+            self.composer.clear();
+        }
+    }
     pub fn composer_pop(&mut self) {
         if !self.processing {
             self.composer.pop();

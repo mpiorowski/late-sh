@@ -4,6 +4,8 @@ use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::app::common::overlay::Overlay;
+
 use crate::app::common::primitives::Banner;
 
 use super::{
@@ -44,7 +46,8 @@ pub struct ChatState {
     general_room_id: Option<Uuid>,
     pub(crate) general_messages: Vec<ChatMessage>,
     pub(crate) usernames: HashMap<Uuid, String>,
-    ignored_usernames: HashSet<String>,
+    ignored_user_ids: HashSet<Uuid>,
+    overlay: Option<Overlay>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
@@ -75,7 +78,7 @@ pub struct ChatState {
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
 
-    /// Pending OSC 777 desktop notifications (title, body).
+    /// Pending OSC 777/9 desktop notifications (title, body) drained on render.
     pub(crate) pending_osc777: Vec<(String, String)>,
 }
 
@@ -108,7 +111,8 @@ impl ChatState {
             general_room_id: None,
             general_messages: Vec::new(),
             usernames: HashMap::new(),
-            ignored_usernames: HashSet::new(),
+            ignored_user_ids: HashSet::new(),
+            overlay: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             room_tx,
@@ -212,6 +216,24 @@ impl ChatState {
             .find(|(room, _)| room.id == room_id)
             .map(|(_, msgs)| msgs.iter().collect())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn overlay(&self) -> Option<&Overlay> {
+        self.overlay.as_ref()
+    }
+
+    pub(crate) fn has_overlay(&self) -> bool {
+        self.overlay.is_some()
+    }
+
+    pub fn close_overlay(&mut self) {
+        self.overlay = None;
+    }
+
+    pub fn scroll_overlay(&mut self, delta: i16) {
+        if let Some(overlay) = &mut self.overlay {
+            overlay.scroll(delta);
+        }
     }
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
@@ -442,7 +464,7 @@ impl ChatState {
             .iter()
             .position(|item| *item == current_item)
             .unwrap_or(0) as isize;
-        let next = (current + delta).clamp(0, order.len() as isize - 1) as usize;
+        let next = wrapped_index(current, delta, order.len());
 
         match order[next] {
             RoomSlot::News => {
@@ -485,40 +507,30 @@ impl ChatState {
         self.invalidate_composer_layout();
     }
 
-    fn send_notice_message(&mut self, body: String) -> Option<Banner> {
-        let Some(room_id) = self.selected_room_id else {
-            return Some(Banner::error("No room selected"));
-        };
-
-        let request_id = Uuid::now_v7();
-        self.service.send_message_task(
-            self.user_id,
-            room_id,
-            self.selected_room_slug(),
-            body,
-            request_id,
-            self.is_admin,
-        );
-        self.pending_send_notices.push_back(request_id);
-        None
+    fn open_overlay(&mut self, title: &str, lines: Vec<String>) {
+        if lines.is_empty() {
+            return;
+        }
+        self.overlay = Some(Overlay::new(title, lines));
     }
 
-    fn format_ignore_list_message(&self) -> String {
-        if self.ignored_usernames.is_empty() {
-            return "Ignore list is empty".to_string();
+    fn ignore_list_lines(&self) -> Vec<String> {
+        if self.ignored_user_ids.is_empty() {
+            return vec!["Ignore list is empty".to_string()];
         }
 
-        let mut ignored_usernames: Vec<&str> =
-            self.ignored_usernames.iter().map(String::as_str).collect();
-        ignored_usernames.sort_unstable();
-
-        let mut body = String::from("Ignored users");
-        for username in ignored_usernames {
-            body.push('\n');
-            body.push('@');
-            body.push_str(username);
-        }
-        body
+        let mut labels: Vec<String> = self
+            .ignored_user_ids
+            .iter()
+            .map(|id| {
+                self.usernames
+                    .get(id)
+                    .map(|name| format!("@{name}"))
+                    .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(*id)))
+            })
+            .collect();
+        labels.sort();
+        labels
     }
 
     pub fn submit_composer(&mut self) -> Option<Banner> {
@@ -526,50 +538,29 @@ impl ChatState {
 
         if body.trim() == "/help" {
             self.clear_composer_after_submit();
-            let help = concat!(
-                "📖 Chat Commands\n",
-                "\n",
-                "/join #room — join a room (creates it if new, only you join)\n",
-                "  → great for private hangouts: /join #rust-nerds\n",
-                "/create #room — create a room & add everyone (new users auto-join too, but anyone can /leave)\n",
-                "  → great for shared spaces: /create #music-recs\n",
-                "/leave — leave the current room\n",
-                "/dm @user — open a direct message\n",
-                "/ignore [@user] — ignore a user, or list ignored users\n",
-                "/unignore [@user] — remove a user from your ignore list\n",
-                "/help — show this message\n",
-                "\n",
-                "⌨ Keys: h/l switch rooms · j/k select msg · r reply · d delete · i compose · @user mention",
-            );
-            return self.send_notice_message(help.to_string());
+            self.open_overlay("Chat Help", chat_help_lines());
+            return None;
         }
 
-        if let Some(command) = parse_ignore_command(&body) {
+        if let Some(target) = parse_user_command(&body, "/ignore") {
             self.clear_composer_after_submit();
-            match command {
-                UserCommand::List => {
-                    return self.send_notice_message(self.format_ignore_list_message());
-                }
-                UserCommand::Username(username) => {
-                    self.service
-                        .ignore_user_task(self.user_id, username.to_string());
-                    return Some(Banner::success(&format!("Ignoring @{username}...")));
-                }
+            match target {
+                None => self.open_overlay("Ignored Users", self.ignore_list_lines()),
+                Some(name) => self
+                    .service
+                    .ignore_user_task(self.user_id, name.to_string()),
             }
+            return None;
         }
-
-        if let Some(command) = parse_unignore_command(&body) {
+        if let Some(target) = parse_user_command(&body, "/unignore") {
             self.clear_composer_after_submit();
-            match command {
-                UserCommand::List => {
-                    return self.send_notice_message(self.format_ignore_list_message());
-                }
-                UserCommand::Username(username) => {
-                    self.service
-                        .unignore_user_task(self.user_id, username.to_string());
-                    return Some(Banner::success(&format!("Unignoring @{username}...")));
-                }
+            match target {
+                None => self.open_overlay("Ignored Users", self.ignore_list_lines()),
+                Some(name) => self
+                    .service
+                    .unignore_user_task(self.user_id, name.to_string()),
             }
+            return None;
         }
 
         if let Some(target) = parse_dm_command(&body) {
@@ -646,6 +637,11 @@ impl ChatState {
         None
     }
 
+    pub fn composer_clear(&mut self) {
+        self.composer.clear();
+        self.composer_cursor = 0;
+        self.invalidate_composer_layout();
+    }
     pub fn composer_backspace(&mut self) {
         if self.composer_cursor == 0 {
             return;
@@ -973,7 +969,7 @@ impl ChatState {
         }
 
         self.usernames = snapshot.usernames;
-        self.ignored_usernames = snapshot.ignored_usernames.into_iter().collect();
+        self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.general_messages = self.filter_messages(snapshot.general_messages);
@@ -997,7 +993,7 @@ impl ChatState {
                     {
                         continue;
                     }
-                    // OSC 777 desktop notification for incoming DMs.
+                    // OSC 777/9 desktop notification for incoming DMs.
                     // target_user_ids is Some for DM/private rooms, None for public.
                     if is_targeted && message.user_id != self.user_id {
                         let nickname = self
@@ -1005,10 +1001,14 @@ impl ChatState {
                             .get(&message.user_id)
                             .cloned()
                             .unwrap_or_else(|| "someone".to_string());
-                        let preview: String =
-                            message.body.replace('\n', " ").chars().take(80).collect();
+                        let preview: String = message
+                            .body
+                            .replace('\n', " ")
+                            .chars()
+                            .take(80)
+                            .collect();
                         self.pending_osc777
-                            .push((format!("late.sh: New DM from {nickname}"), preview));
+                            .push((format!("New DM from {nickname}"), preview));
                     }
                     self.push_message(message);
                 }
@@ -1101,11 +1101,11 @@ impl ChatState {
                 }
                 ChatEvent::IgnoreListUpdated {
                     user_id,
-                    ignored_usernames,
+                    ignored_user_ids,
                     message,
                 } if self.user_id == user_id => {
-                    self.ignored_usernames = ignored_usernames.into_iter().collect();
-                    self.request_list();
+                    self.ignored_user_ids = ignored_user_ids.into_iter().collect();
+                    self.refilter_local_messages();
                     banner = Some(Banner::success(&message));
                 }
                 ChatEvent::IgnoreFailed { user_id, message } if self.user_id == user_id => {
@@ -1118,7 +1118,12 @@ impl ChatState {
     }
 
     fn push_message(&mut self, message: ChatMessage) {
-        if self.message_is_ignored(&message) {
+        let in_dm_room = self
+            .rooms
+            .iter()
+            .any(|(room, _)| room.id == message.room_id && room.kind == "dm");
+
+        if !in_dm_room && self.message_is_ignored(&message) {
             return;
         }
 
@@ -1178,12 +1183,21 @@ impl ChatState {
         incoming
             .into_iter()
             .map(|(room, messages)| {
-                if messages.is_empty()
-                    && let Some(previous) = previous_by_room.get(&room.id)
-                {
-                    return (room, self.filter_messages((*previous).clone()));
-                }
-                (room, self.filter_messages(messages))
+                let messages = if messages.is_empty() {
+                    previous_by_room
+                        .get(&room.id)
+                        .map(|previous| (*previous).clone())
+                        .unwrap_or_default()
+                } else {
+                    messages
+                };
+                // DMs: don't filter. Users leave the DM room if they want it gone.
+                let messages = if room.kind == "dm" {
+                    messages
+                } else {
+                    self.filter_messages(messages)
+                };
+                (room, messages)
             })
             .collect()
     }
@@ -1209,10 +1223,22 @@ impl ChatState {
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
-        self.usernames
-            .get(&message.user_id)
-            .and_then(|username| normalize_ignored_username(username))
-            .is_some_and(|username| self.ignored_usernames.contains(&username))
+        self.ignored_user_ids.contains(&message.user_id)
+    }
+
+    /// Strip already-stored messages from any newly-ignored author.
+    /// DM rooms are exempt — leaving the DM room is the way to dismiss them.
+    fn refilter_local_messages(&mut self) {
+        let ignored = &self.ignored_user_ids;
+        self.general_messages
+            .retain(|m| !ignored.contains(&m.user_id));
+        for (room, messages) in &mut self.rooms {
+            if room.kind == "dm" {
+                continue;
+            }
+            messages.retain(|m| !ignored.contains(&m.user_id));
+        }
+        self.sync_selection();
     }
 }
 
@@ -1230,10 +1256,50 @@ fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>
         .unwrap_or_else(|| "DM".to_string())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UserCommand<'a> {
-    List,
-    Username(&'a str),
+fn chat_help_lines() -> Vec<String> {
+    [
+        "Commands",
+        "  /join #room        join a room (creates it if new, solo)",
+        "  /create #room      create a room and add everyone",
+        "  /leave             leave the current room",
+        "  /dm @user          open a direct message",
+        "  /ignore [@user]    ignore a user, or list ignored users",
+        "  /unignore [@user]  remove a user from your ignore list",
+        "  /help              show this help",
+        "",
+        "Rooms",
+        "  h / l              previous / next room",
+        "  Enter / i          start composing",
+        "  c                  copy a web-chat link to this session",
+        "",
+        "Messages",
+        "  j / k              select older / newer message",
+        "  ↑ / ↓              same as j / k",
+        "  Ctrl+U / Ctrl+D    half page up / down",
+        "  PageUp / PageDown  half page up / down",
+        "  End                jump to most recent",
+        "  g / G              clear selection (back to live view)",
+        "  r                  reply to selected message",
+        "  d                  delete selected message",
+        "",
+        "Compose",
+        "  Enter              send",
+        "  Alt+Enter          newline",
+        "  Esc                exit compose",
+        "  Backspace          delete char",
+        "  Ctrl+Backspace     delete word left",
+        "  Ctrl+Delete        delete word right",
+        "  Ctrl+U             clear composer",
+        "  Ctrl+← / Ctrl+→    move cursor by word",
+        "  @user              mention (Tab/Enter to confirm)",
+        "",
+        "Overlays (this window)",
+        "  j / k or ↑ / ↓     scroll",
+        "  q or Esc           close",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 /// Parse `/dm @username` or `/dm username` from the composer text.
@@ -1293,43 +1359,26 @@ fn parse_delete_room_command(input: &str) -> Option<&str> {
     Some(slug)
 }
 
-fn parse_ignore_command(input: &str) -> Option<UserCommand<'_>> {
-    parse_optional_username_command(input, "/ignore")
+fn wrapped_index(current: isize, delta: isize, len: usize) -> usize {
+    (current + delta).rem_euclid(len as isize) as usize
 }
 
-fn parse_unignore_command(input: &str) -> Option<UserCommand<'_>> {
-    parse_optional_username_command(input, "/unignore")
-}
-
-fn parse_optional_username_command<'a>(input: &'a str, command: &str) -> Option<UserCommand<'a>> {
-    if input.trim() == command {
-        return Some(UserCommand::List);
-    }
-
+/// Parse `/<command>` or `/<command> [@]username`. Returns:
+/// - `None` if `input` is not the given command,
+/// - `Some(None)` for the bare command (caller treats as "list"),
+/// - `Some(Some(username))` for the targeted form.
+fn parse_user_command<'a>(input: &'a str, command: &str) -> Option<Option<&'a str>> {
     let rest = input.strip_prefix(command)?;
-    if !rest.chars().next().is_some_and(char::is_whitespace) {
-        return None;
-    }
-
-    let rest = rest.trim_start();
+    let rest = match rest.chars().next() {
+        None => return Some(None),
+        Some(c) if c.is_whitespace() => rest.trim(),
+        Some(_) => return None,
+    };
     if rest.is_empty() {
-        return Some(UserCommand::List);
+        return Some(None);
     }
-
     let username = rest.strip_prefix('@').unwrap_or(rest).trim();
-    if username.is_empty() {
-        return Some(UserCommand::List);
-    }
-
-    Some(UserCommand::Username(username))
-}
-
-fn normalize_ignored_username(username: &str) -> Option<String> {
-    let trimmed = username.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
+    Some((!username.is_empty()).then_some(username))
 }
 
 fn short_user_id(user_id: Uuid) -> String {
@@ -1418,59 +1467,42 @@ mod tests {
     }
 
     #[test]
-    fn parse_ignore_with_username() {
+    fn wrapped_index_wraps_forward() {
+        assert_eq!(wrapped_index(2, 1, 3), 0);
+        assert_eq!(wrapped_index(1, 5, 3), 0);
+    }
+
+    #[test]
+    fn wrapped_index_wraps_backward() {
+        assert_eq!(wrapped_index(0, -1, 3), 2);
+        assert_eq!(wrapped_index(1, -5, 3), 2);
+    }
+
+    #[test]
+    fn parse_user_command_with_username() {
         assert_eq!(
-            parse_ignore_command("/ignore @alice"),
-            Some(UserCommand::Username("alice"))
+            parse_user_command("/ignore @alice", "/ignore"),
+            Some(Some("alice"))
         );
         assert_eq!(
-            parse_ignore_command("/ignore bob"),
-            Some(UserCommand::Username("bob"))
+            parse_user_command("/unignore bob", "/unignore"),
+            Some(Some("bob"))
         );
     }
 
     #[test]
-    fn parse_ignore_lists_when_username_missing() {
-        assert_eq!(parse_ignore_command("/ignore"), Some(UserCommand::List));
-        assert_eq!(parse_ignore_command("/ignore   "), Some(UserCommand::List));
-        assert_eq!(parse_ignore_command("/ignore @"), Some(UserCommand::List));
+    fn parse_user_command_lists_when_username_missing() {
+        assert_eq!(parse_user_command("/ignore", "/ignore"), Some(None));
+        assert_eq!(parse_user_command("/ignore   ", "/ignore"), Some(None));
+        assert_eq!(parse_user_command("/ignore @", "/ignore"), Some(None));
+        assert_eq!(parse_user_command("/unignore", "/unignore"), Some(None));
     }
 
     #[test]
-    fn parse_ignore_not_command() {
-        assert_eq!(parse_ignore_command("ignore alice"), None);
-        assert_eq!(parse_ignore_command("/ignored alice"), None);
-    }
-
-    #[test]
-    fn parse_unignore_with_username() {
-        assert_eq!(
-            parse_unignore_command("/unignore @alice"),
-            Some(UserCommand::Username("alice"))
-        );
-        assert_eq!(
-            parse_unignore_command("/unignore bob"),
-            Some(UserCommand::Username("bob"))
-        );
-    }
-
-    #[test]
-    fn parse_unignore_lists_when_username_missing() {
-        assert_eq!(parse_unignore_command("/unignore"), Some(UserCommand::List));
-        assert_eq!(
-            parse_unignore_command("/unignore   "),
-            Some(UserCommand::List)
-        );
-        assert_eq!(
-            parse_unignore_command("/unignore @"),
-            Some(UserCommand::List)
-        );
-    }
-
-    #[test]
-    fn parse_unignore_not_command() {
-        assert_eq!(parse_unignore_command("unignore alice"), None);
-        assert_eq!(parse_unignore_command("/unignored alice"), None);
+    fn parse_user_command_rejects_non_matches() {
+        assert_eq!(parse_user_command("ignore alice", "/ignore"), None);
+        assert_eq!(parse_user_command("/ignored alice", "/ignore"), None);
+        assert_eq!(parse_user_command("/unignored alice", "/unignore"), None);
     }
 
     #[test]

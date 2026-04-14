@@ -133,30 +133,42 @@ async fn user_update_modifies_updated_timestamp() {
 }
 
 #[tokio::test]
-async fn ignored_usernames_are_normalized_sorted_and_deduped() {
+async fn ignored_user_ids_are_parsed_sorted_and_deduped() {
     let (client, _test_db) = setup_db().await;
 
+    let alice = Uuid::now_v7();
+    let bob = Uuid::now_v7();
+    let charlie = Uuid::now_v7();
     let user = User::create(
         &client,
         UserParams {
             fingerprint: "fp-ignore-read".to_string(),
             username: "ignore_read_user".to_string(),
             settings: json!({
-                "ignored_usernames": [" Bob ", "alice", "ALICE", "", "charlie"]
+                "ignored_user_ids": [
+                    bob.to_string(),
+                    alice.to_string(),
+                    alice.to_string(),
+                    "",
+                    charlie.to_string(),
+                    "not-a-uuid",
+                ]
             }),
         },
     )
     .await
     .expect("failed to create user");
 
-    let ignored = User::ignored_usernames(&client, user.id)
+    let mut expected = vec![alice, bob, charlie];
+    expected.sort();
+    let ignored = User::ignored_user_ids(&client, user.id)
         .await
-        .expect("read ignored usernames");
-    assert_eq!(ignored, vec!["alice", "bob", "charlie"]);
+        .expect("read ignored user ids");
+    assert_eq!(ignored, expected);
 }
 
 #[tokio::test]
-async fn add_ignored_username_preserves_other_settings() {
+async fn add_ignored_user_id_preserves_other_settings() {
     let (client, _test_db) = setup_db().await;
 
     let user = User::create(
@@ -170,135 +182,117 @@ async fn add_ignored_username_preserves_other_settings() {
     .await
     .expect("failed to create user");
 
-    let update = User::add_ignored_username(&client, user.id, " Alice ")
+    let target = Uuid::now_v7();
+    let (changed, ids) = User::add_ignored_user_id(&client, user.id, target)
         .await
-        .expect("add ignored username");
-    match update {
-        late_core::models::user::IgnoreListMutation::Added {
-            username,
-            ignored_usernames,
-        } => {
-            assert_eq!(username, "alice");
-            assert_eq!(ignored_usernames, vec!["alice"]);
-        }
-        other => panic!("expected Added mutation, got {other:?}"),
-    }
+        .expect("add ignored user id");
+    assert!(changed);
+    assert_eq!(ids, vec![target]);
 
     let refreshed = User::get(&client, user.id)
         .await
         .expect("get user")
         .expect("user");
     assert_eq!(refreshed.settings["theme"], json!("dark"));
-    assert_eq!(refreshed.settings["ignored_usernames"], json!(["alice"]));
+    assert_eq!(
+        refreshed.settings["ignored_user_ids"],
+        json!([target.to_string()])
+    );
 }
 
 #[tokio::test]
-async fn add_ignored_username_reports_already_present_without_duplication() {
+async fn add_ignored_user_id_reports_already_present_without_duplication() {
     let (client, _test_db) = setup_db().await;
 
+    let target = Uuid::now_v7();
     let user = User::create(
         &client,
         UserParams {
             fingerprint: "fp-ignore-dup".to_string(),
             username: "ignore_dup_user".to_string(),
-            settings: json!({"ignored_usernames": ["alice"]}),
+            settings: json!({"ignored_user_ids": [target.to_string()]}),
         },
     )
     .await
     .expect("failed to create user");
 
-    let update = User::add_ignored_username(&client, user.id, "@ALICE")
+    let (changed, ids) = User::add_ignored_user_id(&client, user.id, target)
         .await
-        .expect("re-add ignored username");
-    match update {
-        late_core::models::user::IgnoreListMutation::AlreadyPresent {
-            username,
-            ignored_usernames,
-        } => {
-            assert_eq!(username, "alice");
-            assert_eq!(ignored_usernames, vec!["alice"]);
-        }
-        other => panic!("expected AlreadyPresent mutation, got {other:?}"),
-    }
+        .expect("re-add ignored user id");
+    assert!(!changed);
+    assert_eq!(ids, vec![target]);
 
-    let ignored = User::ignored_usernames(&client, user.id)
+    let ignored = User::ignored_user_ids(&client, user.id)
         .await
-        .expect("read ignored usernames");
-    assert_eq!(ignored, vec!["alice"]);
+        .expect("read ignored user ids");
+    assert_eq!(ignored, vec![target]);
 }
 
 #[tokio::test]
-async fn remove_ignored_username_updates_settings() {
+async fn remove_ignored_user_id_updates_settings() {
     let (client, _test_db) = setup_db().await;
 
+    let alice = Uuid::now_v7();
+    let bob = Uuid::now_v7();
     let user = User::create(
         &client,
         UserParams {
             fingerprint: "fp-ignore-remove".to_string(),
             username: "ignore_remove_user".to_string(),
-            settings: json!({"ignored_usernames": ["alice", "bob"]}),
+            settings: json!({
+                "ignored_user_ids": [alice.to_string(), bob.to_string()]
+            }),
         },
     )
     .await
     .expect("failed to create user");
 
-    let update = User::remove_ignored_username(&client, user.id, "bob")
+    let (changed, ids) = User::remove_ignored_user_id(&client, user.id, bob)
         .await
-        .expect("remove ignored username");
-    match update {
-        late_core::models::user::IgnoreListMutation::Removed {
-            username,
-            ignored_usernames,
-        } => {
-            assert_eq!(username, "bob");
-            assert_eq!(ignored_usernames, vec!["alice"]);
-        }
-        other => panic!("expected Removed mutation, got {other:?}"),
-    }
+        .expect("remove ignored user id");
+    assert!(changed);
+    assert_eq!(ids, vec![alice]);
 
     let refreshed = User::get(&client, user.id)
         .await
         .expect("get user")
         .expect("user");
-    assert_eq!(refreshed.settings["ignored_usernames"], json!(["alice"]));
+    assert_eq!(
+        refreshed.settings["ignored_user_ids"],
+        json!([alice.to_string()])
+    );
 }
 
 #[tokio::test]
-async fn remove_ignored_username_reports_missing_entry() {
+async fn remove_ignored_user_id_reports_missing_entry() {
     let (client, _test_db) = setup_db().await;
 
+    let alice = Uuid::now_v7();
     let user = User::create(
         &client,
         UserParams {
             fingerprint: "fp-ignore-missing".to_string(),
             username: "ignore_missing_user".to_string(),
-            settings: json!({"ignored_usernames": ["alice"]}),
+            settings: json!({"ignored_user_ids": [alice.to_string()]}),
         },
     )
     .await
     .expect("failed to create user");
 
-    let update = User::remove_ignored_username(&client, user.id, "bob")
+    let absent = Uuid::now_v7();
+    let (changed, ids) = User::remove_ignored_user_id(&client, user.id, absent)
         .await
-        .expect("remove missing ignored username");
-    match update {
-        late_core::models::user::IgnoreListMutation::Missing {
-            username,
-            ignored_usernames,
-        } => {
-            assert_eq!(username, "bob");
-            assert_eq!(ignored_usernames, vec!["alice"]);
-        }
-        other => panic!("expected Missing mutation, got {other:?}"),
-    }
+        .expect("remove missing ignored user id");
+    assert!(!changed);
+    assert_eq!(ids, vec![alice]);
 }
 
 #[tokio::test]
-async fn ignored_usernames_require_existing_user() {
+async fn ignored_user_ids_require_existing_user() {
     let (client, _test_db) = setup_db().await;
     let missing_user_id = Uuid::now_v7();
 
-    let err = User::ignored_usernames(&client, missing_user_id)
+    let err = User::ignored_user_ids(&client, missing_user_id)
         .await
         .expect_err("expected missing user error");
     assert!(err.to_string().contains("User not found"));

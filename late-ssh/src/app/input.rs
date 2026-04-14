@@ -234,8 +234,9 @@ impl Perform for VtCollector {
             'F' if intermediates.is_empty() && p0.unwrap_or(0) <= 1 => {
                 self.events.push(ParsedInput::End);
             }
-            // Kitty keyboard protocol: CSI 127;5u == Ctrl+Backspace.
-            'u' if p0 == Some(127) && p1 == Some(5) => {
+            // Kitty keyboard protocol: some terminals report Backspace as
+            // codepoint 127, others as 8 (BS). Accept both for Ctrl+Backspace.
+            'u' if (p0 == Some(127) || p0 == Some(8)) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
             'I' if intermediates.is_empty() => {
@@ -300,6 +301,10 @@ pub fn handle(app: &mut App, data: &[u8]) {
 
     if app.show_splash {
         // Do not process input while splash screen is showing
+        // Escape skips the rest of the intro animation
+        if data.contains(&0x1B) {
+            app.show_splash = false;
+        }
         return;
     }
 
@@ -430,8 +435,24 @@ fn handle_vt_segment(app: &mut App, data: &[u8]) {
     }
 }
 
+fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
+    match event {
+        ParsedInput::Byte(b'q' | b'Q') => app.chat.close_overlay(),
+        ParsedInput::Byte(b'j' | b'J') => app.chat.scroll_overlay(1),
+        ParsedInput::Byte(b'k' | b'K') => app.chat.scroll_overlay(-1),
+        ParsedInput::Arrow(b'B') => app.chat.scroll_overlay(1),
+        ParsedInput::Arrow(b'A') => app.chat.scroll_overlay(-1),
+        _ => {}
+    }
+}
+
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     let ctx = InputContext::from_app(app);
+
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
+        handle_overlay_input(app, &event);
+        return;
+    }
 
     match event {
         // Focus events are already handled in extract_focus_events() for the
@@ -461,6 +482,16 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::End => handle_scroll_for_screen(app, ctx.screen, isize::MIN),
         ParsedInput::CtrlBackspace
+            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+                && ctx.chat_composing =>
+        {
+            app.chat.composer_delete_word_left();
+            app.chat.update_autocomplete();
+        }
+        // Many terminals encode Ctrl+Backspace as raw BS (^H / 0x08) rather
+        // than a distinct escape sequence. Treat that as delete-word-left in
+        // the chat composer; plain Backspace continues to come through as DEL.
+        ParsedInput::Byte(0x08)
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
                 && ctx.chat_composing =>
         {
@@ -538,6 +569,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 fn dispatch_escape(app: &mut App) {
     let ctx = InputContext::from_app(app);
     if handle_modal_input(app, ctx, 0x1B) {
+        return;
+    }
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
+        app.chat.close_overlay();
         return;
     }
     if ctx.screen == Screen::Games && app.is_playing_game {
@@ -618,9 +653,7 @@ pub fn sanitize_paste_markers(s: &str) -> String {
 
 fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
     match screen {
-        Screen::Dashboard => {
-            app.chat.select_dashboard_message(delta);
-        }
+        Screen::Dashboard => app.chat.select_dashboard_message(delta),
         Screen::Chat => chat::input::handle_scroll(app, delta),
         _ => {}
     }
@@ -919,6 +952,7 @@ mod tests {
             parser.feed(b"\x1b[127;5u"),
             vec![ParsedInput::CtrlBackspace]
         );
+        assert_eq!(parser.feed(b"\x1b[8;5u"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[8;5~"), vec![ParsedInput::CtrlBackspace]);
     }
 

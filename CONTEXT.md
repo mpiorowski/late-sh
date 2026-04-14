@@ -474,7 +474,7 @@ late-sh/
 
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE, `settings` JSONB |
+| User | `users` | `fingerprint` UNIQUE, `settings` JSONB (holds `ignored_user_ids: [uuid]` — keyed by id, not username, so renames don't drop ignores) |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
@@ -699,6 +699,14 @@ Currently the SSH app assumes a single process. These in-memory structures would
 3. Side effects: All sessions receive `MessageCreated`, sender gets banner feedback. Messages containing `@username` show a golden `│` gutter on the left for the mentioned user.
 4. Failure: Non-member send → `SendFailed` event with message. DB error → `SendFailed`.
 
+**Chat ignore flow:**
+1. Trigger: User submits `/ignore @user` or `/unignore @user` in the composer
+2. Processing: `ChatService::ignore_user_task` / `unignore_user_task` resolves the username via `User::find_by_username`, then calls `User::add_ignored_user_id` / `remove_ignored_user_id` (settings JSONB write keyed on `target.id`, not the username string)
+3. Side effects: Service emits `ChatEvent::IgnoreListUpdated { user_id, ignored_user_ids, message }`. `ChatState` updates its local `HashSet<Uuid>`, calls `refilter_local_messages()` to drop already-stored messages from any newly-ignored author from `general_messages` and every non-DM room in place (no DB refetch), and shows a success banner.
+4. Exemptions: DM rooms are never filtered — leaving the DM room is the way to dismiss it. `push_message` skips the ignore check for DM rooms so 1:1 messages always land.
+5. Display path: `ChatState::ignore_list_lines()` resolves stored UUIDs back to `@username` via the snapshot's full `usernames` map (`User::list_all_username_map`), falling back to `@<unknown:…>` when a user isn't in the cache.
+6. Failure: `IgnoreFailed { user_id, message }` for self-target, unknown username, already-ignored, or not-currently-ignored — surfaced as a red banner.
+
 **Chat reply flow:**
 1. Trigger: User selects a message (`j`/`k`) and presses `r`
 2. Processing: `ChatState::begin_reply_to_selected()` captures the target author plus a short preview, enters compose mode, and shows a reply-specific composer title
@@ -719,6 +727,8 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 ### 8.4 Easy-to-break gotchas
 
+- **Ignore is keyed by user id, not username:** `users.settings.ignored_user_ids` stores UUIDs, so a `/ignore @alice` survives @alice renaming herself to @alice2. Storing usernames there would silently break on rename and could re-attach a stale ignore to a different person if usernames are ever reused.
+- **Ignore re-filter is local-only:** `ChatEvent::IgnoreListUpdated` triggers an in-place retain over `general_messages` and every non-DM room — no `request_list()` refetch. Side effect: `unignore` does **not** retroactively re-fetch already-dropped messages; they reappear on the next natural snapshot/refresh.
 - **Snapshot merge for empty rooms:** `ChatState::merge_rooms` preserves cached messages when snapshot arrives with empty message list for a room - prevents flash-clear on out-of-order snapshots
 - **Unread count merge:** `merge_unread_counts` tracks `pending_read_rooms` to suppress stale unread counts after marking read (avoids flicker)
 - **Render loop missed ticks:** 66ms interval with `MissedTickBehavior::Skip` - if a frame takes too long, next ticks are skipped rather than queued (prevents snowball lag)
@@ -866,7 +876,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Stream URL + now playing + voting + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`) with grouped room sections and a synthetic `news` entry in the room list |
+| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`, `/ignore [@user]`, `/unignore [@user]`, `/help`) with grouped room sections and a synthetic `news` entry in the room list |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
 | **Profile** | 4 | Active | User profile: username, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info, chat colors |
 
@@ -948,7 +958,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `n` | Nonograms | Generate a fresh personal puzzle for the current size |
 | `[` / `]` | Nonograms | Switch puzzle size pack |
 | `Esc` | Nonograms | Exit back to Arcade lobby |
-| `h` / `l` | Chat | Switch room selection, including the synthetic `news` entry |
+| `h` / `l` | Chat | Switch room selection, including the synthetic `news` entry. Aliases: `Ctrl+N` next room, `Ctrl+P` previous room; room switching wraps around. |
 | `j` / `k` / arrows | Chat (`news` selected) | Navigate news list |
 | `i` | Chat (`news` selected) | Start composing/pasting URL |
 | `Enter` | Chat (`news` selected) | Copy selected link / submit URL |
@@ -957,6 +967,11 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `i` / `Enter` | Dashboard | Start composing chat |
 | `j` / `k` | Chat | Move message selection newer/older |
 | `r` | Chat | Reply to selected message |
+| `/help` | Chat composer | Open scrollable chat help overlay (commands + all chat keys) |
+| `/ignore [@user]` | Chat composer | Mute a user, or list muted users when no arg |
+| `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
+| `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
+| `q` / `Esc` | Chat overlay (`/help`, ignore list) | Close overlay |
 | `j` / `k` / arrows | Profile | Navigate fields |
 | `Space` / `Enter` | Profile | Toggle checkbox / edit username |
 | `e` | Profile | Edit username |

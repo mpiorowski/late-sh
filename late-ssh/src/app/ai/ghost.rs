@@ -73,6 +73,7 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer who is de
     You speak in a resigned, melancholic tone. Sometimes you trail off mid thought. You type in lowercase a lot.";
 pub const GRAYBEARD_CHAT_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
 const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
+const GRAYBEARD_MIN_NEW_MESSAGES: usize = 3;
 
 impl GhostService {
     pub fn new(
@@ -389,8 +390,10 @@ impl GhostService {
             return Ok(());
         }
 
-        // Only comment if there are new messages not from him
-        if messages.first().map(|m| m.user_id) == Some(gb.id) {
+        // Only comment if there are at least N new messages since graybeard's last reply.
+        // `list_recent` returns newest-first, so count leading messages not authored by him.
+        let new_since_last = messages.iter().take_while(|m| m.user_id != gb.id).count();
+        if new_since_last < GRAYBEARD_MIN_NEW_MESSAGES {
             return Ok(());
         }
 

@@ -93,6 +93,7 @@ impl App {
             my_vote: vote_my_vote,
             chat_view: chat::ui::DashboardChatView {
                 messages: self.chat.general_messages(),
+                overlay: self.chat.overlay(),
                 rows_cache: &mut self.dashboard_chat_rows_cache,
                 usernames: chat_usernames,
                 badges: &chat_badges,
@@ -124,6 +125,7 @@ impl App {
             news_view,
             rows_cache: &mut self.active_room_rows_cache,
             chat_rooms: self.chat.rooms.as_slice(),
+            overlay: self.chat.overlay(),
             usernames: chat_usernames,
             badges: &chat_badges,
             unread_counts: &self.chat.unread_counts,
@@ -229,8 +231,9 @@ impl App {
             let _ = write!(self.shared, "\x1b]52;c;{}\x07", encoded);
         }
 
-        // Emit OSC 777 desktop notifications for incoming DMs,
-        // gated on the user's dm_notify preference, focus state, and cooldown.
+        // Emit desktop notifications for incoming DMs.
+        // We send both OSC 777 (urxvt/kitty/Ghostty) and OSC 9 (iTerm2/kitty fallback).
+        // Terminals that don't recognize one ignore it; kitty parses 777 first so no double-fire.
         if !self.chat.pending_osc777.is_empty() {
             let should_notify = match self.profile_state.profile().dm_notify.as_str() {
                 "off" => false,
@@ -248,6 +251,7 @@ impl App {
                 && let Some((title, body)) = self.chat.pending_osc777.first()
             {
                 let _ = write!(self.shared, "\x1b]777;notify;{};{}\x07", title, body);
+                let _ = write!(self.shared, "\x1b]9;{}: {}\x07", title, body);
                 self.last_dm_notify_at = Some(std::time::Instant::now());
             }
             // Always drain — notifications during cooldown are dropped, not queued.
@@ -501,24 +505,19 @@ fn draw_help_overlay(
         section("Dashboard"),
         divider(col_w),
         key("i", "compose chat"),
-        key("j / k", "select msg"),
-        key("r", "reply"),
-        key("d", "delete msg"),
-        key("^d / ^u", "half-page"),
-        key("g", "to bottom"),
         key("Enter", "copy CLI cmd"),
         Line::from(""),
         section("Chat"),
         divider(col_w),
         key("h / l", "switch room"),
         key("i", "compose"),
-        key("j / k", "select msg"),
-        key("r", "reply"),
-        key("d", "delete msg"),
-        key("c", "web chat (QR)"),
-        key("@user", "mention"),
-        key("Alt+Ent", "newline"),
-        key("/help", "commands"),
+        key("/help", "all commands & keys"),
+        Line::from(""),
+        section("Profile"),
+        divider(col_w),
+        key("j / k", "navigate"),
+        key("i", "edit username"),
+        key("Space", "toggle"),
     ];
 
     // ── Right column ──
@@ -543,12 +542,6 @@ fn draw_help_overlay(
         key("Enter", "submit / copy URL"),
         key("Esc", "cancel URL entry"),
         key("d", "delete (own)"),
-        Line::from(""),
-        section("Profile"),
-        divider(col_w),
-        key("j / k", "navigate"),
-        key("i", "edit username"),
-        key("Space", "toggle"),
         Line::from(""),
         section("The Arcade"),
         divider(col_w),

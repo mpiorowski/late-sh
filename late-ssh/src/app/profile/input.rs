@@ -31,6 +31,7 @@ pub fn handle_composer_input(app: &mut App, byte: u8) {
     match byte {
         b'\r' => app.profile_state.submit_username(),
         0x1B => app.profile_state.cancel_username_edit(),
+        0x15 => app.profile_state.composer_clear(),
         0x7F => app.profile_state.composer_backspace(),
         b => {
             if let Some(ch) = composer_char_from_byte(b) {

@@ -12,7 +12,10 @@ use std::{
 };
 use uuid::Uuid;
 
-use crate::app::common::theme;
+use crate::app::common::{
+    overlay::{Overlay, draw_overlay},
+    theme,
+};
 use late_core::models::leaderboard::BadgeTier;
 
 // Re-export types that external modules reference via `chat::ui::`.
@@ -29,6 +32,7 @@ use super::ui_text::{
 
 pub struct DashboardChatView<'a> {
     pub messages: &'a [ChatMessage],
+    pub overlay: Option<&'a Overlay>,
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
@@ -59,13 +63,10 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     let dash_composer_scroll =
         composer_cursor_scroll_for_rows(view.composer_rows, view.composer_cursor, 5);
     let composer_height = visible_composer_lines as u16 + 2;
-    let layout = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(1),
-        Constraint::Length(composer_height),
-    ])
-    .split(inner);
-    let (messages_area, composer_area) = (layout[0], Some(layout[2]));
+    let layout =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(inner);
+    let messages_area = layout[0];
+    let composer_area = Some(layout[1]);
 
     let mut lines = Vec::new();
     if view.messages.is_empty() {
@@ -91,6 +92,9 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     }
 
     frame.render_widget(Paragraph::new(lines), messages_area);
+    if let Some(overlay) = view.overlay {
+        draw_overlay(frame, messages_area, overlay);
+    }
 
     if let Some(area) = composer_area {
         let composer_title = if view.composing {
@@ -439,6 +443,7 @@ pub struct ChatRenderInput<'a> {
         late_core::models::chat_room::ChatRoom,
         Vec<late_core::models::chat_message::ChatMessage>,
     )],
+    pub overlay: Option<&'a Overlay>,
     pub usernames: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
@@ -762,8 +767,12 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             .title(message_title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+        let inner_area = messages_block.inner(messages_area);
         let messages_paragraph = Paragraph::new(message_lines).block(messages_block);
         frame.render_widget(messages_paragraph, messages_area);
+        if let Some(overlay) = view.overlay {
+            draw_overlay(frame, inner_area, overlay);
+        }
     }
 
     if view.notifications_selected {

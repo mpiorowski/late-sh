@@ -144,6 +144,15 @@ pub fn test_app_state(db: Db, config: Config) -> State {
 }
 
 pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
+    make_app_with_chat_service(db, user_id, session_token).0
+}
+
+pub fn make_app_with_chat_service(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+) -> (App, ChatService) {
+    let chat_service = ChatService::new(db.clone(), NotificationService::new(db.clone()));
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
@@ -154,12 +163,12 @@ pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
             Arc::new(Mutex::new(HashMap::new())),
             broadcast::channel::<ActivityEvent>(64).0,
         ),
-        chat_service: ChatService::new(db.clone(), NotificationService::new(db.clone())),
+        chat_service: chat_service.clone(),
         notification_service: NotificationService::new(db.clone()),
         article_service: ArticleService::new(
             db.clone(),
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
-            ChatService::new(db.clone(), NotificationService::new(db.clone())),
+            chat_service.clone(),
         ),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
@@ -221,7 +230,7 @@ pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
     })
     .expect("app");
     app.skip_splash_for_tests();
-    app
+    (app, chat_service)
 }
 
 pub fn make_app_with_paired_client(
