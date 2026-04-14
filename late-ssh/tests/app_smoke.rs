@@ -11,7 +11,7 @@ async fn renders_non_empty_frames_when_input_and_ticks_are_processed() {
     let mut app = make_app(db, user_id, "smoke-token");
 
     app.handle_input(b"2");
-    app.handle_input(b"ihello\n");
+    app.handle_input(b"ihello\r");
     app.handle_input(b"3");
     app.handle_input(b"n");
     app.tick();

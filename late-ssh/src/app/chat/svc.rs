@@ -41,6 +41,7 @@ pub struct ChatSnapshot {
     pub unread_counts: HashMap<Uuid, i64>,
     pub all_usernames: Vec<String>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
+    pub ignored_user_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +118,15 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    IgnoreListUpdated {
+        user_id: Uuid,
+        ignored_user_ids: Vec<Uuid>,
+        message: String,
+    },
+    IgnoreFailed {
+        user_id: Uuid,
+        message: String,
+    },
 }
 
 impl ChatService {
@@ -174,6 +184,7 @@ impl ChatService {
         let usernames = User::list_all_username_map(client).await?;
         let mut all_usernames: Vec<String> = usernames.values().cloned().collect();
         all_usernames.sort();
+        let ignored_user_ids = User::ignored_user_ids(client, user_id).await?;
         let bonsai_glyphs: HashMap<Uuid, String> = Tree::list_all(client)
             .await?
             .into_iter()
@@ -208,6 +219,7 @@ impl ChatService {
             unread_counts,
             all_usernames,
             bonsai_glyphs,
+            ignored_user_ids,
         })
     }
 
@@ -504,6 +516,90 @@ impl ChatService {
         ChatRoomMember::join(client, room.id, user_id).await?;
         ChatRoomMember::join(client, room.id, target.id).await?;
         Ok(room.id)
+    }
+
+    pub fn ignore_user_task(&self, user_id: Uuid, target_username: String) {
+        let service = self.clone();
+        let span =
+            info_span!("chat.ignore_user_task", user_id = %user_id, target = %target_username);
+        tokio::spawn(
+            async move {
+                let event = match service.ignore_user(user_id, &target_username).await {
+                    Ok((ignored_user_ids, message)) => ChatEvent::IgnoreListUpdated {
+                        user_id,
+                        ignored_user_ids,
+                        message,
+                    },
+                    Err(e) => ChatEvent::IgnoreFailed {
+                        user_id,
+                        message: e.to_string(),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn ignore_user(
+        &self,
+        user_id: Uuid,
+        target_username: &str,
+    ) -> Result<(Vec<Uuid>, String)> {
+        let client = &self.db.get().await?;
+        let target = User::find_by_username(client, target_username)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
+        if target.id == user_id {
+            anyhow::bail!("Cannot ignore yourself");
+        }
+        let (changed, ids) = User::add_ignored_user_id(client, user_id, target.id).await?;
+        if !changed {
+            anyhow::bail!("@{} is already ignored", target.username);
+        }
+        Ok((ids, format!("Ignored @{}", target.username)))
+    }
+
+    pub fn unignore_user_task(&self, user_id: Uuid, target_username: String) {
+        let service = self.clone();
+        let span =
+            info_span!("chat.unignore_user_task", user_id = %user_id, target = %target_username);
+        tokio::spawn(
+            async move {
+                let event = match service.unignore_user(user_id, &target_username).await {
+                    Ok((ignored_user_ids, message)) => ChatEvent::IgnoreListUpdated {
+                        user_id,
+                        ignored_user_ids,
+                        message,
+                    },
+                    Err(e) => ChatEvent::IgnoreFailed {
+                        user_id,
+                        message: e.to_string(),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn unignore_user(
+        &self,
+        user_id: Uuid,
+        target_username: &str,
+    ) -> Result<(Vec<Uuid>, String)> {
+        let client = &self.db.get().await?;
+        let target = User::find_by_username(client, target_username)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
+        if target.id == user_id {
+            anyhow::bail!("Cannot unignore yourself");
+        }
+        let (changed, ids) = User::remove_ignored_user_id(client, user_id, target.id).await?;
+        if !changed {
+            anyhow::bail!("@{} is not ignored", target.username);
+        }
+        Ok((ids, format!("Unignored @{}", target.username)))
     }
 
     pub fn join_room_task(&self, user_id: Uuid, slug: String) {

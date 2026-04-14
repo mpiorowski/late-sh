@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use serde_json::{Value, json};
+use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -18,6 +19,8 @@ crate::model! {
         pub settings: serde_json::Value,
     }
 }
+
+const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -108,4 +111,96 @@ impl User {
             .await?;
         Ok(row.map(Self::from))
     }
+
+    pub async fn ignored_user_ids(client: &Client, user_id: Uuid) -> Result<Vec<Uuid>> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_ignored_user_ids(&settings))
+    }
+
+    /// Adds `target_id` to the ignore list. Returns `(changed, ids)` —
+    /// `changed` is false if the id was already present.
+    pub async fn add_ignored_user_id(
+        client: &Client,
+        user_id: Uuid,
+        target_id: Uuid,
+    ) -> Result<(bool, Vec<Uuid>)> {
+        let mut settings = Self::settings_for_user(client, user_id).await?;
+        let mut ids = extract_ignored_user_ids(&settings);
+
+        if ids.contains(&target_id) {
+            return Ok((false, ids));
+        }
+
+        ids.push(target_id);
+        ids.sort();
+        set_ignored_user_ids(&mut settings, &ids);
+        Self::update_settings(client, user_id, &settings).await?;
+        Ok((true, ids))
+    }
+
+    /// Removes `target_id` from the ignore list. Returns `(changed, ids)` —
+    /// `changed` is false if the id was not present.
+    pub async fn remove_ignored_user_id(
+        client: &Client,
+        user_id: Uuid,
+        target_id: Uuid,
+    ) -> Result<(bool, Vec<Uuid>)> {
+        let mut settings = Self::settings_for_user(client, user_id).await?;
+        let mut ids = extract_ignored_user_ids(&settings);
+
+        if !ids.contains(&target_id) {
+            return Ok((false, ids));
+        }
+
+        ids.retain(|entry| entry != &target_id);
+        set_ignored_user_ids(&mut settings, &ids);
+        Self::update_settings(client, user_id, &settings).await?;
+        Ok((true, ids))
+    }
+
+    async fn settings_for_user(client: &Client, user_id: Uuid) -> Result<Value> {
+        let row = client
+            .query_opt("SELECT settings FROM users WHERE id = $1", &[&user_id])
+            .await?;
+        let Some(row) = row else {
+            bail!("User not found");
+        };
+        Ok(row.get("settings"))
+    }
+
+    async fn update_settings(client: &Client, user_id: Uuid, settings: &Value) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = $1, updated = current_timestamp
+                 WHERE id = $2",
+                &[settings, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("User not found");
+        }
+        Ok(())
+    }
+}
+
+fn extract_ignored_user_ids(settings: &Value) -> Vec<Uuid> {
+    let Some(entries) = settings.get(IGNORED_USER_IDS_KEY).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut deduped = BTreeSet::new();
+    for entry in entries {
+        if let Some(id) = entry.as_str().and_then(|s| Uuid::parse_str(s.trim()).ok()) {
+            deduped.insert(id);
+        }
+    }
+    deduped.into_iter().collect()
+}
+
+fn set_ignored_user_ids(settings: &mut Value, ids: &[Uuid]) {
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+    settings[IGNORED_USER_IDS_KEY] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
 }

@@ -1,5 +1,13 @@
 use crate::app::state::App;
 
+fn is_next_room_key(byte: u8) -> bool {
+    matches!(byte, b'l' | b'L' | 0x0E)
+}
+
+fn is_prev_room_key(byte: u8) -> bool {
+    matches!(byte, b'h' | b'H' | 0x10)
+}
+
 pub fn handle_compose_input(app: &mut App, byte: u8) {
     if app.chat.is_autocomplete_active() {
         match byte {
@@ -77,32 +85,28 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     if app.chat.notifications_selected {
-        match byte {
-            b'h' | b'H' => {
-                switch_room(app, -1);
-                return true;
-            }
-            b'l' | b'L' => {
-                switch_room(app, 1);
-                return true;
-            }
-            _ => return super::notifications::input::handle_byte(app, byte),
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
         }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        return super::notifications::input::handle_byte(app, byte);
     }
 
     if app.chat.news_selected {
-        // h/l still switch rooms even when news is selected
-        match byte {
-            b'h' | b'H' => {
-                switch_room(app, -1);
-                return true;
-            }
-            b'l' | b'L' => {
-                switch_room(app, 1);
-                return true;
-            }
-            _ => return super::news::input::handle_byte(app, byte),
+        // Room-switch keys still work when a virtual room is selected.
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
         }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        return super::news::input::handle_byte(app, byte);
     }
 
     // `d` deletes and keeps the cursor on the adjacent message so you can
@@ -136,12 +140,12 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             app.chat.select_message(1);
             true
         }
-        b'h' | b'H' => {
-            switch_room(app, -1);
+        b if is_next_room_key(b) => {
+            switch_room(app, 1);
             true
         }
-        b'l' | b'L' => {
-            switch_room(app, 1);
+        b if is_prev_room_key(b) => {
+            switch_room(app, -1);
             true
         }
         b'i' | b'I' | b'\r' | b'\n' => {
@@ -182,5 +186,26 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_next_room_key, is_prev_room_key};
+
+    #[test]
+    fn next_room_keys_include_ctrl_n() {
+        assert!(is_next_room_key(b'l'));
+        assert!(is_next_room_key(b'L'));
+        assert!(is_next_room_key(0x0E));
+        assert!(!is_next_room_key(b'h'));
+    }
+
+    #[test]
+    fn prev_room_keys_include_ctrl_p() {
+        assert!(is_prev_room_key(b'h'));
+        assert!(is_prev_room_key(b'H'));
+        assert!(is_prev_room_key(0x10));
+        assert!(!is_prev_room_key(b'l'));
     }
 }

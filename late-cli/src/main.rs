@@ -1,19 +1,19 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use futures_util::{SinkExt, StreamExt};
-use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use serde::Deserialize;
 use serde_json::json;
 use shlex::Shlex;
 use std::{
     collections::VecDeque,
     env, fs,
-    io::{self, IsTerminal, Read, Write},
+    io::{self, Cursor, IsTerminal, Read, Write},
     path::{Path, PathBuf},
+    process::Stdio,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
-        mpsc,
+        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+        mpsc, Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -28,7 +28,7 @@ use symphonia::core::{
 };
 use symphonia::default::{get_codecs, get_probe};
 use tokio::{
-    process::Child,
+    process::{Child, Command},
     sync::{broadcast, oneshot},
     time::interval,
 };
@@ -38,16 +38,14 @@ use tracing_subscriber::EnvFilter;
 
 #[cfg(unix)]
 use {
-    std::os::fd::AsRawFd,
     crossterm::terminal::{disable_raw_mode, enable_raw_mode},
     nix::{
         libc,
-        pty::{Winsize, openpty},
+        pty::{openpty, Winsize},
         unistd::setsid,
     },
+    std::os::fd::AsRawFd,
 };
-
-
 
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
@@ -55,24 +53,30 @@ const DEFAULT_SSH_TARGET: &str = "late.sh";
 const DEFAULT_AUDIO_BASE_URL: &str = "http://audio.late.sh";
 const DEFAULT_API_BASE_URL: &str = "https://api.late.sh";
 
-#[cfg(all(unix, not(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly"
-))))]
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
+))]
 const TIOCSCTTY_IOCTL_REQUEST: nix::libc::c_ulong = nix::libc::TIOCSCTTY;
 
-#[cfg(all(unix, any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly"
-)))]
+#[cfg(all(
+    unix,
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    )
+))]
 const TIOCSCTTY_IOCTL_REQUEST: nix::libc::c_ulong = nix::libc::TIOCSCTTY as nix::libc::c_ulong;
 
 #[derive(Debug, Clone)]
@@ -177,6 +181,30 @@ struct SymphoniaStreamDecoder {
     spec: AudioSpec,
 }
 
+struct PrefixThenRead<R> {
+    prefix: Cursor<Vec<u8>>,
+    inner: R,
+}
+
+impl<R> PrefixThenRead<R> {
+    fn new(prefix: Vec<u8>, inner: R) -> Self {
+        Self {
+            prefix: Cursor::new(prefix),
+            inner,
+        }
+    }
+}
+
+impl<R: Read> Read for PrefixThenRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.prefix.read(buf)?;
+        if n > 0 {
+            return Ok(n);
+        }
+        self.inner.read(buf)
+    }
+}
+
 struct StreamingLinearResampler {
     channels: usize,
     source_rate: u32,
@@ -229,8 +257,13 @@ impl PtyResizeHandle {
 impl SymphoniaStreamDecoder {
     fn new_http(url: &str) -> Result<Self> {
         let stream_url = url.to_string() + "/stream";
-        let resp = reqwest::blocking::get(stream_url).context("http get")?;
-        let source = ReadOnlySource::new(resp);
+        let mut resp = reqwest::blocking::get(&stream_url)
+            .context("http get")?
+            .error_for_status()
+            .with_context(|| format!("stream request failed for {stream_url}"))?;
+        let prefix = read_until_mp3_sync(&mut resp)
+            .with_context(|| format!("failed to align MP3 stream from {stream_url}"))?;
+        let source = ReadOnlySource::new(PrefixThenRead::new(prefix, resp));
 
         let mss = MediaSourceStream::new(Box::new(source), Default::default());
         let mut hint = Hint::new();
@@ -295,6 +328,65 @@ impl SymphoniaStreamDecoder {
     fn spec(&self) -> AudioSpec {
         self.spec
     }
+}
+
+fn read_until_mp3_sync<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
+    const MAX_SCAN_BYTES: usize = 64 * 1024;
+    const CHUNK_SIZE: usize = 4096;
+
+    let mut buf = Vec::with_capacity(CHUNK_SIZE * 2);
+    let mut chunk = [0u8; CHUNK_SIZE];
+
+    while buf.len() < MAX_SCAN_BYTES {
+        let read = reader
+            .read(&mut chunk)
+            .context("failed to read from audio stream")?;
+        if read == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..read]);
+
+        if let Some(offset) = find_mp3_sync_offset(&buf) {
+            return Ok(buf.split_off(offset));
+        }
+    }
+
+    anyhow::bail!("could not find MP3 frame sync in first {} bytes", buf.len())
+}
+
+fn find_mp3_sync_offset(bytes: &[u8]) -> Option<usize> {
+    if bytes.starts_with(b"ID3") {
+        return Some(0);
+    }
+
+    for i in 0..=bytes.len().saturating_sub(3) {
+        let b0 = bytes[i];
+        let b1 = bytes[i + 1];
+        let b2 = bytes[i + 2];
+
+        if b0 != 0xFF || (b1 & 0xE0) != 0xE0 {
+            continue;
+        }
+
+        let version = (b1 >> 3) & 0x03;
+        let layer = (b1 >> 1) & 0x03;
+        let bitrate_idx = (b2 >> 4) & 0x0F;
+        let sample_rate_idx = (b2 >> 2) & 0x03;
+
+        if version == 0x01 || layer == 0x00 {
+            continue;
+        }
+        if bitrate_idx == 0x00 || bitrate_idx == 0x0F {
+            continue;
+        }
+        if sample_rate_idx == 0x03 {
+            continue;
+        }
+
+        return Some(i);
+    }
+
+    None
 }
 
 impl StreamingLinearResampler {
@@ -405,19 +497,25 @@ async fn main() -> Result<()> {
     info!(sample_rate = audio.sample_rate, "audio runtime ready");
     info!("starting ssh session");
     let (token_tx, token_rx) = oneshot::channel();
+    #[cfg(unix)]
+    let SshProcess {
+        mut child,
+        mut output_task,
+        input_task,
+        resize_handle,
+        input_gate,
+    } = spawn_ssh(&config, &ssh_identity, token_tx).await?;
+
+    #[cfg(not(unix))]
     let SshProcess {
         mut output_task,
         input_task,
         resize_handle,
     } = spawn_ssh(&config, &ssh_identity, token_tx).await?;
-    
-    #[cfg(unix)]
-    let input_gate = Arc::new(AtomicBool::new(false));
+
     #[cfg(unix)]
     let resize_task = tokio::spawn(forward_resize_events(resize_handle));
 
-    #[cfg(not(unix))]
-    let input_gate = Arc::new(AtomicBool::new(true));
     #[cfg(not(unix))]
     let resize_task = tokio::spawn(async {});
 
@@ -468,9 +566,9 @@ async fn main() -> Result<()> {
         }
     });
 
-    let mut stdout_result: Option<Result<Result<(), anyhow::Error>, anyhow::Error>> = None;
+    let mut stdout_result = None;
     let mut stdout_task_consumed = false;
-    
+
     #[cfg(unix)]
     let status = match tokio::select! {
         status = child.wait() => {
@@ -506,7 +604,7 @@ async fn main() -> Result<()> {
     #[cfg(not(unix))]
     let status: Option<std::process::ExitStatus> = {
         stdout_task_consumed = true;
-        output_task.await.ok();
+        let _ = output_task.await;
         None
     };
 
@@ -514,7 +612,7 @@ async fn main() -> Result<()> {
     resize_task.abort();
     input_task.abort();
     ws_task.abort();
-    
+
     #[cfg(unix)]
     {
         if !stdout_task_consumed && output_task.is_finished() {
@@ -524,7 +622,7 @@ async fn main() -> Result<()> {
             let _ = output_task.await;
         }
     }
-    
+
     #[cfg(not(unix))]
     {
         let _ = stdout_task_consumed;
@@ -705,7 +803,10 @@ fn ssh_dir() -> Result<PathBuf> {
     #[cfg(not(unix))]
     {
         let home = env::var_os("USERPROFILE").context("USERPROFILE is not set")?;
-        Ok(PathBuf::from(home).join("AppData").join("Local").join("ssh"))
+        Ok(PathBuf::from(home)
+            .join("AppData")
+            .join("Local")
+            .join("ssh"))
     }
 }
 
@@ -1375,12 +1476,12 @@ async fn spawn_ssh(
     _token_tx: oneshot::Sender<String>,
 ) -> Result<SshProcess> {
     use std::process::Command;
-    
+
     let (ssh_program, ssh_args) = config
         .ssh_bin
         .split_first()
         .context("ssh client command is empty")?;
-    
+
     let mut cmd = Command::new(ssh_program);
     cmd.env(CLI_MODE_ENV, "1")
         .args(ssh_args)
@@ -1390,8 +1491,8 @@ async fn spawn_ssh(
         .arg("StrictHostKeyChecking=accept-new")
         .arg(&config.ssh_target);
 
-let _child = cmd.spawn().context("failed to start ssh session")?;
-    
+    let _child = cmd.spawn().context("failed to start ssh session")?;
+
     let output_task = tokio::task::spawn_blocking(move || {
         std::thread::sleep(Duration::from_secs(3600));
         Ok::<(), anyhow::Error>(())
@@ -1432,9 +1533,7 @@ fn terminal_size_or_default() -> (u16, u16) {
 #[cfg(not(unix))]
 fn terminal_size_windows() -> (u16, u16) {
     use std::process::Command;
-    let output = Command::new("cmd")
-        .args(["/c", "mode con"])
-        .output();
+    let output = Command::new("cmd").args(["/c", "mode con"]).output();
     match output {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
@@ -1606,9 +1705,6 @@ fn forward_stdin(mut pty: fs::File, input_gate: Arc<AtomicBool>) -> Result<()> {
     }
     Ok(())
 }
-
-#[cfg(not(unix))]
-
 
 async fn run_viz_ws(
     api_base_url: &str,
@@ -1813,6 +1909,24 @@ mod tests {
             trim_stream_suffix("http://audio.late.sh/"),
             "http://audio.late.sh"
         );
+    }
+
+    #[test]
+    fn find_mp3_sync_offset_finds_frame_after_garbage() {
+        let mut bytes = vec![0x12, 0x34, 0x56, 0x78];
+        bytes.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64, 0x00, 0x00]);
+        assert_eq!(find_mp3_sync_offset(&bytes), Some(4));
+    }
+
+    #[test]
+    fn find_mp3_sync_offset_accepts_id3_header() {
+        assert_eq!(find_mp3_sync_offset(b"ID3\x04\x00\x00"), Some(0));
+    }
+
+    #[test]
+    fn find_mp3_sync_offset_checks_last_possible_offset() {
+        let bytes = [0x00, 0xFF, 0xFB, 0x90];
+        assert_eq!(find_mp3_sync_offset(&bytes), Some(1));
     }
 
     #[test]
