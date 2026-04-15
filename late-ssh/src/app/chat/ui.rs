@@ -47,7 +47,64 @@ pub struct DashboardChatView<'a> {
     pub mention_selected: usize,
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
+    pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+}
+
+/// Shared composer block rendering for both the dashboard card and the chat
+/// page. New composer states (editing, replying, …) wire here once.
+pub(super) struct ComposerBlockView<'a> {
+    pub composer: &'a str,
+    pub composer_rows: &'a [ComposerRow],
+    pub composer_cursor: usize,
+    pub composing: bool,
+    pub cursor_visible: bool,
+    pub reply_author: Option<&'a str>,
+    pub is_editing: bool,
+    pub mention_active: bool,
+    pub mention_matches: &'a [String],
+    pub mention_selected: usize,
+}
+
+pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &ComposerBlockView<'_>) {
+    let composer_title = if view.composing {
+        if let Some(author) = view.reply_author {
+            format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ")
+        } else if view.is_editing {
+            " Edit message (Enter save, Alt+Enter newline, Esc cancel) ".to_string()
+        } else {
+            " Compose (Enter send, Alt+Enter newline, Esc cancel) ".to_string()
+        }
+    } else {
+        " Compose (press i) ".to_string()
+    };
+    let composer_style = if view.composing {
+        Style::default().fg(theme::BORDER_ACTIVE)
+    } else {
+        Style::default().fg(theme::BORDER)
+    };
+    let composer_block = Block::default()
+        .title(composer_title.as_str())
+        .borders(Borders::ALL)
+        .border_style(composer_style);
+    let composer_lines = build_composer_lines_from_rows(
+        view.composer,
+        view.composer_rows,
+        view.composer_cursor,
+        view.composing,
+        view.cursor_visible,
+    );
+    let scroll = composer_cursor_scroll_for_rows(view.composer_rows, view.composer_cursor, 5);
+    frame.render_widget(
+        Paragraph::new(composer_lines)
+            .block(composer_block)
+            .scroll((scroll, 0)),
+        area,
+    );
+
+    if view.mention_active {
+        draw_mention_autocomplete(frame, area, view.mention_matches, view.mention_selected);
+    }
 }
 
 pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
@@ -60,8 +117,6 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
 
     let total_composer_lines = composer_line_count_for_rows(view.composer, view.composer_rows);
     let visible_composer_lines = total_composer_lines.min(5);
-    let dash_composer_scroll =
-        composer_cursor_scroll_for_rows(view.composer_rows, view.composer_cursor, 5);
     let composer_height = visible_composer_lines as u16 + 2;
     let layout = Layout::vertical([
         Constraint::Fill(1),
@@ -101,41 +156,22 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     }
 
     if let Some(area) = composer_area {
-        let composer_title = if view.composing {
-            if let Some(author) = view.reply_author {
-                format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ")
-            } else {
-                " Message (Enter send, Alt+Enter newline, Esc cancel) ".to_string()
-            }
-        } else {
-            " Message (i compose) ".to_string()
-        };
-        let composer_style = if view.composing {
-            Style::default().fg(theme::BORDER_ACTIVE)
-        } else {
-            Style::default().fg(theme::BORDER)
-        };
-        let composer_block = Block::default()
-            .title(composer_title.as_str())
-            .borders(Borders::ALL)
-            .border_style(composer_style);
-        let composer_lines = build_composer_lines_from_rows(
-            view.composer,
-            view.composer_rows,
-            view.composer_cursor,
-            view.composing,
-            view.cursor_visible,
-        );
-        frame.render_widget(
-            Paragraph::new(composer_lines)
-                .block(composer_block)
-                .scroll((dash_composer_scroll, 0)),
+        draw_composer_block(
+            frame,
             area,
+            &ComposerBlockView {
+                composer: view.composer,
+                composer_rows: view.composer_rows,
+                composer_cursor: view.composer_cursor,
+                composing: view.composing,
+                cursor_visible: view.cursor_visible,
+                reply_author: view.reply_author,
+                is_editing: view.is_editing,
+                mention_active: view.mention_active,
+                mention_matches: view.mention_matches,
+                mention_selected: view.mention_selected,
+            },
         );
-
-        if view.mention_active {
-            draw_mention_autocomplete(frame, area, view.mention_matches, view.mention_selected);
-        }
     }
 }
 
@@ -464,6 +500,7 @@ pub struct ChatRenderInput<'a> {
     pub mention_selected: usize,
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
+    pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub news_composer: &'a str,
     pub news_composing: bool,
@@ -829,46 +866,22 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             frame.render_widget(hint_text, composer_area);
         }
     } else {
-        let composer_scroll =
-            composer_cursor_scroll_for_rows(view.composer_rows, view.composer_cursor, 5);
-        let composer_title = if composing {
-            if let Some(author) = view.reply_author {
-                format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ")
-            } else {
-                " Compose (Enter send, Alt+Enter newline, Esc cancel) ".to_string()
-            }
-        } else {
-            " Compose (press i) ".to_string()
-        };
-        let composer_style = if composing {
-            Style::default().fg(theme::BORDER_ACTIVE)
-        } else {
-            Style::default().fg(theme::BORDER)
-        };
-        let composer_block = Block::default()
-            .title(composer_title.as_str())
-            .borders(Borders::ALL)
-            .border_style(composer_style);
-        let composer_lines = build_composer_lines_from_rows(
-            composer,
-            view.composer_rows,
-            view.composer_cursor,
-            composing,
-            view.cursor_visible,
+        draw_composer_block(
+            frame,
+            composer_area,
+            &ComposerBlockView {
+                composer,
+                composer_rows: view.composer_rows,
+                composer_cursor: view.composer_cursor,
+                composing,
+                cursor_visible: view.cursor_visible,
+                reply_author: view.reply_author,
+                is_editing: view.is_editing,
+                mention_active: view.mention_active,
+                mention_matches: view.mention_matches,
+                mention_selected: view.mention_selected,
+            },
         );
-        let composer_paragraph = Paragraph::new(composer_lines)
-            .block(composer_block)
-            .scroll((composer_scroll, 0));
-        frame.render_widget(composer_paragraph, composer_area);
-
-        if view.mention_active {
-            draw_mention_autocomplete(
-                frame,
-                composer_area,
-                view.mention_matches,
-                view.mention_selected,
-            );
-        }
     }
 }
 

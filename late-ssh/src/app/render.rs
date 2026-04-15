@@ -132,6 +132,7 @@ impl App {
                 mention_selected: self.chat.mention_ac.selected,
                 mention_active: self.chat.mention_ac.active,
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
             },
         };
@@ -166,6 +167,7 @@ impl App {
             mention_selected: self.chat.mention_ac.selected,
             mention_active: self.chat.mention_ac.active,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+            is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),

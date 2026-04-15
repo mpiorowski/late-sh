@@ -36,7 +36,6 @@ pub struct ChatSnapshot {
     pub user_id: Option<Uuid>,
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
     pub general_room_id: Option<Uuid>,
-    pub general_messages: Vec<ChatMessage>,
     pub usernames: HashMap<Uuid, String>,
     pub unread_counts: HashMap<Uuid, i64>,
     pub all_usernames: Vec<String>,
@@ -203,6 +202,10 @@ impl ChatService {
         } else {
             Vec::new()
         };
+        // General is the dashboard's permanent room — it must always carry
+        // its tail in the snapshot so the dashboard card stays warm even when
+        // the chat page has another room selected. Other non-selected rooms
+        // ride on broadcasts + a backfill on first open per session.
         let usernames = User::list_all_username_map(client).await?;
         let mut all_usernames: Vec<String> = usernames.values().cloned().collect();
         all_usernames.sort();
@@ -225,6 +228,8 @@ impl ChatService {
             .map(|chat| {
                 let messages = if Some(chat.id) == active_room_id {
                     selected_messages.clone()
+                } else if Some(chat.id) == general_room_id {
+                    general_messages.clone()
                 } else {
                     Vec::new()
                 };
@@ -236,7 +241,6 @@ impl ChatService {
             user_id: Some(user_id),
             chat_rooms: rooms,
             general_room_id,
-            general_messages,
             usernames,
             unread_counts,
             all_usernames,
@@ -475,48 +479,6 @@ impl ChatService {
             .create_mentions_task(user_id, chat.id, room_id, body.to_string());
         tracing::info!(chat_id = %chat.id, "message sent");
         Ok(())
-    }
-
-    pub fn send_to_general_task(&self, user_id: Uuid, body: String) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                if let Err(e) = service.send_to_general(user_id, body).await {
-                    late_core::error_span!(
-                        "chat_send_general_failed",
-                        error = ?e,
-                        "failed to send message to general room"
-                    );
-                }
-            }
-            .instrument(info_span!("chat.send_to_general_task", user_id = %user_id)),
-        );
-    }
-
-    #[tracing::instrument(skip(self, body), fields(user_id = %user_id, body_len = body.len()))]
-    async fn send_to_general(&self, user_id: Uuid, body: String) -> Result<()> {
-        let body = body.trim_start_matches('\n').trim_end();
-        if body.is_empty() {
-            return Ok(());
-        }
-
-        // Block-scope: find the room ID, then drop the client before calling
-        // send_message (which acquires its own).
-        let room_id = {
-            let client = self.db.get().await?;
-            ChatRoom::find_general(&client)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("general room missing"))?
-                .id
-        };
-        self.send_message(
-            user_id,
-            room_id,
-            Some("general".to_string()),
-            body.to_string(),
-            false,
-        )
-        .await
     }
 
     pub fn edit_message_task(

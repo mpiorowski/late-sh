@@ -68,13 +68,80 @@ fn switch_room(app: &mut App, delta: isize) {
     }
 }
 
-pub fn handle_arrow(app: &mut App, key: u8) -> bool {
-    if app.chat.notifications_selected {
-        return super::notifications::input::handle_arrow(app, key);
+/// Shared message-list navigation and actions. Consumed by both the chat page
+/// and the dashboard card so that d/r/e/j/k/etc. behave identically on both
+/// screens and new message actions only need to be wired here.
+///
+/// Returns true if the key was handled.
+pub fn handle_message_action(app: &mut App, byte: u8) -> bool {
+    // `d` deletes and keeps the cursor on the adjacent message so you can
+    // reap a run of your own messages with repeated presses.
+    // `r` enters reply mode and drops the selection.
+    // `e` enters edit mode and drops the selection.
+    match byte {
+        b'd' | b'D' => {
+            if let Some(b) = app.chat.delete_selected_message() {
+                app.banner = Some(b);
+            }
+            return true;
+        }
+        b'r' | b'R' => {
+            app.chat.begin_reply_to_selected();
+            app.chat.clear_message_selection();
+            return true;
+        }
+        b'e' | b'E' => {
+            if let Some(b) = app.chat.begin_edit_selected() {
+                app.banner = Some(b);
+            } else {
+                app.chat.clear_message_selection();
+            }
+            return true;
+        }
+        _ => {}
     }
-    if app.chat.news_selected {
-        return super::news::input::handle_arrow(app, key);
+
+    if !matches!(byte, b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15) {
+        app.chat.clear_message_selection();
     }
+
+    match byte {
+        b'j' | b'J' => {
+            app.chat.select_message(-1);
+            true
+        }
+        b'k' | b'K' => {
+            app.chat.select_message(1);
+            true
+        }
+        0x04 => {
+            // Ctrl-D: half-page down. `select_message` delta is in MESSAGES,
+            // not rows, and chat messages wrap to ~3 rows each, so divide
+            // terminal height by 6 to feel like half a visible page.
+            let step = (app.size.1 / 6).max(1) as isize;
+            app.chat.select_message(-step);
+            true
+        }
+        0x15 => {
+            // Ctrl-U: half-page up. Same rationale as Ctrl-D above.
+            let step = (app.size.1 / 6).max(1) as isize;
+            app.chat.select_message(step);
+            true
+        }
+        b'g' | b'G' => {
+            app.chat.clear_message_selection();
+            true
+        }
+        b'i' | b'I' => {
+            app.chat.start_composing();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Arrow-key message navigation shared between screens.
+pub fn handle_message_arrow(app: &mut App, key: u8) -> bool {
     match key {
         b'A' => {
             app.chat.select_message(1);
@@ -86,6 +153,16 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
         }
         _ => false,
     }
+}
+
+pub fn handle_arrow(app: &mut App, key: u8) -> bool {
+    if app.chat.notifications_selected {
+        return super::notifications::input::handle_arrow(app, key);
+    }
+    if app.chat.news_selected {
+        return super::news::input::handle_arrow(app, key);
+    }
+    handle_message_arrow(app, key)
 }
 
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
@@ -114,45 +191,11 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         return super::news::input::handle_byte(app, byte);
     }
 
-    // `d` deletes and keeps the cursor on the adjacent message so you can
-    // reap a run of your own messages with repeated presses.
-    // `r` enters reply mode and drops the selection.
-    // `e` enters edit mode and drops the selection.
-    match byte {
-        b'd' | b'D' => {
-            if let Some(b) = app.chat.delete_selected_message() {
-                app.banner = Some(b);
-            }
-            return true;
-        }
-        b'r' | b'R' => {
-            app.chat.begin_reply_to_selected();
-            app.chat.clear_message_selection();
-            return true;
-        }
-        b'e' | b'E' => {
-            if let Some(b) = app.chat.begin_edit_selected() {
-                app.banner = Some(b);
-                return true;
-            }
-            app.chat.clear_message_selection();
-        }
-        _ => {}
-    }
-
-    if !matches!(byte, b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15) {
-        app.chat.clear_message_selection();
+    if handle_message_action(app, byte) {
+        return true;
     }
 
     match byte {
-        b'j' | b'J' => {
-            app.chat.select_message(-1);
-            true
-        }
-        b'k' | b'K' => {
-            app.chat.select_message(1);
-            true
-        }
         b if is_next_room_key(b) => {
             switch_room(app, 1);
             true
@@ -161,26 +204,8 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             switch_room(app, -1);
             true
         }
-        b'i' | b'I' | b'\r' | b'\n' => {
+        b'\r' | b'\n' => {
             app.chat.start_composing();
-            true
-        }
-        0x04 => {
-            // Ctrl-D: half-page down. `select_message` delta is in MESSAGES,
-            // not rows, and chat messages wrap to ~3 rows each, so divide
-            // terminal height by 6 to feel like half a visible page.
-            let step = (app.size.1 / 6).max(1) as isize;
-            app.chat.select_message(-step);
-            true
-        }
-        0x15 => {
-            // Ctrl-U: half-page up. Same rationale as Ctrl-D above.
-            let step = (app.size.1 / 6).max(1) as isize;
-            app.chat.select_message(step);
-            true
-        }
-        b'g' | b'G' => {
-            app.chat.clear_message_selection();
             true
         }
         b'c' | b'C' => {

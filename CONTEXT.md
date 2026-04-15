@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-15 (minesweeper chord-reveal on Space over numbered cells + tinted flag/mine backgrounds; nonogram Space no longer clobbers an `x` mark directly)
+- Last updated: 2026-04-15 (chat: message edit wired end-to-end; dashboard #general shares one store with the chat page — `ChatState.general_messages` gone, all member rooms stay warm from broadcasts, mark-as-read gated on active view; message actions unified in `chat::input::handle_message_action`, composer render unified in `chat::ui::draw_composer_block`; news announcements now post via `send_message_task` — `send_to_general_task` deleted; minesweeper chord-reveal on Space; nonogram Space no longer clobbers an `x` mark)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -695,15 +695,16 @@ Currently the SSH app assumes a single process. These in-memory structures would
 5. Failure: If the paired client disconnects, visualizer decays (rms * 0.96 per tick) and paired state disappears. If SSH disconnects, the session token unregisters on drop.
 
 **Chat send flow:**
-1. Trigger: User presses Enter in composer with non-empty text (supports multiline via Alt+Enter)
-2. Processing: `ChatService::send_message_task` spawned with `request_id` → DB insert → `MessageCreated` broadcast → `SendSucceeded` targeted to sender
-3. Side effects: All sessions receive `MessageCreated`, sender gets banner feedback. Messages containing `@username` show a golden `│` gutter on the left for the mentioned user.
-4. Failure: Non-member send → `SendFailed` event with message. DB error → `SendFailed`.
+1. Trigger: User presses Enter in composer with non-empty text (supports multiline via Alt+Enter). If `edited_message_id` is set, the same submit path fires `edit_message_task` instead of `send_message_task`, so edit rides on the composer exactly like a fresh send.
+2. Processing: `ChatService::send_message_task` spawned with `request_id` → DB insert → `MessageCreated` broadcast → `SendSucceeded` targeted to sender. Edits emit `MessageEdited` (full `ChatMessage` payload + real `target_user_ids`) plus a per-sender `EditSucceeded`/`EditFailed` ack.
+3. Side effects: All sessions receive `MessageCreated`/`MessageEdited` and apply the delta to their local `rooms[room_id]` vec (no DB refetch). Messages containing `@username` show a golden `│` gutter on the left for the mentioned user.
+4. Failure: Non-member send → `SendFailed` event with message. DB error → `SendFailed`. Empty edit body → `EditFailed`.
+5. News articles post their "new article" announcement into #general by resolving the general room id inline in `ArticleService` and calling `send_message_task` like any other composer submit — there is no general-specific send wrapper.
 
 **Chat ignore flow:**
 1. Trigger: User submits `/ignore @user` or `/unignore @user` in the composer
 2. Processing: `ChatService::ignore_user_task` / `unignore_user_task` resolves the username via `User::find_by_username`, then calls `User::add_ignored_user_id` / `remove_ignored_user_id` (settings JSONB write keyed on `target.id`, not the username string)
-3. Side effects: Service emits `ChatEvent::IgnoreListUpdated { user_id, ignored_user_ids, message }`. `ChatState` updates its local `HashSet<Uuid>`, calls `refilter_local_messages()` to drop already-stored messages from any newly-ignored author from `general_messages` and every non-DM room in place (no DB refetch), and shows a success banner.
+3. Side effects: Service emits `ChatEvent::IgnoreListUpdated { user_id, ignored_user_ids, message }`. `ChatState` updates its local `HashSet<Uuid>`, calls `refilter_local_messages()` to drop already-stored messages from any newly-ignored author across every non-DM room in place (no DB refetch), and shows a success banner.
 4. Exemptions: DM rooms are never filtered — leaving the DM room is the way to dismiss it. `push_message` skips the ignore check for DM rooms so 1:1 messages always land.
 5. Display path: `ChatState::ignore_list_lines()` resolves stored UUIDs back to `@username` via the snapshot's full `usernames` map (`User::list_all_username_map`), falling back to `@<unknown:…>` when a user isn't in the cache.
 6. Failure: `IgnoreFailed { user_id, message }` for self-target, unknown username, already-ignored, or not-currently-ignored — surfaced as a red banner.
@@ -736,17 +737,18 @@ Currently the SSH app assumes a single process. These in-memory structures would
 ### 8.4 Easy-to-break gotchas
 
 - **Ignore is keyed by user id, not username:** `users.settings.ignored_user_ids` stores UUIDs, so a `/ignore @alice` survives @alice renaming herself to @alice2. Storing usernames there would silently break on rename and could re-attach a stale ignore to a different person if usernames are ever reused.
-- **Ignore re-filter is local-only:** `ChatEvent::IgnoreListUpdated` triggers an in-place retain over `general_messages` and every non-DM room — no `request_list()` refetch. Side effect: `unignore` does **not** retroactively re-fetch already-dropped messages; they reappear on the next natural snapshot/refresh.
+- **Ignore re-filter is local-only:** `ChatEvent::IgnoreListUpdated` triggers an in-place retain across every non-DM room — no `request_list()` refetch. Side effect: `unignore` does **not** retroactively re-fetch already-dropped messages; they reappear on the next natural snapshot/refresh.
+- **Dashboard shares one chat store with the chat page:** #general lives inside `ChatState.rooms` like every other room; the dashboard card just looks it up by `general_room_id`. There is no parallel `general_messages` vec. Every member-room stays warm from broadcasts regardless of selection — `push_message` only gates the "mark-as-read" side effect on whether the user is actually viewing the room. Wire new message actions *once* in three places and they work on both dashboard and chat page automatically: (a) `chat::input::handle_message_action` for the keybinding, (b) the shared `ChatState` helpers (`find_message`, `replace_message`, `remove_message`, etc.) for state mutation, (c) `chat::ui::draw_composer_block` / `ComposerBlockView` for any new composer state label (reply, edit, …). The dashboard input delegates to `handle_message_action` after pinning general as the selected room, so it only keeps its own bindings for genuinely dashboard-specific keys (Enter copies the CLI install command).
 - **Snapshot merge for empty rooms:** `ChatState::merge_rooms` preserves cached messages when snapshot arrives with empty message list for a room - prevents flash-clear on out-of-order snapshots
 - **Unread count merge:** `merge_unread_counts` tracks `pending_read_rooms` to suppress stale unread counts after marking read (avoids flicker)
 - **Render loop missed ticks:** 66ms interval with `MissedTickBehavior::Skip` - if a frame takes too long, next ticks are skipped rather than queued (prevents snowball lag)
 - **SSH data timeout:** `handle.data` has 50ms timeout to avoid blocking render loop on backpressure
 - **SSH send failure is terminal for render task:** if `handle.data` returns `Err` (closed/broken channel), `render_once` now returns an error so the render loop stops and closes channel once, instead of logging warnings every 66ms forever
 - **Message ordering:** Full history is `ORDER BY created DESC, id DESC` (newest first), delta sync is `(created, id) > cursor ASC` - mixing these up breaks chat display. Chat rendering reverses messages to oldest-first for row-based display, with newest at the bottom.
-- **Chat message navigation is selection-first:** `selected_message_id` is the source of truth for dashboard/general chat and the full chat screen. Mouse wheel, arrows, paging, and `j/k` all move selection; when no message is selected, the viewport falls back to newest-at-bottom.
+- **Chat message navigation is selection-first:** `selected_message_id` is the source of truth on both the dashboard general card and the chat screen (they share one storage). Mouse wheel, arrows, paging, and `j/k` all move selection; when no message is selected, the viewport falls back to newest-at-bottom.
 - **Chat wrapping is word-aware:** Shared wrapping prefers breaking on whitespace for regular messages, reply quote lines, news-card text, and the composer. Hard splits are only valid for single words longer than the available width.
 - **Chat room list order is UI-defined:** The chat sidebar order is hardcoded as `core` (`general`, `announcements`, `suggestions`, any other permanent rooms, then synthetic `news`) → `public` → `private` → `dm`, with divider rows rendered in the UI. Here, "private" is a UI/product label for non-auto-join rooms (`auto_join = false`), not necessarily DB `visibility = 'private'`. The synthetic `news` row now carries its own unread badge sourced from `article_feed_reads`, not `chat_room_members`.
-- **Transcript render cost is cache-sensitive:** `late-ssh` fetches up to 1000 messages for the selected room and up to 1000 for general. The chat UI therefore caches wrapped transcript rows for the dashboard general card and the active room; invalidation must track width, message content/order, usernames, badges, and bonsai glyphs.
+- **Transcript render cost is cache-sensitive:** every member room keeps a warm tail (broadcast-driven, hard-capped at 1000 messages per room). The chat UI caches wrapped transcript rows for the dashboard general card and the active room; invalidation must track width, message content/order, usernames, badges, and bonsai glyphs. Only the selected room and general are fetched from DB on snapshot refresh — other rooms warm up from broadcasts and pull a one-shot backfill via `request_list` on first open per session.
 - **Composer render cost is cache-sensitive:** The chat composer caches wrapped `ComposerRow`s in `ChatState`; any change to composer text or width must invalidate that cache before render/cursor-up/down.
 - **Icon picker is chat-composer-only:** `Ctrl+]` (byte `0x1D`) opens `app::icon_picker` as a modal overlay, lazy-loads the catalog on first open (two sections each for Emoji and Nerd Font — no Unicode tab, no `unicode_names2` dep), and auto-starts `ChatState::start_composing` if the user isn't already composing. Selected icons are only ever pushed into `app.chat.composer`; Profile and news composers are intentionally not targets. The picker intercepts all input via an early return in `handle_parsed_input`, so while it is open nothing else on screen receives keys.
 - **@mention detection:** Uses simple `@username` substring match in message body. The `all_usernames` field on `ChatSnapshot` is loaded from profiles DB every refresh (10s) via `User::list_all_usernames` — includes all users, not just online ones.
@@ -943,7 +945,9 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
 | `s` | Dashboard | Copy bonsai ASCII snippet to clipboard |
 | `j` / `k` / arrows | Dashboard | Scroll chat |
-| `r` | Dashboard chat selection | Reply to selected dashboard/general chat message |
+| `r` | Dashboard chat selection | Reply to selected general chat message |
+| `e` | Dashboard / Chat (own message selected) | Edit selected message — same composer, different title |
+| `d` | Dashboard / Chat (own message selected) | Delete selected message |
 | `Enter` | Games lobby | Launch selected game |
 | `Esc` | Active game | Exit back to Arcade lobby |
 | `h` / `j` / `k` / `l` / arrows | 2048 | Move tiles |

@@ -234,12 +234,6 @@ async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() 
 
     assert_eq!(snapshot.user_id, Some(target_user.id));
     assert_eq!(snapshot.general_room_id, Some(general_room.id));
-    assert!(
-        snapshot
-            .general_messages
-            .iter()
-            .any(|m| m.id == general_message.id)
-    );
     assert_eq!(
         snapshot.usernames.get(&author_user.id).map(String::as_str),
         Some("author")
@@ -255,12 +249,19 @@ async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() 
         .expect("selected room present");
     assert!(selected_room.1.iter().any(|m| m.id == lang_message.id));
 
-    let non_selected_room = snapshot
+    // General always ships with its tail populated, even when another room is
+    // selected — the dashboard card depends on this to stay warm.
+    let general_in_snapshot = snapshot
         .chat_rooms
         .iter()
         .find(|(room, _)| room.id == general_room.id)
         .expect("general room present");
-    assert!(non_selected_room.1.is_empty());
+    assert!(
+        general_in_snapshot
+            .1
+            .iter()
+            .any(|m| m.id == general_message.id)
+    );
 }
 
 #[tokio::test]

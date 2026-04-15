@@ -7,6 +7,7 @@ use late_core::{
         article::{Article, ArticleParams},
         article_feed_read::ArticleFeedRead,
         chat_message::ChatMessage,
+        chat_room::ChatRoom,
         user::User,
     },
     telemetry::TracedExt,
@@ -372,8 +373,23 @@ impl ArticleService {
             .await?;
         }
 
-        self.chat_service
-            .send_to_general_task(user_id, announcement);
+        // Post the announcement into #general via the same send path as any
+        // other message. No special-case task needed — resolve the room id
+        // here and call send_message_task like a normal composer submit.
+        let general_room_id = {
+            let client = self.db.get().await?;
+            ChatRoom::find_general(&client).await?.map(|room| room.id)
+        };
+        if let Some(room_id) = general_room_id {
+            self.chat_service.send_message_task(
+                user_id,
+                room_id,
+                Some("general".to_string()),
+                announcement,
+                Uuid::now_v7(),
+                false,
+            );
+        }
 
         // Refresh the shared feed snapshot immediately so clients see the new item
         // without waiting for the periodic poll tick.

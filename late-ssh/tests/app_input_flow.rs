@@ -24,7 +24,7 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
     app.handle_input(b"i");
     wait_for_render_contains(
         &mut app,
-        "Message (Enter send, Alt+Enter newline, Esc cancel)",
+        "Compose (Enter send, Alt+Enter newline, Esc cancel)",
     )
     .await;
 

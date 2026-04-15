@@ -647,7 +647,10 @@ pub fn sanitize_paste_markers(s: &str) -> String {
 
 fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
     match screen {
-        Screen::Dashboard => app.chat.select_dashboard_message(delta),
+        Screen::Dashboard => {
+            app.chat.select_general_room();
+            chat::input::handle_scroll(app, delta);
+        }
         Screen::Chat => chat::input::handle_scroll(app, delta),
         _ => {}
     }
