@@ -191,12 +191,16 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
         CELL_FLAGGED => (
             " F ".to_string(),
             Style::default()
-                .fg(theme::AMBER_GLOW)
+                .fg(Color::Rgb(20, 16, 10))
+                .bg(theme::AMBER_GLOW)
                 .add_modifier(Modifier::BOLD),
         ),
         CELL_MINE_HIT => (
             " * ".to_string(),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Rgb(30, 10, 10))
+                .bg(Color::Rgb(180, 56, 48))
+                .add_modifier(Modifier::BOLD),
         ),
         _ => (
             " \u{00b7} ".to_string(),

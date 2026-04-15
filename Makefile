@@ -7,7 +7,7 @@ RUST_LOG ?= info,late_web=debug,late_ssh=debug,late_core=debug
 CARGO_TARGET_DIR ?= /app/target
 
 # --- SSH ---
-LATE_FORCE_ADMIN ?= 1
+LATE_FORCE_ADMIN ?= 0
 LATE_SSH_PORT ?= 2222                                       # SSH server listen port
 LATE_API_PORT ?= 4000                                       # HTTP API listen port
 LATE_SSH_OPEN ?= 1                                          # Allow connections without auth (1=open, 0=require key)

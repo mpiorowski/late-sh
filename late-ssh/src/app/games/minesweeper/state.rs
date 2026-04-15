@@ -247,8 +247,13 @@ impl State {
             return;
         }
         match self.player_grid[row][col] {
-            CELL_REVEALED | CELL_MINE_HIT => return,
-            CELL_FLAGGED => return,
+            CELL_REVEALED => {
+                self.chord_reveal(row, col, &diff);
+                self.store_active_snapshot();
+                self.save_async();
+                return;
+            }
+            CELL_MINE_HIT | CELL_FLAGGED => return,
             _ => {}
         }
 
@@ -279,6 +284,52 @@ impl State {
 
         self.store_active_snapshot();
         self.save_async();
+    }
+
+    fn chord_reveal(&mut self, row: usize, col: usize, diff: &DifficultyConfig) {
+        let number = adjacent_mine_count(&self.mine_map, row, col);
+        if number == 0 {
+            return;
+        }
+
+        let mut neighbors = Vec::with_capacity(8);
+        for dr in -1..=1i32 {
+            for dc in -1..=1i32 {
+                if dr == 0 && dc == 0 {
+                    continue;
+                }
+                let r = row as i32 + dr;
+                let c = col as i32 + dc;
+                if r < 0 || r >= diff.rows as i32 || c < 0 || c >= diff.cols as i32 {
+                    continue;
+                }
+                neighbors.push((r as usize, c as usize));
+            }
+        }
+
+        for (r, c) in neighbors {
+            if self.player_grid[r][c] != CELL_HIDDEN {
+                continue;
+            }
+            if self.mine_map[r][c] {
+                self.player_grid[r][c] = CELL_MINE_HIT;
+                self.lives = self.lives.saturating_sub(1);
+                if self.lives == 0 {
+                    self.is_game_over = true;
+                    for rr in 0..diff.rows {
+                        for cc in 0..diff.cols {
+                            if self.mine_map[rr][cc] && self.player_grid[rr][cc] == CELL_HIDDEN {
+                                self.player_grid[rr][cc] = CELL_MINE_HIT;
+                            }
+                        }
+                    }
+                    return;
+                }
+            } else {
+                flood_reveal(&self.mine_map, &mut self.player_grid, r, c);
+            }
+        }
+        self.check_win();
     }
 
     pub fn toggle_flag(&mut self) {

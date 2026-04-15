@@ -64,8 +64,11 @@ If you'd rather not use your real key:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway
-late --ssh-bin "ssh -i ~/.ssh/late_throwaway"
+late --ssh-bin "ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway"
 ```
+
+`IdentitiesOnly=yes` stops ssh-agent from offering other keys first — without it
+you may land on a different account depending on what's loaded in your agent.
 
 ## License
 

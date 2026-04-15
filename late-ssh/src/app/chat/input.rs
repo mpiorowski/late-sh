@@ -115,8 +115,9 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     }
 
     // `d` deletes and keeps the cursor on the adjacent message so you can
-    // reap a run of your own messages with repeated presses. `r` enters
-    // reply mode and drops the selection.
+    // reap a run of your own messages with repeated presses.
+    // `r` enters reply mode and drops the selection.
+    // `e` enters edit mode and drops the selection.
     match byte {
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message() {
@@ -128,6 +129,13 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             app.chat.begin_reply_to_selected();
             app.chat.clear_message_selection();
             return true;
+        }
+        b'e' | b'E' => {
+            if let Some(b) = app.chat.begin_edit_selected() {
+                app.banner = Some(b);
+                return true;
+            }
+            app.chat.clear_message_selection();
         }
         _ => {}
     }

@@ -61,6 +61,16 @@ mod inner {
         })
     }
 
+    fn chat_messages_edited_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_chat_messages_edited_total")
+                .with_description("Chat messages successfully edited")
+                .build()
+        })
+    }
+
     fn votes_cast_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -91,6 +101,10 @@ mod inner {
         chat_messages_sent_total().add(1, &[]);
     }
 
+    pub fn record_chat_message_edited() {
+        chat_messages_edited_total().add(1, &[]);
+    }
+
     pub fn record_vote_cast(genre: &str) {
         votes_cast_total().add(1, &[KeyValue::new("genre", genre.to_string())]);
     }
@@ -103,6 +117,7 @@ mod inner {
     pub fn record_ws_pair_success() {}
     pub fn record_render_frame_drop() {}
     pub fn record_chat_message_sent() {}
+    pub fn record_chat_message_edited() {}
     pub fn record_vote_cast(_genre: &str) {}
 }
 

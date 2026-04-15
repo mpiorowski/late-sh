@@ -64,6 +64,7 @@ pub struct ChatState {
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
     pub(crate) selected_message_id: Option<Uuid>,
     pub(crate) highlighted_message_id: Option<Uuid>,
+    pub(crate) edited_message_id: Option<Uuid>,
     pub(crate) reply_target: Option<ReplyTarget>,
     bg_task: tokio::task::AbortHandle,
 
@@ -138,6 +139,7 @@ impl ChatState {
             bonsai_glyphs: HashMap::new(),
             selected_message_id: None,
             highlighted_message_id: None,
+            edited_message_id: None,
             reply_target: None,
             bg_task,
             composer_text_width: 80,
@@ -304,6 +306,37 @@ impl ChatState {
         self.composing = true;
         self.composer_cursor = self.composer.chars().count();
         true
+    }
+
+    pub fn begin_edit_selected(&mut self) -> Option<Banner> {
+        let selected_id = self.selected_message_id?;
+        // Find the message in general messages or in the selected room
+        let msg_user_id = self
+            .general_messages
+            .iter()
+            .find(|m| m.id == selected_id)
+            .or_else(|| {
+                self.rooms
+                    .iter()
+                    .flat_map(|(_, msgs)| msgs.iter())
+                    .find(|m| m.id == selected_id)
+            })
+            .map(|m| m.user_id)?;
+        let is_own = msg_user_id == self.user_id;
+        if !is_own && !self.is_admin {
+            return Some(Banner::error("Can only edit your own messages"));
+        }
+        let Some(message) = self.selected_message() else {
+            return Some(Banner::error("Selected message not found"));
+        };
+        let msg = message.clone();
+        self.edited_message_id = Some(message.id);
+        self.composer.clear();
+        self.composer.push_str(&msg.body);
+        self.composing = true;
+        self.composer_cursor = self.composer.chars().count();
+        self.invalidate_composer_layout();
+        None
     }
 
     pub(crate) fn reply_target(&self) -> Option<&ReplyTarget> {
@@ -519,6 +552,7 @@ impl ChatState {
         self.composer_cursor = 0;
         self.composing = false;
         self.reply_target = None;
+        self.edited_message_id = None;
         self.invalidate_composer_layout();
     }
 
@@ -660,14 +694,24 @@ impl ChatState {
             } else {
                 body
             };
-            self.service.send_message_task(
-                self.user_id,
-                room_id,
-                self.selected_room_slug(),
-                body,
-                request_id,
-                self.is_admin,
-            );
+            if let Some(message_id) = self.edited_message_id {
+                self.service.edit_message_task(
+                    self.user_id,
+                    message_id,
+                    body,
+                    request_id,
+                    self.is_admin,
+                );
+            } else {
+                self.service.send_message_task(
+                    self.user_id,
+                    room_id,
+                    self.selected_room_slug(),
+                    body,
+                    request_id,
+                    self.is_admin,
+                );
+            }
             self.pending_send_notices.push_back(request_id);
         }
         self.clear_composer_after_submit();

@@ -246,6 +246,7 @@ impl State {
 
         self.player_grid[row][col] = match self.player_grid[row][col] {
             CELL_FILLED => CELL_EMPTY,
+            CELL_MARKED_EMPTY => return,
             _ => CELL_FILLED,
         };
         self.after_edit();

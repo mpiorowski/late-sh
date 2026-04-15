@@ -509,17 +509,17 @@
     </div>
 
     <div class="stagger stagger-5 mb-14">
-        <button @click="copy('ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -i ~/.ssh/late_throwaway late.sh')"
+        <button @click="copy('ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway late.sh')"
             class="group w-full text-left border border-gray-800 hover:border-green-950 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
             <div class="flex items-center justify-between gap-4">
                 <span class="text-xs text-gray-300 min-w-0 truncate">
                     <span class="text-gray-600">$ </span>
-                    <span class="text-gray-100">ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -i ~/.ssh/late_throwaway late.sh</span>
+                    <span class="text-gray-100">ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway late.sh</span>
                 </span>
                 <span class="shrink-0 text-right text-xs">
-                    <span x-cloak x-show="copied !== 'ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -i ~/.ssh/late_throwaway late.sh'"
+                    <span x-cloak x-show="copied !== 'ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway late.sh'"
                         class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
-                    <span x-cloak x-show="copied === 'ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -i ~/.ssh/late_throwaway late.sh'"
+                    <span x-cloak x-show="copied === 'ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway late.sh'"
                         class="text-green-600">copied</span>
                 </span>
             </div>

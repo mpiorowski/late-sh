@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-15 (/active and /list chat composer commands added; /list is for non-auto-join "private" rooms)
+- Last updated: 2026-04-15 (minesweeper chord-reveal on Space over numbered cells + tinted flag/mine backgrounds; nonogram Space no longer clobbers an `x` mark directly)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
