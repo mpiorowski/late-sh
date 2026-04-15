@@ -133,6 +133,7 @@ pub struct App {
     pub(crate) show_welcome: bool,
     pub(crate) show_splash: bool,
     pub(crate) splash_ticks: usize,
+    pub(crate) splash_hint: String,
     pub(crate) show_help: bool,
     pub(crate) help_scroll: u16,
     pub(crate) pending_escape: bool,
@@ -161,6 +162,8 @@ pub struct App {
     pub(super) activity: VecDeque<ActivityEvent>,
     pub(crate) user_id: Uuid,
     pub(crate) is_admin: bool,
+    #[allow(dead_code)]
+    pub(crate) is_new_user: bool,
 
     /// Voting
     pub(crate) vote: vote::state::VoteState,
@@ -216,6 +219,13 @@ impl App {
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.show_welcome = false;
+    }
+
+    pub fn show_splash_for_tests(&mut self, hint: impl Into<String>) {
+        self.show_splash = true;
+        self.show_welcome = false;
+        self.splash_ticks = 1;
+        self.splash_hint = hint.into();
     }
 
     pub fn new(config: SessionConfig) -> anyhow::Result<Self> {
@@ -337,6 +347,7 @@ impl App {
         };
 
         let active_users = config.active_users.clone();
+        let splash_hint = super::splash_tips::choose_splash_hint(config.is_new_user);
 
         Ok(Self {
             running: true,
@@ -346,6 +357,7 @@ impl App {
             show_welcome: true,
             show_splash: true,
             splash_ticks: 0,
+            splash_hint,
             show_help: false,
             help_scroll: 0,
             pending_escape: false,
@@ -370,6 +382,7 @@ impl App {
             activity: VecDeque::new(),
             user_id: config.user_id,
             is_admin: config.is_admin,
+            is_new_user: config.is_new_user,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
                 config.chat_service,

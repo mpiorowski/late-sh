@@ -74,6 +74,7 @@ struct DrawContext<'a> {
     help_scroll: u16,
     show_splash: bool,
     splash_ticks: usize,
+    splash_hint: &'a str,
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
     is_draining: bool,
@@ -239,6 +240,7 @@ impl App {
                         help_scroll: self.help_scroll,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
+                        splash_hint: &self.splash_hint,
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
@@ -361,6 +363,17 @@ impl App {
             .split(area);
 
             frame.render_widget(p, layout[1]);
+            let splash_bottom = layout[1].bottom();
+            let hint_y = splash_bottom + ((area.bottom().saturating_sub(splash_bottom) * 3) / 4);
+            if hint_y < area.bottom() {
+                let hint_area = Rect::new(area.x, hint_y, area.width, 1);
+                let hint = ratatui::text::Line::from(ratatui::text::Span::styled(
+                    ctx.splash_hint,
+                    Style::default().fg(theme::BORDER),
+                ));
+                let hint_paragraph = ratatui::widgets::Paragraph::new(hint).centered();
+                frame.render_widget(hint_paragraph, hint_area);
+            }
             return;
         }
 
