@@ -648,8 +648,9 @@ pub fn sanitize_paste_markers(s: &str) -> String {
 fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
     match screen {
         Screen::Dashboard => {
-            app.chat.select_general_room();
-            chat::input::handle_scroll(app, delta);
+            if let Some(room_id) = app.chat.general_room_id() {
+                chat::input::handle_scroll_in_room(app, room_id, delta);
+            }
         }
         Screen::Chat => chat::input::handle_scroll(app, delta),
         _ => {}

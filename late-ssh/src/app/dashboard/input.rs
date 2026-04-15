@@ -1,11 +1,10 @@
 use crate::app::{chat, state::App, vote};
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
-    // The dashboard card always shows #general, so treat cursor movement as
-    // if general is the active room. Delegation to the shared chat helper
-    // means new message-nav behaviors land once.
-    app.chat.select_general_room();
-    chat::input::handle_message_arrow(app, key)
+    let Some(room_id) = app.chat.general_room_id() else {
+        return false;
+    };
+    chat::input::handle_message_arrow_in_room(app, room_id, key)
 }
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
@@ -24,9 +23,8 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    // Every message action (d/r/e/j/k/g/i/Ctrl-D/Ctrl-U) lives in the shared
-    // chat helper. Pin general as the active room first so the cursor and
-    // actions operate on the dashboard feed.
-    app.chat.select_general_room();
-    chat::input::handle_message_action(app, byte)
+    let Some(room_id) = app.chat.general_room_id() else {
+        return false;
+    };
+    chat::input::handle_message_action_in_room(app, room_id, byte)
 }
