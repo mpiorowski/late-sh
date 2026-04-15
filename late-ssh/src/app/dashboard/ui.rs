@@ -29,7 +29,10 @@ pub struct DashboardRenderInput<'a> {
 }
 
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
-    if area.width < 52 || area.height < 16 {
+    const DASHBOARD_MIN_WIDTH: u16 = 24;
+    const DASHBOARD_SPLIT_TOP_MIN_WIDTH: u16 = 49;
+
+    if area.width < DASHBOARD_MIN_WIDTH || area.height < 16 {
         let compact = Paragraph::new("Dashboard view too small.")
             .style(Style::default().fg(theme::TEXT_DIM))
             .centered();
@@ -47,15 +50,26 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         leading_genre: view.vote_counts.winner_or(view.current_genre),
         next_switch_in: view.next_switch_in,
     };
-    draw_stream_card(frame, top[0], &stream_props);
-    draw_vote_card(
-        frame,
-        top[1],
-        &VoteCardView {
-            vote_counts: view.vote_counts,
-            my_vote: view.my_vote,
-        },
-    );
+    if area.width >= DASHBOARD_SPLIT_TOP_MIN_WIDTH {
+        draw_stream_card(frame, top[0], &stream_props);
+        draw_vote_card(
+            frame,
+            top[1],
+            &VoteCardView {
+                vote_counts: view.vote_counts,
+                my_vote: view.my_vote,
+            },
+        );
+    } else {
+        draw_vote_card(
+            frame,
+            sections[0],
+            &VoteCardView {
+                vote_counts: view.vote_counts,
+                my_vote: view.my_vote,
+            },
+        );
+    }
 
     draw_dashboard_chat_card(frame, sections[1], view.chat_view);
 }
@@ -81,7 +95,21 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
         ..inner
     };
 
-    let lines = vec![
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let lines = if inner.width <= 31 {
+        compact_stream_lines(inner.width as usize, inner.height as usize)
+    } else {
+        stream_detail_lines(props)
+    };
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+fn stream_detail_lines<'a>(props: &'a StreamCardProps<'a>) -> Vec<Line<'a>> {
+    vec![
         Line::from(vec![
             Span::styled("CLI:     ", Style::default().fg(theme::TEXT_DIM)),
             Span::styled(
@@ -123,7 +151,98 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
                 Style::default().fg(theme::TEXT),
             ),
         ]),
-    ];
+    ]
+}
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+fn compact_stream_lines(width: usize, max_rows: usize) -> Vec<Line<'static>> {
+    let install_label = if width >= 20 { "Enter" } else { "⏎" };
+    let install_gap = 1;
+    let install_desc = if width >= 24 {
+        "Copy CLI Install Command"
+    } else {
+        "Copy Install Command"
+    };
+    let browser_gap = if width >= 20 { 5 } else { 1 };
+    let mut lines = wrapped_action_lines(install_label, install_gap, install_desc, width);
+    let browser_lines = wrapped_action_lines("P", browser_gap, "Copy Browser Music URL", width);
+
+    if lines.len() + browser_lines.len() < max_rows {
+        lines.push(Line::raw(""));
+    }
+    lines.extend(browser_lines);
+
+    while lines.len() < max_rows {
+        lines.push(Line::raw(""));
+    }
+    lines.truncate(max_rows);
+    lines
+}
+
+fn wrapped_action_lines(
+    key: &str,
+    gap: usize,
+    description: &str,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let prefix = format!("{key}{}", " ".repeat(gap));
+    let indent = " ".repeat(prefix.chars().count());
+    let wrapped = wrap_with_indent(description, width, prefix.chars().count());
+    let mut lines = Vec::with_capacity(wrapped.len());
+
+    for (index, chunk) in wrapped.into_iter().enumerate() {
+        if index == 0 {
+            lines.push(Line::from(vec![
+                Span::styled(prefix.clone(), Style::default().fg(theme::AMBER)),
+                Span::styled(chunk, Style::default().fg(theme::TEXT_DIM)),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("{indent}{chunk}"),
+                Style::default().fg(theme::TEXT_DIM),
+            )));
+        }
+    }
+
+    lines
+}
+
+fn wrap_with_indent(text: &str, width: usize, indent_width: usize) -> Vec<String> {
+    let first_width = width.saturating_sub(indent_width).max(1);
+    let next_width = first_width;
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut line_width = first_width;
+
+    for word in text.split_whitespace() {
+        let needed = if current.is_empty() {
+            word.len()
+        } else {
+            current.len() + 1 + word.len()
+        };
+        if needed <= line_width {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+            continue;
+        }
+
+        if current.is_empty() {
+            lines.push(word.to_string());
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+        line_width = next_width;
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines
 }

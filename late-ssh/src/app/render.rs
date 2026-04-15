@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::Style,
-    widgets::{Block, Borders, Clear},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use late_core::models::leaderboard::LeaderboardData;
@@ -307,6 +307,20 @@ impl App {
     }
 
     fn draw(frame: &mut Frame, area: Rect, screen: Screen, ctx: DrawContext<'_>) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        if area.width < 4 || area.height < 4 {
+            frame.render_widget(
+                Paragraph::new("Too small")
+                    .style(Style::default().fg(theme::TEXT_DIM))
+                    .centered(),
+                area,
+            );
+            return;
+        }
+
         if ctx.show_splash {
             let msg = "take a break, grab a coffee";
             // Animate typing the message (1 char per tick instead of 1 char per 2 ticks)

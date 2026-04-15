@@ -410,6 +410,10 @@ impl App {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
+        if cols == 0 || rows == 0 {
+            tracing::debug!(cols, rows, "ignoring zero-sized resize");
+            return Ok(());
+        }
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
         self.terminal.resize(Rect::new(0, 0, cols, rows))
