@@ -282,3 +282,136 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn chat_edit_mode_updates_selected_own_message_without_creating_new_row() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "chat-edit-owner").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    let original = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: user.id,
+            body: "draft body".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+    let mut app = make_app(test_db.db.clone(), user.id, "chat-edit-flow-it");
+
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+
+    app.handle_input(b"je");
+    wait_for_render_contains(
+        &mut app,
+        "Edit Message (Enter save, Alt+Enter newline, Esc cancel)",
+    )
+    .await;
+
+    app.handle_input(b" updated\r");
+    wait_until(
+        || async {
+            ChatMessage::get(&client, original.id)
+                .await
+                .expect("get message")
+                .is_some_and(|message| message.body == "draft body updated")
+        },
+        "message edit to persist",
+    )
+    .await;
+
+    let messages = ChatMessage::list_recent(&client, general.id, 20)
+        .await
+        .expect("list recent messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, original.id);
+
+    wait_for_render_contains(&mut app, "draft body updated").await;
+    wait_for_render_contains(&mut app, "· edited").await;
+}
+
+#[tokio::test]
+async fn chat_edit_mode_escape_clears_but_keeps_focus_until_second_escape() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "chat-edit-esc").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: user.id,
+            body: "escape target".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+    let mut app = make_app(test_db.db.clone(), user.id, "chat-edit-esc-flow-it");
+
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+
+    app.handle_input(b"je");
+    wait_for_render_contains(
+        &mut app,
+        "Edit Message (Enter save, Alt+Enter newline, Esc cancel)",
+    )
+    .await;
+
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(
+        &mut app,
+        "Compose (Enter send, Alt+Enter newline, Esc cancel)",
+    )
+    .await;
+
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "Compose (press i)").await;
+}
+
+#[tokio::test]
+async fn chat_edit_mode_does_not_start_for_other_users_message() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "chat-edit-viewer").await;
+    let author = create_test_user(&test_db.db, "chat-edit-author").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general.id, author.id)
+        .await
+        .expect("join author");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: author.id,
+            body: "not yours".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+    let mut app = make_app(test_db.db.clone(), viewer.id, "chat-edit-other-flow-it");
+
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+
+    app.handle_input(b"je");
+    wait_for_render_contains(&mut app, "Compose (press i)").await;
+}

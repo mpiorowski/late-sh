@@ -30,6 +30,11 @@ pub(crate) struct ReplyTarget {
     pub preview: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EditTarget {
+    pub message_id: Uuid,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
@@ -65,6 +70,7 @@ pub struct ChatState {
     pub(crate) selected_message_id: Option<Uuid>,
     pub(crate) highlighted_message_id: Option<Uuid>,
     pub(crate) reply_target: Option<ReplyTarget>,
+    pub(crate) edit_target: Option<EditTarget>,
     bg_task: tokio::task::AbortHandle,
 
     /// Width (in chars) available for composer text, updated each render.
@@ -139,6 +145,7 @@ impl ChatState {
             selected_message_id: None,
             highlighted_message_id: None,
             reply_target: None,
+            edit_target: None,
             bg_task,
             composer_text_width: 80,
             composer_rows: Vec::new(),
@@ -185,6 +192,7 @@ impl ChatState {
         self.composer_cursor = self.composer.chars().count();
         self.selected_message_id = None;
         self.reply_target = None;
+        self.edit_target = None;
     }
 
     pub fn request_list(&self) {
@@ -301,6 +309,7 @@ impl ChatState {
             author,
             preview: reply_preview_text(&message.body),
         });
+        self.edit_target = None;
         self.composing = true;
         self.composer_cursor = self.composer.chars().count();
         true
@@ -308,6 +317,30 @@ impl ChatState {
 
     pub(crate) fn reply_target(&self) -> Option<&ReplyTarget> {
         self.reply_target.as_ref()
+    }
+
+    pub fn begin_edit_selected(&mut self) -> bool {
+        let Some(message) = self.selected_message() else {
+            return false;
+        };
+        if message.user_id != self.user_id {
+            return false;
+        }
+        let message_id = message.id;
+        let body = message.body.clone();
+        self.composer = body;
+        self.composer_cursor = self.composer.chars().count();
+        self.composing = true;
+        self.reply_target = None;
+        self.edit_target = Some(EditTarget { message_id });
+        self.mention_ac = MentionAutocomplete::default();
+        self.invalidate_composer_layout();
+        self.update_autocomplete();
+        true
+    }
+
+    pub(crate) fn is_editing(&self) -> bool {
+        self.edit_target.is_some()
     }
 
     /// Delete the selected message if owned by user (or if admin).
@@ -512,6 +545,20 @@ impl ChatState {
         self.composing = false;
         self.composer_cursor = self.composer.chars().count();
         self.reply_target = None;
+        self.edit_target = None;
+        self.mention_ac = MentionAutocomplete::default();
+    }
+
+    pub fn cancel_edit_mode(&mut self) {
+        if self.edit_target.is_none() {
+            return;
+        }
+        self.composer.clear();
+        self.composer_cursor = 0;
+        self.reply_target = None;
+        self.edit_target = None;
+        self.mention_ac = MentionAutocomplete::default();
+        self.invalidate_composer_layout();
     }
 
     fn clear_composer_after_submit(&mut self) {
@@ -519,6 +566,8 @@ impl ChatState {
         self.composer_cursor = 0;
         self.composing = false;
         self.reply_target = None;
+        self.edit_target = None;
+        self.mention_ac = MentionAutocomplete::default();
         self.invalidate_composer_layout();
     }
 
@@ -554,6 +603,16 @@ impl ChatState {
 
     pub fn submit_composer(&mut self) -> Option<Banner> {
         let body = self.composer.trim_end().to_string();
+
+        if let Some(edit_target) = self.edit_target.clone() {
+            if body.trim().is_empty() {
+                return Some(Banner::error("Message cannot be empty"));
+            }
+            self.service
+                .edit_message_task(self.user_id, edit_target.message_id, body);
+            self.clear_composer_after_submit();
+            return None;
+        }
 
         if body.trim() == "/help" {
             self.clear_composer_after_submit();
@@ -1064,6 +1123,12 @@ impl ChatState {
                     }
                     self.push_message(message);
                 }
+                ChatEvent::MessageUpdated { user_id, message } => {
+                    self.replace_message(message);
+                    if self.user_id == user_id {
+                        banner = Some(Banner::success("Message updated"));
+                    }
+                }
                 ChatEvent::SendSucceeded {
                     user_id,
                     request_id,
@@ -1151,6 +1216,9 @@ impl ChatState {
                 ChatEvent::DeleteFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::EditFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
                 ChatEvent::IgnoreListUpdated {
                     user_id,
                     ignored_user_ids,
@@ -1224,6 +1292,21 @@ impl ChatState {
         self.unread_counts.insert(messages[0].room_id, 0);
         if messages.len() > 1000 {
             messages.truncate(1000);
+        }
+    }
+
+    fn replace_message(&mut self, message: ChatMessage) {
+        if let Some(existing) = self
+            .general_messages
+            .iter_mut()
+            .find(|m| m.id == message.id)
+        {
+            *existing = message.clone();
+        }
+        for (_, messages) in &mut self.rooms {
+            if let Some(existing) = messages.iter_mut().find(|m| m.id == message.id) {
+                *existing = message.clone();
+            }
         }
     }
 
@@ -1345,6 +1428,7 @@ fn chat_help_lines() -> Vec<String> {
         "  PageUp / PageDown  half page up / down",
         "  End                jump to most recent",
         "  g / G              clear selection (back to live view)",
+        "  e                  edit selected own message",
         "  r                  reply to selected message",
         "  d                  delete selected message",
         "",

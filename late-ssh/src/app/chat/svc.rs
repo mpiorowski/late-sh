@@ -50,6 +50,10 @@ pub enum ChatEvent {
         message: ChatMessage,
         target_user_ids: Option<Vec<Uuid>>,
     },
+    MessageUpdated {
+        user_id: Uuid,
+        message: ChatMessage,
+    },
     SendSucceeded {
         user_id: Uuid,
         request_id: Uuid,
@@ -115,6 +119,10 @@ pub enum ChatEvent {
         message_id: Uuid,
     },
     DeleteFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    EditFailed {
         user_id: Uuid,
         message: String,
     },
@@ -461,6 +469,29 @@ impl ChatService {
                 room_id = %room_id,
                 request_id = %request_id
             )),
+        );
+    }
+
+    pub fn edit_message_task(&self, user_id: Uuid, message_id: Uuid, body: String) {
+        let service = self.clone();
+        let span = info_span!("chat.edit_message", user_id = %user_id, message_id = %message_id);
+        tokio::spawn(
+            async move {
+                match service.edit_message(user_id, message_id, &body).await {
+                    Ok(message) => {
+                        let _ = service
+                            .evt_tx
+                            .send(ChatEvent::MessageUpdated { user_id, message });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::EditFailed {
+                            user_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            .instrument(span),
         );
     }
 
@@ -871,6 +902,20 @@ impl ChatService {
             }
             .instrument(span),
         );
+    }
+
+    async fn edit_message(
+        &self,
+        user_id: Uuid,
+        message_id: Uuid,
+        body: &str,
+    ) -> Result<ChatMessage> {
+        let client = &self.db.get().await?;
+        let message = ChatMessage::edit_by_author(client, message_id, user_id, body)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Cannot edit this message"))?;
+        tracing::info!(message_id = %message_id, "message edited");
+        Ok(message)
     }
 
     async fn delete_message(

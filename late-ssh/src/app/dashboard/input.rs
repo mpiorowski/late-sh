@@ -20,6 +20,12 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
     }
 
     match byte {
+        b'e' | b'E' => {
+            app.chat.select_general_room();
+            app.chat.begin_edit_selected();
+            app.chat.clear_message_selection();
+            return true;
+        }
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message() {
                 app.banner = Some(b);

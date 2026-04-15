@@ -217,6 +217,7 @@ pub(crate) fn composer_cursor_scroll_for_rows(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn wrap_message_to_lines(
     body: &str,
+    edited: bool,
     stamp: &str,
     prefix: &str,
     width: usize,
@@ -234,11 +235,18 @@ pub(super) fn wrap_message_to_lines(
 
     if !continuation {
         // Line 1: author [time]
-        lines.push(Line::from(vec![
+        let mut header = vec![
             pad.clone(),
             Span::styled(prefix.to_string(), author_style),
             Span::styled(format!(" {stamp}"), Style::default().fg(theme::TEXT_FAINT)),
-        ]));
+        ];
+        if edited {
+            header.push(Span::styled(
+                " · edited",
+                Style::default().fg(theme::TEXT_FAINT),
+            ));
+        }
+        lines.push(Line::from(header));
     }
 
     // Line 2+: body with word wrap, respecting newlines
@@ -292,6 +300,7 @@ fn parse_reply_quote(body: &str) -> (Option<String>, &str) {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn wrap_chat_entry_to_lines(
     body: &str,
+    edited: bool,
     stamp: &str,
     prefix: &str,
     width: usize,
@@ -301,10 +310,11 @@ pub(super) fn wrap_chat_entry_to_lines(
     continuation: bool,
 ) -> Vec<Line<'static>> {
     if let Some(news) = parse_news_payload(body) {
-        return wrap_news_to_lines(stamp, prefix, width, author_style, news);
+        return wrap_news_to_lines(stamp, prefix, width, author_style, news, edited);
     }
     wrap_message_to_lines(
         body,
+        edited,
         stamp,
         prefix,
         width,
@@ -361,6 +371,7 @@ fn wrap_news_to_lines(
     width: usize,
     author_style: Style,
     payload: NewsPayload,
+    edited: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let border_style = Style::default().fg(theme::BORDER);
@@ -376,6 +387,10 @@ fn wrap_news_to_lines(
         pad.clone(),
         Span::styled(prefix.to_string(), author_style),
         Span::styled(" shared news ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(
+            if edited { "(edited) " } else { "" },
+            Style::default().fg(theme::TEXT_FAINT),
+        ),
         Span::styled(stamp.to_string(), meta_style),
     ]));
 
@@ -701,6 +716,7 @@ mod tests {
                 url: "https://example.com".to_string(),
                 ascii_art: ".:-\n+*#".to_string(),
             },
+            false,
         );
         assert!(lines.len() >= 4);
         let rendered = lines
@@ -729,6 +745,7 @@ mod tests {
     fn wrap_message_has_left_padding() {
         let lines = wrap_message_to_lines(
             "hello",
+            false,
             "[1m]",
             "alice",
             80,
@@ -748,6 +765,7 @@ mod tests {
     fn wrap_message_respects_newlines() {
         let lines = wrap_message_to_lines(
             "line1\nline2\nline3",
+            false,
             "[1m]",
             "bob",
             80,
@@ -768,6 +786,7 @@ mod tests {
     fn wrap_message_empty_line_in_body() {
         let lines = wrap_message_to_lines(
             "above\n\nbelow",
+            false,
             "[1m]",
             "mat",
             80,
@@ -788,6 +807,7 @@ mod tests {
     fn wrap_message_wraps_long_lines() {
         let lines = wrap_message_to_lines(
             "abcdefghij",
+            false,
             "[1m]",
             "x",
             6, // area width 6, minus 1 pad = 5 body cols
@@ -807,6 +827,7 @@ mod tests {
     fn wrap_message_prefers_word_boundaries() {
         let lines = wrap_message_to_lines(
             "hello wide world",
+            false,
             "[1m]",
             "x",
             8,
@@ -833,6 +854,7 @@ mod tests {
     fn wrap_message_renders_reply_quote_separately() {
         let lines = wrap_message_to_lines(
             "> @alice: original text\nmy reply",
+            false,
             "[1m]",
             "bob",
             80,
@@ -851,6 +873,7 @@ mod tests {
     fn wrap_message_empty_body() {
         let lines = wrap_message_to_lines(
             "",
+            false,
             "[1m]",
             "alice",
             80,
@@ -861,6 +884,25 @@ mod tests {
         );
         // Only author line
         assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn wrap_message_shows_edited_marker() {
+        let lines = wrap_message_to_lines(
+            "hello",
+            true,
+            "[1m]",
+            "alice",
+            80,
+            Style::default(),
+            Style::default(),
+            false,
+            false,
+        );
+        let strings = lines_to_strings(&lines);
+        assert!(strings[0].contains("[1m] · edited"));
+        assert!(strings[1].contains("hello"));
+        assert!(!strings[1].contains("edited"));
     }
 
     #[test]

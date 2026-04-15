@@ -42,6 +42,7 @@ pub struct DashboardChatView<'a> {
     pub composer_rows: &'a [ComposerRow],
     pub composer_cursor: usize,
     pub composing: bool,
+    pub edit_mode: bool,
     pub cursor_visible: bool,
     pub mention_matches: &'a [String],
     pub mention_selected: usize,
@@ -102,7 +103,9 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
 
     if let Some(area) = composer_area {
         let composer_title = if view.composing {
-            if let Some(author) = view.reply_author {
+            if view.edit_mode {
+                " Edit Message (Enter save, Alt+Enter newline, Esc cancel) ".to_string()
+            } else if let Some(author) = view.reply_author {
                 format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ")
             } else {
                 " Message (Enter send, Alt+Enter newline, Esc cancel) ".to_string()
@@ -172,6 +175,7 @@ fn chat_rows_fingerprint(
         msg.id.hash(&mut hasher);
         msg.user_id.hash(&mut hasher);
         msg.created.hash(&mut hasher);
+        msg.updated.hash(&mut hasher);
         msg.body.hash(&mut hasher);
         ctx.usernames.get(&msg.user_id).hash(&mut hasher);
         ctx.badges
@@ -257,6 +261,7 @@ fn ensure_chat_rows_cache(
         let row_start = all_rows.len();
         let msg_lines = wrap_chat_entry_to_lines(
             &msg.body,
+            msg.updated > msg.created,
             &stamp,
             &prefix,
             width,
@@ -458,6 +463,7 @@ pub struct ChatRenderInput<'a> {
     pub composer_rows: &'a [ComposerRow],
     pub composer_cursor: usize,
     pub composing: bool,
+    pub edit_mode: bool,
     pub current_user_id: Uuid,
     pub cursor_visible: bool,
     pub mention_matches: &'a [String],
@@ -832,7 +838,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         let composer_scroll =
             composer_cursor_scroll_for_rows(view.composer_rows, view.composer_cursor, 5);
         let composer_title = if composing {
-            if let Some(author) = view.reply_author {
+            if view.edit_mode {
+                " Edit Message (Enter save, Alt+Enter newline, Esc cancel) ".to_string()
+            } else if let Some(author) = view.reply_author {
                 format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ")
             } else {
                 " Compose (Enter send, Alt+Enter newline, Esc cancel) ".to_string()

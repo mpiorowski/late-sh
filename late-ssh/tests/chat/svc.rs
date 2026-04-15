@@ -159,6 +159,101 @@ async fn emits_send_failed_event_when_non_admin_posts_to_announcements() {
 }
 
 #[tokio::test]
+async fn emits_message_updated_when_author_edits_message() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let author = create_test_user(&test_db.db, "editor").await;
+    let room = ChatRoom::get_or_create_language(&client, "fr")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, author.id)
+        .await
+        .expect("join");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: author.id,
+            body: "before".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    service.edit_message_task(author.id, message.id, "after".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::MessageUpdated {
+            user_id,
+            message: updated,
+        } => {
+            assert_eq!(user_id, author.id);
+            assert_eq!(updated.id, message.id);
+            assert_eq!(updated.body, "after");
+            assert!(updated.updated >= updated.created);
+        }
+        other => panic!("expected MessageUpdated, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn emits_edit_failed_when_non_author_edits_message() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let author = create_test_user(&test_db.db, "edit_author").await;
+    let intruder = create_test_user(&test_db.db, "edit_intruder").await;
+    let room = ChatRoom::get_or_create_language(&client, "it")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, author.id)
+        .await
+        .expect("join author");
+    ChatRoomMember::join(&client, room.id, intruder.id)
+        .await
+        .expect("join intruder");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: author.id,
+            body: "hands off".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    service.edit_message_task(intruder.id, message.id, "tampered".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::EditFailed { user_id, message } => {
+            assert_eq!(user_id, intruder.id);
+            assert_eq!(message, "Cannot edit this message");
+        }
+        other => panic!("expected EditFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() {
     let test_db = new_test_db().await;
     let service = ChatService::new(

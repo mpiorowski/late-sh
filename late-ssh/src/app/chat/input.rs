@@ -25,7 +25,11 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
 
     match byte {
         0x1B => {
-            app.chat.stop_composing();
+            if app.chat.is_editing() {
+                app.chat.cancel_edit_mode();
+            } else {
+                app.chat.stop_composing();
+            }
         }
         b'\r' | b'\n' => {
             if let Some(b) = app.chat.submit_composer() {
@@ -118,6 +122,11 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     // reap a run of your own messages with repeated presses. `r` enters
     // reply mode and drops the selection.
     match byte {
+        b'e' | b'E' => {
+            app.chat.begin_edit_selected();
+            app.chat.clear_message_selection();
+            return true;
+        }
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message() {
                 app.banner = Some(b);
