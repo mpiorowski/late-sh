@@ -63,6 +63,7 @@ pub fn handle_scroll(app: &mut App, delta: isize) {
 
 fn switch_room(app: &mut App, delta: isize) {
     if app.chat.move_selection(delta) {
+        app.chat.reset_composer();
         app.chat.mark_selected_room_read();
         app.chat.request_list();
     }

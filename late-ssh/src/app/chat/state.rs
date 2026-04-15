@@ -512,6 +512,16 @@ impl ChatState {
         self.reply_target = None;
     }
 
+    pub fn reset_composer(&mut self) {
+        self.composer.clear();
+        self.composer_cursor = 0;
+        self.composing = false;
+        self.reply_target = None;
+        self.edited_message_id = None;
+        self.mention_ac = MentionAutocomplete::default();
+        self.invalidate_composer_layout();
+    }
+
     fn clear_composer_after_submit(&mut self) {
         self.composer.clear();
         self.composer_cursor = 0;

@@ -696,6 +696,12 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     false
 }
 
+fn reset_composers_for_page_change(app: &mut App) {
+    app.chat.reset_composer();
+    app.chat.news.stop_composing();
+    app.profile_state.cancel_username_edit();
+}
+
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     // ? opens help unless composing text
     if byte == b'?' && !ctx.chat_composing && !ctx.news_composing && !ctx.profile_composing {
@@ -815,10 +821,12 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             true
         }
         b'1' => {
+            reset_composers_for_page_change(app);
             app.screen = Screen::Dashboard;
             true
         }
         b'2' => {
+            reset_composers_for_page_change(app);
             app.chat.request_list();
             app.chat.sync_selection();
             app.chat.mark_selected_room_read();
@@ -826,14 +834,17 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             true
         }
         b'3' => {
+            reset_composers_for_page_change(app);
             app.screen = Screen::Games;
             true
         }
         b'4' => {
+            reset_composers_for_page_change(app);
             app.screen = Screen::Profile;
             true
         }
         b'\t' => {
+            reset_composers_for_page_change(app);
             app.screen = ctx.screen.next();
             match app.screen {
                 Screen::Dashboard => {}
