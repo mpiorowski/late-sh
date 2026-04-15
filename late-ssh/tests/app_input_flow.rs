@@ -19,7 +19,22 @@ use uuid::Uuid;
 async fn dashboard_chat_compose_blocks_quit_shortcut() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "popup-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
     let mut app = make_app(test_db.db.clone(), user.id, "popup-flow-it");
+
+    // Hop through the chat screen first so the async room snapshot has
+    // definitely landed: `> general` only renders once `drain_snapshot`
+    // populates `general_room_id`, which the dashboard `i` handler needs.
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, "> general").await;
+    app.handle_input(b"1");
+    wait_for_render_contains(&mut app, " Dashboard ").await;
 
     app.handle_input(b"i");
     wait_for_render_contains(
@@ -76,7 +91,21 @@ async fn active_game_blocks_screen_number_hotkeys() {
 async fn dashboard_chat_compose_treats_screen_hotkeys_as_text() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dash-chat-compose-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
     let mut app = make_app(test_db.db.clone(), user.id, "dash-chat-compose-flow-it");
+
+    // See `dashboard_chat_compose_blocks_quit_shortcut` — hop through chat
+    // once to guarantee the room snapshot has populated `general_room_id`.
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, "> general").await;
+    app.handle_input(b"1");
+    wait_for_render_contains(&mut app, " Dashboard ").await;
 
     app.handle_input(b"i3abc");
 
