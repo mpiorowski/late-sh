@@ -9,7 +9,6 @@ pub mod input;
 pub mod profile;
 pub mod qr;
 mod render;
-mod splash_tips;
 pub mod state;
 mod tick;
 pub mod visualizer;

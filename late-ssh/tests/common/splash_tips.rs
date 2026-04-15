@@ -1,6 +1,4 @@
-mod helpers;
-
-use helpers::{
+use crate::helpers::{
     assert_render_not_contains_for, make_app, new_test_db, render_plain, wait_for_render_contains,
 };
 use late_core::test_utils::create_test_user;

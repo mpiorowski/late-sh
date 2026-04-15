@@ -6,13 +6,13 @@ const DEFAULT_SPLASH_TIP: &str = "Press ? outside of chat to see available hotke
 
 static NEW_AND_RETURNING_TIPS: LazyLock<Vec<String>> = LazyLock::new(|| {
     parse_tip_pool(include_str!(
-        "../../assets/splash_tips/new_and_returning_users_tip_pool.json"
+        "../../../assets/splash_tips/new_and_returning_users_tip_pool.json"
     ))
 });
 
 static RETURNING_USER_TIPS: LazyLock<Vec<String>> = LazyLock::new(|| {
     parse_tip_pool(include_str!(
-        "../../assets/splash_tips/returning_users_tip_pool.json"
+        "../../../assets/splash_tips/returning_users_tip_pool.json"
     ))
 });
 

@@ -224,7 +224,7 @@ impl Stage {
             Stage::Young => "\u{1f332}",   // 🌲
             Stage::Mature => "\u{1f333}",  // 🌳
             Stage::Ancient => "\u{1f333}", // 🌳
-            Stage::Blossom => "\u{1f338}", // 🌸
+            Stage::Blossom => "\u{1f33C}", // 🌼
         }
     }
 }

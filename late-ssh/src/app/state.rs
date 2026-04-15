@@ -345,7 +345,7 @@ impl App {
         };
 
         let active_users = config.active_users.clone();
-        let splash_hint = super::splash_tips::choose_splash_hint(config.is_new_user);
+        let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
 
         Ok(Self {
             running: true,
