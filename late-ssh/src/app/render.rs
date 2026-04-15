@@ -364,7 +364,8 @@ impl App {
 
             frame.render_widget(p, layout[1]);
             let splash_bottom = layout[1].bottom();
-            let hint_y = splash_bottom + ((area.bottom().saturating_sub(splash_bottom) * 3) / 4);
+            let gap = area.bottom().saturating_sub(splash_bottom);
+            let hint_y = splash_bottom + (gap * 3 / 4);
             if hint_y < area.bottom() {
                 let hint_area = Rect::new(area.x, hint_y, area.width, 1);
                 let hint = ratatui::text::Line::from(ratatui::text::Span::styled(

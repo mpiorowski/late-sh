@@ -5,31 +5,24 @@ use rand_core::{OsRng, RngCore};
 const DEFAULT_SPLASH_TIP: &str = "Press ? outside of chat to see available hotkeys";
 
 static NEW_AND_RETURNING_TIPS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    parse_tip_pool(
-        "new_and_returning_users_tip_pool.json",
-        include_str!("../../assets/splash_tips/new_and_returning_users_tip_pool.json"),
-    )
+    parse_tip_pool(include_str!(
+        "../../assets/splash_tips/new_and_returning_users_tip_pool.json"
+    ))
 });
 
 static RETURNING_USER_TIPS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    parse_tip_pool(
-        "returning_users_tip_pool.json",
-        include_str!("../../assets/splash_tips/returning_users_tip_pool.json"),
-    )
+    parse_tip_pool(include_str!(
+        "../../assets/splash_tips/returning_users_tip_pool.json"
+    ))
 });
 
-fn parse_tip_pool(name: &str, raw: &str) -> Vec<String> {
-    match serde_json::from_str::<Vec<String>>(raw) {
-        Ok(tips) => tips
-            .into_iter()
-            .map(|tip| tip.trim().to_string())
-            .filter(|tip| !tip.is_empty())
-            .collect(),
-        Err(error) => {
-            tracing::error!(tip_pool = name, ?error, "failed to parse splash tip pool");
-            Vec::new()
-        }
-    }
+fn parse_tip_pool(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .expect("splash tip pool json is malformed")
+        .into_iter()
+        .map(|tip| tip.trim().to_string())
+        .filter(|tip| !tip.is_empty())
+        .collect()
 }
 
 pub(crate) fn tip_candidates(is_new_user: bool) -> Vec<&'static str> {

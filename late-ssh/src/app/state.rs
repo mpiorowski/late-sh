@@ -162,8 +162,6 @@ pub struct App {
     pub(super) activity: VecDeque<ActivityEvent>,
     pub(crate) user_id: Uuid,
     pub(crate) is_admin: bool,
-    #[allow(dead_code)]
-    pub(crate) is_new_user: bool,
 
     /// Voting
     pub(crate) vote: vote::state::VoteState,
@@ -382,7 +380,6 @@ impl App {
             activity: VecDeque::new(),
             user_id: config.user_id,
             is_admin: config.is_admin,
-            is_new_user: config.is_new_user,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
                 config.chat_service,
