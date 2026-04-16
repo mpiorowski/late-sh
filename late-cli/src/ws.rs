@@ -10,7 +10,7 @@ use tokio::{sync::broadcast, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info};
 
-use super::VizSample;
+use super::audio::VizSample;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
