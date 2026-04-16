@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
@@ -17,63 +17,53 @@ pub fn generate_qr_braille<'a>(url: &str) -> Vec<Line<'a>> {
     };
 
     let size = qr.size();
-    let qr_style = Style::default().fg(Color::Black).bg(Color::White);
-    let lr_pad = "    "; // left/right white margin
+    let qr_style = Style::default().fg(theme::TEXT_BRIGHT);
+    let quiet_zone: i32 = 4;
+
+    let ww = ' ';
+    let bb = '\u{2588}'; // █
+    let wb = '\u{2584}'; // ▄
+    let bw = '\u{2580}'; // ▀
+
     let mut lines = Vec::new();
+    let full_width = (size + quiet_zone * 2) as usize;
+    let pad_row: String = std::iter::repeat_n(ww, full_width).collect();
 
-    // QR content width in chars
-    let qr_chars = ((size + 1) / 2) as usize;
-    let full_width = lr_pad.len() * 2 + qr_chars;
-    let pad_row = " ".repeat(full_width);
-    lines.push(Line::from(vec![Span::styled(pad_row.clone(), qr_style)]));
+    let get_module = |x: i32, y: i32| -> bool {
+        x >= 0 && x < size && y >= 0 && y < size && qr.get_module(x, y)
+    };
 
-    for y in (-2..size).step_by(4) {
-        let mut span_str = String::with_capacity(full_width);
-        span_str.push_str(lr_pad);
-        for x in (0..size).step_by(2) {
-            let mut dot_mask = 0u32;
-
-            let get_module = |dx: i32, dy: i32| -> bool {
-                let mx = x + dx;
-                let my = y + dy;
-                mx >= 0 && mx < size && my >= 0 && my < size && qr.get_module(mx, my)
-            };
-
-            if get_module(0, 0) {
-                dot_mask |= 0x01;
-            }
-            if get_module(0, 1) {
-                dot_mask |= 0x02;
-            }
-            if get_module(0, 2) {
-                dot_mask |= 0x04;
-            }
-            if get_module(0, 3) {
-                dot_mask |= 0x40;
-            }
-            if get_module(1, 0) {
-                dot_mask |= 0x08;
-            }
-            if get_module(1, 1) {
-                dot_mask |= 0x10;
-            }
-            if get_module(1, 2) {
-                dot_mask |= 0x20;
-            }
-            if get_module(1, 3) {
-                dot_mask |= 0x80;
-            }
-
-            if let Some(c) = char::from_u32(0x2800 + dot_mask) {
-                span_str.push(c);
-            }
-        }
-        span_str.push_str(lr_pad);
-        lines.push(Line::from(vec![Span::styled(span_str, qr_style)]));
+    for _ in 0..(quiet_zone + 1) / 2 {
+        lines.push(Line::from(vec![Span::styled(pad_row.clone(), qr_style)]));
     }
 
-    // Bottom padding row (white)
-    lines.push(Line::from(vec![Span::styled(pad_row, qr_style)]));
+    let mut i = 0;
+    while i <= size {
+        let mut row = String::with_capacity(full_width);
+        for _ in 0..quiet_zone {
+            row.push(ww);
+        }
+        for j in 0..=size {
+            let curr = get_module(j, i);
+            let next = get_module(j, i + 1);
+            let c = match (curr, next) {
+                (true, true) => bb,
+                (true, false) => bw,
+                (false, false) => ww,
+                (false, true) => wb,
+            };
+            row.push(c);
+        }
+        for _ in 0..quiet_zone - 1 {
+            row.push(ww);
+        }
+        lines.push(Line::from(vec![Span::styled(row, qr_style)]));
+        i += 2;
+    }
+
+    for _ in 0..(quiet_zone + 1) / 2 {
+        lines.push(Line::from(vec![Span::styled(pad_row.clone(), qr_style)]));
+    }
 
     lines
 }
@@ -93,9 +83,10 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
     lines.push(Line::from(Span::styled("  Press any key to close.", dim)));
     lines.push(Line::from(""));
 
-    let w = 44u16.min(area.width.saturating_sub(4));
+    let content_w = lines.iter().map(|l| l.width() as u16).max().unwrap_or(0);
     let content_h = lines.len() as u16;
     let h = (content_h + 2).min(area.height.saturating_sub(4));
+    let w = (content_w + 4).max(h * 2).min(area.width.saturating_sub(4));
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let popup_area = Rect::new(x, y, w, h);
