@@ -1,13 +1,7 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use futures_util::{SinkExt, StreamExt};
-use nix::{
-    libc,
-    pty::{Winsize, openpty},
-    unistd::setsid,
-};
-use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use serde::Deserialize;
 use serde_json::json;
 use shlex::Shlex;
@@ -15,13 +9,11 @@ use std::{
     collections::VecDeque,
     env, fs,
     io::{self, Cursor, IsTerminal, Read, Write},
-    os::fd::AsRawFd,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
-        mpsc,
+        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+        mpsc, Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -44,29 +36,48 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
+#[cfg(unix)]
+use {
+    crossterm::terminal::{disable_raw_mode, enable_raw_mode},
+    nix::{
+        libc,
+        pty::{openpty, Winsize},
+        unistd::setsid,
+    },
+    std::os::fd::AsRawFd,
+};
+
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const DEFAULT_SSH_TARGET: &str = "late.sh";
 const DEFAULT_AUDIO_BASE_URL: &str = "http://audio.late.sh";
 const DEFAULT_API_BASE_URL: &str = "https://api.late.sh";
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly"
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
 ))]
-const TIOCSCTTY_IOCTL_REQUEST: libc::c_ulong = libc::TIOCSCTTY as libc::c_ulong;
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly"
-)))]
-const TIOCSCTTY_IOCTL_REQUEST: libc::c_ulong = libc::TIOCSCTTY;
+const TIOCSCTTY_IOCTL_REQUEST: nix::libc::c_ulong = nix::libc::TIOCSCTTY;
+
+#[cfg(all(
+    unix,
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    )
+))]
+const TIOCSCTTY_IOCTL_REQUEST: nix::libc::c_ulong = nix::libc::TIOCSCTTY as nix::libc::c_ulong;
 
 #[derive(Debug, Clone)]
 struct Config {
@@ -81,19 +92,25 @@ struct RawModeGuard(bool);
 
 impl RawModeGuard {
     fn enable_if_tty() -> Self {
-        if !std::io::stdin().is_terminal() {
-            return Self(false);
-        }
-        match enable_raw_mode() {
-            Ok(()) => Self(true),
-            Err(err) => {
-                eprintln!("warning: failed to enable raw mode: {err}");
-                Self(false)
+        #[cfg(unix)]
+        {
+            if !std::io::stdin().is_terminal() {
+                return Self(false);
+            }
+            match enable_raw_mode() {
+                Ok(()) => Self(true),
+                Err(err) => {
+                    eprintln!("warning: failed to enable raw mode: {err}");
+                    Self(false)
+                }
             }
         }
+        #[cfg(not(unix))]
+        Self(false)
     }
 }
 
+#[cfg(unix)]
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         if self.0 {
@@ -196,6 +213,7 @@ struct StreamingLinearResampler {
     previous_frame: Option<Vec<f32>>,
 }
 
+#[cfg(unix)]
 struct SshProcess {
     child: Child,
     output_task: tokio::task::JoinHandle<Result<()>>,
@@ -204,15 +222,35 @@ struct SshProcess {
     input_gate: Arc<AtomicBool>,
 }
 
+#[cfg(not(unix))]
+struct SshProcess {
+    output_task: tokio::task::JoinHandle<Result<()>>,
+    input_task: tokio::task::JoinHandle<Result<()>>,
+    resize_handle: PtyResizeHandle,
+}
+
+#[cfg(unix)]
 #[derive(Clone)]
 struct PtyResizeHandle {
     master: Arc<fs::File>,
 }
 
+#[cfg(not(unix))]
+#[derive(Clone)]
+struct PtyResizeHandle;
+
+#[cfg(unix)]
 impl PtyResizeHandle {
     fn resize_to_current(&self) -> Result<()> {
         let (cols, rows) = terminal_size_or_default();
         resize_pty(&self.master, cols, rows)
+    }
+}
+
+#[cfg(not(unix))]
+impl PtyResizeHandle {
+    fn resize_to_current(&self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -459,6 +497,7 @@ async fn main() -> Result<()> {
     info!(sample_rate = audio.sample_rate, "audio runtime ready");
     info!("starting ssh session");
     let (token_tx, token_rx) = oneshot::channel();
+    #[cfg(unix)]
     let SshProcess {
         mut child,
         mut output_task,
@@ -466,7 +505,19 @@ async fn main() -> Result<()> {
         resize_handle,
         input_gate,
     } = spawn_ssh(&config, &ssh_identity, token_tx).await?;
+
+    #[cfg(not(unix))]
+    let SshProcess {
+        mut output_task,
+        input_task,
+        resize_handle,
+    } = spawn_ssh(&config, &ssh_identity, token_tx).await?;
+
+    #[cfg(unix)]
     let resize_task = tokio::spawn(forward_resize_events(resize_handle));
+
+    #[cfg(not(unix))]
+    let resize_task = tokio::spawn(async {});
 
     let token = tokio::time::timeout(Duration::from_secs(10), token_rx)
         .await
@@ -517,6 +568,8 @@ async fn main() -> Result<()> {
 
     let mut stdout_result = None;
     let mut stdout_task_consumed = false;
+
+    #[cfg(unix)]
     let status = match tokio::select! {
         status = child.wait() => {
             let status = status.context("ssh process failed to exit cleanly")?;
@@ -548,15 +601,32 @@ async fn main() -> Result<()> {
         }
     };
 
+    #[cfg(not(unix))]
+    let status: Option<std::process::ExitStatus> = {
+        stdout_task_consumed = true;
+        let _ = output_task.await;
+        None
+    };
+
     audio.stop.store(true, Ordering::Relaxed);
     resize_task.abort();
     input_task.abort();
     ws_task.abort();
-    if !stdout_task_consumed && output_task.is_finished() {
-        stdout_result = Some(output_task.await);
-    } else if !stdout_task_consumed {
-        output_task.abort();
-        let _ = output_task.await;
+
+    #[cfg(unix)]
+    {
+        if !stdout_task_consumed && output_task.is_finished() {
+            stdout_result = Some(output_task.await);
+        } else if !stdout_task_consumed {
+            output_task.abort();
+            let _ = output_task.await;
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = stdout_task_consumed;
+        let _ = output_task;
     }
 
     if let Some(status) = status {
@@ -725,8 +795,19 @@ fn ensure_client_identity() -> Result<PathBuf> {
 }
 
 fn ssh_dir() -> Result<PathBuf> {
-    let home = env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".ssh"))
+    #[cfg(unix)]
+    {
+        let home = env::var_os("HOME").context("HOME is not set")?;
+        Ok(PathBuf::from(home).join(".ssh"))
+    }
+    #[cfg(not(unix))]
+    {
+        let home = env::var_os("USERPROFILE").context("USERPROFILE is not set")?;
+        Ok(PathBuf::from(home)
+            .join("AppData")
+            .join("Local")
+            .join("ssh"))
+    }
 }
 
 fn dedicated_identity_path() -> Result<PathBuf> {
@@ -1308,6 +1389,7 @@ fn normalize_bands(bands: &mut [f32], rms: &mut f32, gain: f32) {
     *rms = soft_compress(*rms * gain).clamp(0.0, 1.0);
 }
 
+#[cfg(unix)]
 async fn spawn_ssh(
     config: &Config,
     identity_file: &Path,
@@ -1387,6 +1469,48 @@ async fn spawn_ssh(
     })
 }
 
+#[cfg(not(unix))]
+async fn spawn_ssh(
+    config: &Config,
+    identity_file: &Path,
+    _token_tx: oneshot::Sender<String>,
+) -> Result<SshProcess> {
+    use std::process::Command;
+
+    let (ssh_program, ssh_args) = config
+        .ssh_bin
+        .split_first()
+        .context("ssh client command is empty")?;
+
+    let mut cmd = Command::new(ssh_program);
+    cmd.env(CLI_MODE_ENV, "1")
+        .args(ssh_args)
+        .arg("-i")
+        .arg(identity_file)
+        .arg("-o")
+        .arg("StrictHostKeyChecking=accept-new")
+        .arg(&config.ssh_target);
+
+    let _child = cmd.spawn().context("failed to start ssh session")?;
+
+    let output_task = tokio::task::spawn_blocking(move || {
+        std::thread::sleep(Duration::from_secs(3600));
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let input_task = tokio::task::spawn_blocking(move || {
+        std::thread::sleep(Duration::from_secs(3600));
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let resize_handle = PtyResizeHandle;
+    Ok(SshProcess {
+        output_task,
+        input_task,
+        resize_handle,
+    })
+}
+
 fn parse_ssh_bin_spec(spec: &str) -> Result<Vec<String>> {
     let parts: Vec<String> = Shlex::new(spec).collect();
     if parts.is_empty() {
@@ -1396,9 +1520,42 @@ fn parse_ssh_bin_spec(spec: &str) -> Result<Vec<String>> {
 }
 
 fn terminal_size_or_default() -> (u16, u16) {
-    crossterm::terminal::size().unwrap_or((80, 24))
+    #[cfg(unix)]
+    {
+        crossterm::terminal::size().unwrap_or((80, 24))
+    }
+    #[cfg(not(unix))]
+    {
+        terminal_size_windows()
+    }
 }
 
+#[cfg(not(unix))]
+fn terminal_size_windows() -> (u16, u16) {
+    use std::process::Command;
+    let output = Command::new("cmd").args(["/c", "mode con"]).output();
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if line.contains("Columns") || line.contains("Lines") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(cols) = parts[1].parse::<u16>() {
+                            if line.contains("Columns") {
+                                return (cols, 24);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    (80, 24)
+}
+
+#[cfg(unix)]
 fn pty_winsize(cols: u16, rows: u16) -> Winsize {
     Winsize {
         ws_row: rows,
@@ -1408,10 +1565,12 @@ fn pty_winsize(cols: u16, rows: u16) -> Winsize {
     }
 }
 
+#[cfg(unix)]
 fn nix_to_io_error(err: nix::Error) -> io::Error {
     io::Error::from_raw_os_error(err as i32)
 }
 
+#[cfg(unix)]
 fn resize_pty(master: &fs::File, cols: u16, rows: u16) -> Result<()> {
     let winsize = pty_winsize(cols, rows);
     let rc = unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &winsize) };
@@ -1422,17 +1581,29 @@ fn resize_pty(master: &fs::File, cols: u16, rows: u16) -> Result<()> {
     Ok(())
 }
 
-async fn forward_resize_events(handle: PtyResizeHandle) {
-    let Ok(mut sigwinch) =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
-    else {
-        return;
-    };
+#[cfg(not(unix))]
+fn resize_pty(_master: &std::process::Child, _cols: u16, _rows: u16) -> Result<()> {
+    Ok(())
+}
 
-    while sigwinch.recv().await.is_some() {
-        if let Err(err) = handle.resize_to_current() {
-            debug!(error = ?err, "failed to forward local terminal resize");
+async fn forward_resize_events(handle: PtyResizeHandle) {
+    #[cfg(unix)]
+    {
+        let Ok(mut sigwinch) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+        else {
+            return;
+        };
+
+        while sigwinch.recv().await.is_some() {
+            if let Err(err) = handle.resize_to_current() {
+                debug!(error = ?err, "failed to forward local terminal resize");
+            }
         }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = handle;
     }
 }
 
@@ -1494,19 +1665,27 @@ fn forward_ssh_output(mut pty: fs::File, token_tx: oneshot::Sender<String>) -> R
 }
 
 fn flush_stdin_input_queue() {
-    if !std::io::stdin().is_terminal() {
-        return;
-    }
+    #[cfg(unix)]
+    {
+        if !std::io::stdin().is_terminal() {
+            return;
+        }
 
-    let rc = unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
-    if rc == -1 {
-        debug!(
-            error = ?io::Error::last_os_error(),
-            "failed to flush pending stdin before enabling ssh input"
-        );
+        let rc = unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
+        if rc == -1 {
+            debug!(
+                error = ?io::Error::last_os_error(),
+                "failed to flush pending stdin before enabling ssh input"
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = ();
     }
 }
 
+#[cfg(unix)]
 fn forward_stdin(mut pty: fs::File, input_gate: Arc<AtomicBool>) -> Result<()> {
     let mut stdin = std::io::stdin().lock();
     let mut buf = [0u8; 4096];
