@@ -63,6 +63,7 @@ symphonia = "0.5.5"
 testcontainers = "0.26.3"
 tokio-tungstenite = "0.28"
 tower = "0.5"
+unicode-width = "0.2"
 vte = "0.15"
 
 [profile.release]
