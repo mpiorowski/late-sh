@@ -56,6 +56,7 @@ pub struct DashboardChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub terminal_width: u16,
 }
 
 /// Shared composer block rendering for both the dashboard card and the chat
@@ -71,20 +72,74 @@ pub(super) struct ComposerBlockView<'a> {
     pub mention_active: bool,
     pub mention_matches: &'a [String],
     pub mention_selected: usize,
+    pub terminal_width: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ComposerTitleStage {
+    show_compose_label: bool,
+    use_return_symbol: bool,
+    show_primary_action: bool,
+    show_newline_hint: bool,
+}
+
+impl ComposerTitleStage {
+    fn for_terminal_width(terminal_width: u16) -> Self {
+        Self {
+            show_compose_label: terminal_width > 82,
+            use_return_symbol: terminal_width <= 74,
+            show_primary_action: terminal_width > 50,
+            show_newline_hint: terminal_width > 57,
+        }
+    }
+
+    fn enter_label(self) -> &'static str {
+        if self.use_return_symbol { "⏎" } else { "Enter" }
+    }
+
+    fn alt_enter_label(self) -> &'static str {
+        if self.use_return_symbol {
+            "Alt+⏎"
+        } else {
+            "Alt+Enter"
+        }
+    }
+
+    fn hint_body(self, primary_verb: &str) -> String {
+        let mut parts = Vec::new();
+        if self.show_primary_action {
+            parts.push(format!("{} {primary_verb}", self.enter_label()));
+        }
+        if self.show_newline_hint {
+            parts.push(format!("{} newline", self.alt_enter_label()));
+        }
+        parts.push("Esc cancel".to_string());
+        parts.join(", ")
+    }
+}
+
+fn composer_title(view: &ComposerBlockView<'_>, terminal_width: u16) -> String {
+    let stage = ComposerTitleStage::for_terminal_width(terminal_width);
+
+    if view.composing {
+        if let Some(author) = view.reply_author {
+            format!(" Reply to @{author} ({}) ", stage.hint_body("send"))
+        } else if view.is_editing {
+            format!(" Edit message ({}) ", stage.hint_body("save"))
+        } else if !stage.show_compose_label {
+            format!(" ({}) ", stage.hint_body("send"))
+        } else {
+            format!(" Compose ({}) ", stage.hint_body("send"))
+        }
+    } else if !stage.show_compose_label {
+        " (press i) ".to_string()
+    } else {
+        " Compose (press i) ".to_string()
+    }
 }
 
 pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &ComposerBlockView<'_>) {
-    let composer_title = if view.composing {
-        if let Some(author) = view.reply_author {
-            format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ")
-        } else if view.is_editing {
-            " Edit message (Enter save, Alt+Enter newline, Esc cancel) ".to_string()
-        } else {
-            " Compose (Enter send, Alt+Enter newline, Esc cancel) ".to_string()
-        }
-    } else {
-        " Compose (press i) ".to_string()
-    };
+    let composer_title = composer_title(view, view.terminal_width);
     let composer_style = if view.composing {
         Style::default().fg(theme::BORDER_ACTIVE())
     } else {
@@ -177,6 +232,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
+                terminal_width: view.terminal_width,
             },
         );
     }
@@ -511,6 +567,7 @@ pub struct ChatRenderInput<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub terminal_width: u16,
     pub news_composer: &'a str,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -889,6 +946,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
+                terminal_width: view.terminal_width,
             },
         );
     }
@@ -921,5 +979,115 @@ mod tests {
     fn effective_chat_scroll_keeps_selected_message_off_bottom_edge() {
         let scroll = effective_chat_scroll(40, 10, Some((29, 31)));
         assert_eq!(scroll, 3);
+    }
+
+    fn composer_view() -> ComposerBlockView<'static> {
+        ComposerBlockView {
+            composer: "",
+            composer_rows: &[],
+            composer_cursor: 0,
+            composing: true,
+            cursor_visible: false,
+            reply_author: None,
+            is_editing: false,
+            mention_active: false,
+            mention_matches: &[],
+            mention_selected: 0,
+            terminal_width: 100,
+        }
+    }
+
+    #[test]
+    fn composer_title_stage_tracks_all_collapse_breakpoints() {
+        assert_eq!(
+            ComposerTitleStage::for_terminal_width(83),
+            ComposerTitleStage {
+                show_compose_label: true,
+                use_return_symbol: false,
+                show_primary_action: true,
+                show_newline_hint: true,
+            }
+        );
+        assert_eq!(
+            ComposerTitleStage::for_terminal_width(82),
+            ComposerTitleStage {
+                show_compose_label: false,
+                use_return_symbol: false,
+                show_primary_action: true,
+                show_newline_hint: true,
+            }
+        );
+        assert_eq!(
+            ComposerTitleStage::for_terminal_width(74),
+            ComposerTitleStage {
+                show_compose_label: false,
+                use_return_symbol: true,
+                show_primary_action: true,
+                show_newline_hint: true,
+            }
+        );
+        assert_eq!(
+            ComposerTitleStage::for_terminal_width(57),
+            ComposerTitleStage {
+                show_compose_label: false,
+                use_return_symbol: true,
+                show_primary_action: true,
+                show_newline_hint: false,
+            }
+        );
+        assert_eq!(
+            ComposerTitleStage::for_terminal_width(50),
+            ComposerTitleStage {
+                show_compose_label: false,
+                use_return_symbol: true,
+                show_primary_action: false,
+                show_newline_hint: false,
+            }
+        );
+    }
+
+    #[test]
+    fn composer_title_keeps_compose_label_above_82_columns() {
+        let view = composer_view();
+        assert_eq!(
+            composer_title(&view, 83),
+            " Compose (Enter send, Alt+Enter newline, Esc cancel) "
+        );
+    }
+
+    #[test]
+    fn composer_title_drops_compose_label_between_74_and_82_columns() {
+        let view = composer_view();
+        assert_eq!(
+            composer_title(&view, 82),
+            " (Enter send, Alt+Enter newline, Esc cancel) "
+        );
+        assert_eq!(
+            composer_title(&view, 74),
+            " (⏎ send, Alt+⏎ newline, Esc cancel) "
+        );
+    }
+
+    #[test]
+    fn composer_title_uses_return_symbol_at_74_columns_and_below() {
+        let view = composer_view();
+        assert_eq!(
+            composer_title(&view, 73),
+            " (⏎ send, Alt+⏎ newline, Esc cancel) "
+        );
+    }
+
+    #[test]
+    fn composer_title_drops_newline_hint_at_57_columns_and_below() {
+        let view = composer_view();
+        assert_eq!(composer_title(&view, 57), " (⏎ send, Esc cancel) ");
+        assert_eq!(composer_title(&view, 51), " (⏎ send, Esc cancel) ");
+    }
+
+    #[test]
+    fn composer_title_drops_send_hint_at_50_columns_and_below() {
+        let view = composer_view();
+        assert_eq!(composer_title(&view, 50), " (Esc cancel) ");
+        assert_eq!(composer_title(&view, 40), " (Esc cancel) ");
     }
 }

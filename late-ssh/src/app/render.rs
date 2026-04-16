@@ -136,6 +136,7 @@ impl App {
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
+                terminal_width: self.size.0,
             },
         };
         let news_view = chat::news::ui::ArticleListView {
@@ -171,6 +172,7 @@ impl App {
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
+            terminal_width: self.size.0,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
