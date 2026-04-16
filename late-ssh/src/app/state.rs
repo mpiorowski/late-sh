@@ -116,6 +116,7 @@ pub struct SessionConfig {
 
     /// Display config (informational, shown on profile screen)
     pub ai_model: String,
+    pub initial_theme_id: String,
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -395,6 +396,7 @@ impl App {
                 config.profile_service,
                 config.user_id,
                 config.ai_model,
+                config.initial_theme_id,
             ),
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),

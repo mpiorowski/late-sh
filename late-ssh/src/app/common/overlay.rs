@@ -48,7 +48,7 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
     let block = Block::default()
         .title(format!(" {} (j/k scroll · q/Esc close) ", overlay.title))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
     let lines: Vec<Line> = overlay
         .lines
@@ -56,7 +56,7 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
         .map(|line| {
             Line::from(Span::styled(
                 format!(" {line}"),
-                Style::default().fg(theme::TEXT),
+                Style::default().fg(theme::TEXT()),
             ))
         })
         .collect();

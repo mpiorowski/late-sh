@@ -69,9 +69,9 @@ impl Visualizer {
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let border = if self.has_viz {
-            theme::BORDER_ACTIVE
+            theme::BORDER_ACTIVE()
         } else {
-            theme::BORDER
+            theme::BORDER()
         };
 
         let block = Block::default()
@@ -86,8 +86,8 @@ impl Visualizer {
         }
 
         if !self.has_viz {
-            let dim = Style::default().fg(theme::TEXT_DIM);
-            let key = Style::default().fg(theme::AMBER);
+            let dim = Style::default().fg(theme::TEXT_DIM());
+            let key = Style::default().fg(theme::AMBER());
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled("No audio paired", dim)),
@@ -144,7 +144,7 @@ impl Visualizer {
                 let filled = level <= bar_height;
 
                 let (ch, style) = if filled {
-                    ('█', Style::default().fg(theme::AMBER))
+                    ('█', Style::default().fg(theme::AMBER()))
                 } else {
                     (' ', Style::default())
                 };

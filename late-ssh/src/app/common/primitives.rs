@@ -90,11 +90,11 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     };
 
     let current_line = Paragraph::new(Line::from(vec![
-        Span::styled("Current: ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled("Current: ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled(
             label,
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -103,8 +103,8 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
 
 pub fn draw_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
     let (icon, color) = match banner.kind {
-        BannerKind::Success => (" ✓ ", theme::SUCCESS),
-        BannerKind::Error => (" ✗ ", theme::ERROR),
+        BannerKind::Success => (" ✓ ", theme::SUCCESS()),
+        BannerKind::Error => (" ✗ ", theme::ERROR()),
     };
 
     let content = Paragraph::new(Line::from(vec![

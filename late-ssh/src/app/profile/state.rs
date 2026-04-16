@@ -3,7 +3,7 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use super::svc::{ProfileEvent, ProfileService, ProfileSnapshot};
-use crate::app::common::primitives::Banner;
+use crate::app::common::{primitives::Banner, theme};
 
 const USERNAME_MAX_LEN: usize = 12;
 
@@ -23,6 +23,7 @@ pub struct ProfileState {
 
     // Display config (informational)
     pub(crate) ai_model: String,
+    pub(crate) theme_id: String,
 
     // Scroll
     pub(crate) scroll_offset: u16,
@@ -38,7 +39,12 @@ impl Drop for ProfileState {
 }
 
 impl ProfileState {
-    pub fn new(profile_service: ProfileService, user_id: Uuid, ai_model: String) -> Self {
+    pub fn new(
+        profile_service: ProfileService,
+        user_id: Uuid,
+        ai_model: String,
+        initial_theme_id: String,
+    ) -> Self {
         let snapshot_rx = profile_service.subscribe_snapshot(user_id);
         let event_rx = profile_service.subscribe_events();
         let bg_task = profile_service.start_user_refresh_task(user_id);
@@ -53,6 +59,7 @@ impl ProfileState {
             bg_task,
             settings_row: 0,
             ai_model,
+            theme_id: theme::normalize_id(&initial_theme_id).to_string(),
             scroll_offset: 0,
             viewport_height: 0,
         }
@@ -76,6 +83,10 @@ impl ProfileState {
 
     pub fn ai_model(&self) -> &str {
         &self.ai_model
+    }
+
+    pub fn theme_id(&self) -> &str {
+        &self.theme_id
     }
 
     pub fn scroll_offset(&self) -> u16 {
@@ -140,8 +151,12 @@ impl ProfileState {
         Self::NOTIFY_KINDS.len()
     }
 
+    fn theme_row_index() -> usize {
+        Self::cooldown_row_index() + 1
+    }
+
     pub fn move_settings_row(&mut self, delta: isize) {
-        let last = Self::cooldown_row_index() as isize;
+        let last = Self::theme_row_index() as isize;
         self.settings_row = clamp_settings_row(self.settings_row as isize + delta, last);
     }
 
@@ -151,6 +166,10 @@ impl ProfileState {
             self.profile.notify_cooldown_mins =
                 cycle_cooldown_value(self.profile.notify_cooldown_mins, forward);
             self.save_profile();
+        } else if self.settings_row == Self::theme_row_index() {
+            self.theme_id = theme::cycle_id(&self.theme_id, forward).to_string();
+            self.profile_service
+                .set_theme_id(self.user_id, self.theme_id.clone());
         } else if let Some(kind) = Self::NOTIFY_KINDS.get(self.settings_row) {
             toggle_notify_kind(&mut self.profile.notify_kinds, kind);
             self.save_profile();
@@ -185,9 +204,13 @@ impl ProfileState {
                     return;
                 }
                 let profile = snapshot.profile.clone();
+                let theme_id = snapshot.theme_id.clone();
                 drop(snapshot);
                 if let Some(profile) = profile {
                     self.profile = profile;
+                }
+                if let Some(theme_id) = theme_id {
+                    self.theme_id = theme::normalize_id(&theme_id).to_string();
                 }
             }
             Ok(false) => (),
@@ -350,12 +373,12 @@ mod tests {
 
     #[test]
     fn clamp_settings_row_clamps_above_last() {
-        assert_eq!(clamp_settings_row(9, 3), 3);
+        assert_eq!(clamp_settings_row(9, 4), 4);
     }
 
     #[test]
     fn clamp_settings_row_passes_through_in_range() {
-        assert_eq!(clamp_settings_row(2, 3), 2);
+        assert_eq!(clamp_settings_row(2, 4), 2);
     }
 
     #[test]
@@ -365,6 +388,14 @@ mod tests {
         assert_eq!(
             ProfileState::NOTIFY_KINDS,
             &["dms", "mentions", "game_events"]
+        );
+    }
+
+    #[test]
+    fn theme_row_index_is_after_cooldown() {
+        assert_eq!(
+            ProfileState::theme_row_index(),
+            ProfileState::cooldown_row_index() + 1
         );
     }
 }

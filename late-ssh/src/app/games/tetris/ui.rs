@@ -16,11 +16,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
     let info_lines = vec![
         info_tagline("Endless falling blocks. Speed rises as you survive."),
         Line::from(""),
-        info_label_value("Score", state.score.to_string(), theme::AMBER_GLOW),
-        info_label_value("Best", state.best_score.to_string(), theme::SUCCESS),
-        info_label_value("Lines", state.lines.to_string(), theme::TEXT_BRIGHT),
-        info_label_value("Level", state.level.to_string(), theme::TEXT_BRIGHT),
-        info_label_value("Next", state.next.name().to_string(), theme::AMBER_DIM),
+        info_label_value("Score", state.score.to_string(), theme::AMBER_GLOW()),
+        info_label_value("Best", state.best_score.to_string(), theme::SUCCESS()),
+        info_label_value("Lines", state.lines.to_string(), theme::TEXT_BRIGHT()),
+        info_label_value("Level", state.level.to_string(), theme::TEXT_BRIGHT()),
+        info_label_value("Next", state.next.name().to_string(), theme::AMBER_DIM()),
         Line::from(""),
         key_hint("h/l or ←/→", "move"),
         key_hint("j or ↓", "soft drop"),
@@ -46,7 +46,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
             board_area,
             "PAUSED",
             "Press p to resume",
-            theme::AMBER,
+            theme::AMBER(),
         );
     } else if state.is_game_over {
         draw_game_overlay(
@@ -54,7 +54,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
             board_area,
             "GAME OVER",
             "Press r for a fresh run",
-            theme::ERROR,
+            theme::ERROR(),
         );
     }
 }
@@ -64,21 +64,27 @@ fn board_lines(state: &State) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(BOARD_HEIGHT + 2);
     lines.push(Line::from(Span::styled(
         format!("┌{}┐", "─".repeat(BOARD_WIDTH * 2)),
-        Style::default().fg(theme::BORDER_ACTIVE),
+        Style::default().fg(theme::BORDER_ACTIVE()),
     )));
 
     for row in board {
-        let mut spans = vec![Span::styled("│", Style::default().fg(theme::BORDER_ACTIVE))];
+        let mut spans = vec![Span::styled(
+            "│",
+            Style::default().fg(theme::BORDER_ACTIVE()),
+        )];
         for cell in row {
             spans.push(cell_span(cell));
         }
-        spans.push(Span::styled("│", Style::default().fg(theme::BORDER_ACTIVE)));
+        spans.push(Span::styled(
+            "│",
+            Style::default().fg(theme::BORDER_ACTIVE()),
+        ));
         lines.push(Line::from(spans));
     }
 
     lines.push(Line::from(Span::styled(
         format!("└{}┘", "─".repeat(BOARD_WIDTH * 2)),
-        Style::default().fg(theme::BORDER_ACTIVE),
+        Style::default().fg(theme::BORDER_ACTIVE()),
     )));
 
     lines
@@ -92,7 +98,7 @@ fn cell_span(cell: Option<PieceKind>) -> Span<'static> {
                 .fg(piece_color(kind))
                 .add_modifier(Modifier::BOLD),
         ),
-        None => Span::styled("  ", Style::default().bg(theme::BG_SELECTION)),
+        None => Span::styled("  ", Style::default().bg(theme::BG_SELECTION())),
     }
 }
 

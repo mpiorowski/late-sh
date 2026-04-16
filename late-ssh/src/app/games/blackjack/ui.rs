@@ -24,7 +24,7 @@ fn draw_game_snapshot(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapsho
     let info_lines = vec![
         info_tagline("Single-player blackjack. Bet, draw, settle, repeat."),
         Line::from(""),
-        info_label_value("Balance", snapshot.balance.to_string(), theme::SUCCESS),
+        info_label_value("Balance", snapshot.balance.to_string(), theme::SUCCESS()),
         info_label_value(
             "Bet",
             snapshot
@@ -37,12 +37,12 @@ fn draw_game_snapshot(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapsho
                         snapshot.bet_input.clone()
                     }
                 }),
-            theme::AMBER_GLOW,
+            theme::AMBER_GLOW(),
         ),
         info_label_value(
             "Phase",
             snapshot.phase.label().to_string(),
-            theme::TEXT_BRIGHT,
+            theme::TEXT_BRIGHT(),
         ),
         Line::from(""),
         key_line(snapshot.phase),
@@ -72,16 +72,16 @@ fn draw_game_snapshot(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapsho
 
     frame.render_widget(
         Paragraph::new(vec![Line::from(vec![
-            Span::styled("Dealer: ", Style::default().fg(theme::TEXT_DIM)),
-            Span::styled(dealer_cards, Style::default().fg(theme::TEXT_BRIGHT)),
+            Span::styled("Dealer: ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(dealer_cards, Style::default().fg(theme::TEXT_BRIGHT())),
             Span::raw(format!("   ({dealer_total})")),
         ])]),
         rows[0],
     );
     frame.render_widget(
         Paragraph::new(vec![Line::from(vec![
-            Span::styled("You:    ", Style::default().fg(theme::TEXT_DIM)),
-            Span::styled(player_cards, Style::default().fg(theme::TEXT_BRIGHT)),
+            Span::styled("You:    ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(player_cards, Style::default().fg(theme::TEXT_BRIGHT())),
             Span::raw(format!("   ({player_total})")),
         ])]),
         rows[2],
@@ -90,15 +90,15 @@ fn draw_game_snapshot(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapsho
         Paragraph::new(snapshot.status_message.as_str()).block(
             Block::default()
                 .borders(Borders::TOP)
-                .border_style(Style::default().fg(theme::BORDER_DIM)),
+                .border_style(Style::default().fg(theme::BORDER_DIM())),
         ),
         rows[4],
     );
 
     if let Some((title, subtitle)) = &snapshot.outcome_banner {
         let color = match snapshot.last_outcome {
-            Some(Outcome::PlayerBlackjack | Outcome::PlayerWin | Outcome::Push) => theme::SUCCESS,
-            Some(Outcome::DealerWin) | None => theme::ERROR,
+            Some(Outcome::PlayerBlackjack | Outcome::PlayerWin | Outcome::Push) => theme::SUCCESS(),
+            Some(Outcome::DealerWin) | None => theme::ERROR(),
         };
         draw_game_overlay(frame, inner, title.as_str(), subtitle.as_str(), color);
     }

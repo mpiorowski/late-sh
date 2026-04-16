@@ -33,7 +33,7 @@ pub(super) fn build_composer_lines_from_rows(
 ) -> Vec<Line<'static>> {
     if text.is_empty() {
         if composing {
-            let dim = Style::default().fg(theme::TEXT_DIM);
+            let dim = Style::default().fg(theme::TEXT_DIM());
             let first_style = if cursor_visible {
                 dim.add_modifier(Modifier::REVERSED)
             } else {
@@ -227,7 +227,7 @@ pub(super) fn wrap_message_to_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let pad = if mentions_us {
-        Span::styled("│", Style::default().fg(theme::MENTION))
+        Span::styled("│", Style::default().fg(theme::MENTION()))
     } else {
         Span::raw(" ")
     };
@@ -237,7 +237,10 @@ pub(super) fn wrap_message_to_lines(
         lines.push(Line::from(vec![
             pad.clone(),
             Span::styled(prefix.to_string(), author_style),
-            Span::styled(format!(" {stamp}"), Style::default().fg(theme::TEXT_FAINT)),
+            Span::styled(
+                format!(" {stamp}"),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ),
         ]));
     }
 
@@ -255,7 +258,7 @@ pub(super) fn wrap_message_to_lines(
         for row in wrap_plain_line(&format!("> {reply_quote}"), body_width) {
             lines.push(Line::from(vec![
                 pad.clone(),
-                Span::styled(row, Style::default().fg(theme::TEXT_FAINT)),
+                Span::styled(row, Style::default().fg(theme::TEXT_FAINT())),
             ]));
         }
     }
@@ -363,19 +366,19 @@ fn wrap_news_to_lines(
     payload: NewsPayload,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let border_style = Style::default().fg(theme::BORDER);
+    let border_style = Style::default().fg(theme::BORDER());
     let title_style = Style::default()
-        .fg(theme::AMBER)
+        .fg(theme::AMBER())
         .add_modifier(Modifier::BOLD);
-    let body_style = Style::default().fg(theme::CHAT_BODY);
-    let meta_style = Style::default().fg(theme::TEXT_FAINT);
+    let body_style = Style::default().fg(theme::CHAT_BODY());
+    let meta_style = Style::default().fg(theme::TEXT_FAINT());
 
     let pad = Span::raw(" ");
 
     lines.push(Line::from(vec![
         pad.clone(),
         Span::styled(prefix.to_string(), author_style),
-        Span::styled(" shared news ", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(" shared news ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled(stamp.to_string(), meta_style),
     ]));
 
@@ -442,7 +445,7 @@ fn wrap_news_to_lines(
             Span::styled("│", border_style),
             Span::styled(
                 pad_to_width(left, left_width),
-                Style::default().fg(theme::AMBER_DIM),
+                Style::default().fg(theme::AMBER_DIM()),
             ),
             Span::styled(" │ ", border_style),
             Span::styled(pad_to_width(right, right_width), right_style),
@@ -571,7 +574,7 @@ fn decode_escaped_field(input: &str) -> String {
 // ── Mention span highlighting ───────────────────────────────
 
 pub(super) fn mention_spans(text: &str, body_style: Style) -> Vec<Span<'static>> {
-    let mention_style = body_style.fg(theme::MENTION).add_modifier(Modifier::BOLD);
+    let mention_style = body_style.fg(theme::MENTION()).add_modifier(Modifier::BOLD);
     let mut spans = Vec::new();
     let mut idx = 0;
     let mut segment_start = 0;

@@ -28,17 +28,17 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
     let info_lines = vec![
         info_tagline("Classic newspaper logic."),
         Line::from(""),
-        info_label_value("Mode", mode_str.to_string(), theme::AMBER_GLOW),
+        info_label_value("Mode", mode_str.to_string(), theme::AMBER_GLOW()),
         info_label_value(
             "Difficulty",
             state.difficulty_key().to_string(),
-            theme::SUCCESS,
+            theme::SUCCESS(),
         ),
-        info_label_value("Progress", format!("{filled}/81"), theme::TEXT_BRIGHT),
+        info_label_value("Progress", format!("{filled}/81"), theme::TEXT_BRIGHT()),
         info_label_value(
             "Cursor",
             format!("{}{}", row_label(state.cursor.0), state.cursor.1 + 1),
-            theme::TEXT_BRIGHT,
+            theme::TEXT_BRIGHT(),
         ),
         Line::from(""),
         key_hint("h/j/k/l", "move"),
@@ -65,7 +65,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
             Mode::Daily => "Change diff via [ ]",
             Mode::Personal => "n for new",
         };
-        draw_game_overlay(frame, board_area, "PUZZLE SOLVED!", subtext, theme::SUCCESS);
+        draw_game_overlay(
+            frame,
+            board_area,
+            "PUZZLE SOLVED!",
+            subtext,
+            theme::SUCCESS(),
+        );
     }
 }
 
@@ -74,7 +80,7 @@ fn board_lines(state: &State) -> Vec<Line<'static>> {
         column_header(),
         Line::from(Span::styled(
             "   ┌───────────┬───────────┬───────────┐",
-            Style::default().fg(theme::BORDER_ACTIVE),
+            Style::default().fg(theme::BORDER_ACTIVE()),
         )),
     ];
 
@@ -83,14 +89,14 @@ fn board_lines(state: &State) -> Vec<Line<'static>> {
         if row == 2 || row == 5 {
             lines.push(Line::from(Span::styled(
                 "   ├───────────┼───────────┼───────────┤",
-                Style::default().fg(theme::BORDER),
+                Style::default().fg(theme::BORDER()),
             )));
         }
     }
 
     lines.push(Line::from(Span::styled(
         "   └───────────┴───────────┴───────────┘",
-        Style::default().fg(theme::BORDER_ACTIVE),
+        Style::default().fg(theme::BORDER_ACTIVE()),
     )));
     lines
 }
@@ -103,7 +109,7 @@ fn column_header() -> Line<'static> {
             let col = block * 3 + inner + 1;
             spans.push(Span::styled(
                 format!(" {col} "),
-                Style::default().fg(theme::TEXT_DIM),
+                Style::default().fg(theme::TEXT_DIM()),
             ));
             if inner < 2 {
                 spans.push(Span::raw(" "));
@@ -121,9 +127,9 @@ fn board_row(state: &State, row: usize) -> Line<'static> {
     let mut spans = vec![
         Span::styled(
             format!(" {} ", row_label(row)),
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         ),
-        Span::styled("│", Style::default().fg(theme::BORDER_ACTIVE)),
+        Span::styled("│", Style::default().fg(theme::BORDER_ACTIVE())),
     ];
 
     for block in 0..3 {
@@ -134,7 +140,10 @@ fn board_row(state: &State, row: usize) -> Line<'static> {
                 spans.push(Span::raw(" "));
             }
         }
-        spans.push(Span::styled("│", Style::default().fg(theme::BORDER_ACTIVE)));
+        spans.push(Span::styled(
+            "│",
+            Style::default().fg(theme::BORDER_ACTIVE()),
+        ));
     }
 
     Line::from(spans)
@@ -145,19 +154,19 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     let is_fixed = state.fixed_mask[row][col];
     let is_selected = state.cursor == (row, col);
     let mut style = if value == 0 {
-        Style::default().fg(theme::TEXT_FAINT)
+        Style::default().fg(theme::TEXT_FAINT())
     } else if is_fixed {
-        Style::default().fg(theme::TEXT_MUTED)
+        Style::default().fg(theme::TEXT_MUTED())
     } else {
         Style::default()
-            .fg(theme::AMBER_GLOW)
+            .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD)
     };
 
     if is_selected {
         style = style
-            .bg(theme::BG_HIGHLIGHT)
-            .fg(theme::TEXT_BRIGHT)
+            .bg(theme::BG_HIGHLIGHT())
+            .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD);
     }
 

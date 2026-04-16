@@ -32,22 +32,22 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
     let info_lines = vec![
         info_tagline("Clear the field. Three strikes and you're out."),
         Line::from(""),
-        info_label_value("Mode", mode_str.to_string(), theme::AMBER_GLOW),
+        info_label_value("Mode", mode_str.to_string(), theme::AMBER_GLOW()),
         info_label_value(
             "Difficulty",
             state.difficulty_key().to_string(),
-            theme::SUCCESS,
+            theme::SUCCESS(),
         ),
         info_label_value("Lives", lives_str, lives_color(state.lives)),
         info_label_value(
             "Revealed",
             format!("{}/{}", state.revealed_count(), state.safe_cell_count()),
-            theme::TEXT_BRIGHT,
+            theme::TEXT_BRIGHT(),
         ),
         info_label_value(
             "Flags",
             format!("{}/{}", state.accounted_mine_count(), state.mine_count()),
-            theme::AMBER,
+            theme::AMBER(),
         ),
         Line::from(""),
         key_hint("h/j/k/l", "move"),
@@ -80,7 +80,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
                 Mode::Daily => "Change diff via [ ]",
                 Mode::Personal => "n for new",
             };
-            draw_game_overlay(frame, board_area, "FIELD CLEARED!", subtext, theme::SUCCESS);
+            draw_game_overlay(
+                frame,
+                board_area,
+                "FIELD CLEARED!",
+                subtext,
+                theme::SUCCESS(),
+            );
         } else {
             let subtext = match state.mode {
                 Mode::Daily => "Try another diff via [ ]",
@@ -93,7 +99,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
 
 fn board_lines(state: &State) -> Vec<Line<'static>> {
     let diff = state.difficulty();
-    let dim = Style::default().fg(theme::BORDER_DIM);
+    let dim = Style::default().fg(theme::BORDER_DIM());
 
     let mut lines = Vec::new();
 
@@ -136,7 +142,7 @@ fn column_header(cols: usize) -> Line<'static> {
     let mut spans = vec![Span::raw("    ")];
     for col in 0..cols {
         let label = format!("{:>2} ", col + 1);
-        spans.push(Span::styled(label, Style::default().fg(theme::TEXT_DIM)));
+        spans.push(Span::styled(label, Style::default().fg(theme::TEXT_DIM())));
         if col < cols - 1 {
             spans.push(Span::raw(" "));
         }
@@ -146,12 +152,12 @@ fn column_header(cols: usize) -> Line<'static> {
 
 fn board_row(state: &State, row: usize) -> Line<'static> {
     let diff = state.difficulty();
-    let dim = Style::default().fg(theme::BORDER_DIM);
+    let dim = Style::default().fg(theme::BORDER_DIM());
 
     let mut spans = vec![
         Span::styled(
             format!(" {} ", row_label(row)),
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         ),
         Span::styled("\u{2502}", dim),
     ];
@@ -178,7 +184,7 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
         CELL_REVEALED => {
             let count = adjacent_mine_count(mine_map, row, col);
             if count == 0 {
-                ("   ".to_string(), Style::default().fg(theme::TEXT_FAINT))
+                ("   ".to_string(), Style::default().fg(theme::TEXT_FAINT()))
             } else {
                 (
                     format!(" {count} "),
@@ -192,7 +198,7 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
             " F ".to_string(),
             Style::default()
                 .fg(Color::Rgb(20, 16, 10))
-                .bg(theme::AMBER_GLOW)
+                .bg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
         ),
         CELL_MINE_HIT => (
@@ -204,14 +210,14 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
         ),
         _ => (
             " \u{00b7} ".to_string(),
-            Style::default().fg(theme::TEXT_FAINT),
+            Style::default().fg(theme::TEXT_FAINT()),
         ),
     };
 
     if is_selected {
         style = style
-            .bg(theme::BG_HIGHLIGHT)
-            .fg(theme::TEXT_BRIGHT)
+            .bg(theme::BG_HIGHLIGHT())
+            .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD);
     }
 

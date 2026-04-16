@@ -22,7 +22,7 @@ pub fn draw_game_frame<'a>(
     let block = Block::default()
         .title(format!(" {title} "))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -31,7 +31,7 @@ pub fn draw_game_frame<'a>(
     let info_block = Block::default()
         .title(" Info ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let info_inner = info_block.inner(layout[1]);
     frame.render_widget(info_block, layout[1]);
     frame.render_widget(Paragraph::new(info_lines), info_inner);
@@ -57,7 +57,7 @@ pub fn draw_game_overlay(
         )),
         Line::from(Span::styled(
             subtitle.to_string(),
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         )),
     ])
     .alignment(Alignment::Center)
@@ -85,7 +85,7 @@ pub fn info_label_value<'a>(label: &'a str, value: String, color: Color) -> Line
     Line::from(vec![
         Span::styled(
             format!("{:<11}", label),
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         ),
         Span::styled(
             value,
@@ -98,9 +98,9 @@ pub fn key_hint(key: &str, desc: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{:<12}", key),
-            Style::default().fg(theme::AMBER_DIM),
+            Style::default().fg(theme::AMBER_DIM()),
         ),
-        Span::styled(desc.to_string(), Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(desc.to_string(), Style::default().fg(theme::TEXT_DIM())),
     ])
 }
 
@@ -108,7 +108,7 @@ pub fn info_tagline(text: &str) -> Line<'static> {
     Line::from(Span::styled(
         text.to_string(),
         Style::default()
-            .fg(theme::TEXT_MUTED)
+            .fg(theme::TEXT_MUTED())
             .add_modifier(Modifier::ITALIC),
     ))
 }
@@ -156,7 +156,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     let block = Block::default()
         .title(" The Arcade ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -303,14 +303,14 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
         Line::from(Span::styled(
             line,
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ))
     }));
     header_text.push(Line::from(""));
     header_text.push(Line::from(Span::styled(
         format!("{subtitle_indent}{subtitle}"),
-        Style::default().fg(theme::TEXT_DIM),
+        Style::default().fg(theme::TEXT_DIM()),
     )));
 
     let paragraph = Paragraph::new(header_text).alignment(Alignment::Left);
@@ -326,7 +326,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     lines.push(Line::from(Span::styled(
         "─── High Score Games ───",
         Style::default()
-            .fg(theme::AMBER)
+            .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
@@ -360,12 +360,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         let marker = if is_selected { "> " } else { "  " };
         let style = if is_selected {
             Style::default()
-                .fg(theme::TEXT_BRIGHT)
+                .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD)
         } else if available {
-            Style::default().fg(theme::TEXT)
+            Style::default().fg(theme::TEXT())
         } else {
-            Style::default().fg(theme::TEXT_MUTED)
+            Style::default().fg(theme::TEXT_MUTED())
         };
 
         let mut title_line = vec![
@@ -378,19 +378,19 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
 
         if available {
             if let Some(status) = status {
-                title_line.push(Span::styled(status, Style::default().fg(theme::SUCCESS)));
+                title_line.push(Span::styled(status, Style::default().fg(theme::SUCCESS())));
             }
         } else {
             title_line.push(Span::styled(
                 "Coming Soon",
-                Style::default().fg(theme::TEXT_DIM),
+                Style::default().fg(theme::TEXT_DIM()),
             ));
         }
 
         lines.push(Line::from(title_line));
         lines.push(Line::from(vec![
             Span::raw("      "),
-            Span::styled(desc, Style::default().fg(theme::TEXT_DIM)),
+            Span::styled(desc, Style::default().fg(theme::TEXT_DIM())),
         ]));
         lines.push(Line::from(""));
     }
@@ -399,7 +399,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     lines.push(Line::from(Span::styled(
         "─── Daily Games ───",
         Style::default()
-            .fg(theme::AMBER)
+            .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
@@ -408,7 +408,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         Span::raw("  "),
         Span::styled(
             "Daily runs, personal retries, streaks, and leaderboards.",
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
     lines.push(Line::from(""));
@@ -482,12 +482,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         let marker = if is_selected { "> " } else { "  " };
         let style = if is_selected {
             Style::default()
-                .fg(theme::TEXT_BRIGHT)
+                .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD)
         } else if available {
-            Style::default().fg(theme::TEXT)
+            Style::default().fg(theme::TEXT())
         } else {
-            Style::default().fg(theme::TEXT_MUTED)
+            Style::default().fg(theme::TEXT_MUTED())
         };
 
         let mut title_line = vec![
@@ -499,18 +499,18 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         title_line.push(Span::raw(" ".repeat(padding_len)));
 
         if available {
-            title_line.push(Span::styled(status, Style::default().fg(theme::SUCCESS)));
+            title_line.push(Span::styled(status, Style::default().fg(theme::SUCCESS())));
         } else {
             title_line.push(Span::styled(
                 "Coming Soon",
-                Style::default().fg(theme::TEXT_DIM),
+                Style::default().fg(theme::TEXT_DIM()),
             ));
         }
 
         lines.push(Line::from(title_line));
         lines.push(Line::from(vec![
             Span::raw("      "),
-            Span::styled(desc, Style::default().fg(theme::TEXT_DIM)),
+            Span::styled(desc, Style::default().fg(theme::TEXT_DIM())),
         ]));
         lines.push(Line::from(""));
     }
@@ -519,7 +519,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     lines.push(Line::from(Span::styled(
         "─── Multiplayer ───",
         Style::default()
-            .fg(theme::AMBER)
+            .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
@@ -587,10 +587,10 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             let marker = if is_selected { "> " } else { "  " };
             let style = if is_selected {
                 Style::default()
-                    .fg(theme::TEXT_BRIGHT)
+                    .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT)
+                Style::default().fg(theme::TEXT())
             };
             let mut title_line = vec![
                 Span::styled(marker, style),
@@ -599,12 +599,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             let padding_len = 16_usize.saturating_sub(name.len() + 4);
             title_line.push(Span::raw(" ".repeat(padding_len)));
             if let Some(status) = status {
-                title_line.push(Span::styled(status, Style::default().fg(theme::SUCCESS)));
+                title_line.push(Span::styled(status, Style::default().fg(theme::SUCCESS())));
             }
             lines.push(Line::from(title_line));
             lines.push(Line::from(vec![
                 Span::raw("      "),
-                Span::styled(desc, Style::default().fg(theme::TEXT_DIM)),
+                Span::styled(desc, Style::default().fg(theme::TEXT_DIM())),
             ]));
             lines.push(Line::from(""));
         } else if idx == 6 {
@@ -616,18 +616,18 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             lines.push(Line::from(vec![
                 Span::styled(
                     if is_selected { "> " } else { "  " },
-                    Style::default().fg(theme::TEXT_MUTED),
+                    Style::default().fg(theme::TEXT_MUTED()),
                 ),
                 Span::styled(
                     format!("[ {} ]", name),
-                    Style::default().fg(theme::TEXT_MUTED),
+                    Style::default().fg(theme::TEXT_MUTED()),
                 ),
                 Span::raw(" ".repeat(padding_len)),
-                Span::styled("Admin Only", Style::default().fg(theme::TEXT_DIM)),
+                Span::styled("Admin Only", Style::default().fg(theme::TEXT_DIM())),
             ]));
             lines.push(Line::from(vec![
                 Span::raw("      "),
-                Span::styled(desc, Style::default().fg(theme::TEXT_MUTED)),
+                Span::styled(desc, Style::default().fg(theme::TEXT_MUTED())),
             ]));
             lines.push(Line::from(""));
         } else {
@@ -668,14 +668,14 @@ fn draw_coming_soon_entry<'a>(lines: &mut Vec<Line<'a>>, name: &'a str, desc: &'
         Span::raw("  "),
         Span::styled(
             format!("[ {} ]", name),
-            Style::default().fg(theme::TEXT_MUTED),
+            Style::default().fg(theme::TEXT_MUTED()),
         ),
         Span::raw(" ".repeat(padding_len)),
-        Span::styled("Coming Soon", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled("Coming Soon", Style::default().fg(theme::TEXT_DIM())),
     ]));
     lines.push(Line::from(vec![
         Span::raw("      "),
-        Span::styled(desc, Style::default().fg(theme::TEXT_MUTED)),
+        Span::styled(desc, Style::default().fg(theme::TEXT_MUTED())),
     ]));
     lines.push(Line::from(""));
 }
@@ -686,7 +686,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
     let block = Block::default()
         .title(" Leaderboard (🗘 30s) ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let block_inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -709,7 +709,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
         lines.push(Line::from(Span::styled(
             "Chip Leaders",
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
@@ -721,17 +721,17 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
             };
             let medal_style = if i == 0 {
                 Style::default()
-                    .fg(theme::AMBER_GLOW)
+                    .fg(theme::AMBER_GLOW())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT_DIM)
+                Style::default().fg(theme::TEXT_DIM())
             };
             let name_style = if i == 0 {
                 Style::default()
-                    .fg(theme::TEXT_BRIGHT)
+                    .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT)
+                Style::default().fg(theme::TEXT())
             };
             let max_name = (inner.width as usize).saturating_sub(10);
             let name: String = entry.username.chars().take(max_name).collect();
@@ -740,7 +740,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
                 Span::styled(name, name_style),
                 Span::styled(
                     format!(" {}", entry.balance),
-                    Style::default().fg(theme::SUCCESS),
+                    Style::default().fg(theme::SUCCESS()),
                 ),
             ]));
         }
@@ -752,7 +752,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
     lines.push(Line::from(Span::styled(
         "Today's Champions",
         Style::default()
-            .fg(theme::AMBER)
+            .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
@@ -760,7 +760,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
     if data.today_champions.is_empty() {
         lines.push(Line::from(Span::styled(
             "No wins yet today",
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         )));
     } else {
         for (i, entry) in data.today_champions.iter().take(5).enumerate() {
@@ -770,17 +770,17 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
             };
             let medal_style = if i == 0 {
                 Style::default()
-                    .fg(theme::AMBER_GLOW)
+                    .fg(theme::AMBER_GLOW())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT_DIM)
+                Style::default().fg(theme::TEXT_DIM())
             };
             let name_style = if i == 0 {
                 Style::default()
-                    .fg(theme::TEXT_BRIGHT)
+                    .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT)
+                Style::default().fg(theme::TEXT())
             };
             let max_name = (inner.width as usize).saturating_sub(8);
             let name: String = entry.username.chars().take(max_name).collect();
@@ -789,7 +789,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
                 Span::styled(name, name_style),
                 Span::styled(
                     format!(" {}", entry.count),
-                    Style::default().fg(theme::TEXT_DIM),
+                    Style::default().fg(theme::TEXT_DIM()),
                 ),
             ]));
         }
@@ -801,7 +801,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
     lines.push(Line::from(Span::styled(
         "Streak Leaders",
         Style::default()
-            .fg(theme::AMBER)
+            .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
@@ -809,17 +809,17 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
     if data.streak_leaders.is_empty() {
         lines.push(Line::from(Span::styled(
             "No active streaks",
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         )));
     } else {
         for (i, entry) in data.streak_leaders.iter().take(5).enumerate() {
             let badge = BadgeTier::from_streak(entry.count);
             let badge_str = badge.map(|b| b.label()).unwrap_or("");
             let badge_color = match badge {
-                Some(BadgeTier::Gold) => theme::AMBER_GLOW,
-                Some(BadgeTier::Silver) => theme::TEXT_BRIGHT,
-                Some(BadgeTier::Bronze) => theme::AMBER_DIM,
-                None => theme::TEXT_DIM,
+                Some(BadgeTier::Gold) => theme::AMBER_GLOW(),
+                Some(BadgeTier::Silver) => theme::TEXT_BRIGHT(),
+                Some(BadgeTier::Bronze) => theme::AMBER_DIM(),
+                None => theme::TEXT_DIM(),
             };
             let medal = if i == 0 {
                 "\u{25c6} " // ◆
@@ -827,14 +827,14 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
                 ""
             };
             let medal_style = Style::default()
-                .fg(theme::AMBER_GLOW)
+                .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD);
             let name_style = if i == 0 {
                 Style::default()
-                    .fg(theme::TEXT_BRIGHT)
+                    .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT)
+                Style::default().fg(theme::TEXT())
             };
             let max_name = (inner.width as usize).saturating_sub(10);
             let name: String = entry.username.chars().take(max_name).collect();
@@ -844,7 +844,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
                 Span::styled(name, name_style),
                 Span::styled(
                     format!(" {}d", entry.count),
-                    Style::default().fg(theme::TEXT_DIM),
+                    Style::default().fg(theme::TEXT_DIM()),
                 ),
             ]));
         }
@@ -856,7 +856,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
         lines.push(Line::from(Span::styled(
             "All-Time High Scores",
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
@@ -869,7 +869,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
                 game_first = true;
                 lines.push(Line::from(Span::styled(
                     current_game.to_string(),
-                    Style::default().fg(theme::TEXT_DIM),
+                    Style::default().fg(theme::TEXT_DIM()),
                 )));
             }
             let medal = if game_first {
@@ -879,17 +879,17 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
             };
             let medal_style = if game_first {
                 Style::default()
-                    .fg(theme::AMBER_GLOW)
+                    .fg(theme::AMBER_GLOW())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT_DIM)
+                Style::default().fg(theme::TEXT_DIM())
             };
             let name_style = if game_first {
                 Style::default()
-                    .fg(theme::TEXT_BRIGHT)
+                    .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT)
+                Style::default().fg(theme::TEXT())
             };
             game_first = false;
             let max_name = (inner.width as usize).saturating_sub(10);
@@ -899,7 +899,7 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
                 Span::styled(name, name_style),
                 Span::styled(
                     format!(" {}", entry.score),
-                    Style::default().fg(theme::SUCCESS),
+                    Style::default().fg(theme::SUCCESS()),
                 ),
             ]));
         }
@@ -910,30 +910,33 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
     lines.push(Line::from(Span::styled(
         "Info",
         Style::default()
-            .fg(theme::AMBER)
+            .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
-    let muted = Style::default().fg(theme::TEXT_MUTED);
+    let muted = Style::default().fg(theme::TEXT_MUTED());
 
     // Streak tiers
     lines.push(Line::from(Span::styled("Streak tiers:", muted)));
     lines.push(Line::from(vec![
         Span::styled("  ", muted),
-        Span::styled("\u{2605}", Style::default().fg(theme::AMBER_DIM)),
+        Span::styled("\u{2605}", Style::default().fg(theme::AMBER_DIM())),
         Span::styled("   Bronze   3+d", muted),
     ]));
     lines.push(Line::from(vec![
         Span::styled("  ", muted),
-        Span::styled("\u{2605}\u{2605}", Style::default().fg(theme::TEXT_BRIGHT)),
+        Span::styled(
+            "\u{2605}\u{2605}",
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ),
         Span::styled("  Silver   7+d", muted),
     ]));
     lines.push(Line::from(vec![
         Span::styled("  ", muted),
         Span::styled(
             "\u{2605}\u{2605}\u{2605}",
-            Style::default().fg(theme::AMBER_GLOW),
+            Style::default().fg(theme::AMBER_GLOW()),
         ),
         Span::styled(" Gold    14+d", muted),
     ]));

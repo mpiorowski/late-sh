@@ -55,18 +55,18 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
     let info_lines = vec![
         info_tagline("Paint by logic."),
         Line::from(""),
-        info_label_value("Mode", mode_str.to_string(), theme::AMBER_GLOW),
-        info_label_value("Size", pack.size_key.clone(), theme::TEXT_BRIGHT),
-        info_label_value("Difficulty", puzzle.difficulty.clone(), theme::SUCCESS),
+        info_label_value("Mode", mode_str.to_string(), theme::AMBER_GLOW()),
+        info_label_value("Size", pack.size_key.clone(), theme::TEXT_BRIGHT()),
+        info_label_value("Difficulty", puzzle.difficulty.clone(), theme::SUCCESS()),
         info_label_value(
             "Progress",
             format!("{}/{}", state.filled_count(), state.target_count()),
-            theme::TEXT_BRIGHT,
+            theme::TEXT_BRIGHT(),
         ),
         info_label_value(
             "Puzzle",
             state.current_puzzle_id().to_string(),
-            theme::TEXT_DIM,
+            theme::TEXT_DIM(),
         ),
         Line::from(""),
         key_hint("h/j/k/l", "move"),
@@ -98,7 +98,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
             Mode::Daily => "Change diff via [ ]",
             Mode::Personal => "n for new",
         };
-        draw_game_overlay(frame, board_area, "PUZZLE SOLVED!", subtext, theme::SUCCESS);
+        draw_game_overlay(
+            frame,
+            board_area,
+            "PUZZLE SOLVED!",
+            subtext,
+            theme::SUCCESS(),
+        );
     }
 }
 
@@ -118,14 +124,14 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
 
     let num_cols = puzzle.width as usize;
     let clue_pad = max_row_clues * 3;
-    let dim = Style::default().fg(theme::BORDER_DIM);
+    let dim = Style::default().fg(theme::BORDER_DIM());
 
     let mut lines = Vec::new();
 
     let cursor_col = state.cursor.1;
     let cursor_row = state.cursor.0;
-    let clue_active = Style::default().fg(theme::TEXT_BRIGHT);
-    let clue_normal = Style::default().fg(theme::AMBER_DIM);
+    let clue_active = Style::default().fg(theme::TEXT_BRIGHT());
+    let clue_normal = Style::default().fg(theme::AMBER_DIM());
 
     // Column clue rows (offset by 1 to align with cells inside │)
     for clue_row in 0..max_col_clues {
@@ -213,20 +219,20 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
 
     let mut style = if filled == 1 {
         Style::default()
-            .fg(theme::AMBER_GLOW)
+            .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD)
     } else if filled == 2 {
         Style::default()
-            .fg(theme::TEXT_MUTED)
+            .fg(theme::TEXT_MUTED())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme::TEXT_FAINT)
+        Style::default().fg(theme::TEXT_FAINT())
     };
 
     if is_selected {
         style = style
-            .bg(theme::BG_HIGHLIGHT)
-            .fg(theme::TEXT_BRIGHT)
+            .bg(theme::BG_HIGHLIGHT())
+            .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD);
     }
 

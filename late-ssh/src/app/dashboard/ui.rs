@@ -30,7 +30,7 @@ pub struct DashboardRenderInput<'a> {
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     if area.width < 52 || area.height < 16 {
         let compact = Paragraph::new("Dashboard view too small.")
-            .style(Style::default().fg(theme::TEXT_DIM))
+            .style(Style::default().fg(theme::TEXT_DIM()))
             .centered();
         frame.render_widget(compact, area);
         return;
@@ -69,7 +69,7 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
     let block = Block::default()
         .title(" Stream ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let inner = Rect {
@@ -80,31 +80,31 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
 
     let lines = vec![
         Line::from(vec![
-            Span::styled("Playing: ", Style::default().fg(theme::TEXT_DIM)),
-            Span::styled(props.now_playing, Style::default().fg(theme::TEXT_BRIGHT)),
+            Span::styled("Playing: ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(props.now_playing, Style::default().fg(theme::TEXT_BRIGHT())),
         ]),
         Line::from(vec![
-            Span::styled("Vibe: ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled("Vibe: ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 genre_label(props.current_genre),
                 Style::default()
-                    .fg(theme::AMBER)
+                    .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  Next: ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled("  Next: ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 genre_label(props.leading_genre),
-                Style::default().fg(theme::AMBER_DIM),
+                Style::default().fg(theme::AMBER_DIM()),
             ),
-            Span::styled("  Switch in ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled("  Switch in ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 format_duration_mmss(props.next_switch_in),
-                Style::default().fg(theme::TEXT),
+                Style::default().fg(theme::TEXT()),
             ),
         ]),
         Line::from(vec![Span::styled(
             "No audio? Type /music in chat for setup instructions",
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         )]),
     ];
 

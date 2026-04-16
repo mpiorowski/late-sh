@@ -23,9 +23,9 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if state.is_alive {
-            theme::BORDER
+            theme::BORDER()
         } else {
-            theme::TEXT_FAINT
+            theme::TEXT_FAINT()
         }));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -56,14 +56,14 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
 
     // Render tree lines
     let leaf_color = if wilting {
-        theme::AMBER_DIM
+        theme::AMBER_DIM()
     } else {
         leaf_color_for_stage(stage)
     };
     let trunk_color = if wilting {
-        theme::TEXT_FAINT
+        theme::TEXT_FAINT()
     } else {
-        theme::AMBER
+        theme::AMBER()
     };
 
     // Sway: slow sine oscillation kicked by detected beats, canopy lines only
@@ -113,8 +113,8 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
             let color = match ch {
                 '|' | '/' | '\\' | '_' | '~' => trunk_color,
                 '.' | '\'' | ',' | '*' | '@' | '#' | 'o' | 'O' => leaf_color,
-                '[' | ']' | '=' => theme::TEXT_DIM, // pot
-                _ => theme::TEXT_FAINT,
+                '[' | ']' | '=' => theme::TEXT_DIM(), // pot
+                _ => theme::TEXT_FAINT(),
             };
             spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
         }
@@ -144,24 +144,24 @@ fn status_lines(state: &BonsaiState) -> Vec<Line<'static>> {
         .map(|spec| match spec {
             StatusLineSpec::DeadHint => Line::from(Span::styled(
                 "Press r to plant anew",
-                Style::default().fg(theme::TEXT_FAINT),
+                Style::default().fg(theme::TEXT_FAINT()),
             ))
             .centered(),
             StatusLineSpec::StageLabel(label) => Line::from(Span::styled(
                 label,
                 Style::default()
-                    .fg(theme::TEXT_MUTED)
+                    .fg(theme::TEXT_MUTED())
                     .add_modifier(Modifier::BOLD),
             ))
             .centered(),
             StatusLineSpec::CanWater => Line::from(vec![
-                Span::styled("w", Style::default().fg(theme::AMBER)),
-                Span::styled(" water", Style::default().fg(theme::TEXT_DIM)),
+                Span::styled("w", Style::default().fg(theme::AMBER())),
+                Span::styled(" water", Style::default().fg(theme::TEXT_DIM())),
             ])
             .centered(),
             StatusLineSpec::WateredToday => Line::from(Span::styled(
                 "Watered today",
-                Style::default().fg(theme::SUCCESS),
+                Style::default().fg(theme::SUCCESS()),
             ))
             .centered(),
         })
@@ -192,14 +192,14 @@ fn status_line_specs(is_alive: bool, stage: Stage, can_water: bool) -> Vec<Statu
 
 fn leaf_color_for_stage(stage: Stage) -> ratatui::style::Color {
     match stage {
-        Stage::Dead => theme::TEXT_FAINT,
-        Stage::Seed => theme::TEXT_DIM,
-        Stage::Sprout => theme::BONSAI_SPROUT,
-        Stage::Sapling => theme::BONSAI_LEAF,
-        Stage::Young => theme::BONSAI_CANOPY,
-        Stage::Mature => theme::BONSAI_CANOPY,
-        Stage::Ancient => theme::BONSAI_BLOOM,
-        Stage::Blossom => theme::BONSAI_BLOOM,
+        Stage::Dead => theme::TEXT_FAINT(),
+        Stage::Seed => theme::TEXT_DIM(),
+        Stage::Sprout => theme::BONSAI_SPROUT(),
+        Stage::Sapling => theme::BONSAI_LEAF(),
+        Stage::Young => theme::BONSAI_CANOPY(),
+        Stage::Mature => theme::BONSAI_CANOPY(),
+        Stage::Ancient => theme::BONSAI_BLOOM(),
+        Stage::Blossom => theme::BONSAI_BLOOM(),
     }
 }
 

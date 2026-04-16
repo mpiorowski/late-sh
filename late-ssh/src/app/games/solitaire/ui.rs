@@ -29,12 +29,12 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
                 Mode::Daily => "daily".to_string(),
                 Mode::Personal => "personal".to_string(),
             },
-            theme::AMBER_GLOW,
+            theme::AMBER_GLOW(),
         ),
         info_label_value(
             "Difficulty",
             state.difficulty_key().to_string(),
-            theme::SUCCESS,
+            theme::SUCCESS(),
         ),
         info_label_value(
             "Draw",
@@ -43,17 +43,21 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
                 state.draw_count(),
                 if state.draw_count() == 1 { "" } else { "s" }
             ),
-            theme::TEXT_BRIGHT,
+            theme::TEXT_BRIGHT(),
         ),
-        info_label_value("Progress", format!("{}/52", state.score()), theme::SUCCESS),
+        info_label_value(
+            "Progress",
+            format!("{}/52", state.score()),
+            theme::SUCCESS(),
+        ),
         info_label_value(
             "Cards",
             SOLITAIRE_CARD_THEME.name().to_string(),
-            theme::TEXT_BRIGHT,
+            theme::TEXT_BRIGHT(),
         ),
-        info_label_value("Stock", state.stock.len().to_string(), theme::TEXT_BRIGHT),
-        info_label_value("Cursor", state.cursor_label(), theme::TEXT_BRIGHT),
-        info_label_value("Selected", state.selection_label(), theme::TEXT_BRIGHT),
+        info_label_value("Stock", state.stock.len().to_string(), theme::TEXT_BRIGHT()),
+        info_label_value("Cursor", state.cursor_label(), theme::TEXT_BRIGHT()),
+        info_label_value("Selected", state.selection_label(), theme::TEXT_BRIGHT()),
         Line::from(""),
         key_hint("h/j/k/l", "move"),
         key_hint("Space", "select/place"),
@@ -70,7 +74,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
         Line::from(Span::styled(
             "Selection tips",
             Style::default()
-                .fg(theme::TEXT_BRIGHT)
+                .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         )),
         info_tagline("Click a face-down card to"),
@@ -100,7 +104,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
             Mode::Daily => "Change diff via [ ]",
             Mode::Personal => "n for new",
         };
-        draw_game_overlay(frame, board_area, "YOU WON!", subtext, theme::SUCCESS);
+        draw_game_overlay(frame, board_area, "YOU WON!", subtext, theme::SUCCESS());
     }
 }
 
@@ -155,7 +159,7 @@ fn board_lines_compact(state: &State) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "T1     T2     T3     T4     T5     T6     T7",
-        Style::default().fg(theme::TEXT_DIM),
+        Style::default().fg(theme::TEXT_DIM()),
     )]));
 
     let height = state.max_tableau_height();
@@ -232,11 +236,11 @@ fn tableau_span(state: &State, col: usize, row: usize, card: Option<TableauCard>
         ),
         Some(_) => Span::styled(
             SOLITAIRE_CARD_THEME.render_back_compact().to_string(),
-            block_style(focused, selected, None).fg(theme::TEXT_DIM),
+            block_style(focused, selected, None).fg(theme::TEXT_DIM()),
         ),
         None => Span::styled(
             SOLITAIRE_CARD_THEME.render_empty_compact().to_string(),
-            block_style(focused, selected, None).fg(theme::TEXT_FAINT),
+            block_style(focused, selected, None).fg(theme::TEXT_FAINT()),
         ),
     }
 }
@@ -341,7 +345,7 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         tableau_header_line(),
-        Style::default().fg(theme::TEXT_DIM),
+        Style::default().fg(theme::TEXT_DIM()),
     )]));
 
     let card_height = SOLITAIRE_CARD_THEME.card_height();
@@ -449,27 +453,27 @@ fn tableau_span_multiline(
         ),
         Some(_) => styled_span_with_style(
             SOLITAIRE_CARD_THEME.render_back_lines()[line_idx].clone(),
-            block_style(focused, selected, None).fg(theme::TEXT_DIM),
+            block_style(focused, selected, None).fg(theme::TEXT_DIM()),
         ),
         None => styled_span_with_style(
             SOLITAIRE_CARD_THEME.render_empty_lines()[line_idx].clone(),
-            block_style(focused, selected, None).fg(theme::TEXT_FAINT),
+            block_style(focused, selected, None).fg(theme::TEXT_FAINT()),
         ),
     }
 }
 
 fn block_style(focused: bool, selected: bool, suit: Option<Suit>) -> Style {
     let mut style = Style::default().fg(match suit {
-        Some(Suit::Hearts | Suit::Diamonds) => theme::ERROR,
-        Some(_) => theme::TEXT_BRIGHT,
-        None => theme::TEXT,
+        Some(Suit::Hearts | Suit::Diamonds) => theme::ERROR(),
+        Some(_) => theme::TEXT_BRIGHT(),
+        None => theme::TEXT(),
     });
 
     if selected {
-        style = style.bg(theme::BG_SELECTION).add_modifier(Modifier::BOLD);
+        style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
     }
     if focused {
-        style = style.bg(theme::BG_HIGHLIGHT).add_modifier(Modifier::BOLD);
+        style = style.bg(theme::BG_HIGHLIGHT()).add_modifier(Modifier::BOLD);
     }
     style
 }

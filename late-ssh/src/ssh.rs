@@ -7,7 +7,7 @@ use late_core::models::{
 use russh::keys::PrivateKey;
 use russh::server::{Auth, Msg, Session};
 use russh::*;
-use serde_json::json;
+use serde_json::{Value, json};
 #[cfg(unix)]
 use std::fs::Permissions;
 use std::net::{IpAddr, SocketAddr};
@@ -684,6 +684,7 @@ impl russh::server::Handler for ClientHandler {
 
             // Display config
             ai_model: self.state.config.ai.model.clone(),
+            initial_theme_id: late_ssh_theme_id(&user.settings),
 
             // Server state
             is_draining: self.state.is_draining.clone(),
@@ -968,6 +969,16 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
     let mut user = user;
     user.username = profile.username;
     Ok((user, is_new_user))
+}
+
+fn late_ssh_theme_id(settings: &Value) -> String {
+    settings
+        .get("theme_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("late")
+        .to_string()
 }
 
 fn reject_publickey_only() -> Auth {

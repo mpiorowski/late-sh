@@ -16,16 +16,16 @@ use super::{
 };
 
 const MUSIC_HELP_TEXT: &str = "\
-🎵 How music works on late.sh
+How music works on late.sh
 
 SSH is a terminal protocol - it carries text, not audio. To hear music, you need a second audio channel that pairs with your SSH session.
 
-▸ Option 1 (recommended): Install the CLI
+Option 1 (recommended): Install the CLI
   curl -fsSL https://cli.late.sh/install.sh | bash
   Then run `late` instead of `ssh late.sh`. It launches SSH + local audio playback in one process - no browser needed. The CLI decodes the MP3 stream locally, plays through your system audio, and pairs with the TUI over WebSocket for visualizer + controls.
   Don't trust the install script? Build from source: git clone https://github.com/mpiorowski/late-sh && cargo install --path late-cli
 
-▸ Option 2: Browser pairing
+Option 2: Browser pairing
   Press `p` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
 
 Both options give you:
@@ -600,6 +600,10 @@ impl ChatState {
         format_active_user_lines(self.active_users.as_ref())
     }
 
+    fn music_help_lines(&self) -> Vec<String> {
+        MUSIC_HELP_TEXT.lines().map(str::to_string).collect()
+    }
+
     pub fn submit_composer(&mut self) -> Option<Banner> {
         let body = self.composer.trim_end().to_string();
 
@@ -610,19 +614,8 @@ impl ChatState {
         }
 
         if body.trim() == "/music" {
-            if let Some(room_id) = self.composer_room_id {
-                let request_id = Uuid::now_v7();
-                self.service.send_message_task(
-                    self.user_id,
-                    room_id,
-                    self.selected_room_slug(),
-                    MUSIC_HELP_TEXT.to_string(),
-                    request_id,
-                    self.is_admin,
-                );
-                self.pending_send_notices.push_back(request_id);
-            }
             self.clear_composer_after_submit();
+            self.open_overlay("Music Help", self.music_help_lines());
             return None;
         }
 
@@ -1438,7 +1431,7 @@ fn chat_help_lines() -> Vec<String> {
         "  /list              list users in this private room",
         "  /ignore [@user]    ignore a user, or list ignored users",
         "  /unignore [@user]  remove a user from your ignore list",
-        "  /music             explain how music works (posts to chat)",
+        "  /music             explain how music works",
         "  /help              show this help",
         "",
         "Rooms",

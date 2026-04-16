@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-16 (`/music` chat command sends music setup instructions as a real message; dashboard Stream card trimmed to 3 rows (now playing, vibe, `/music` hint) - CLI/browser URLs removed; sidebar Now Playing merged paired client info into one line (8->7 rows); visualizer empty state shows `/music` hint; QR modal shows URL as fallback text; chat pairing tokens switched to compact base64url (22 chars, same as session tokens); splash tips brighter)
+- Last updated: 2026-04-16 (`/music` now opens the same scrollable overlay flow as `/help` instead of posting to chat; `?` help overlay Chat section lists `/music`; user-selectable SSH themes added with persisted `users.settings.theme_id`; built-in palettes now include default `late`, `contrast`, and opacity-friendly `purple`; profile settings gained a Theme selector; dashboard Stream card trimmed to 3 rows (now playing, vibe, `/music` hint) - CLI/browser URLs removed; sidebar Now Playing merged paired client info into one line (8->7 rows); visualizer empty state shows `/music` hint; QR modal shows URL as fallback text; chat pairing tokens switched to compact base64url (22 chars, same as session tokens); splash tips brighter)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -987,7 +987,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `/help` | Chat composer | Open scrollable chat help overlay (commands + all chat keys) |
 | `/active` | Chat composer | List active SSH users from the in-memory session registry |
 | `/list` | Chat composer | List users in the selected non-auto-join ("private") room |
-| `/music` | Chat composer | Send music setup instructions as a chat message (visible to room) |
+| `/music` | Chat composer | Open music setup instructions in the same scrollable overlay flow as `/help` |
 | `/ignore [@user]` | Chat composer | Mute a user, or list muted users when no arg |
 | `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
 | `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |

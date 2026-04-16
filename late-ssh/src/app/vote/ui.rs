@@ -18,7 +18,7 @@ pub fn draw_vote_card(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) {
     let block = Block::default()
         .title(" Vote Next (L/A/C) ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -64,27 +64,27 @@ pub fn draw_vote_options(
             Span::styled(
                 format!(" {} ", key),
                 Style::default()
-                    .fg(theme::AMBER)
+                    .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!("{:<8}", name), Style::default().fg(theme::TEXT)),
+            Span::styled(format!("{:<8}", name), Style::default().fg(theme::TEXT())),
             Span::styled(
                 "█".repeat(bar_filled),
                 Style::default().fg(if *is_voted {
-                    theme::SUCCESS
+                    theme::SUCCESS()
                 } else {
-                    theme::AMBER_DIM
+                    theme::AMBER_DIM()
                 }),
             ),
-            Span::styled("░".repeat(bar_empty), Style::default().fg(theme::BORDER)),
+            Span::styled("░".repeat(bar_empty), Style::default().fg(theme::BORDER())),
             Span::styled(
                 format!(" {:>3}", votes),
-                Style::default().fg(theme::TEXT_DIM),
+                Style::default().fg(theme::TEXT_DIM()),
             ),
         ];
 
         if *is_voted {
-            spans.push(Span::styled(" ✓", Style::default().fg(theme::SUCCESS)));
+            spans.push(Span::styled(" ✓", Style::default().fg(theme::SUCCESS())));
         }
 
         frame.render_widget(Paragraph::new(Line::from(spans)), layout[i]);

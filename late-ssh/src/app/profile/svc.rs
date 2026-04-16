@@ -1,5 +1,6 @@
 use anyhow::Result;
 use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::user::User;
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
@@ -24,6 +25,7 @@ pub struct ProfileService {
 pub struct ProfileSnapshot {
     pub user_id: Option<Uuid>,
     pub profile: Option<Profile>,
+    pub theme_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -127,11 +129,13 @@ impl ProfileService {
     async fn do_find_profile(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         let profile = Profile::find_or_create_by_user(&client, user_id).await?;
+        let theme_id = User::theme_id(&client, user_id).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
                 user_id: Some(user_id),
                 profile: Some(profile),
+                theme_id,
             },
         )?;
         Ok(())
@@ -171,6 +175,35 @@ impl ProfileService {
             user.username = username;
         }
 
+        self.find_profile(user_id);
+        self.publish_event(ProfileEvent::Saved { user_id });
+        Ok(())
+    }
+
+    pub fn set_theme_id(&self, user_id: Uuid, theme_id: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_set_theme_id(user_id, &theme_id).await {
+                    late_core::error_span!(
+                        "profile_theme_edit_failed",
+                        error = ?e,
+                        "failed to edit profile theme"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: "Could not save theme. Please try again.".to_string(),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.theme_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self, theme_id), fields(user_id = %user_id))]
+    async fn do_set_theme_id(&self, user_id: Uuid, theme_id: &str) -> Result<()> {
+        let client = self.db.get().await?;
+        User::set_theme_id(&client, user_id, theme_id).await?;
         self.find_profile(user_id);
         self.publish_event(ProfileEvent::Saved { user_id });
         Ok(())

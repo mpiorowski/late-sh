@@ -48,7 +48,7 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
     let block = Block::default()
         .title(format!(" {title} "))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
@@ -64,9 +64,9 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
         .flex(Flex::Center)
         .areas(qr_area);
 
-    let dim = Style::default().fg(theme::TEXT_DIM);
-    let amber = Style::default().fg(theme::AMBER);
-    let green = Style::default().fg(theme::SUCCESS);
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let amber = Style::default().fg(theme::AMBER());
+    let green = Style::default().fg(theme::SUCCESS());
 
     frame.render_widget(
         Paragraph::new(vec![
