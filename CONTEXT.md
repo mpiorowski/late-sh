@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-15 (chat: message edit wired end-to-end; dashboard #general shares one store with the chat page — `ChatState.general_messages` gone, all member rooms stay warm from broadcasts, mark-as-read gated on active view; message actions unified in `chat::input::handle_message_action`, composer render unified in `chat::ui::draw_composer_block`; news announcements now post via `send_message_task` — `send_to_general_task` deleted; minesweeper chord-reveal on Space; nonogram Space no longer clobbers an `x` mark)
+- Last updated: 2026-04-16 (generic chat overlays now size height from wrapped visual rows, so long `/music` help lines fit without clipping; `/music` now opens the same scrollable overlay flow as `/help` instead of posting to chat; `?` help overlay Chat section lists `/music`; user-selectable SSH themes added with persisted `users.settings.theme_id`; built-in palettes now include default `late`, `contrast`, and opacity-friendly `purple`; profile settings gained a Theme selector; dashboard Stream card trimmed to 3 rows (now playing, vibe, `/music` hint) - CLI/browser URLs removed; sidebar Now Playing merged paired client info into one line (8->7 rows); visualizer empty state shows `/music` hint; QR modal shows URL as fallback text; chat pairing tokens switched to compact base64url (22 chars, same as session tokens); splash tips brighter)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -890,8 +890,8 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
-| **Dashboard** | 1 | Active | Stream URL + now playing + voting + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/help`) with grouped room sections and a synthetic `news` entry in the room list |
+| **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
+| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/help`) with grouped room sections and a synthetic `news` entry in the room list |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
 | **Profile** | 4 | Active | User profile: username, Notifications (OSC 777/9 desktop notifications — opt-in checkboxes for DMs / `@mentions` / game events, plus a shared cooldown; no tmux support), Your Stats (streak + badge, chips, high scores), @bot/@graybeard info, chat colors |
 
@@ -987,6 +987,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `/help` | Chat composer | Open scrollable chat help overlay (commands + all chat keys) |
 | `/active` | Chat composer | List active SSH users from the in-memory session registry |
 | `/list` | Chat composer | List users in the selected non-auto-join ("private") room |
+| `/music` | Chat composer | Open music setup instructions in the same scrollable overlay flow as `/help` |
 | `/ignore [@user]` | Chat composer | Mute a user, or list muted users when no arg |
 | `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
 | `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
@@ -996,7 +997,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `Space` / `Enter` | Profile | Toggle the currently selected notification checkbox (or bump the cooldown forward) |
 | `i` | Profile | Edit username (Enter saves, Esc cancels; whitespace is trimmed on save) |
 | `Esc` | Any modal | Close/cancel |
-| `c` | Chat (not composing) | Open web chat QR link |
+| `c` | Chat (not composing) | Open web chat QR (copies URL + shows it as fallback) |
 | `Ctrl+]` | Dashboard / Chat | Open icon picker (emoji + nerd font). Auto-starts the composer if not already composing. Inserts into the chat composer only. |
 | `↑` / `↓` / `j` / `k` | Icon picker | Move selection |
 | `Ctrl+U` / `Ctrl+D` | Icon picker | Half-page up / down |

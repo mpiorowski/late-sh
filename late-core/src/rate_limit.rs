@@ -30,6 +30,24 @@ impl IpRateLimiter {
         self.window.as_secs()
     }
 
+    pub fn entry_count(&self) -> usize {
+        self.attempts_by_ip.lock_recover().len()
+    }
+
+    pub fn cleanup(&self) {
+        let now = Instant::now();
+        let mut attempts_by_ip = self.attempts_by_ip.lock_recover();
+        attempts_by_ip.retain(|_, attempts| {
+            while let Some(first) = attempts.front() {
+                if now.duration_since(*first) <= self.window {
+                    break;
+                }
+                attempts.pop_front();
+            }
+            !attempts.is_empty()
+        });
+    }
+
     pub fn allow(&self, ip: IpAddr) -> bool {
         if self.max_attempts == 0 {
             return true;
@@ -99,5 +117,32 @@ mod tests {
         assert!(!limiter.allow(ip));
         sleep(Duration::from_millis(1100)).await;
         assert!(limiter.allow(ip));
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_expired_ip_entries() {
+        let limiter = IpRateLimiter::new(1, 1);
+        let ip: IpAddr = "10.0.0.1".parse().expect("parse ip");
+
+        limiter.allow(ip);
+        assert_eq!(limiter.entry_count(), 1);
+
+        sleep(Duration::from_millis(1100)).await;
+        limiter.cleanup();
+        assert_eq!(limiter.entry_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn cleanup_retains_ips_with_active_timestamps() {
+        let limiter = IpRateLimiter::new(5, 1);
+        let stale_ip: IpAddr = "10.0.0.1".parse().expect("parse stale ip");
+        let active_ip: IpAddr = "10.0.0.2".parse().expect("parse active ip");
+
+        limiter.allow(stale_ip);
+        sleep(Duration::from_millis(1100)).await;
+        limiter.allow(active_ip);
+
+        limiter.cleanup();
+        assert_eq!(limiter.entry_count(), 1);
     }
 }

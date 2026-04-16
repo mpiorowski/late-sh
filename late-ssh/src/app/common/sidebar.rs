@@ -39,7 +39,7 @@ pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     let layout = Layout::vertical([
         Constraint::Length(3),  // screen card
         Constraint::Length(10), // visualizer
-        Constraint::Length(8),  // now playing
+        Constraint::Length(7),  // now playing
         Constraint::Fill(1),    // activity (shrinks on small screens)
         Constraint::Length(16), // bonsai tree (12 max art + 2 status + 2 border)
     ])
@@ -66,14 +66,14 @@ fn draw_screen_card(frame: &mut Frame, area: Rect, screen: Screen) {
             spans.push(Span::styled(
                 format!(" {key} "),
                 Style::default()
-                    .fg(theme::BG_SELECTION)
-                    .bg(theme::AMBER)
+                    .fg(theme::BG_SELECTION())
+                    .bg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
             spans.push(Span::styled(
                 format!(" {key} "),
-                Style::default().fg(theme::TEXT_DIM),
+                Style::default().fg(theme::TEXT_DIM()),
             ));
         }
     }
@@ -88,7 +88,7 @@ fn draw_screen_card(frame: &mut Frame, area: Rect, screen: Screen) {
     let block = Block::default()
         .title(format!(" {label} "))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
@@ -103,7 +103,7 @@ fn draw_now_playing(
     let block = Block::default()
         .title(" Now Playing ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -115,10 +115,10 @@ fn draw_now_playing(
             let duration = np.track.duration_seconds;
 
             let mut lines = vec![
-                Line::from(Span::styled(artist, Style::default().fg(theme::TEXT_DIM))),
+                Line::from(Span::styled(artist, Style::default().fg(theme::TEXT_DIM()))),
                 Line::from(Span::styled(
                     title.as_str(),
-                    Style::default().fg(theme::TEXT_BRIGHT),
+                    Style::default().fg(theme::TEXT_BRIGHT()),
                 )),
             ];
 
@@ -142,29 +142,29 @@ fn draw_now_playing(
                 let bar_after = "─".repeat(bar_width.saturating_sub(dot_pos + 1));
 
                 lines.push(Line::from(vec![
-                    Span::styled(elapsed_str, Style::default().fg(theme::AMBER)),
+                    Span::styled(elapsed_str, Style::default().fg(theme::AMBER())),
                     Span::raw(" "),
-                    Span::styled(bar_before, Style::default().fg(theme::BORDER_DIM)),
-                    Span::styled("●", Style::default().fg(theme::AMBER_GLOW)),
-                    Span::styled(bar_after, Style::default().fg(theme::BORDER_DIM)),
+                    Span::styled(bar_before, Style::default().fg(theme::BORDER_DIM())),
+                    Span::styled("●", Style::default().fg(theme::AMBER_GLOW())),
+                    Span::styled(bar_after, Style::default().fg(theme::BORDER_DIM())),
                     Span::raw(" "),
-                    Span::styled(total_str, Style::default().fg(theme::TEXT_FAINT)),
+                    Span::styled(total_str, Style::default().fg(theme::TEXT_FAINT())),
                 ]));
             } else {
                 let elapsed_str = format!("{}:{:02}", elapsed_secs / 60, elapsed_secs % 60);
                 lines.push(Line::from(vec![
-                    Span::styled(elapsed_str, Style::default().fg(theme::AMBER)),
-                    Span::styled(" ▸", Style::default().fg(theme::AMBER_GLOW)),
+                    Span::styled(elapsed_str, Style::default().fg(theme::AMBER())),
+                    Span::styled(" ▸", Style::default().fg(theme::AMBER_GLOW())),
                 ]));
             }
 
             lines.push(Line::from(vec![
-                Span::styled("- / =", Style::default().fg(theme::AMBER_DIM)),
-                Span::styled(" vol  ", Style::default().fg(theme::TEXT_FAINT)),
-                Span::styled("m", Style::default().fg(theme::AMBER_DIM)),
-                Span::styled(" mute", Style::default().fg(theme::TEXT_FAINT)),
+                Span::styled("- / =", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" vol  ", Style::default().fg(theme::TEXT_FAINT())),
+                Span::styled("m", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" mute", Style::default().fg(theme::TEXT_FAINT())),
             ]));
-            lines.extend(paired_client_lines(paired_client));
+            lines.push(paired_client_line(paired_client));
 
             lines
         }
@@ -172,11 +172,11 @@ fn draw_now_playing(
             let mut lines = vec![
                 Line::from(Span::styled(
                     "Waiting...",
-                    Style::default().fg(theme::TEXT_FAINT),
+                    Style::default().fg(theme::TEXT_FAINT()),
                 )),
                 Line::raw(""),
             ];
-            lines.extend(paired_client_lines(paired_client));
+            lines.push(paired_client_line(paired_client));
             lines
         }
     };
@@ -184,42 +184,32 @@ fn draw_now_playing(
     frame.render_widget(Paragraph::new(content), inner);
 }
 
-fn paired_client_lines(paired_client: Option<&ClientAudioState>) -> Vec<Line<'static>> {
+fn paired_client_line(paired_client: Option<&ClientAudioState>) -> Line<'static> {
     match paired_client {
-        Some(state) => vec![
-            Line::from(vec![
-                Span::styled("Pair ", Style::default().fg(theme::TEXT_DIM)),
-                Span::styled(
-                    state.client_kind.label(),
-                    Style::default().fg(theme::TEXT_BRIGHT),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    if state.muted { "Muted" } else { "Live" },
-                    Style::default().fg(if state.muted {
-                        theme::AMBER
-                    } else {
-                        theme::TEXT_BRIGHT
-                    }),
-                ),
-                Span::styled("  ", Style::default().fg(theme::TEXT_DIM)),
-                Span::styled(
-                    format!("{}%", state.volume_percent),
-                    Style::default().fg(theme::AMBER_DIM),
-                ),
-            ]),
-        ],
-        None => vec![
-            Line::from(Span::styled(
-                "No pair",
-                Style::default().fg(theme::TEXT_FAINT),
-            )),
-            Line::from(Span::styled(
-                "Volume --",
-                Style::default().fg(theme::TEXT_FAINT),
-            )),
-        ],
+        Some(state) => Line::from(vec![
+            Span::styled(
+                state.client_kind.label(),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                if state.muted { "Muted" } else { "Live" },
+                Style::default().fg(if state.muted {
+                    theme::AMBER()
+                } else {
+                    theme::TEXT_BRIGHT()
+                }),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("{}%", state.volume_percent),
+                Style::default().fg(theme::AMBER_DIM()),
+            ),
+        ]),
+        None => Line::from(Span::styled(
+            "No pair",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
     }
 }
 
@@ -236,22 +226,22 @@ fn draw_status(
     let block = Block::default()
         .title(" Activity ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let mut lines = vec![Line::from(vec![
-        Span::styled("● ", Style::default().fg(theme::SUCCESS)),
+        Span::styled("● ", Style::default().fg(theme::SUCCESS())),
         Span::styled(
             format!("{}", online_count),
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" online", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(" online", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("  ", Style::default()),
-        Span::styled("?", Style::default().fg(theme::AMBER)),
-        Span::styled(" keys", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled("?", Style::default().fg(theme::AMBER())),
+        Span::styled(" keys", Style::default().fg(theme::TEXT_DIM())),
     ])];
 
     let activity_rows = inner.height.saturating_sub(1).min(20) as usize;
@@ -272,11 +262,11 @@ fn draw_status(
 
         lines.push(Line::from(vec![Span::styled(
             meta,
-            Style::default().fg(theme::TEXT_MUTED),
+            Style::default().fg(theme::TEXT_MUTED()),
         )]));
         lines.push(Line::from(vec![Span::styled(
             action,
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         )]));
     }
 

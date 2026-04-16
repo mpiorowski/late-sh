@@ -40,7 +40,7 @@ impl WebChatRegistry {
     }
 
     pub fn create_link(&self, user_id: Uuid, username: String) -> String {
-        let token = Uuid::now_v7().to_string();
+        let token = crate::session::new_session_token();
         let mut tokens = self.tokens.lock_recover();
         tokens.retain(|_, s| s.created_at.elapsed() < TOKEN_TTL);
         tokens.insert(
@@ -238,11 +238,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_link_returns_uuid_token() {
+    fn create_link_returns_compact_token() {
         let registry = WebChatRegistry::new();
         let token = registry.create_link(Uuid::now_v7(), "alice".to_string());
-        assert!(!token.is_empty());
-        assert!(Uuid::parse_str(&token).is_ok());
+        assert_eq!(token.len(), 22); // compact base64url, same as session tokens
     }
 
     #[test]

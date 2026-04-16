@@ -30,7 +30,7 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
 
     let inner_area = block.inner(area);
     frame.render_widget(block, area);
@@ -39,7 +39,7 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
 
     if view.articles.is_empty() {
         let text = Text::from("No news yet. Press 'i' to share a link.");
-        let empty_p = Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM));
+        let empty_p = Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM()));
         frame.render_widget(empty_p, list_area);
     } else {
         let visible_items = ((list_area.height / ITEM_HEIGHT).max(1)) as usize;
@@ -64,14 +64,14 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
             let article = &item.article;
 
             let bg_color = if article_idx == selected_index {
-                theme::BG_SELECTION
+                theme::BG_SELECTION()
             } else {
                 Color::Reset
             };
 
             let item_block = Block::default()
                 .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(theme::BORDER))
+                .border_style(Style::default().fg(theme::BORDER()))
                 .style(Style::default().bg(bg_color));
 
             let content_area = item_block.inner(item_area);
@@ -93,7 +93,7 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
                 THUMB_LINES,
             )
             .into_iter()
-            .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::AMBER_DIM))))
+            .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::AMBER_DIM()))))
             .collect();
             let ascii_p = Paragraph::new(ascii_lines);
             frame.render_widget(ascii_p, thumb_area);
@@ -102,29 +102,29 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
                 Line::from(vec![Span::styled(
                     article.title.as_str(),
                     Style::default()
-                        .fg(theme::TEXT_BRIGHT)
+                        .fg(theme::TEXT_BRIGHT())
                         .add_modifier(Modifier::BOLD),
                 )]),
                 Line::from(vec![Span::styled(
                     article.url.as_str(),
                     Style::default()
-                        .fg(theme::TEXT_FAINT)
+                        .fg(theme::TEXT_FAINT())
                         .add_modifier(Modifier::ITALIC),
                 )]),
                 Line::from(vec![
                     Span::styled(
                         format!("@{}", item.author_username),
                         Style::default()
-                            .fg(theme::AMBER)
+                            .fg(theme::AMBER())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!(" - {}", format_relative_time(article.created)),
-                        Style::default().fg(theme::TEXT_DIM),
+                        Style::default().fg(theme::TEXT_DIM()),
                     ),
                     Span::styled(
                         format!(" - {}", article.created.format("%a %Y-%m-%d %H:%M UTC")),
-                        Style::default().fg(theme::TEXT_FAINT),
+                        Style::default().fg(theme::TEXT_FAINT()),
                     ),
                 ]),
             ];
@@ -137,13 +137,13 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
             for line in summary_lines.iter().take(SUMMARY_LINES).copied() {
                 text_lines.push(Line::from(Span::styled(
                     line,
-                    Style::default().fg(theme::TEXT),
+                    Style::default().fg(theme::TEXT()),
                 )));
             }
             if summary_lines.len() > SUMMARY_LINES {
                 text_lines.push(Line::from(Span::styled(
                     "...",
-                    Style::default().fg(theme::TEXT),
+                    Style::default().fg(theme::TEXT()),
                 )));
             }
 

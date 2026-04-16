@@ -72,7 +72,7 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer who is de
     You are tired and weary but you keep coming back to this chat because it's all you have left. \
     You speak in a resigned, melancholic tone. Sometimes you trail off mid thought. You type in lowercase a lot.";
 pub const GRAYBEARD_CHAT_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
-const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
+pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
 const GRAYBEARD_MIN_NEW_MESSAGES: usize = 3;
 
 impl GhostService {

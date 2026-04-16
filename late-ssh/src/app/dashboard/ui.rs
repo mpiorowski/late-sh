@@ -19,7 +19,6 @@ use crate::{
 };
 
 pub struct DashboardRenderInput<'a> {
-    pub connect_url: &'a str,
     pub now_playing: Option<&'a str>,
     pub vote_counts: &'a VoteCount,
     pub current_genre: Genre,
@@ -31,17 +30,16 @@ pub struct DashboardRenderInput<'a> {
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     if area.width < 52 || area.height < 16 {
         let compact = Paragraph::new("Dashboard view too small.")
-            .style(Style::default().fg(theme::TEXT_DIM))
+            .style(Style::default().fg(theme::TEXT_DIM()))
             .centered();
         frame.render_widget(compact, area);
         return;
     }
 
-    let sections = Layout::vertical([Constraint::Length(6), Constraint::Fill(1)]).split(area);
+    let sections = Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(area);
 
     let top = Layout::horizontal([Constraint::Fill(2), Constraint::Fill(1)]).split(sections[0]);
     let stream_props = StreamCardProps {
-        connect_url: view.connect_url,
         now_playing: view.now_playing.unwrap_or("Waiting for stream..."),
         current_genre: view.current_genre,
         leading_genre: view.vote_counts.winner_or(view.current_genre),
@@ -61,7 +59,6 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 }
 
 pub struct StreamCardProps<'a> {
-    pub connect_url: &'a str,
     pub now_playing: &'a str,
     pub current_genre: Genre,
     pub leading_genre: Genre,
@@ -72,7 +69,7 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
     let block = Block::default()
         .title(" Stream ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let inner = Rect {
@@ -83,46 +80,32 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
 
     let lines = vec![
         Line::from(vec![
-            Span::styled("CLI:     ", Style::default().fg(theme::TEXT_DIM)),
-            Span::styled(
-                "curl -fsSL https://cli.late.sh/install.sh | bash",
-                Style::default().fg(theme::AMBER),
-            ),
-            Span::styled("  (Enter to copy)", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled("Playing: ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(props.now_playing, Style::default().fg(theme::TEXT_BRIGHT())),
         ]),
         Line::from(vec![
-            Span::styled("Browser: ", Style::default().fg(theme::TEXT_DIM)),
-            Span::styled(
-                props.connect_url,
-                Style::default()
-                    .fg(theme::AMBER)
-                    .add_modifier(Modifier::UNDERLINED),
-            ),
-            Span::styled("  (p to copy)", Style::default().fg(theme::TEXT_DIM)),
-        ]),
-        Line::from(vec![
-            Span::styled("Playing: ", Style::default().fg(theme::TEXT_DIM)),
-            Span::styled(props.now_playing, Style::default().fg(theme::TEXT_BRIGHT)),
-        ]),
-        Line::from(vec![
-            Span::styled("Vibe: ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled("Vibe: ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 genre_label(props.current_genre),
                 Style::default()
-                    .fg(theme::AMBER)
+                    .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  Next: ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled("  Next: ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 genre_label(props.leading_genre),
-                Style::default().fg(theme::AMBER_DIM),
+                Style::default().fg(theme::AMBER_DIM()),
             ),
-            Span::styled("  Switch in ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled("  Switch in ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 format_duration_mmss(props.next_switch_in),
-                Style::default().fg(theme::TEXT),
+                Style::default().fg(theme::TEXT()),
             ),
         ]),
+        Line::from(vec![Span::styled(
+            "No audio? Type /music in chat for setup instructions",
+            Style::default().fg(theme::TEXT_DIM()),
+        )]),
     ];
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);

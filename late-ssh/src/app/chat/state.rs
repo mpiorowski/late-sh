@@ -15,6 +15,25 @@ use super::{
     svc::{ChatEvent, ChatService, ChatSnapshot},
 };
 
+const MUSIC_HELP_TEXT: &str = "\
+How music works on late.sh
+
+SSH is a terminal protocol - it carries text, not audio. To hear music, you need a second audio channel that pairs with your SSH session.
+
+Option 1 (recommended): Install the CLI
+  curl -fsSL https://cli.late.sh/install.sh | bash
+  Then run `late` instead of `ssh late.sh`. It launches SSH + local audio playback in one process - no browser needed. The CLI decodes the MP3 stream locally, plays through your system audio, and pairs with the TUI over WebSocket for visualizer + controls.
+  Don't trust the install script? Build from source: git clone https://github.com/mpiorowski/late-sh && cargo install --path late-cli
+
+Option 2: Browser pairing
+  Press `p` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
+
+Both options give you:
+  m = mute | +/- = volume | visualizer in the sidebar
+  Vote for genres on the Dashboard: L C A
+
+The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";
+
 #[derive(Default)]
 pub(crate) struct MentionAutocomplete {
     pub active: bool,
@@ -581,12 +600,22 @@ impl ChatState {
         format_active_user_lines(self.active_users.as_ref())
     }
 
+    fn music_help_lines(&self) -> Vec<String> {
+        MUSIC_HELP_TEXT.lines().map(str::to_string).collect()
+    }
+
     pub fn submit_composer(&mut self) -> Option<Banner> {
         let body = self.composer.trim_end().to_string();
 
         if body.trim() == "/help" {
             self.clear_composer_after_submit();
             self.open_overlay("Chat Help", chat_help_lines());
+            return None;
+        }
+
+        if body.trim() == "/music" {
+            self.clear_composer_after_submit();
+            self.open_overlay("Music Help", self.music_help_lines());
             return None;
         }
 
@@ -1364,7 +1393,7 @@ impl ChatState {
     }
 
     /// Strip already-stored messages from any newly-ignored author.
-    /// DM rooms are exempt — leaving the DM room is the way to dismiss them.
+    /// DM rooms are exempt -leaving the DM room is the way to dismiss them.
     fn refilter_local_messages(&mut self) {
         let ignored = &self.ignored_user_ids;
         for (room, messages) in &mut self.rooms {
@@ -1402,6 +1431,7 @@ fn chat_help_lines() -> Vec<String> {
         "  /list              list users in this private room",
         "  /ignore [@user]    ignore a user, or list ignored users",
         "  /unignore [@user]  remove a user from your ignore list",
+        "  /music             explain how music works",
         "  /help              show this help",
         "",
         "Rooms",
@@ -1417,6 +1447,7 @@ fn chat_help_lines() -> Vec<String> {
         "  End                jump to most recent",
         "  g / G              clear selection (back to live view)",
         "  r                  reply to selected message",
+        "  e                  edit selected message",
         "  d                  delete selected message",
         "",
         "Compose",

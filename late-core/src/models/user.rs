@@ -21,6 +21,7 @@ crate::model! {
 }
 
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
+const THEME_ID_KEY: &str = "theme_id";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -117,6 +118,11 @@ impl User {
         Ok(extract_ignored_user_ids(&settings))
     }
 
+    pub async fn theme_id(client: &Client, user_id: Uuid) -> Result<Option<String>> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_theme_id(&settings))
+    }
+
     /// Adds `target_id` to the ignore list. Returns `(changed, ids)` —
     /// `changed` is false if the id was already present.
     pub async fn add_ignored_user_id(
@@ -156,6 +162,12 @@ impl User {
         set_ignored_user_ids(&mut settings, &ids);
         Self::update_settings(client, user_id, &settings).await?;
         Ok((true, ids))
+    }
+
+    pub async fn set_theme_id(client: &Client, user_id: Uuid, theme_id: &str) -> Result<()> {
+        let mut settings = Self::settings_for_user(client, user_id).await?;
+        set_theme_id(&mut settings, theme_id);
+        Self::update_settings(client, user_id, &settings).await
     }
 
     async fn settings_for_user(client: &Client, user_id: Uuid) -> Result<Value> {
@@ -203,4 +215,38 @@ fn set_ignored_user_ids(settings: &mut Value, ids: &[Uuid]) {
         *settings = json!({});
     }
     settings[IGNORED_USER_IDS_KEY] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
+}
+
+fn extract_theme_id(settings: &Value) -> Option<String> {
+    settings
+        .get(THEME_ID_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn set_theme_id(settings: &mut Value, theme_id: &str) {
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+    settings[THEME_ID_KEY] = json!(theme_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_theme_id_reads_trimmed_string() {
+        let settings = json!({ "theme_id": " purple " });
+        assert_eq!(extract_theme_id(&settings).as_deref(), Some("purple"));
+    }
+
+    #[test]
+    fn set_theme_id_creates_settings_object() {
+        let mut settings = Value::Null;
+        set_theme_id(&mut settings, "contrast");
+        assert_eq!(extract_theme_id(&settings).as_deref(), Some("contrast"));
+    }
 }

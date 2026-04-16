@@ -30,14 +30,26 @@ impl Overlay {
     }
 }
 
+fn wrapped_row_count(line: &str, width: u16) -> u16 {
+    let width = width.max(1) as usize;
+    let cell_count = 1 + line.chars().count();
+    cell_count.div_ceil(width) as u16
+}
+
 pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
     if anchor.width < 12 || anchor.height < 8 {
         return;
     }
 
-    let content_height = overlay.lines.len() as u16 + 2;
-    let height = content_height.min(anchor.height).max(8);
     let width = anchor.width.saturating_sub(4).max(10);
+    let inner_width = width.saturating_sub(2).max(1);
+    let content_height = overlay
+        .lines
+        .iter()
+        .map(|line| wrapped_row_count(line, inner_width))
+        .sum::<u16>()
+        .saturating_add(2);
+    let height = content_height.min(anchor.height).max(8);
     let area = Rect::new(
         anchor.x + 2,
         anchor.y + anchor.height - height,
@@ -48,7 +60,7 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
     let block = Block::default()
         .title(format!(" {} (j/k scroll · q/Esc close) ", overlay.title))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
     let lines: Vec<Line> = overlay
         .lines
@@ -56,7 +68,7 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
         .map(|line| {
             Line::from(Span::styled(
                 format!(" {line}"),
-                Style::default().fg(theme::TEXT),
+                Style::default().fg(theme::TEXT()),
             ))
         })
         .collect();

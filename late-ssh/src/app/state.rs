@@ -116,6 +116,7 @@ pub struct SessionConfig {
 
     /// Display config (informational, shown on profile screen)
     pub ai_model: String,
+    pub initial_theme_id: String,
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -133,6 +134,7 @@ pub struct App {
     pub(crate) show_welcome: bool,
     pub(crate) show_splash: bool,
     pub(crate) splash_ticks: usize,
+    pub(crate) splash_hint: String,
     pub(crate) show_help: bool,
     pub(crate) help_scroll: u16,
     pub(crate) pending_escape: bool,
@@ -219,6 +221,13 @@ impl App {
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.show_welcome = false;
+    }
+
+    pub fn show_splash_for_tests(&mut self, hint: impl Into<String>) {
+        self.show_splash = true;
+        self.show_welcome = false;
+        self.splash_ticks = 1;
+        self.splash_hint = hint.into();
     }
 
     pub fn new(config: SessionConfig) -> anyhow::Result<Self> {
@@ -340,6 +349,7 @@ impl App {
         };
 
         let active_users = config.active_users.clone();
+        let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
 
         Ok(Self {
             running: true,
@@ -349,6 +359,7 @@ impl App {
             show_welcome: true,
             show_splash: true,
             splash_ticks: 0,
+            splash_hint,
             show_help: false,
             help_scroll: 0,
             pending_escape: false,
@@ -388,6 +399,7 @@ impl App {
                 config.profile_service,
                 config.user_id,
                 config.ai_model,
+                config.initial_theme_id,
             ),
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),

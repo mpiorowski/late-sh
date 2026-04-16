@@ -188,6 +188,35 @@ echo "🔄 Setting KUBE_CONFIG secret..."
 kubectl config view --minify --raw | gh secret set KUBE_CONFIG --env $GITHUB_ENV --repo $OWNER_REPO
 echo "✅ Secret 'KUBE_CONFIG' set for '$GITHUB_ENV' environment."
 
+configure_host_ssh_port() {
+  local server_ip="$1"
+  local server_user="$2"
+  local server_key="$3"
+  local server_name="$4"
+
+  if [ -z "$server_ip" ]; then
+    return
+  fi
+
+  echo "🔄 Reconfiguring host SSH on ${server_name} (${server_ip}) to port 22222..."
+  ssh -i "${server_key}" "${server_user}@${server_ip}" <<'EOF'
+    set -e
+    sudo mkdir -p /etc/ssh/sshd_config.d
+    sudo tee /etc/ssh/sshd_config.d/99-admin.conf >/dev/null <<'CONFIG'
+Port 22222
+CONFIG
+    sudo /usr/sbin/sshd -t
+    sudo systemctl reload ssh
+  EOF
+}
+
+echo "🔄 Moving host admin SSH to port 22222..."
+configure_host_ssh_port "${SERVER_IP_1}" "${SERVER_USER_1}" "${SERVER_KEY_1}" "${SERVER_NAME_1}"
+configure_host_ssh_port "${SERVER_IP_2}" "${SERVER_USER_2}" "${SERVER_KEY_2}" "${SERVER_NAME_2}"
+configure_host_ssh_port "${SERVER_IP_3}" "${SERVER_USER_3}" "${SERVER_KEY_3}" "${SERVER_NAME_3}"
+configure_host_ssh_port "${AGENT_IP}" "${AGENT_USER}" "${AGENT_KEY}" "${AGENT_NAME}"
+echo "✅ Host admin SSH moved to port 22222 on configured nodes."
+
 echo ""
 echo "🎉 RKE2 setup completed successfully!"
 echo "Run 'k9s' or 'kubectl get nodes' to verify your cluster is operational."

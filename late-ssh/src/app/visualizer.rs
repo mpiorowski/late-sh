@@ -69,9 +69,9 @@ impl Visualizer {
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let border = if self.has_viz {
-            theme::BORDER_ACTIVE
+            theme::BORDER_ACTIVE()
         } else {
-            theme::BORDER
+            theme::BORDER()
         };
 
         let block = Block::default()
@@ -86,23 +86,26 @@ impl Visualizer {
         }
 
         if !self.has_viz {
-            let dim = Style::default().fg(theme::TEXT_DIM);
-            let key = Style::default().fg(theme::AMBER);
+            let dim = Style::default().fg(theme::TEXT_DIM());
+            let key = Style::default().fg(theme::AMBER());
             let lines = vec![
-                Line::from(""),
                 Line::from(""),
                 Line::from(Span::styled("No audio paired", dim)),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("Install CLI ", dim),
-                    Span::styled("(Enter)", key),
+                    Span::styled("Type ", dim),
+                    Span::styled("/music", key),
+                    Span::styled(" in chat", dim),
                 ]),
+                Line::from(""),
                 Line::from(vec![
-                    Span::styled("or web      ", dim),
-                    Span::styled("(p)", key),
+                    Span::styled("Enter", key),
+                    Span::styled(" cli  ", dim),
+                    Span::styled("p", key),
+                    Span::styled(" web", dim),
                 ]),
             ];
-            frame.render_widget(Paragraph::new(lines).centered(), inner);
+            frame.render_widget(Paragraph::new(lines), inner);
             return;
         }
 
@@ -141,7 +144,7 @@ impl Visualizer {
                 let filled = level <= bar_height;
 
                 let (ch, style) = if filled {
-                    ('█', Style::default().fg(theme::AMBER))
+                    ('█', Style::default().fg(theme::AMBER()))
                 } else {
                     (' ', Style::default())
                 };

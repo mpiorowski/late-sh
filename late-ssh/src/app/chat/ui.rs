@@ -28,6 +28,13 @@ use super::ui_text::{
     wrap_chat_entry_to_lines,
 };
 
+fn contributor_badge_for_username(username: &str) -> Option<&'static str> {
+    match username.trim().to_ascii_lowercase().as_str() {
+        "mevanlc" | "yawner" => Some(" 🔧"),
+        _ => None,
+    }
+}
+
 // ── Dashboard chat card ─────────────────────────────────────
 
 pub struct DashboardChatView<'a> {
@@ -79,9 +86,9 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
         " Compose (press i) ".to_string()
     };
     let composer_style = if view.composing {
-        Style::default().fg(theme::BORDER_ACTIVE)
+        Style::default().fg(theme::BORDER_ACTIVE())
     } else {
-        Style::default().fg(theme::BORDER)
+        Style::default().fg(theme::BORDER())
     };
     let composer_block = Block::default()
         .title(composer_title.as_str())
@@ -111,7 +118,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     let block = Block::default()
         .title(" Chat ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -131,7 +138,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     if view.messages.is_empty() {
         lines.push(Line::from(Span::styled(
             "No messages yet.",
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         )));
     } else {
         let height = messages_area.height.max(1) as usize;
@@ -257,6 +264,7 @@ fn ensure_chat_rows_cache(
             .filter(|name| !name.is_empty())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| short_user_id(msg.user_id));
+        let contributor_badge = contributor_badge_for_username(&author).unwrap_or_default();
         let is_bot = author == "bot" || author == "graybeard";
         let badge = if !is_bot {
             ctx.badges.get(&msg.user_id).copied()
@@ -265,21 +273,22 @@ fn ensure_chat_rows_cache(
         };
         let author_style = if is_own {
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD)
         } else if is_bot {
-            Style::default().fg(theme::BOT)
+            Style::default().fg(theme::BOT())
         } else {
-            Style::default().fg(theme::CHAT_AUTHOR)
+            Style::default().fg(theme::CHAT_AUTHOR())
         };
-        let body_style = Style::default().fg(theme::CHAT_BODY);
+        let body_style = Style::default().fg(theme::CHAT_BODY());
+        let contributor_badge = if is_bot { "" } else { contributor_badge };
         let streak_badge = badge.map(|b| format!(" {}", b.label())).unwrap_or_default();
         let bonsai_badge = ctx
             .bonsai_glyphs
             .get(&msg.user_id)
             .map(|g| format!(" {}", g))
             .unwrap_or_default();
-        let prefix = format!("{author}{streak_badge}{bonsai_badge}");
+        let prefix = format!("{author}{contributor_badge}{streak_badge}{bonsai_badge}");
 
         let mentions_us = our_mention
             .as_ref()
@@ -348,7 +357,7 @@ fn visible_chat_rows(
         let end = end.min(visible_end);
         for idx in start..end {
             for span in &mut lines[idx - visible_start].spans {
-                span.style = span.style.bg(theme::BG_SELECTION);
+                span.style = span.style.bg(theme::BG_SELECTION());
             }
         }
     }
@@ -361,7 +370,7 @@ fn visible_chat_rows(
             if let Some(first_span) = row.spans.first()
                 && (first_span.content == " " || first_span.content == "│")
             {
-                row.spans[0] = Span::styled("▸", Style::default().fg(theme::AMBER));
+                row.spans[0] = Span::styled("▸", Style::default().fg(theme::AMBER()));
             }
         }
     }
@@ -450,7 +459,7 @@ fn draw_mention_autocomplete(frame: &mut Frame, anchor: Rect, matches: &[String]
     let block = Block::default()
         .title(" @mentions ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
     let items: Vec<Line> = matches
         .iter()
@@ -459,10 +468,10 @@ fn draw_mention_autocomplete(frame: &mut Frame, anchor: Rect, matches: &[String]
         .map(|(i, name)| {
             let style = if i == selected {
                 Style::default()
-                    .fg(theme::AMBER)
+                    .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT)
+                Style::default().fg(theme::TEXT())
             };
             let prefix = if i == selected { " > " } else { "   " };
             Line::from(Span::styled(format!("{prefix}@{name}"), style))
@@ -523,13 +532,13 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let block = Block::default()
         .title(" Chat ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if chat_rooms.is_empty() {
         let empty = Paragraph::new("No chat rooms yet.")
-            .style(Style::default().fg(theme::TEXT_DIM))
+            .style(Style::default().fg(theme::TEXT_DIM()))
             .centered();
         frame.render_widget(empty, inner);
         return;
@@ -559,10 +568,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             let prefix = if is_selected { ">" } else { " " };
             let style = if is_selected {
                 Style::default()
-                    .fg(theme::AMBER)
+                    .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::TEXT)
+                Style::default().fg(theme::TEXT())
             };
             let text = if unread > 0 {
                 format!("{prefix} {label} ({unread})")
@@ -577,7 +586,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         let suffix: String = "─".repeat(suffix_len);
         Line::from(Span::styled(
             format!("{prefix}{label} {suffix}"),
-            Style::default().fg(theme::TEXT_FAINT),
+            Style::default().fg(theme::TEXT_FAINT()),
         ))
     };
     let rooms_width = rooms_area.width.saturating_sub(2); // inner width minus borders
@@ -619,10 +628,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         let prefix = if news_selected { ">" } else { " " };
         let style = if news_selected {
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::TEXT)
+            Style::default().fg(theme::TEXT())
         };
         let label = if news_unread_count > 0 {
             format!("{prefix} news ({news_unread_count})")
@@ -638,10 +647,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         let prefix = if notifications_selected { ">" } else { " " };
         let style = if notifications_selected {
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::TEXT)
+            Style::default().fg(theme::TEXT())
         };
         let label = if notifications_unread_count > 0 {
             format!("{prefix} mentions ({notifications_unread_count})")
@@ -720,18 +729,18 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     room_lines.push(Line::from(""));
     room_lines.push(section_divider("Mobile", rooms_width));
     room_lines.push(Line::from(vec![
-        Span::styled(" c", Style::default().fg(theme::AMBER_DIM)),
-        Span::styled(" open web chat", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(" c", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" open web chat", Style::default().fg(theme::TEXT_DIM())),
     ]));
     room_lines.push(Line::from(Span::styled(
         " 24h link, scan QR",
-        Style::default().fg(theme::TEXT_FAINT),
+        Style::default().fg(theme::TEXT_FAINT()),
     )));
 
     let rooms_block = Block::default()
         .title(" Rooms (h/l) ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
     let rooms_paragraph = Paragraph::new(room_lines).block(rooms_block);
     frame.render_widget(rooms_paragraph, rooms_area);
 
@@ -790,7 +799,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 if lines.is_empty() {
                     lines = vec![Line::from(Span::styled(
                         "No messages yet",
-                        Style::default().fg(theme::TEXT_DIM),
+                        Style::default().fg(theme::TEXT_DIM()),
                     ))];
                 }
                 (format!(" #{} ", title), lines)
@@ -799,7 +808,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                     " Messages ".to_string(),
                     vec![Line::from(Span::styled(
                         "Select a room.",
-                        Style::default().fg(theme::TEXT_DIM),
+                        Style::default().fg(theme::TEXT_DIM()),
                     ))],
                 )
             };
@@ -807,7 +816,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         let messages_block = Block::default()
             .title(message_title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+            .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
         let inner_area = messages_block.inner(messages_area);
         let messages_paragraph = Paragraph::new(message_lines).block(messages_block);
         frame.render_widget(messages_paragraph, messages_area);
@@ -820,10 +829,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         let hint_block = Block::default()
             .title(" Mentions ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER));
+            .border_style(Style::default().fg(theme::BORDER()));
         let hint_text = Paragraph::new(Line::from(Span::styled(
             " j/k navigate · Enter jump to room",
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::TEXT_DIM()),
         )))
         .block(hint_block);
         frame.render_widget(hint_text, composer_area);
@@ -832,12 +841,12 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             let (title, border_style) = if view.news_processing {
                 (
                     " Processing URL... ".to_string(),
-                    Style::default().fg(theme::AMBER),
+                    Style::default().fg(theme::AMBER()),
                 )
             } else {
                 (
                     " Paste URL (Enter submit, Esc cancel) ".to_string(),
-                    Style::default().fg(theme::BORDER_ACTIVE),
+                    Style::default().fg(theme::BORDER_ACTIVE()),
                 )
             };
             let news_block = Block::default()
@@ -857,10 +866,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             let hint_block = Block::default()
                 .title(" Share URL ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme::BORDER));
+                .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
                 " j/k navigate · Enter copy · i paste URL",
-                Style::default().fg(theme::TEXT_DIM),
+                Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
             frame.render_widget(hint_text, composer_area);

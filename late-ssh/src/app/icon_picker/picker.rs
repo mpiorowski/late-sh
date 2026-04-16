@@ -81,7 +81,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &IconPickerState, catalog: &Icon
     let outer_block = Block::default()
         .title(" Icon Picker ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
     let inner = outer_block.inner(popup);
     f.render_widget(outer_block, popup);
@@ -101,8 +101,8 @@ pub fn render(f: &mut Frame, area: Rect, state: &IconPickerState, catalog: &Icon
 
 fn render_search(f: &mut Frame, area: Rect, state: &IconPickerState) {
     let mut spans = vec![
-        Span::styled("  search ", Style::default().fg(theme::TEXT_DIM)),
-        Span::styled("› ", Style::default().fg(theme::AMBER_DIM)),
+        Span::styled("  search ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("› ", Style::default().fg(theme::AMBER_DIM())),
     ];
     spans.extend(render_text_with_cursor(
         &state.search_query,
@@ -123,16 +123,16 @@ fn render_text_with_cursor(text: &str, cursor_pos: usize) -> Vec<Span<'static>> 
 
     let cursor_style = if cursor_pos < text.chars().count() {
         Style::default()
-            .fg(theme::BG_SELECTION)
-            .bg(theme::AMBER_GLOW)
+            .fg(theme::BG_SELECTION())
+            .bg(theme::AMBER_GLOW())
     } else {
-        Style::default().fg(theme::AMBER_GLOW)
+        Style::default().fg(theme::AMBER_GLOW())
     };
 
     vec![
-        Span::styled(before, Style::default().fg(theme::TEXT_BRIGHT)),
+        Span::styled(before, Style::default().fg(theme::TEXT_BRIGHT())),
         Span::styled(cursor_char, cursor_style),
-        Span::styled(after, Style::default().fg(theme::TEXT_BRIGHT)),
+        Span::styled(after, Style::default().fg(theme::TEXT_BRIGHT())),
     ]
 }
 
@@ -196,15 +196,18 @@ fn header_line(title: &'static str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{dashes}\u{2500}{dashes} "),
-            Style::default().fg(theme::TEXT_FAINT),
+            Style::default().fg(theme::TEXT_FAINT()),
         ),
         Span::styled(
             title,
             Style::default()
-                .fg(theme::AMBER_DIM)
+                .fg(theme::AMBER_DIM())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!(" {dashes}"), Style::default().fg(theme::TEXT_FAINT)),
+        Span::styled(
+            format!(" {dashes}"),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ),
     ])
 }
 
@@ -217,29 +220,32 @@ fn entry_line(entry: &IconEntry, is_selected: bool, width: u16) -> Line<'static>
             Span::styled(
                 format!(" {icon} "),
                 Style::default()
-                    .fg(theme::TEXT_BRIGHT)
-                    .bg(theme::BG_HIGHLIGHT),
+                    .fg(theme::TEXT_BRIGHT())
+                    .bg(theme::BG_HIGHLIGHT()),
             ),
             Span::styled(
                 name.clone(),
                 Style::default()
-                    .fg(theme::AMBER_GLOW)
-                    .bg(theme::BG_HIGHLIGHT)
+                    .fg(theme::AMBER_GLOW())
+                    .bg(theme::BG_HIGHLIGHT())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" ".repeat(pad), Style::default().bg(theme::BG_HIGHLIGHT)),
+            Span::styled(" ".repeat(pad), Style::default().bg(theme::BG_HIGHLIGHT())),
         ])
     } else {
         Line::from(vec![
-            Span::styled(format!(" {icon} "), Style::default().fg(theme::TEXT_BRIGHT)),
-            Span::styled(name.clone(), Style::default().fg(theme::TEXT)),
+            Span::styled(
+                format!(" {icon} "),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+            Span::styled(name.clone(), Style::default().fg(theme::TEXT())),
         ])
     }
 }
 
 fn render_footer(f: &mut Frame, area: Rect) {
-    let dim = Style::default().fg(theme::TEXT_DIM);
-    let key = Style::default().fg(theme::AMBER_DIM);
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let key = Style::default().fg(theme::AMBER_DIM());
     let hint = Line::from(vec![
         Span::raw("  "),
         Span::styled("\u{23CE}", key),
@@ -251,7 +257,7 @@ fn render_footer(f: &mut Frame, area: Rect) {
     ]);
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(theme::BORDER_DIM));
+        .border_style(Style::default().fg(theme::BORDER_DIM()));
     let inner = block.inner(area);
     f.render_widget(block, area);
     f.render_widget(Paragraph::new(hint), inner);

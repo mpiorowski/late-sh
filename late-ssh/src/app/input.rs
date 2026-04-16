@@ -893,7 +893,17 @@ fn try_open_icon_picker(app: &mut App) {
         return;
     }
     if !ctx.chat_composing {
-        app.chat.start_composing();
+        // The dashboard card always posts to #general, regardless of whatever
+        // room was selected on the chat screen before. Pin general explicitly
+        // so opening the icon picker from the dashboard doesn't inherit a
+        // stale `selected_room_id`.
+        if ctx.screen == Screen::Dashboard {
+            if let Some(room_id) = app.chat.general_room_id() {
+                app.chat.start_composing_in_room(room_id);
+            }
+        } else {
+            app.chat.start_composing();
+        }
     }
     if app.icon_catalog.is_none() {
         app.icon_catalog = Some(icon_picker::catalog::IconCatalogData::load());

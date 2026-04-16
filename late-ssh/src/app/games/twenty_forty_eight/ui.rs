@@ -24,12 +24,12 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
     let info_lines = vec![
         info_tagline("Slide. Merge. Survive."),
         Line::from(""),
-        info_label_value("Score", format!("{}", state.score), theme::AMBER_GLOW),
-        info_label_value("Best", format!("{}", state.best_score), theme::SUCCESS),
+        info_label_value("Score", format!("{}", state.score), theme::AMBER_GLOW()),
+        info_label_value("Best", format!("{}", state.best_score), theme::SUCCESS()),
         info_label_value(
             "Best Tile",
             format!("{}", top_tile.max(2)),
-            theme::TEXT_BRIGHT,
+            theme::TEXT_BRIGHT(),
         ),
         Line::from(""),
         key_hint("h/j/k/l", "move"),
@@ -78,7 +78,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
             board_area,
             "GAME OVER",
             "No moves left",
-            theme::ERROR,
+            theme::ERROR(),
         );
     }
 }
@@ -103,7 +103,7 @@ fn draw_cell(frame: &mut Frame, area: Rect, value: u32) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER_DIM)),
+            .border_style(Style::default().fg(theme::BORDER_DIM())),
     )
     .style(Style::default().bg(bg));
 
@@ -112,7 +112,7 @@ fn draw_cell(frame: &mut Frame, area: Rect, value: u32) {
 
 fn tile_colors(val: u32) -> (Color, Color) {
     match val {
-        0 => (ratatui::style::Color::Reset, theme::TEXT),
+        0 => (ratatui::style::Color::Reset, theme::TEXT()),
         2 => (Color::Rgb(238, 228, 218), Color::Rgb(119, 110, 101)),
         4 => (Color::Rgb(237, 224, 200), Color::Rgb(119, 110, 101)),
         8 => (Color::Rgb(242, 177, 121), Color::Rgb(249, 246, 242)),

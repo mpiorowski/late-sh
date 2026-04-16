@@ -51,11 +51,11 @@ resource "kubernetes_deployment_v1" "service_ssh" {
 
           resources {
             limits = {
-              cpu    = "1000m"
+              cpu    = "2000m"
               memory = "2Gi"
             }
             requests = {
-              cpu    = "250m"
+              cpu    = "500m"
               memory = "512Mi"
             }
           }

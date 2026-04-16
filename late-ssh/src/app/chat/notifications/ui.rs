@@ -25,14 +25,14 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(theme::BORDER()));
 
     let inner_area = block.inner(area);
     frame.render_widget(block, area);
 
     if view.items.is_empty() {
         let text = Text::from("No mentions yet.");
-        let p = Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM));
+        let p = Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM()));
         frame.render_widget(p, inner_area);
         return;
     }
@@ -56,14 +56,14 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
         let item = &view.items[idx];
 
         let bg_color = if idx == selected_index {
-            theme::BG_SELECTION
+            theme::BG_SELECTION()
         } else {
             Color::Reset
         };
 
         let item_block = Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(theme::BORDER))
+            .border_style(Style::default().fg(theme::BORDER()))
             .style(Style::default().bg(bg_color));
 
         let content_area = item_block.inner(item_area);
@@ -78,7 +78,7 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
         let read_indicator = if item.read_at.is_some() {
             Span::styled(" ", Style::default())
         } else {
-            Span::styled("* ", Style::default().fg(theme::MENTION))
+            Span::styled("* ", Style::default().fg(theme::MENTION()))
         };
 
         let lines = vec![
@@ -87,23 +87,23 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
                 Span::styled(
                     format!("@{}", item.actor_username),
                     Style::default()
-                        .fg(theme::AMBER)
+                        .fg(theme::AMBER())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!(" mentioned you in {room_label}"),
-                    Style::default().fg(theme::TEXT),
+                    Style::default().fg(theme::TEXT()),
                 ),
                 Span::styled(
                     format!("  {}", format_relative_time(item.created)),
-                    Style::default().fg(theme::TEXT_DIM),
+                    Style::default().fg(theme::TEXT_DIM()),
                 ),
             ]),
             Line::from(vec![
                 Span::styled("  ", Style::default()),
                 Span::styled(
                     preview_text(&item.message_preview),
-                    Style::default().fg(theme::TEXT_FAINT),
+                    Style::default().fg(theme::TEXT_FAINT()),
                 ),
             ]),
         ];

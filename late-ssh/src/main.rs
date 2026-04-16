@@ -263,6 +263,24 @@ async fn main() -> anyhow::Result<()> {
         Ok(())
     });
 
+    let limiter_cleanup_shutdown = singleton_shutdown.clone();
+    let ssh_limiter = state.ssh_attempt_limiter.clone();
+    let ws_limiter = state.ws_pair_limiter.clone();
+    tasks.spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        interval.tick().await; // skip immediate first tick
+        loop {
+            tokio::select! {
+                _ = limiter_cleanup_shutdown.cancelled() => break,
+                _ = interval.tick() => {
+                    ssh_limiter.cleanup();
+                    ws_limiter.cleanup();
+                }
+            }
+        }
+        Ok(())
+    });
+
     let vote_shutdown = singleton_shutdown.clone();
     tasks.spawn(async move {
         vote_service.start_background_task(vote_shutdown).await;

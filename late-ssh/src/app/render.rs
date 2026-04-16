@@ -47,6 +47,7 @@ fn desktop_notification_bytes(title: &str, body: &str) -> Vec<u8> {
 }
 
 struct DrawContext<'a> {
+    connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     profile_view: profile::ui::ProfileRenderInput<'a>,
@@ -74,6 +75,7 @@ struct DrawContext<'a> {
     help_scroll: u16,
     show_splash: bool,
     splash_ticks: usize,
+    splash_hint: &'a str,
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
     is_draining: bool,
@@ -103,6 +105,7 @@ impl App {
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let screen = self.screen;
+        theme::set_current_by_id(self.profile_state.theme_id());
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
             .as_mut()
@@ -120,7 +123,6 @@ impl App {
         let chat_badges = self.leaderboard.badges();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let dashboard_view = dashboard::ui::DashboardRenderInput {
-            connect_url: self.connect_url.as_str(),
             now_playing: now_playing_text.as_deref(),
             vote_counts: &vote_snapshot.counts,
             current_genre: vote_snapshot.current_genre,
@@ -201,6 +203,7 @@ impl App {
             editing_username: self.profile_state.editing_username(),
             username_composer: self.profile_state.username_composer(),
             ai_model: self.profile_state.ai_model(),
+            theme_id: self.profile_state.theme_id(),
             scroll_offset: self.profile_state.scroll_offset(),
             current_streak: user_streak,
             chip_balance: self.chip_balance,
@@ -225,6 +228,7 @@ impl App {
                     area,
                     screen,
                     DrawContext {
+                        connect_url: self.connect_url.as_str(),
                         dashboard_view,
                         chat_view,
                         profile_view,
@@ -252,6 +256,7 @@ impl App {
                         help_scroll: self.help_scroll,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
+                        splash_hint: &self.splash_hint,
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
@@ -350,19 +355,19 @@ impl App {
             for s in steam {
                 lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
                     *s,
-                    Style::default().fg(theme::TEXT_FAINT),
+                    Style::default().fg(theme::TEXT_FAINT()),
                 )));
             }
             for b in &base {
                 lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
                     *b,
-                    Style::default().fg(theme::TEXT_DIM),
+                    Style::default().fg(theme::TEXT_DIM()),
                 )));
             }
             lines.push(ratatui::text::Line::from(""));
             lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
                 text,
-                Style::default().fg(theme::TEXT_MUTED),
+                Style::default().fg(theme::TEXT_MUTED()),
             )));
 
             let p = ratatui::widgets::Paragraph::new(lines).centered();
@@ -374,13 +379,25 @@ impl App {
             .split(area);
 
             frame.render_widget(p, layout[1]);
+            let splash_bottom = layout[1].bottom();
+            let gap = area.bottom().saturating_sub(splash_bottom);
+            let hint_y = splash_bottom + (gap * 3 / 4);
+            if hint_y < area.bottom() {
+                let hint_area = Rect::new(area.x, hint_y, area.width, 1);
+                let hint = ratatui::text::Line::from(ratatui::text::Span::styled(
+                    ctx.splash_hint,
+                    Style::default().fg(theme::TEXT_DIM()),
+                ));
+                let hint_paragraph = ratatui::widgets::Paragraph::new(hint).centered();
+                frame.render_widget(hint_paragraph, hint_area);
+            }
             return;
         }
 
         let mut block = Block::default()
             .title(" late.sh ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+            .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
         if ctx.profile_view.profile.enable_black_bg {
             block = block.style(Style::default().bg(theme::CANVAS));
@@ -393,7 +410,7 @@ impl App {
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
         let content_area = main_layout[0];
         let sidebar_area = main_layout[1];
-        let connect_url = ctx.dashboard_view.connect_url;
+        let connect_url = ctx.connect_url;
 
         match screen {
             Screen::Dashboard => {
@@ -453,8 +470,8 @@ impl App {
 
         if let Some(banner) = banner {
             let color = match banner.kind {
-                BannerKind::Success => theme::SUCCESS,
-                BannerKind::Error => theme::ERROR,
+                BannerKind::Success => theme::SUCCESS(),
+                BannerKind::Error => theme::ERROR(),
             };
             // leading space (1) + icon (2) + message + border padding (4)
             let msg_w = (banner.message.len() as u16) + 7;
@@ -516,14 +533,14 @@ fn draw_help_overlay(
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Clear, Paragraph};
 
-    let dim = Style::default().fg(theme::TEXT_DIM);
-    let faint = Style::default().fg(theme::TEXT_FAINT);
-    let muted = Style::default().fg(theme::TEXT_MUTED);
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let muted = Style::default().fg(theme::TEXT_MUTED());
     let bold_amber = Style::default()
-        .fg(theme::AMBER)
+        .fg(theme::AMBER())
         .add_modifier(Modifier::BOLD);
-    let key_s = Style::default().fg(theme::AMBER_DIM);
-    let desc_s = Style::default().fg(theme::TEXT);
+    let key_s = Style::default().fg(theme::AMBER_DIM());
+    let desc_s = Style::default().fg(theme::TEXT());
 
     let col_w: u16 = 34;
 
@@ -574,6 +591,7 @@ fn draw_help_overlay(
         key("h / l", "switch room"),
         key("i", "compose"),
         key("/help", "commands"),
+        key("/music", "music setup"),
         key("/active", "active users"),
         key("/list", "private room users"),
         Line::from(""),
@@ -628,11 +646,11 @@ fn draw_help_overlay(
         .title(Span::styled(
             " Keybindings ",
             Style::default()
-                .fg(theme::AMBER_GLOW)
+                .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
@@ -676,13 +694,13 @@ fn draw_help_overlay(
     let can_scroll = max_scroll > 0;
     let mut footer = vec![
         Span::styled("  press ", dim),
-        Span::styled("? ", Style::default().fg(theme::TEXT_MUTED)),
+        Span::styled("? ", Style::default().fg(theme::TEXT_MUTED())),
         Span::styled("to close", dim),
     ];
     if can_scroll {
         footer.push(Span::styled(
             "  j/k ",
-            Style::default().fg(theme::TEXT_MUTED),
+            Style::default().fg(theme::TEXT_MUTED()),
         ));
         footer.push(Span::styled("scroll", dim));
     }
@@ -694,12 +712,12 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Clear, Paragraph, Wrap};
 
-    let dim = Style::default().fg(theme::TEXT_DIM);
+    let dim = Style::default().fg(theme::TEXT_DIM());
     let bold_cyan = Style::default()
-        .fg(theme::AMBER)
+        .fg(theme::AMBER())
         .add_modifier(Modifier::BOLD);
-    let white = Style::default().fg(theme::TEXT_BRIGHT);
-    let green = Style::default().fg(theme::SUCCESS);
+    let white = Style::default().fg(theme::TEXT_BRIGHT());
+    let green = Style::default().fg(theme::SUCCESS());
 
     let greeting = format!("Welcome back, @{username}.");
 
@@ -710,7 +728,7 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
             Span::styled(
                 greeting,
                 Style::default()
-                    .fg(theme::AMBER_GLOW)
+                    .fg(theme::AMBER_GLOW())
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -838,7 +856,7 @@ fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
     let block = Block::default()
         .title(" late.sh ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 

@@ -7,7 +7,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::ai::ghost::GRAYBEARD_CHAT_INTERVAL;
+use crate::app::ai::ghost::{GRAYBEARD_CHAT_INTERVAL, GRAYBEARD_MENTION_COOLDOWN};
 use crate::app::common::theme;
 use late_core::models::leaderboard::BadgeTier;
 
@@ -16,6 +16,7 @@ pub struct ProfileRenderInput<'a> {
     pub editing_username: bool,
     pub username_composer: &'a str,
     pub ai_model: &'a str,
+    pub theme_id: &'a str,
     pub scroll_offset: u16,
     pub current_streak: u32,
     pub chip_balance: i64,
@@ -34,7 +35,7 @@ pub fn draw_profile(frame: &mut Frame, area: Rect, view: &ProfileRenderInput<'_>
 }
 
 fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
-    let dim = Style::default().fg(theme::TEXT_DIM);
+    let dim = Style::default().fg(theme::TEXT_DIM());
 
     let mut lines: Vec<Line<'a>> = Vec::with_capacity(64);
 
@@ -48,9 +49,9 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     let box_w = (width.saturating_sub(6) as usize).min(42);
 
     let username_border_color = if view.editing_username {
-        theme::BORDER_ACTIVE
+        theme::BORDER_ACTIVE()
     } else {
-        theme::BORDER
+        theme::BORDER()
     };
     let border_style = Style::default().fg(username_border_color);
 
@@ -77,15 +78,15 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
         if view.username_composer.is_empty() {
             let placeholder_first = if view.cursor_visible {
                 Style::default()
-                    .fg(theme::TEXT_DIM)
+                    .fg(theme::TEXT_DIM())
                     .add_modifier(Modifier::REVERSED)
             } else {
-                Style::default().fg(theme::TEXT_DIM)
+                Style::default().fg(theme::TEXT_DIM())
             };
             vec![
                 Span::styled("  \u{2502} ", border_style),
                 Span::styled("e", placeholder_first),
-                Span::styled("nter username", Style::default().fg(theme::TEXT_DIM)),
+                Span::styled("nter username", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled(
                     format!("{}\u{2502}", " ".repeat(box_w.saturating_sub(15))),
                     border_style,
@@ -96,8 +97,8 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
             let padding = " ".repeat(box_w.saturating_sub(composer_len + 2));
             vec![
                 Span::styled("  \u{2502} ", border_style),
-                Span::styled(view.username_composer, Style::default().fg(theme::TEXT)),
-                Span::styled(cursor.to_string(), Style::default().fg(theme::AMBER_GLOW)),
+                Span::styled(view.username_composer, Style::default().fg(theme::TEXT())),
+                Span::styled(cursor.to_string(), Style::default().fg(theme::AMBER_GLOW())),
                 Span::styled(format!("{padding}\u{2502}"), border_style),
             ]
         }
@@ -105,7 +106,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
         let padding = " ".repeat(box_w.saturating_sub(8));
         vec![
             Span::styled("  \u{2502} ", border_style),
-            Span::styled("not set", Style::default().fg(theme::TEXT_FAINT)),
+            Span::styled("not set", Style::default().fg(theme::TEXT_FAINT())),
             Span::styled(format!("{padding}\u{2502}"), border_style),
         ]
     } else {
@@ -115,7 +116,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
             Span::styled("  \u{2502} ", border_style),
             Span::styled(
                 view.profile.username.as_str(),
-                Style::default().fg(theme::TEXT),
+                Style::default().fg(theme::TEXT()),
             ),
             Span::styled(format!("{padding}\u{2502}"), border_style),
         ]
@@ -125,67 +126,67 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     let bottom_border = format!("  \u{2514}{}\u{2518}", "\u{2500}".repeat(box_w));
     lines.push(Line::from(Span::styled(bottom_border, border_style)));
 
-    // ── Preferences ──
-    lines.push(Line::from(""));
-    lines.push(section_heading("Preferences"));
-
-    let nav_style = Style::default().fg(theme::TEXT_FAINT);
-    let selected_label = Style::default().fg(theme::TEXT);
+    let nav_style = Style::default().fg(theme::TEXT_FAINT());
+    let selected_label = Style::default().fg(theme::TEXT());
     let label_pad: usize = 33;
 
-    let black_bg_selected = view.settings_row == 0;
+    let theme_row_style = if view.settings_row == 0 {
+        selected_label
+    } else {
+        dim
+    };
+    let theme_marker = if view.settings_row == 0 {
+        "\u{203a}"
+    } else {
+        " "
+    };
+    let theme_label_text = " Theme";
+    let theme_pad = " ".repeat(label_pad.saturating_sub(theme_label_text.len() + 1));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  Themes: {}.", theme::help_text()),
+        Style::default().fg(theme::TEXT_MUTED()),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {theme_marker}"), nav_style),
+        Span::styled(theme_label_text, theme_row_style),
+        Span::styled(theme_pad, dim),
+        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            theme::label_for_id(view.theme_id),
+            Style::default().fg(theme::AMBER()),
+        ),
+        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM())),
+    ]));
+
+    // Black background toggle row
+    let black_bg_selected = view.settings_row == 1;
     let black_bg_row_style = if black_bg_selected {
         selected_label
     } else {
         dim
     };
-    let label = " High Contrast (Black BG)";
-    let pad = " ".repeat(label_pad.saturating_sub(label.len() + 1));
+    let black_bg_marker = if black_bg_selected { "\u{203a}" } else { " " };
+    let bb_label = " High Contrast (Black BG)";
+    let bb_pad = " ".repeat(label_pad.saturating_sub(bb_label.len() + 1));
     let checkbox = if view.profile.enable_black_bg { "[x]" } else { "[ ]" };
     let checkbox_style = if view.profile.enable_black_bg {
-        Style::default().fg(theme::AMBER)
+        Style::default().fg(theme::AMBER())
     } else {
-        Style::default().fg(theme::TEXT_DIM)
+        Style::default().fg(theme::TEXT_DIM())
     };
     lines.push(Line::from(vec![
-        Span::styled(" \u{2022}", nav_style),
-        Span::styled(label, black_bg_row_style),
-        Span::styled(pad, dim),
+        Span::styled(format!(" {black_bg_marker}"), nav_style),
+        Span::styled(bb_label, black_bg_row_style),
+        Span::styled(bb_pad, dim),
         Span::styled(checkbox, checkbox_style),
     ]));
 
-    // ── Notifications ──
     lines.push(Line::from(""));
-    lines.push(section_heading("Notifications"));
-
     lines.push(Line::from(Span::styled(
-        "  Desktop notifications delivered to your terminal via",
-        dim,
+        "  Notification settings",
+        Style::default().fg(theme::TEXT_MUTED()),
     )));
-    lines.push(Line::from(vec![
-        Span::styled("  ", dim),
-        Span::styled("OSC 777", Style::default().fg(theme::TEXT)),
-        Span::styled(" (kitty, Ghostty, rxvt-unicode, foot,", dim),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  wezterm, konsole) and ", dim),
-        Span::styled("OSC 9", Style::default().fg(theme::TEXT)),
-        Span::styled(" (iTerm2). Unsupported", dim),
-    ]));
-    lines.push(Line::from(Span::styled(
-        "  terminals silently ignore both.",
-        dim,
-    )));
-    lines.push(Line::from(Span::styled(
-        "  tmux is not supported — run directly in a terminal.",
-        dim,
-    )));
-    lines.push(Line::from(Span::styled(
-        "  Space / Enter toggles a kind; ◀ ▶ adjusts cooldown.",
-        dim,
-    )));
-
-    lines.push(Line::from(""));
 
     // Kind checkboxes. Keep this list in sync with ProfileState::NOTIFY_KINDS.
     let kinds: [(&str, &str); 3] = [
@@ -196,21 +197,27 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
 
     for (row_idx, (kind, label)) in kinds.iter().enumerate() {
         let enabled = view.notify_kinds.iter().any(|k| k == *kind);
-        let row_style = if view.settings_row == row_idx + 1 {
+        let settings_row = row_idx + 2; // rows 0=theme, 1=black_bg, 2..=notify
+        let row_style = if view.settings_row == settings_row {
             selected_label
         } else {
             dim
+        };
+        let row_marker = if view.settings_row == settings_row {
+            "\u{203a}"
+        } else {
+            " "
         };
         let label_text = format!(" {label}");
         let pad = " ".repeat(label_pad.saturating_sub(label_text.len() + 1));
         let checkbox = if enabled { "[x]" } else { "[ ]" };
         let checkbox_style = if enabled {
-            Style::default().fg(theme::AMBER)
+            Style::default().fg(theme::AMBER())
         } else {
-            Style::default().fg(theme::TEXT_DIM)
+            Style::default().fg(theme::TEXT_DIM())
         };
         lines.push(Line::from(vec![
-            Span::styled(" \u{2022}", nav_style),
+            Span::styled(format!(" {row_marker}"), nav_style),
             Span::styled(label_text, row_style),
             Span::styled(pad, dim),
             Span::styled(checkbox, checkbox_style),
@@ -218,11 +225,16 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     }
 
     // Cooldown row (last).
-    let cooldown_row = kinds.len() + 1;
+    let cooldown_row = kinds.len() + 2; // 0=theme, 1=black_bg, 2..4=notify, 5=cooldown
     let cooldown_row_style = if view.settings_row == cooldown_row {
         selected_label
     } else {
         dim
+    };
+    let cooldown_marker = if view.settings_row == cooldown_row {
+        "\u{203a}"
+    } else {
+        " "
     };
     let cooldown_label_text = " Cooldown (mins)";
     let cooldown_pad = " ".repeat(label_pad.saturating_sub(cooldown_label_text.len() + 1));
@@ -232,13 +244,44 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
         format!("{}", view.notify_cooldown_mins)
     };
     lines.push(Line::from(vec![
-        Span::styled(" \u{25bc}", nav_style),
+        Span::styled(format!(" {cooldown_marker}"), nav_style),
         Span::styled(cooldown_label_text, cooldown_row_style),
         Span::styled(cooldown_pad, dim),
-        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM)),
-        Span::styled(cooldown_val, Style::default().fg(theme::AMBER)),
-        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM)),
+        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(cooldown_val, Style::default().fg(theme::AMBER())),
+        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM())),
     ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Up/Down select a setting. Left/Right change it. Space/Enter toggles.",
+        dim,
+    )));
+    // ── Notifications ──
+    lines.push(Line::from(""));
+    lines.push(section_heading("Notifications"));
+
+    lines.push(Line::from(Span::styled(
+        "  Desktop notifications delivered to your terminal via",
+        dim,
+    )));
+    lines.push(Line::from(vec![
+        Span::styled("  ", dim),
+        Span::styled("OSC 777", Style::default().fg(theme::TEXT())),
+        Span::styled(" (kitty, Ghostty, rxvt-unicode, foot,", dim),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  wezterm, konsole) and ", dim),
+        Span::styled("OSC 9", Style::default().fg(theme::TEXT())),
+        Span::styled(" (iTerm2). Unsupported", dim),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "  terminals silently ignore both.",
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  tmux is not supported — run directly in a terminal.",
+        dim,
+    )));
 
     // ── Your Stats ──
     lines.push(Line::from(""));
@@ -250,14 +293,14 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     if streak == 0 {
         lines.push(Line::from(vec![
             Span::styled("  Daily Streak: ", dim),
-            Span::styled("none", Style::default().fg(theme::TEXT_FAINT)),
+            Span::styled("none", Style::default().fg(theme::TEXT_FAINT())),
         ]));
     } else {
         let badge_color = match badge {
-            Some(BadgeTier::Gold) => theme::BADGE_GOLD,
-            Some(BadgeTier::Silver) => theme::BADGE_SILVER,
-            Some(BadgeTier::Bronze) => theme::BADGE_BRONZE,
-            None => theme::TEXT,
+            Some(BadgeTier::Gold) => theme::BADGE_GOLD(),
+            Some(BadgeTier::Silver) => theme::BADGE_SILVER(),
+            Some(BadgeTier::Bronze) => theme::BADGE_BRONZE(),
+            None => theme::TEXT(),
         };
         let badge_label = badge.map(|b| format!(" {}", b.label())).unwrap_or_default();
         lines.push(Line::from(vec![
@@ -290,7 +333,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
             lines.push(Line::from(Span::styled(
                 "  Max tier reached!",
                 Style::default()
-                    .fg(theme::BADGE_GOLD)
+                    .fg(theme::BADGE_GOLD())
                     .add_modifier(Modifier::ITALIC),
             )));
         }
@@ -302,7 +345,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
         Span::styled(
             format!("{}", view.chip_balance),
             Style::default()
-                .fg(theme::SUCCESS)
+                .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -313,7 +356,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
             Span::styled(
                 format!("{}", view.tetris_best),
                 Style::default()
-                    .fg(theme::TEXT)
+                    .fg(theme::TEXT())
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -325,7 +368,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
             Span::styled(
                 format!("{}", view.twenty_forty_eight_best),
                 Style::default()
-                    .fg(theme::TEXT)
+                    .fg(theme::TEXT())
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -341,7 +384,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     )));
     lines.push(Line::from(vec![
         Span::styled("  AI-powered help, powered by ", dim),
-        Span::styled(view.ai_model, Style::default().fg(theme::TEXT)),
+        Span::styled(view.ai_model, Style::default().fg(theme::TEXT())),
         Span::styled(".", dim),
     ]));
     lines.push(Line::from(Span::styled(
@@ -362,12 +405,17 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     lines.push(section_heading("@graybeard"));
 
     let interval_min = GRAYBEARD_CHAT_INTERVAL.as_secs() / 60;
+    let mention_cooldown_sec = GRAYBEARD_MENTION_COOLDOWN.as_secs();
     lines.push(Line::from(Span::styled(
         "  One ghost user haunts #general — a burned-out dev who",
         dim,
     )));
     lines.push(Line::from(Span::styled(
         format!("  moans about the good old days (every ~{interval_min}min)."),
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  Replies when @mentioned ({mention_cooldown_sec}s cooldown)."),
         dim,
     )));
 
@@ -386,42 +434,42 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
         Span::styled(
             "\u{25cf}",
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" your username          ", dim),
         Span::styled(
             "amber bold",
             Style::default()
-                .fg(theme::AMBER)
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
     lines.push(Line::from(vec![
         Span::styled("    ", dim),
-        Span::styled("\u{25cf}", Style::default().fg(theme::CHAT_AUTHOR)),
+        Span::styled("\u{25cf}", Style::default().fg(theme::CHAT_AUTHOR())),
         Span::styled(" other users            ", dim),
-        Span::styled("blue-grey", Style::default().fg(theme::CHAT_AUTHOR)),
+        Span::styled("blue-grey", Style::default().fg(theme::CHAT_AUTHOR())),
     ]));
     lines.push(Line::from(vec![
         Span::styled("    ", dim),
-        Span::styled("\u{25cf}", Style::default().fg(theme::BOT)),
+        Span::styled("\u{25cf}", Style::default().fg(theme::BOT())),
         Span::styled(" @bot / @graybeard      ", dim),
-        Span::styled("muted purple", Style::default().fg(theme::BOT)),
+        Span::styled("muted purple", Style::default().fg(theme::BOT())),
     ]));
     lines.push(Line::from(vec![
         Span::styled("    ", dim),
         Span::styled(
             "\u{25cf}",
             Style::default()
-                .fg(theme::MENTION)
+                .fg(theme::MENTION())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" @mentions              ", dim),
         Span::styled(
             "yellow bold",
             Style::default()
-                .fg(theme::MENTION)
+                .fg(theme::MENTION())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -432,9 +480,9 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
 }
 
 fn section_heading(title: &str) -> Line<'static> {
-    let dim = Style::default().fg(theme::BORDER);
+    let dim = Style::default().fg(theme::BORDER());
     let bold_cyan = Style::default()
-        .fg(theme::AMBER)
+        .fg(theme::AMBER())
         .add_modifier(Modifier::BOLD);
     Line::from(vec![
         Span::styled("  \u{2500}\u{2500} ", dim),
@@ -456,6 +504,7 @@ mod tests {
             editing_username: false,
             username_composer: "",
             ai_model: "gemini-3-flash",
+            theme_id: "late",
             scroll_offset: 0,
             current_streak: 5,
             chip_balance: 750,
