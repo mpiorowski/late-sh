@@ -75,7 +75,7 @@ impl<'a, B: Barcode, P: Polarity> QrWidget<'a, B, P> {
             quiet_zone: QuietZone::default(),
             scaling: Scaling::default(),
             aspect_ratio: AspectRatio::default(),
-            style: P::style(),
+            style: Style::default(),
             _phantom: PhantomData,
         }
     }
@@ -191,9 +191,16 @@ impl<'a, B: Barcode, P: Polarity> QrWidget<'a, B, P> {
         let v_pad = v_pad as usize;
         let total_chars_w = glyphs_w as usize + h_pad * 2;
         let total_rows = raw_rows as usize + v_pad * 2;
-        let off = B::glyph(0);
 
-        let pad_row: String = std::iter::repeat_n(off, total_chars_w).collect();
+        // Instead of setting styles we can just invert the mask
+        // the advantage is that qr is displayed correctly without ANSI
+        let xor: u32 = match P::INVERT {
+            true => (1u32 << (B::MODULES_W * B::MODULES_H)) - 1,
+            false => 0,
+        };
+        let off = B::glyph(xor);
+
+        let qr_range = 0..size;
         let mut out = String::with_capacity((total_chars_w * 3 + 1) * total_rows);
 
         for row in 0..total_rows {
@@ -202,37 +209,30 @@ impl<'a, B: Barcode, P: Polarity> QrWidget<'a, B, P> {
             }
 
             if row < v_pad || row >= total_rows - v_pad {
-                out.push_str(&pad_row);
+                out.extend(std::iter::repeat_n(off, total_chars_w));
                 continue;
             }
 
             let gy = (row - v_pad) as i32;
-            for _ in 0..h_pad {
-                out.push(off);
-            }
-            for gx in 0..glyphs_w {
-                let mut modules: u32 = 0;
-                for dy in 0..B::MODULES_H {
-                    for dx in 0..B::MODULES_W {
-                        let smx = gx * B::MODULES_W + dx;
-                        let smy = gy * B::MODULES_H + dy;
-                        let orig_x = smx / sx - qz;
-                        let orig_y = smy / sy - qz;
-                        if orig_x >= 0
-                            && orig_x < size
-                            && orig_y >= 0
-                            && orig_y < size
+            out.extend(std::iter::repeat_n(off, h_pad));
+            out.extend((0..glyphs_w).map(|gx| {
+                let modules = (0..B::MODULES_H)
+                    .flat_map(|dy| (0..B::MODULES_W).map(move |dx| (dy, dx)))
+                    .fold(0u32, |acc, (dy, dx)| {
+                        let orig_x = (gx * B::MODULES_W + dx) / sx - qz;
+                        let orig_y = (gy * B::MODULES_H + dy) / sy - qz;
+                        if qr_range.contains(&orig_x)
+                            && qr_range.contains(&orig_y)
                             && qr.get_module(orig_x, orig_y)
                         {
-                            modules |= 1 << (dy * B::MODULES_W + dx);
+                            acc | (1 << (dy * B::MODULES_W + dx))
+                        } else {
+                            acc
                         }
-                    }
-                }
-                out.push(B::glyph(modules));
-            }
-            for _ in 0..h_pad {
-                out.push(off);
-            }
+                    });
+                B::glyph(modules ^ xor)
+            }));
+            out.extend(std::iter::repeat_n(off, h_pad));
         }
 
         out
@@ -262,5 +262,307 @@ impl<B: Barcode, P: Polarity> Styled for QrWidget<'_, B, P> {
     fn set_style<S: Into<Style>>(mut self, style: S) -> Self::Item {
         self.style = style.into();
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use qrcodegen::QrCodeEcc;
+    use ratatui::widgets::Widget;
+    use rstest::{fixture, rstest};
+
+    use super::super::barcode::{Braille, FullBlock};
+    use super::super::polarity::LightOnDark;
+    use super::*;
+
+    type HB<'a> = QrWidget<'a, HalfBlock, DarkOnLight>;
+    type FB<'a> = QrWidget<'a, FullBlock, DarkOnLight>;
+    type BR<'a> = QrWidget<'a, Braille, DarkOnLight>;
+
+    /// Empty string QR → version 1 → 21×21 modules.
+    #[fixture]
+    fn empty_qr() -> QrCode {
+        QrCode::encode_text("", QrCodeEcc::Low).expect("failed to create QR code")
+    }
+
+    #[rstest]
+    #[case::exact_1x1((40, 40), Scaling::Exact(1, 1), (21, 11))]
+    #[case::exact_2x2((40, 40), Scaling::Exact(2, 2), (42, 21))]
+    #[case::max_fitting((21, 11), Scaling::Max, (21, 11))]
+    #[case::max_larger((42, 22), Scaling::Max, (42, 21))]
+    #[case::min_fitting((21, 11), Scaling::Min, (21, 21))]
+    #[case::min_larger((42, 22), Scaling::Min, (42, 32))]
+    fn size_halfblock_no_qz(
+        empty_qr: QrCode,
+        #[case] area: (u16, u16),
+        #[case] scaling: Scaling,
+        #[case] expected: (u16, u16),
+    ) {
+        let w = HB::new(&empty_qr)
+            .with_quiet_zone(QuietZone::Disabled)
+            .with_scaling(scaling)
+            .with_aspect_ratio(AspectRatio::Computed);
+        let rect = Rect::new(0, 0, area.0, area.1);
+        assert_eq!(w.size(rect), Size::from(expected));
+    }
+
+    #[rstest]
+    #[case::exact_1x1(Scaling::Exact(1, 1), (29, 15))]
+    #[case::max_71x71(Scaling::Max, (58, 58))]
+    #[case::min_71x71(Scaling::Min, (87, 73))]
+    fn size_halfblock_with_qz(
+        empty_qr: QrCode,
+        #[case] scaling: Scaling,
+        #[case] expected: (u16, u16),
+    ) {
+        let w = HB::new(&empty_qr)
+            .with_scaling(scaling)
+            .with_aspect_ratio(AspectRatio::Computed);
+        let rect = Rect::new(0, 0, 71, 71);
+        assert_eq!(w.size(rect), Size::from(expected));
+    }
+
+    #[rstest]
+    #[case::square(AspectRatio::Square, (23, 11))]
+    #[case::computed(AspectRatio::Computed, (21, 11))]
+    fn size_aspect_halfblock(
+        empty_qr: QrCode,
+        #[case] aspect: AspectRatio,
+        #[case] expected: (u16, u16),
+    ) {
+        let w = HB::new(&empty_qr)
+            .with_quiet_zone(QuietZone::Disabled)
+            .with_aspect_ratio(aspect);
+        assert_eq!(w.size(Rect::new(0, 0, 40, 40)), Size::from(expected));
+    }
+
+    #[rstest]
+    #[case::computed(AspectRatio::Computed, (11, 6))]
+    #[case::square(AspectRatio::Square, (13, 6))]
+    fn size_aspect_braille(
+        empty_qr: QrCode,
+        #[case] aspect: AspectRatio,
+        #[case] expected: (u16, u16),
+    ) {
+        let w = BR::new(&empty_qr)
+            .with_quiet_zone(QuietZone::Disabled)
+            .with_aspect_ratio(aspect);
+        assert_eq!(w.size(Rect::new(0, 0, 40, 40)), Size::from(expected));
+    }
+
+    #[rstest]
+    fn render_halfblock_exact(empty_qr: QrCode) {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 21, 11));
+        unstyled::<HB>(&empty_qr).render(buf.area, &mut buf);
+        assert_eq!(
+            buf,
+            Buffer::with_lines([
+                "█▀▀▀▀▀█  ▀▄▄  █▀▀▀▀▀█",
+                "█ ███ █ ███▀█ █ ███ █",
+                "█ ▀▀▀ █  █▀█▄ █ ▀▀▀ █",
+                "▀▀▀▀▀▀▀ ▀ ▀ ▀ ▀▀▀▀▀▀▀",
+                "▄▄ ▀▀▄▀█▄  ▄█  ▄▄█▀▄▄",
+                "▀█ ▄▄▀▀▀█▄▄▄▀▀▀█▄▀ ▄▀",
+                "▀ ▀▀  ▀ █▄   ▄▀▀▀▀███",
+                "█▀▀▀▀▀█ ▀██▄ ██  ▀█ ▀",
+                "█ ███ █ ██ ▀▄ ▀▄█ ▀▀ ",
+                "█ ▀▀▀ █  ▀ ▀▀▄ █▀█ ██",
+                "▀▀▀▀▀▀▀   ▀▀▀ ▀▀▀ ▀▀ ",
+            ])
+        );
+    }
+
+    #[rstest]
+    fn render_halfblock_with_quiet_zone(empty_qr: QrCode) {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 29, 15));
+        HB::new(&empty_qr)
+            .with_aspect_ratio(AspectRatio::Computed)
+            .with_style(Style::default())
+            .render(buf.area, &mut buf);
+        assert_eq!(
+            buf,
+            Buffer::with_lines([
+                "                             ",
+                "                             ",
+                "    █▀▀▀▀▀█  ▀▄▄  █▀▀▀▀▀█    ",
+                "    █ ███ █ ███▀█ █ ███ █    ",
+                "    █ ▀▀▀ █  █▀█▄ █ ▀▀▀ █    ",
+                "    ▀▀▀▀▀▀▀ ▀ ▀ ▀ ▀▀▀▀▀▀▀    ",
+                "    ▄▄ ▀▀▄▀█▄  ▄█  ▄▄█▀▄▄    ",
+                "    ▀█ ▄▄▀▀▀█▄▄▄▀▀▀█▄▀ ▄▀    ",
+                "    ▀ ▀▀  ▀ █▄   ▄▀▀▀▀███    ",
+                "    █▀▀▀▀▀█ ▀██▄ ██  ▀█ ▀    ",
+                "    █ ███ █ ██ ▀▄ ▀▄█ ▀▀     ",
+                "    █ ▀▀▀ █  ▀ ▀▀▄ █▀█ ██    ",
+                "    ▀▀▀▀▀▀▀   ▀▀▀ ▀▀▀ ▀▀     ",
+                "                             ",
+                "                             ",
+            ])
+        );
+    }
+
+    #[rstest]
+    fn render_fullblock_exact(empty_qr: QrCode) {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 21, 21));
+        unstyled::<FB>(&empty_qr).render(buf.area, &mut buf);
+        assert_eq!(
+            buf,
+            Buffer::with_lines([
+                "███████  █    ███████",
+                "█     █   ██  █     █",
+                "█ ███ █ █████ █ ███ █",
+                "█ ███ █ ███ █ █ ███ █",
+                "█ ███ █  ███  █ ███ █",
+                "█     █  █ ██ █     █",
+                "███████ █ █ █ ███████",
+                "                     ",
+                "   ██ ██    █    ██  ",
+                "██   █ ██  ██  ███ ██",
+                "██   ████   ████ █  █",
+                " █ ██   ████   ██  █ ",
+                "█ ██  █ █     ███████",
+                "        ██   █    ███",
+                "███████ ███  ██  ██ █",
+                "█     █  ███ ██   █  ",
+                "█ ███ █ ██ █  █ █ ██ ",
+                "█ ███ █ ██  █  ██    ",
+                "█ ███ █  █ ██  ███ ██",
+                "█     █      █ █ █ ██",
+                "███████   ███ ███ ██ ",
+            ])
+        );
+    }
+
+    #[rstest]
+    fn render_fullblock_scaled_2x1(empty_qr: QrCode) {
+        let w = FB::new(&empty_qr)
+            .with_quiet_zone(QuietZone::Disabled)
+            .with_scaling(Scaling::Exact(2, 1))
+            .with_aspect_ratio(AspectRatio::Computed);
+        assert_eq!(w.size(Rect::ZERO), Size::from((42, 21)));
+    }
+
+    #[rstest]
+    fn render_halfblock_inverted(empty_qr: QrCode) {
+        type LoD<'a> = QrWidget<'a, HalfBlock, LightOnDark>;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 21, 11));
+        LoD::new(&empty_qr)
+            .with_quiet_zone(QuietZone::Disabled)
+            .with_aspect_ratio(AspectRatio::Computed)
+            .with_style(Style::default())
+            .render(buf.area, &mut buf);
+        // Inverted: █↔space, ▀↔▄
+        assert_eq!(
+            buf,
+            Buffer::with_lines([
+                " ▄▄▄▄▄ ██▄▀▀██ ▄▄▄▄▄ ",
+                " █   █ █   ▄ █ █   █ ",
+                " █▄▄▄█ ██ ▄ ▀█ █▄▄▄█ ",
+                "▄▄▄▄▄▄▄█▄█▄█▄█▄▄▄▄▄▄▄",
+                "▀▀█▄▄▀▄ ▀██▀ ██▀▀ ▄▀▀",
+                "▄ █▀▀▄▄▄ ▀▀▀▄▄▄ ▀▄█▀▄",
+                "▄█▄▄██▄█ ▀███▀▄▄▄▄   ",
+                " ▄▄▄▄▄ █▄  ▀█  ██▄ █▄",
+                " █   █ █  █▄▀█▄▀ █▄▄█",
+                " █▄▄▄█ ██▄█▄▄▀█ ▄ █  ",
+                "▄▄▄▄▄▄▄███▄▄▄█▄▄▄█▄▄█",
+            ])
+        );
+    }
+
+    #[rstest]
+    fn render_fullblock_inverted(empty_qr: QrCode) {
+        type LoD<'a> = QrWidget<'a, FullBlock, LightOnDark>;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 21, 21));
+        LoD::new(&empty_qr)
+            .with_quiet_zone(QuietZone::Disabled)
+            .with_aspect_ratio(AspectRatio::Computed)
+            .with_style(Style::default())
+            .render(buf.area, &mut buf);
+        // Inverted: █↔space
+        assert_eq!(
+            buf,
+            Buffer::with_lines([
+                "       ██ ████       ",
+                " █████ ███  ██ █████ ",
+                " █   █ █     █ █   █ ",
+                " █   █ █   █ █ █   █ ",
+                " █   █ ██   ██ █   █ ",
+                " █████ ██ █  █ █████ ",
+                "       █ █ █ █       ",
+                "█████████████████████",
+                "███  █  ████ ████  ██",
+                "  ███ █  ██  ██   █  ",
+                "  ███    ███    █ ██ ",
+                "█ █  ███    ███  ██ █",
+                " █  ██ █ █████       ",
+                "████████  ███ ████   ",
+                "       █   ██  ██  █ ",
+                " █████ ██   █  ███ ██",
+                " █   █ █  █ ██ █ █  █",
+                " █   █ █  ██ ██  ████",
+                " █   █ ██ █  ██   █  ",
+                " █████ ██████ █ █ █  ",
+                "       ███   █   █  █",
+            ])
+        );
+    }
+
+    #[rstest]
+    fn render_braille_exact(empty_qr: QrCode) {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 11, 6));
+        unstyled::<BR>(&empty_qr).render(buf.area, &mut buf);
+        assert_eq!(
+            buf,
+            Buffer::with_lines([
+                "⡏⣭⡍⡇⣬⡶⡄⡏⣭⡍⡇",
+                "⠧⠭⠥⠇⠜⠝⠆⠧⠭⠥⠇",
+                "⢶⢈⡱⠽⣆⣐⠧⢴⡺⢑⠆",
+                "⡥⠭⠤⡅⢷⣄⢰⡍⠩⡟⠇",
+                "⡇⠿⠇⡇⠻⠨⢆⢱⢧⢩⡄",
+                "⠉⠉⠉⠁⠀⠉⠁⠉⠁⠉⠀",
+            ])
+        );
+    }
+
+    #[rstest]
+    fn render_braille_inverted(empty_qr: QrCode) {
+        type LoD<'a> = QrWidget<'a, Braille, LightOnDark>;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 11, 6));
+        LoD::new(&empty_qr)
+            .with_quiet_zone(QuietZone::Disabled)
+            .with_aspect_ratio(AspectRatio::Computed)
+            .with_style(Style::default())
+            .render(buf.area, &mut buf);
+        assert_eq!(
+            buf,
+            Buffer::with_lines([
+                "⢰⠒⢲⢸⠓⢉⢻⢰⠒⢲⢸",
+                "⣘⣒⣚⣸⣣⣢⣹⣘⣒⣚⣸",
+                "⡉⡷⢎⣂⠹⠯⣘⡋⢅⡮⣹",
+                "⢚⣒⣛⢺⡈⠻⡏⢲⣖⢠⣸",
+                "⢸⣀⣸⢸⣄⣗⡹⡎⡘⡖⢻",
+                "⣶⣶⣶⣾⣿⣶⣾⣶⣾⣶⣿",
+            ])
+        );
+    }
+
+    /// Shorthand: no QZ, Computed aspect, default style.
+    fn unstyled<'a, W>(qr: &'a QrCode) -> W
+    where
+        W: From<UnsBuilder<'a>>,
+    {
+        W::from(UnsBuilder(qr))
+    }
+
+    struct UnsBuilder<'a>(&'a QrCode);
+
+    impl<'a, B: Barcode, P: Polarity> From<UnsBuilder<'a>> for QrWidget<'a, B, P> {
+        fn from(b: UnsBuilder<'a>) -> Self {
+            Self::new(b.0)
+                .with_quiet_zone(QuietZone::Disabled)
+                .with_aspect_ratio(AspectRatio::Computed)
+                .with_style(Style::default())
+        }
     }
 }

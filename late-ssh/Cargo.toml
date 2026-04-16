@@ -52,3 +52,4 @@ opentelemetry-http = { workspace = true, optional = true }
 
 [dev-dependencies]
 late-core = { path = "../late-core", features = ["testing"] }
+rstest = "0.26.1"
