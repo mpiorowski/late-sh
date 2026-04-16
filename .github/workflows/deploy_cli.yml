@@ -103,7 +103,7 @@ jobs:
       - name: prepare_distribution_layout
         run: |
           chmod 755 scripts/install.sh
-          mkdir -p publish/releases/${RELEASE_TAG}
+          mkdir -p "publish/releases/${RELEASE_TAG}"
 
           for artifact_dir in dist/late-*; do
             target="${artifact_dir#dist/late-}"
@@ -111,31 +111,31 @@ jobs:
             cp "${artifact_dir}/late" "publish/releases/${RELEASE_TAG}/${target}/late"
           done
 
-          cp scripts/install.sh publish/releases/${RELEASE_TAG}/install.sh
-          printf '%s\n' "${RELEASE_TAG}" > publish/releases/${RELEASE_TAG}/VERSION
+          cp scripts/install.sh "publish/releases/${RELEASE_TAG}/install.sh"
+          printf '%s\n' "${RELEASE_TAG}" > "publish/releases/${RELEASE_TAG}/VERSION"
           (
-            cd publish/releases/${RELEASE_TAG}
-            sha256sum */late > sha256sums.txt
+            cd "publish/releases/${RELEASE_TAG}"
+            sha256sum -- */late > sha256sums.txt
           )
 
           if [[ "${IS_PRERELEASE}" != "true" ]]; then
             mkdir -p publish/latest
-            cp -R publish/releases/${RELEASE_TAG}/x86_64-unknown-linux-gnu publish/latest/
-            cp -R publish/releases/${RELEASE_TAG}/aarch64-unknown-linux-gnu publish/latest/
-            cp -R publish/releases/${RELEASE_TAG}/x86_64-apple-darwin publish/latest/
-            cp -R publish/releases/${RELEASE_TAG}/aarch64-apple-darwin publish/latest/
+            cp -R "publish/releases/${RELEASE_TAG}/x86_64-unknown-linux-gnu" publish/latest/
+            cp -R "publish/releases/${RELEASE_TAG}/aarch64-unknown-linux-gnu" publish/latest/
+            cp -R "publish/releases/${RELEASE_TAG}/x86_64-apple-darwin" publish/latest/
+            cp -R "publish/releases/${RELEASE_TAG}/aarch64-apple-darwin" publish/latest/
             cp scripts/install.sh publish/latest/install.sh
             cp scripts/install.sh publish/install.sh
             cp scripts/install.sh publish/index.html
             printf '%s\n' "${RELEASE_TAG}" > publish/latest/VERSION
             printf '%s\n' "${RELEASE_TAG}" > publish/VERSION
-            cp publish/releases/${RELEASE_TAG}/sha256sums.txt publish/latest/sha256sums.txt
+            cp "publish/releases/${RELEASE_TAG}/sha256sums.txt" publish/latest/sha256sums.txt
           fi
 
       - name: upload_release_distribution
         run: |
           aws s3 cp \
-            publish/releases/${RELEASE_TAG}/ \
+            "publish/releases/${RELEASE_TAG}/" \
             "s3://${DIST_BUCKET}/releases/${RELEASE_TAG}/" \
             --recursive \
             --endpoint-url "${S3_ENDPOINT}"

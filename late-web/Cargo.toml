@@ -13,12 +13,11 @@ otel = [
 ]
 
 [dependencies]
-# Workspace Crates
-late-core = { path = "../late-core", default-features = false }
+late-core.workspace = true
 
 # Core Utils
 anyhow = { workspace = true }
-bytes = "1"
+bytes.workspace = true
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -27,14 +26,12 @@ tracing-subscriber = { workspace = true }
 
 # Async Runtime
 tokio = { workspace = true }
-
-# Templating
-askama = "0.15.1"
-async-stream = "0.3"
+askama.workspace = true
+async-stream.workspace = true
 
 # Web / HTTP
 axum = { workspace = true }
-futures-util = "0.3"
+futures-util.workspace = true
 reqwest = { workspace = true, features = ["json"] }
 tower-http = { workspace = true, features = ["fs", "trace"] }
 
@@ -44,4 +41,4 @@ tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry-http = { workspace = true, optional = true }
 
 [dev-dependencies]
-tower = "0.5"
+tower.workspace = true

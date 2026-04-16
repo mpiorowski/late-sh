@@ -28,19 +28,15 @@ uuid = { workspace = true }
 # Async Runtime
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-
-# Database
-deadpool-postgres = "0.14"
+deadpool-postgres.workspace = true
 tokio-postgres = { workspace = true }
-testcontainers = { version = "0.26.3", optional = true }
+testcontainers = { workspace = true, optional = true }
 
 # HTTP Client
 reqwest = { workspace = true, features = ["blocking"] }
-
-# Audio Processing
-rustfft = "6.4.1"
-symphonia = { version = "0.5.5", features = ["mp3"] }
-image = "0.25.9"
+rustfft.workspace = true
+symphonia = { workspace = true, features = ["mp3"] }
+image.workspace = true
 axum.workspace = true
 
 # Telemetry (optional, heavy deps — gated behind "otel" feature)
@@ -52,4 +48,4 @@ opentelemetry-appender-tracing = { workspace = true, optional = true }
 opentelemetry-http = { workspace = true, optional = true }
 
 [dev-dependencies]
-late-core = { path = ".", features = ["testing"] }
+late-core = { workspace = true, features = ["testing"] }
