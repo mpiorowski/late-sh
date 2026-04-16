@@ -741,7 +741,7 @@ impl russh::server::Handler for ClientHandler {
                 let banner = format!("{CLI_TOKEN_PREFIX}{token}\r\n");
                 let _ = timeout(
                     Duration::from_millis(50),
-                    handle.data(channel_id, CryptoVec::from(banner.into_bytes())),
+                    handle.data(channel_id, banner.into_bytes()),
                 )
                 .await;
             }
@@ -749,7 +749,7 @@ impl russh::server::Handler for ClientHandler {
             let init = App::enter_alt_screen();
             let _ = timeout(
                 Duration::from_millis(50),
-                handle.data(channel_id, CryptoVec::from(init)),
+                handle.data(channel_id, init),
             )
             .await;
 
@@ -875,7 +875,7 @@ async fn render_once(
 
     match timeout(
         Duration::from_millis(50),
-        handle.data(channel_id, CryptoVec::from(frame)),
+        handle.data(channel_id, frame),
     )
     .await
     {
@@ -898,7 +898,7 @@ async fn render_once(
     for command in terminal_commands {
         match timeout(
             Duration::from_millis(50),
-            handle.data(channel_id, CryptoVec::from(command)),
+            handle.data(channel_id, command),
         )
         .await
         {
@@ -926,12 +926,12 @@ async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId)
     let exit = App::leave_alt_screen();
     let _ = timeout(
         Duration::from_millis(50),
-        handle.data(channel_id, CryptoVec::from(exit)),
+        handle.data(channel_id, exit),
     )
     .await;
     let _ = timeout(
         Duration::from_millis(50),
-        handle.data(channel_id, CryptoVec::from(EXIT_MESSAGE.as_bytes())),
+        handle.data(channel_id, EXIT_MESSAGE.as_bytes().to_vec()),
     )
     .await;
     let _ = handle.eof(channel_id).await;
