@@ -28,6 +28,13 @@ use super::ui_text::{
     wrap_chat_entry_to_lines,
 };
 
+fn contributor_badge_for_username(username: &str) -> Option<&'static str> {
+    match username.trim().to_ascii_lowercase().as_str() {
+        "mevanlc" | "yawner" => Some(" 🔧"),
+        _ => None,
+    }
+}
+
 // ── Dashboard chat card ─────────────────────────────────────
 
 pub struct DashboardChatView<'a> {
@@ -257,6 +264,7 @@ fn ensure_chat_rows_cache(
             .filter(|name| !name.is_empty())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| short_user_id(msg.user_id));
+        let contributor_badge = contributor_badge_for_username(&author).unwrap_or_default();
         let is_bot = author == "bot" || author == "graybeard";
         let badge = if !is_bot {
             ctx.badges.get(&msg.user_id).copied()
@@ -273,13 +281,14 @@ fn ensure_chat_rows_cache(
             Style::default().fg(theme::CHAT_AUTHOR)
         };
         let body_style = Style::default().fg(theme::CHAT_BODY);
+        let contributor_badge = if is_bot { "" } else { contributor_badge };
         let streak_badge = badge.map(|b| format!(" {}", b.label())).unwrap_or_default();
         let bonsai_badge = ctx
             .bonsai_glyphs
             .get(&msg.user_id)
             .map(|g| format!(" {}", g))
             .unwrap_or_default();
-        let prefix = format!("{author}{streak_badge}{bonsai_badge}");
+        let prefix = format!("{author}{contributor_badge}{streak_badge}{bonsai_badge}");
 
         let mentions_us = our_mention
             .as_ref()

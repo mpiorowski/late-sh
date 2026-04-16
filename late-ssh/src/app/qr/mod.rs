@@ -2,7 +2,7 @@ use qrcodegen::QrCode;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
-    style::Style,
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -24,7 +24,8 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
         return;
     };
 
-    let qr_widget = QrWidget::<HalfBlock, DarkOnLight>::new(&qr);
+    let qr_widget = QrWidget::<HalfBlock, DarkOnLight>::new(&qr)
+        .with_style(Style::default().fg(Color::Black).bg(Color::White));
     let qr_size = qr_widget.size(area);
 
     let header_h = 4u16;
