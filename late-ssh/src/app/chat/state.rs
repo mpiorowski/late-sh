@@ -51,7 +51,7 @@ pub(crate) struct ReplyTarget {
     pub preview: String,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
     News,

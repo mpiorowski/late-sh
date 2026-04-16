@@ -1,8 +1,23 @@
 use crate::app::state::App;
 
-pub fn handle_byte(app: &mut App, byte: u8) {
+fn settings_row_delta(byte: u8) -> Option<isize> {
     match byte {
-        b'i' => app.profile_state.start_username_edit(),
+        b'j' | b'J' => Some(1),
+        b'k' | b'K' => Some(-1),
+        _ => None,
+    }
+}
+
+pub fn handle_byte(app: &mut App, byte: u8) {
+    if byte == b'i' {
+        app.profile_state.start_username_edit();
+        return;
+    }
+    if let Some(delta) = settings_row_delta(byte) {
+        app.profile_state.move_settings_row(delta);
+        return;
+    }
+    match byte {
         b' ' | b'\r' => app.profile_state.cycle_setting(true),
         _ => {}
     }
@@ -66,5 +81,14 @@ mod tests {
         assert_eq!(composer_char_from_byte(0x00), None);
         assert_eq!(composer_char_from_byte(0x1B), None);
         assert_eq!(composer_char_from_byte(b'\n'), None);
+    }
+
+    #[test]
+    fn settings_row_delta_maps_jk_keys() {
+        assert_eq!(settings_row_delta(b'j'), Some(1));
+        assert_eq!(settings_row_delta(b'J'), Some(1));
+        assert_eq!(settings_row_delta(b'k'), Some(-1));
+        assert_eq!(settings_row_delta(b'K'), Some(-1));
+        assert_eq!(settings_row_delta(b'x'), None);
     }
 }

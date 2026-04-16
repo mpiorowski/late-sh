@@ -770,9 +770,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
 
     let rooms_block = Block::default()
         .title(if room_jump_active {
-            " Rooms (Space/Esc cancel jump) "
+            " Rooms (h/l) Space/Esc cancel jump "
         } else {
-            " Rooms (h/l, Space jump) "
+            " Rooms (h/l) Space jump "
         })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
