@@ -126,6 +126,105 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     let bottom_border = format!("  \u{2514}{}\u{2518}", "\u{2500}".repeat(box_w));
     lines.push(Line::from(Span::styled(bottom_border, border_style)));
 
+    let nav_style = Style::default().fg(theme::TEXT_FAINT());
+    let selected_label = Style::default().fg(theme::TEXT());
+    let label_pad: usize = 33;
+
+    let theme_row_style = if view.settings_row == 0 {
+        selected_label
+    } else {
+        dim
+    };
+    let theme_marker = if view.settings_row == 0 {
+        "\u{203a}"
+    } else {
+        " "
+    };
+    let theme_label_text = " Theme";
+    let theme_pad = " ".repeat(label_pad.saturating_sub(theme_label_text.len() + 1));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {theme_marker}"), nav_style),
+        Span::styled(theme_label_text, theme_row_style),
+        Span::styled(theme_pad, dim),
+        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            theme::label_for_id(view.theme_id),
+            Style::default().fg(theme::AMBER()),
+        ),
+        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM())),
+    ]));
+
+    lines.push(Line::from(""));
+
+    // Kind checkboxes. Keep this list in sync with ProfileState::NOTIFY_KINDS.
+    let kinds: [(&str, &str); 3] = [
+        ("dms", "Direct messages"),
+        ("mentions", "@mentions"),
+        ("game_events", "Game events"),
+    ];
+
+    for (row_idx, (kind, label)) in kinds.iter().enumerate() {
+        let enabled = view.notify_kinds.iter().any(|k| k == *kind);
+        let settings_row = row_idx + 1;
+        let row_style = if view.settings_row == settings_row {
+            selected_label
+        } else {
+            dim
+        };
+        let row_marker = if view.settings_row == settings_row {
+            "\u{203a}"
+        } else {
+            " "
+        };
+        let label_text = format!(" {label}");
+        let pad = " ".repeat(label_pad.saturating_sub(label_text.len() + 1));
+        let checkbox = if enabled { "[x]" } else { "[ ]" };
+        let checkbox_style = if enabled {
+            Style::default().fg(theme::AMBER())
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {row_marker}"), nav_style),
+            Span::styled(label_text, row_style),
+            Span::styled(pad, dim),
+            Span::styled(checkbox, checkbox_style),
+        ]));
+    }
+
+    // Cooldown row (last).
+    let cooldown_row = kinds.len() + 1;
+    let cooldown_row_style = if view.settings_row == cooldown_row {
+        selected_label
+    } else {
+        dim
+    };
+    let cooldown_marker = if view.settings_row == cooldown_row {
+        "\u{203a}"
+    } else {
+        " "
+    };
+    let cooldown_label_text = " Cooldown (mins)";
+    let cooldown_pad = " ".repeat(label_pad.saturating_sub(cooldown_label_text.len() + 1));
+    let cooldown_val = if view.notify_cooldown_mins == 0 {
+        "Off".to_string()
+    } else {
+        format!("{}", view.notify_cooldown_mins)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {cooldown_marker}"), nav_style),
+        Span::styled(cooldown_label_text, cooldown_row_style),
+        Span::styled(cooldown_pad, dim),
+        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(cooldown_val, Style::default().fg(theme::AMBER())),
+        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM())),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "  Up/Down select a setting. Left/Right change it. Space/Enter toggles.",
+        dim,
+    )));
+
     // ── Notifications ──
     lines.push(Line::from(""));
     lines.push(section_heading("Notifications"));
@@ -154,90 +253,11 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     )));
     lines.push(Line::from(Span::styled(
         format!(
-            "  Space / Enter toggles rows; ◀ ▶ adjusts values. Themes: {}.",
+            "  Notification settings live above. Themes: {}.",
             theme::help_text()
         ),
         dim,
     )));
-
-    lines.push(Line::from(""));
-
-    let nav_style = Style::default().fg(theme::TEXT_FAINT());
-    let selected_label = Style::default().fg(theme::TEXT());
-    let label_pad: usize = 33;
-
-    // Kind checkboxes. Keep this list in sync with ProfileState::NOTIFY_KINDS.
-    let kinds: [(&str, &str); 3] = [
-        ("dms", "Direct messages"),
-        ("mentions", "@mentions"),
-        ("game_events", "Game events"),
-    ];
-
-    for (row_idx, (kind, label)) in kinds.iter().enumerate() {
-        let enabled = view.notify_kinds.iter().any(|k| k == *kind);
-        let row_style = if view.settings_row == row_idx {
-            selected_label
-        } else {
-            dim
-        };
-        let label_text = format!(" {label}");
-        let pad = " ".repeat(label_pad.saturating_sub(label_text.len() + 1));
-        let checkbox = if enabled { "[x]" } else { "[ ]" };
-        let checkbox_style = if enabled {
-            Style::default().fg(theme::AMBER())
-        } else {
-            Style::default().fg(theme::TEXT_DIM())
-        };
-        lines.push(Line::from(vec![
-            Span::styled(" \u{2022}", nav_style),
-            Span::styled(label_text, row_style),
-            Span::styled(pad, dim),
-            Span::styled(checkbox, checkbox_style),
-        ]));
-    }
-
-    // Cooldown row (last).
-    let cooldown_row = kinds.len();
-    let cooldown_row_style = if view.settings_row == cooldown_row {
-        selected_label
-    } else {
-        dim
-    };
-    let cooldown_label_text = " Cooldown (mins)";
-    let cooldown_pad = " ".repeat(label_pad.saturating_sub(cooldown_label_text.len() + 1));
-    let cooldown_val = if view.notify_cooldown_mins == 0 {
-        "Off".to_string()
-    } else {
-        format!("{}", view.notify_cooldown_mins)
-    };
-    lines.push(Line::from(vec![
-        Span::styled(" \u{25bc}", nav_style),
-        Span::styled(cooldown_label_text, cooldown_row_style),
-        Span::styled(cooldown_pad, dim),
-        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled(cooldown_val, Style::default().fg(theme::AMBER())),
-        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM())),
-    ]));
-
-    let theme_row = cooldown_row + 1;
-    let theme_row_style = if view.settings_row == theme_row {
-        selected_label
-    } else {
-        dim
-    };
-    let theme_label_text = " Theme";
-    let theme_pad = " ".repeat(label_pad.saturating_sub(theme_label_text.len() + 1));
-    lines.push(Line::from(vec![
-        Span::styled(" \u{2728}", nav_style),
-        Span::styled(theme_label_text, theme_row_style),
-        Span::styled(theme_pad, dim),
-        Span::styled("\u{25c0} ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled(
-            theme::label_for_id(view.theme_id),
-            Style::default().fg(theme::AMBER()),
-        ),
-        Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM())),
-    ]));
 
     // ── Your Stats ──
     lines.push(Line::from(""));

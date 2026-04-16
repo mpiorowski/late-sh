@@ -147,12 +147,16 @@ impl ProfileState {
     /// Notification kinds the user can toggle on the profile screen, in display order.
     pub(crate) const NOTIFY_KINDS: &'static [&'static str] = &["dms", "mentions", "game_events"];
 
-    fn cooldown_row_index() -> usize {
-        Self::NOTIFY_KINDS.len()
+    fn theme_row_index() -> usize {
+        0
     }
 
-    fn theme_row_index() -> usize {
-        Self::cooldown_row_index() + 1
+    fn notify_row_index(kind_idx: usize) -> usize {
+        Self::theme_row_index() + 1 + kind_idx
+    }
+
+    fn cooldown_row_index() -> usize {
+        Self::notify_row_index(Self::NOTIFY_KINDS.len())
     }
 
     pub fn move_settings_row(&mut self, delta: isize) {
@@ -162,15 +166,19 @@ impl ProfileState {
 
     /// Cycle the currently selected setting and save immediately.
     pub fn cycle_setting(&mut self, forward: bool) {
-        if self.settings_row == Self::cooldown_row_index() {
-            self.profile.notify_cooldown_mins =
-                cycle_cooldown_value(self.profile.notify_cooldown_mins, forward);
-            self.save_profile();
-        } else if self.settings_row == Self::theme_row_index() {
+        if self.settings_row == Self::theme_row_index() {
             self.theme_id = theme::cycle_id(&self.theme_id, forward).to_string();
             self.profile_service
                 .set_theme_id(self.user_id, self.theme_id.clone());
-        } else if let Some(kind) = Self::NOTIFY_KINDS.get(self.settings_row) {
+        } else if self.settings_row == Self::cooldown_row_index() {
+            self.profile.notify_cooldown_mins =
+                cycle_cooldown_value(self.profile.notify_cooldown_mins, forward);
+            self.save_profile();
+        } else if let Some(kind) = self
+            .settings_row
+            .checked_sub(Self::theme_row_index() + 1)
+            .and_then(|idx| Self::NOTIFY_KINDS.get(idx))
+        {
             toggle_notify_kind(&mut self.profile.notify_kinds, kind);
             self.save_profile();
         }
@@ -393,9 +401,11 @@ mod tests {
 
     #[test]
     fn theme_row_index_is_after_cooldown() {
-        assert_eq!(
-            ProfileState::theme_row_index(),
-            ProfileState::cooldown_row_index() + 1
-        );
+        assert_eq!(ProfileState::theme_row_index(), 0);
+    }
+
+    #[test]
+    fn first_notify_row_follows_theme_row() {
+        assert_eq!(ProfileState::notify_row_index(0), 1);
     }
 }
