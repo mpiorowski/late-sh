@@ -179,6 +179,10 @@ pub fn handle_message_arrow_in_room(app: &mut App, room_id: Uuid, key: u8) -> bo
 }
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
+    if app.chat.room_jump_active {
+        app.chat.cancel_room_jump();
+        return true;
+    }
     if app.chat.notifications_selected {
         return super::notifications::input::handle_arrow(app, key);
     }
@@ -189,6 +193,29 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
+    if app.chat.room_jump_active {
+        match byte {
+            b' ' => {
+                app.chat.cancel_room_jump();
+                return true;
+            }
+            _ => {
+                let changed = app.chat.handle_room_jump_key(byte);
+                if changed {
+                    app.chat.reset_composer();
+                    app.chat.mark_selected_room_read();
+                    app.chat.request_list();
+                }
+                return true;
+            }
+        }
+    }
+
+    if byte == b' ' {
+        app.chat.activate_room_jump();
+        return true;
+    }
+
     if app.chat.notifications_selected {
         if is_next_room_key(byte) {
             switch_room(app, 1);
