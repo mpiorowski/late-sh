@@ -89,6 +89,17 @@ impl App {
         self.chat
             .set_composer_text_width(self.size.0.saturating_sub(31).max(1) as usize);
         self.chat.sync_composer_layout();
+        
+        let black_bg = self.profile_state.profile().enable_black_bg;
+        if Some(black_bg) != self.last_black_bg {
+            let cmd = if black_bg {
+                b"\x1b]11;#000000\x1b\\".to_vec()
+            } else {
+                b"\x1b]111\x1b\\".to_vec()
+            };
+            self.pending_terminal_commands.push(cmd);
+            self.last_black_bg = Some(black_bg);
+        }
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let screen = self.screen;
@@ -366,11 +377,14 @@ impl App {
             return;
         }
 
-        let block = Block::default()
+        let mut block = Block::default()
             .title(" late.sh ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER_ACTIVE))
-            .style(Style::default().bg(theme::CANVAS));
+            .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+
+        if ctx.profile_view.profile.enable_black_bg {
+            block = block.style(Style::default().bg(theme::CANVAS));
+        }
 
         let inner = block.inner(area);
         frame.render_widget(block, area);

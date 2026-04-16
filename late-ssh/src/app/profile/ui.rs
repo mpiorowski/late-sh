@@ -125,6 +125,35 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     let bottom_border = format!("  \u{2514}{}\u{2518}", "\u{2500}".repeat(box_w));
     lines.push(Line::from(Span::styled(bottom_border, border_style)));
 
+    // ── Preferences ──
+    lines.push(Line::from(""));
+    lines.push(section_heading("Preferences"));
+
+    let nav_style = Style::default().fg(theme::TEXT_FAINT);
+    let selected_label = Style::default().fg(theme::TEXT);
+    let label_pad: usize = 33;
+
+    let black_bg_selected = view.settings_row == 0;
+    let black_bg_row_style = if black_bg_selected {
+        selected_label
+    } else {
+        dim
+    };
+    let label = " High Contrast (Black BG)";
+    let pad = " ".repeat(label_pad.saturating_sub(label.len() + 1));
+    let checkbox = if view.profile.enable_black_bg { "[x]" } else { "[ ]" };
+    let checkbox_style = if view.profile.enable_black_bg {
+        Style::default().fg(theme::AMBER)
+    } else {
+        Style::default().fg(theme::TEXT_DIM)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(" \u{2022}", nav_style),
+        Span::styled(label, black_bg_row_style),
+        Span::styled(pad, dim),
+        Span::styled(checkbox, checkbox_style),
+    ]));
+
     // ── Notifications ──
     lines.push(Line::from(""));
     lines.push(section_heading("Notifications"));
@@ -158,10 +187,6 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
 
     lines.push(Line::from(""));
 
-    let nav_style = Style::default().fg(theme::TEXT_FAINT);
-    let selected_label = Style::default().fg(theme::TEXT);
-    let label_pad: usize = 33;
-
     // Kind checkboxes. Keep this list in sync with ProfileState::NOTIFY_KINDS.
     let kinds: [(&str, &str); 3] = [
         ("dms", "Direct messages"),
@@ -171,7 +196,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
 
     for (row_idx, (kind, label)) in kinds.iter().enumerate() {
         let enabled = view.notify_kinds.iter().any(|k| k == *kind);
-        let row_style = if view.settings_row == row_idx {
+        let row_style = if view.settings_row == row_idx + 1 {
             selected_label
         } else {
             dim
@@ -193,7 +218,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     }
 
     // Cooldown row (last).
-    let cooldown_row = kinds.len();
+    let cooldown_row = kinds.len() + 1;
     let cooldown_row_style = if view.settings_row == cooldown_row {
         selected_label
     } else {

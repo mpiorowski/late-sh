@@ -136,8 +136,11 @@ impl ProfileState {
     /// Notification kinds the user can toggle on the profile screen, in display order.
     pub(crate) const NOTIFY_KINDS: &'static [&'static str] = &["dms", "mentions", "game_events"];
 
+    const BLACK_BG_ROW: usize = 0;
+    const NOTIFY_START_ROW: usize = 1;
+
     fn cooldown_row_index() -> usize {
-        Self::NOTIFY_KINDS.len()
+        Self::NOTIFY_START_ROW + Self::NOTIFY_KINDS.len()
     }
 
     pub fn move_settings_row(&mut self, delta: isize) {
@@ -147,13 +150,20 @@ impl ProfileState {
 
     /// Cycle the currently selected setting and save immediately.
     pub fn cycle_setting(&mut self, forward: bool) {
-        if self.settings_row == Self::cooldown_row_index() {
+        let row = self.settings_row;
+        if row == Self::BLACK_BG_ROW {
+            self.profile.enable_black_bg = !self.profile.enable_black_bg;
+            self.save_profile();
+        } else if row == Self::cooldown_row_index() {
             self.profile.notify_cooldown_mins =
                 cycle_cooldown_value(self.profile.notify_cooldown_mins, forward);
             self.save_profile();
-        } else if let Some(kind) = Self::NOTIFY_KINDS.get(self.settings_row) {
-            toggle_notify_kind(&mut self.profile.notify_kinds, kind);
-            self.save_profile();
+        } else {
+            let notify_idx = row.saturating_sub(Self::NOTIFY_START_ROW);
+            if let Some(kind) = Self::NOTIFY_KINDS.get(notify_idx) {
+                toggle_notify_kind(&mut self.profile.notify_kinds, kind);
+                self.save_profile();
+            }
         }
     }
 
@@ -165,6 +175,7 @@ impl ProfileState {
                 user_id: self.user_id,
                 username: self.profile.username.clone(),
                 enable_ghost: self.profile.enable_ghost,
+                enable_black_bg: self.profile.enable_black_bg,
                 notify_kinds: self.profile.notify_kinds.clone(),
                 notify_cooldown_mins: self.profile.notify_cooldown_mins,
             },
