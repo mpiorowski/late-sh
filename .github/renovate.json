@@ -4,6 +4,7 @@
     "config:recommended",
     ":dependencyDashboard"
   ],
+  "enabledManagers": ["cargo", "npm", "github-actions", "dockerfile", "docker-compose", "nix"],
   "prHourlyLimit": 0,
   "prConcurrentLimit": 20,
   "rangeStrategy": "bump",
