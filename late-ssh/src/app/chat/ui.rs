@@ -89,7 +89,7 @@ impl ComposerTitleStage {
             show_compose_label: terminal_width > 82,
             use_return_symbol: terminal_width <= 74,
             show_primary_action: terminal_width > 50,
-            show_newline_hint: terminal_width > 57,
+            show_newline_hint: terminal_width > 64,
         }
     }
 
@@ -1031,7 +1031,16 @@ mod tests {
             }
         );
         assert_eq!(
-            ComposerTitleStage::for_terminal_width(57),
+            ComposerTitleStage::for_terminal_width(65),
+            ComposerTitleStage {
+                show_compose_label: false,
+                use_return_symbol: true,
+                show_primary_action: true,
+                show_newline_hint: true,
+            }
+        );
+        assert_eq!(
+            ComposerTitleStage::for_terminal_width(64),
             ComposerTitleStage {
                 show_compose_label: false,
                 use_return_symbol: true,
@@ -1082,10 +1091,37 @@ mod tests {
     }
 
     #[test]
-    fn composer_title_drops_newline_hint_at_57_columns_and_below() {
+    fn composer_title_drops_newline_hint_at_64_columns_and_below() {
         let view = composer_view();
-        assert_eq!(composer_title(&view, 57), " (⏎ send, Esc cancel) ");
+        assert_eq!(composer_title(&view, 64), " (⏎ send, Esc cancel) ");
+        assert_eq!(composer_title(&view, 58), " (⏎ send, Esc cancel) ");
         assert_eq!(composer_title(&view, 51), " (⏎ send, Esc cancel) ");
+    }
+
+    #[test]
+    fn composer_title_fits_composer_block_at_narrow_terminal_widths() {
+        use ratatui::{Terminal, backend::TestBackend};
+        // Composer block is drawn inside content_area, which is
+        // terminal_width - outer_border(2) - sidebar(24) = terminal_width - 26.
+        for term_w in 40u16..=120 {
+            let composer_w = term_w.saturating_sub(26).max(10);
+            let backend = TestBackend::new(composer_w, 3);
+            let mut terminal = Terminal::new(backend).expect("term");
+            let mut view = composer_view();
+            view.terminal_width = term_w;
+            terminal
+                .draw(|f| {
+                    let area = Rect::new(0, 0, composer_w, 3);
+                    draw_composer_block(f, area, &view);
+                })
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            let last = buf[(composer_w - 1, 0)].symbol().to_string();
+            assert_eq!(
+                last, "┐",
+                "title overflowed right border at term_w={term_w} composer_w={composer_w}",
+            );
+        }
     }
 
     #[test]
