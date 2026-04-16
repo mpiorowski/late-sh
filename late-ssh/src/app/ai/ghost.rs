@@ -592,7 +592,7 @@ impl GhostService {
                     enable_ghost: profile.enable_ghost,
                     notify_kinds: profile.notify_kinds.clone(),
                     notify_cooldown_mins: profile.notify_cooldown_mins,
-                    enable_black_bg: profile.enable_black_bg,
+                    enable_background_color: profile.enable_background_color,
                 },
             )
             .await?;

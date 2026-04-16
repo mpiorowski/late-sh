@@ -151,7 +151,7 @@ impl ProfileState {
         0
     }
 
-    const BLACK_BG_ROW: usize = 1;
+    const BACKGROUND_COLOR_ROW: usize = 1;
     const NOTIFY_START_ROW: usize = 2;
 
     fn notify_row_index(kind_idx: usize) -> usize {
@@ -173,8 +173,8 @@ impl ProfileState {
             self.theme_id = theme::cycle_id(&self.theme_id, forward).to_string();
             self.profile_service
                 .set_theme_id(self.user_id, self.theme_id.clone());
-        } else if self.settings_row == Self::BLACK_BG_ROW {
-            self.profile.enable_black_bg = !self.profile.enable_black_bg;
+        } else if self.settings_row == Self::BACKGROUND_COLOR_ROW {
+            self.profile.enable_background_color = !self.profile.enable_background_color;
             self.save_profile();
         } else if self.settings_row == Self::cooldown_row_index() {
             self.profile.notify_cooldown_mins =
@@ -198,7 +198,7 @@ impl ProfileState {
                 user_id: self.user_id,
                 username: self.profile.username.clone(),
                 enable_ghost: self.profile.enable_ghost,
-                enable_black_bg: self.profile.enable_black_bg,
+                enable_background_color: self.profile.enable_background_color,
                 notify_kinds: self.profile.notify_kinds.clone(),
                 notify_cooldown_mins: self.profile.notify_cooldown_mins,
             },
@@ -412,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn first_notify_row_follows_black_bg_row() {
+    fn first_notify_row_follows_background_color_row() {
         assert_eq!(ProfileState::notify_row_index(0), 2);
     }
 

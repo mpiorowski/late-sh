@@ -160,24 +160,24 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     ]));
 
     // Black background toggle row
-    let black_bg_selected = view.settings_row == 1;
-    let black_bg_row_style = if black_bg_selected {
+    let background_color_selected = view.settings_row == 1;
+    let background_color_row_style = if background_color_selected {
         selected_label
     } else {
         dim
     };
-    let black_bg_marker = if black_bg_selected { "\u{203a}" } else { " " };
-    let bb_label = " High Contrast (Black BG)";
+    let background_color_marker = if background_color_selected { "\u{203a}" } else { " " };
+    let bb_label = " Enable Background Color";
     let bb_pad = " ".repeat(label_pad.saturating_sub(bb_label.len() + 1));
-    let checkbox = if view.profile.enable_black_bg { "[x]" } else { "[ ]" };
-    let checkbox_style = if view.profile.enable_black_bg {
+    let checkbox = if view.profile.enable_background_color { "[x]" } else { "[ ]" };
+    let checkbox_style = if view.profile.enable_background_color {
         Style::default().fg(theme::AMBER())
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
     lines.push(Line::from(vec![
-        Span::styled(format!(" {black_bg_marker}"), nav_style),
-        Span::styled(bb_label, black_bg_row_style),
+        Span::styled(format!(" {background_color_marker}"), nav_style),
+        Span::styled(bb_label, background_color_row_style),
         Span::styled(bb_pad, dim),
         Span::styled(checkbox, checkbox_style),
     ]));
@@ -197,7 +197,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
 
     for (row_idx, (kind, label)) in kinds.iter().enumerate() {
         let enabled = view.notify_kinds.iter().any(|k| k == *kind);
-        let settings_row = row_idx + 2; // rows 0=theme, 1=black_bg, 2..=notify
+        let settings_row = row_idx + 2; // rows 0=theme, 1=background_color, 2..=notify
         let row_style = if view.settings_row == settings_row {
             selected_label
         } else {
@@ -225,7 +225,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     }
 
     // Cooldown row (last).
-    let cooldown_row = kinds.len() + 2; // 0=theme, 1=black_bg, 2..4=notify, 5=cooldown
+    let cooldown_row = kinds.len() + 2; // 0=theme, 1=background_color, 2..4=notify, 5=cooldown
     let cooldown_row_style = if view.settings_row == cooldown_row {
         selected_label
     } else {

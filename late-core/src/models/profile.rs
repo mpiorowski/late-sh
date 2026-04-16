@@ -11,7 +11,7 @@ crate::user_scoped_model! {
         pub user_id: Uuid,
         pub username: String,
         pub enable_ghost: bool,
-        pub enable_black_bg: bool,
+        pub enable_background_color: bool,
         pub notify_kinds: Vec<String>,
         pub notify_cooldown_mins: i32,
     }
@@ -26,7 +26,7 @@ impl Default for Profile {
             user_id: Uuid::nil(),
             username: String::new(),
             enable_ghost: true,
-            enable_black_bg: false,
+            enable_background_color: false,
             notify_kinds: Vec::new(),
             notify_cooldown_mins: 0,
         }

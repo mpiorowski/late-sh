@@ -96,7 +96,7 @@ impl App {
         self.chat.sync_composer_layout();
 
         // Synchronize terminal background color with theme bg_canvas if enabled
-        let enabled = self.profile_state.profile().enable_black_bg;
+        let enabled = self.profile_state.profile().enable_background_color;
         let current_bg = if enabled {
             Some(theme::BG_CANVAS())
         } else {
