@@ -1375,6 +1375,43 @@ mod tests {
     }
 
     #[test]
+    fn vt_parser_emits_one_char_per_codepoint_for_full_word() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed("тест".as_bytes()),
+            vec![
+                ParsedInput::Char('т'),
+                ParsedInput::Char('е'),
+                ParsedInput::Char('с'),
+                ParsedInput::Char('т'),
+            ]
+        );
+    }
+
+    #[test]
+    fn vt_parser_preserves_ascii_controls_as_bytes() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\r"), vec![ParsedInput::Byte(b'\r')]);
+        assert_eq!(parser.feed(b"\n"), vec![ParsedInput::Byte(b'\n')]);
+        assert_eq!(parser.feed(b"\x15"), vec![ParsedInput::Byte(0x15)]);
+        assert_eq!(parser.feed(b"\x7f"), vec![ParsedInput::Byte(0x7f)]);
+    }
+
+    #[test]
+    fn vt_parser_interleaves_ascii_and_non_ascii() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed("café".as_bytes()),
+            vec![
+                ParsedInput::Char('c'),
+                ParsedInput::Char('a'),
+                ParsedInput::Char('f'),
+                ParsedInput::Char('é'),
+            ]
+        );
+    }
+
+    #[test]
     fn insert_pasted_text_strips_bracketed_paste_markers() {
         let mut out = String::new();
         insert_pasted_text(b"\x1b[200~https://example.com\x1b[201~", |ch| out.push(ch));
