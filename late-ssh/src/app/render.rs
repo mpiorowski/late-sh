@@ -86,26 +86,36 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Init theme and layout sync
+        theme::set_current_by_id(self.profile_state.theme_id());
+
         // Keep composer text width in sync for cursor up/down navigation.
         // outer border(2) + sidebar(24) + chat-block border(2) + composer padding(3) = 31
         self.chat
             .set_composer_text_width(self.size.0.saturating_sub(31).max(1) as usize);
         self.chat.sync_composer_layout();
-        
-        let black_bg = self.profile_state.profile().enable_black_bg;
-        if Some(black_bg) != self.last_black_bg {
-            let cmd = if black_bg {
-                b"\x1b]11;#000000\x1b\\".to_vec()
+
+        // Synchronize terminal background color with theme bg_canvas if enabled
+        let enabled = self.profile_state.profile().enable_black_bg;
+        let current_bg = if enabled {
+            Some(theme::BG_CANVAS())
+        } else {
+            None
+        };
+
+        if current_bg != self.last_terminal_bg {
+            let cmd = if let Some(color) = current_bg {
+                let hex = theme::color_to_hex(color);
+                format!("\x1b]11;{}\x1b\\", hex).into_bytes()
             } else {
                 b"\x1b]111\x1b\\".to_vec()
             };
             self.pending_terminal_commands.push(cmd);
-            self.last_black_bg = Some(black_bg);
+            self.last_terminal_bg = current_bg;
         }
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let screen = self.screen;
-        theme::set_current_by_id(self.profile_state.theme_id());
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
             .as_mut()
@@ -399,9 +409,6 @@ impl App {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
-        if ctx.profile_view.profile.enable_black_bg {
-            block = block.style(Style::default().bg(theme::CANVAS));
-        }
 
         let inner = block.inner(area);
         frame.render_widget(block, area);

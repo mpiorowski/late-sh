@@ -205,8 +205,8 @@ pub struct App {
     /// Last time a desktop notification was emitted (shared cooldown).
     pub(crate) last_notify_at: Option<Instant>,
 
-    /// Cached state of the high-contrast background setting to detect changes.
-    pub(crate) last_black_bg: Option<bool>,
+    /// Last background color sent to the terminal via OSC 11 (if any).
+    pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -421,7 +421,7 @@ impl App {
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
-            last_black_bg: None,
+            last_terminal_bg: None,
         })
     }
 
