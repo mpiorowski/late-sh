@@ -5,6 +5,7 @@ use ratatui::style::Color;
 // Everything muted. Reserve bright accents for what truly matters.
 
 // ── Surface / Background ──
+pub const CANVAS: Color = Color::Rgb(0, 0, 0);
 pub const BG_SELECTION: Color = Color::Rgb(30, 25, 22);
 pub const BG_HIGHLIGHT: Color = Color::Rgb(40, 33, 28);
 

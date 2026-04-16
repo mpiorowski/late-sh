@@ -369,7 +369,8 @@ impl App {
         let block = Block::default()
             .title(" late.sh ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER_ACTIVE));
+            .border_style(Style::default().fg(theme::BORDER_ACTIVE))
+            .style(Style::default().bg(theme::CANVAS));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
