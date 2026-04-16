@@ -1,88 +1,32 @@
+use std::marker::PhantomData;
+
 use qrcodegen::QrCode;
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Flex, Layout, Rect},
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+mod barcode;
+mod polarity;
+
+pub use barcode::{Barcode, Braille, FullBlock, HalfBlock};
+pub use polarity::{DarkOnLight, LightOnDark, Polarity};
+
 use super::common::theme;
 
-#[derive(Copy, Clone, Debug)]
-enum HalfBlock {
-    Empty, // ' '
-    Upper, // ▀
-    Lower, // ▄
-    Full,  // █
-}
+// Here we define the default, which is HalfBlock with LoD
+// but for testing we can just switch any of the zst defaults
+// Maybe can expose this in future as a config option?
+pub struct QrGenerator<B = Braille, P = DarkOnLight>(PhantomData<(B, P)>);
+type DefaultQrGenerator = QrGenerator;
 
-impl HalfBlock {
-    const fn from_modules(top: bool, bot: bool) -> Self {
-        match (top, bot) {
-            (false, false) => Self::Empty,
-            (true, false) => Self::Upper,
-            (false, true) => Self::Lower,
-            (true, true) => Self::Full,
-        }
+impl<B: Barcode, P: Polarity> QrGenerator<B, P> {
+    pub fn generate_lines<'a>(qr: &QrCode) -> Vec<Line<'a>> {
+        barcode::render::<B, P>(qr)
     }
-
-    const fn glyph(self) -> char {
-        match self {
-            Self::Empty => ' ',
-            Self::Upper => '\u{2580}',
-            Self::Lower => '\u{2584}',
-            Self::Full => '\u{2588}',
-        }
-    }
-}
-
-const QUIET_ZONE: i32 = 4;
-
-pub fn generate_qr_braille<'a>(qr: &QrCode) -> Vec<Line<'a>> {
-    let size = qr.size();
-    let qr_style = Style::default().fg(theme::TEXT_BRIGHT);
-    let full_width = (size + QUIET_ZONE * 2) as usize;
-    let pad_rows = ((QUIET_ZONE + 1) / 2) as usize;
-    let data_rows = (size as usize / 2) + 1;
-
-    let mut lines: Vec<Line<'a>> = Vec::with_capacity(pad_rows * 2 + data_rows);
-    let pad_row = row_string(std::iter::repeat_n(HalfBlock::Empty, full_width));
-
-    for _ in 0..pad_rows {
-        lines.push(Line::from(Span::styled(pad_row.clone(), qr_style)));
-    }
-
-    let get_module = |x: i32, y: i32| -> bool {
-        x >= 0 && x < size && y >= 0 && y < size && qr.get_module(x, y)
-    };
-
-    let mut i = 0;
-    while i <= size {
-        let left = std::iter::repeat_n(HalfBlock::Empty, QUIET_ZONE as usize);
-        let data =
-            (0..=size).map(|j| HalfBlock::from_modules(get_module(j, i), get_module(j, i + 1)));
-        let right = std::iter::repeat_n(HalfBlock::Empty, (QUIET_ZONE - 1) as usize);
-        let row = row_string(left.chain(data).chain(right));
-        lines.push(Line::from(Span::styled(row, qr_style)));
-        i += 2;
-    }
-
-    for _ in 0..pad_rows {
-        lines.push(Line::from(Span::styled(pad_row.clone(), qr_style)));
-    }
-
-    lines
-}
-
-fn row_string(blocks: impl Iterator<Item = HalfBlock>) -> String {
-    let (lo, hi) = blocks.size_hint();
-    let cap = hi.unwrap_or(lo) * 3;
-    let mut s = String::with_capacity(cap);
-    for b in blocks {
-        s.push(b.glyph());
-    }
-    s
 }
 
 pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, subtitle: &str) {
@@ -101,7 +45,7 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
         Line::from(Span::styled("  URL copied to clipboard", green)),
         Line::from(""),
     ];
-    lines.extend(generate_qr_braille(&qr));
+    lines.extend(DefaultQrGenerator::generate_lines(&qr));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("  Press any key to close.", dim)));
     lines.push(Line::from(""));
@@ -110,9 +54,13 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
     let content_h = lines.len() as u16;
     let h = (content_h + 2).min(area.height.saturating_sub(4));
     let w = (content_w + 4).max(h * 2).min(area.width.saturating_sub(4));
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let popup_area = Rect::new(x, y, w, h);
+
+    let [popup_area] = Layout::vertical([Constraint::Length(h)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [popup_area] = Layout::horizontal([Constraint::Length(w)])
+        .flex(Flex::Center)
+        .areas(popup_area);
 
     frame.render_widget(Clear, popup_area);
     let block = Block::default()
