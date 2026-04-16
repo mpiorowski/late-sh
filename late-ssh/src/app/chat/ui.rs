@@ -23,6 +23,7 @@ pub use super::ui_text::ComposerRow;
 pub(super) use super::ui_text::build_composer_rows;
 pub(crate) use super::ui_text::{composer_cursor_scroll_for_rows, composer_line_count_for_rows};
 
+use super::state::ROOM_JUMP_KEYS;
 use super::ui_text::{
     build_composer_lines, build_composer_lines_from_rows, composer_line_count,
     wrap_chat_entry_to_lines,
@@ -497,6 +498,7 @@ pub struct ChatRenderInput<'a> {
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub selected_room_id: Option<Uuid>,
+    pub room_jump_active: bool,
     pub selected_message_id: Option<Uuid>,
     pub highlighted_message_id: Option<Uuid>,
     pub composer: &'a str,
@@ -519,12 +521,24 @@ pub struct ChatRenderInput<'a> {
     pub notifications_view: super::notifications::ui::NotificationListView<'a>,
 }
 
+fn room_jump_prefix(key: Option<u8>, active: bool, is_selected: bool) -> String {
+    if active {
+        key.map(|key| format!("[{}] ", key as char))
+            .unwrap_or_else(|| "    ".to_string())
+    } else if is_selected {
+        "> ".to_string()
+    } else {
+        "  ".to_string()
+    }
+}
+
 pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let chat_rooms = view.chat_rooms;
     let usernames = view.usernames;
     let unread_counts = view.unread_counts;
     let news_unread_count = view.news_unread_count;
     let selected_room_id = view.selected_room_id;
+    let room_jump_active = view.room_jump_active;
     let composer = view.composer;
     let composing = view.composing;
     let current_user_id = view.current_user_id;
@@ -561,25 +575,29 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let body_layout = Layout::horizontal([Constraint::Length(26), Constraint::Fill(1)]).split(body);
     let rooms_area = body_layout[0];
     let messages_area = body_layout[1];
+    let mut jump_keys = ROOM_JUMP_KEYS.iter().copied();
 
-    let room_line =
-        |room: &late_core::models::chat_room::ChatRoom, label: String, is_selected: bool| -> Line {
-            let unread = unread_counts.get(&room.id).copied().unwrap_or(0);
-            let prefix = if is_selected { ">" } else { " " };
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let text = if unread > 0 {
-                format!("{prefix} {label} ({unread})")
-            } else {
-                format!("{prefix} {label}")
-            };
-            Line::from(Span::styled(text, style))
+    let room_line = |room: &late_core::models::chat_room::ChatRoom,
+                     label: String,
+                     is_selected: bool,
+                     jump_key: Option<u8>|
+     -> Line {
+        let unread = unread_counts.get(&room.id).copied().unwrap_or(0);
+        let style = if is_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
         };
+        let prefix = room_jump_prefix(jump_key, room_jump_active, is_selected);
+        let text = if unread > 0 {
+            format!("{prefix}{label} ({unread})")
+        } else {
+            format!("{prefix}{label}")
+        };
+        Line::from(Span::styled(text, style))
+    };
     let section_divider = |label: &str, width: u16| -> Line {
         let prefix = "── ";
         let suffix_len = (width as usize).saturating_sub(prefix.len() + label.len() + 1); // +1 for space after label
@@ -605,6 +623,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 room,
                 slug.to_string(),
                 !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
         }
     }
@@ -621,11 +640,16 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             room,
             label,
             !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+            room_jump_active.then(|| jump_keys.next()).flatten(),
         ));
     }
     // News virtual room
     {
-        let prefix = if news_selected { ">" } else { " " };
+        let prefix = room_jump_prefix(
+            room_jump_active.then(|| jump_keys.next()).flatten(),
+            room_jump_active,
+            news_selected,
+        );
         let style = if news_selected {
             Style::default()
                 .fg(theme::AMBER())
@@ -634,9 +658,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             Style::default().fg(theme::TEXT())
         };
         let label = if news_unread_count > 0 {
-            format!("{prefix} news ({news_unread_count})")
+            format!("{prefix}news ({news_unread_count})")
         } else {
-            format!("{prefix} news")
+            format!("{prefix}news")
         };
         room_lines.push(Line::from(Span::styled(label, style)));
     }
@@ -644,7 +668,11 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     {
         let notifications_selected = view.notifications_selected;
         let notifications_unread_count = view.notifications_unread_count;
-        let prefix = if notifications_selected { ">" } else { " " };
+        let prefix = room_jump_prefix(
+            room_jump_active.then(|| jump_keys.next()).flatten(),
+            room_jump_active,
+            notifications_selected,
+        );
         let style = if notifications_selected {
             Style::default()
                 .fg(theme::AMBER())
@@ -653,9 +681,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             Style::default().fg(theme::TEXT())
         };
         let label = if notifications_unread_count > 0 {
-            format!("{prefix} mentions ({notifications_unread_count})")
+            format!("{prefix}mentions ({notifications_unread_count})")
         } else {
-            format!("{prefix} mentions")
+            format!("{prefix}mentions")
         };
         room_lines.push(Line::from(Span::styled(label, style)));
     }
@@ -679,6 +707,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 room,
                 label,
                 !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
         }
     }
@@ -702,6 +731,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 room,
                 label,
                 !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
         }
     }
@@ -722,6 +752,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 room,
                 label,
                 !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
         }
     }
@@ -738,7 +769,11 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     )));
 
     let rooms_block = Block::default()
-        .title(" Rooms (h/l) ")
+        .title(if room_jump_active {
+            " Rooms (Space/Esc cancel jump) "
+        } else {
+            " Rooms (h/l, Space jump) "
+        })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let rooms_paragraph = Paragraph::new(room_lines).block(rooms_block);
@@ -921,5 +956,16 @@ mod tests {
     fn effective_chat_scroll_keeps_selected_message_off_bottom_edge() {
         let scroll = effective_chat_scroll(40, 10, Some((29, 31)));
         assert_eq!(scroll, 3);
+    }
+
+    #[test]
+    fn room_jump_prefix_shows_jump_key_when_active() {
+        assert_eq!(room_jump_prefix(Some(b'a'), true, false), "[a] ");
+    }
+
+    #[test]
+    fn room_jump_prefix_shows_selected_marker_when_inactive() {
+        assert_eq!(room_jump_prefix(None, false, true), "> ");
+        assert_eq!(room_jump_prefix(None, false, false), "  ");
     }
 }

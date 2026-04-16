@@ -34,6 +34,8 @@ Both options give you:
 
 The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";
 
+pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
+
 #[derive(Default)]
 pub(crate) struct MentionAutocomplete {
     pub active: bool,
@@ -72,6 +74,7 @@ pub struct ChatState {
     pending_read_rooms: HashSet<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
     pub(crate) selected_room_id: Option<Uuid>,
+    pub(crate) room_jump_active: bool,
     pub(crate) composer: String,
     pub(crate) composer_cursor: usize, // char position within composer
     pub(crate) composing: bool,
@@ -147,6 +150,7 @@ impl ChatState {
             pending_read_rooms: HashSet::new(),
             room_tx,
             selected_room_id: None,
+            room_jump_active: false,
             composer: String::new(),
             composer_cursor: 0,
             composing: false,
@@ -208,6 +212,7 @@ impl ChatState {
     }
 
     pub fn start_composing_in_room(&mut self, room_id: Uuid) {
+        self.room_jump_active = false;
         self.composing = true;
         self.composer_room_id = Some(room_id);
         self.composer_cursor = self.composer.chars().count();
@@ -224,6 +229,7 @@ impl ChatState {
     pub fn sync_selection(&mut self) {
         if self.rooms.is_empty() {
             self.selected_room_id = None;
+            self.room_jump_active = false;
             return;
         }
 
@@ -492,30 +498,19 @@ impl ChatState {
         order
     }
 
-    pub fn move_selection(&mut self, delta: isize) -> bool {
+    pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
+        self.visual_order()
+            .into_iter()
+            .zip(ROOM_JUMP_KEYS.iter().copied())
+            .map(|(slot, key)| (key, slot))
+            .collect()
+    }
+
+    fn select_room_slot(&mut self, slot: RoomSlot) -> bool {
         self.selected_message_id = None;
         self.highlighted_message_id = None;
-        let order = self.visual_order();
-        if order.is_empty() {
-            return false;
-        }
 
-        let current_item = if self.notifications_selected {
-            RoomSlot::Notifications
-        } else if self.news_selected {
-            RoomSlot::News
-        } else {
-            self.selected_room_id
-                .map(RoomSlot::Room)
-                .unwrap_or(RoomSlot::News)
-        };
-        let current = order
-            .iter()
-            .position(|item| *item == current_item)
-            .unwrap_or(0) as isize;
-        let next = wrapped_index(current, delta, order.len());
-
-        match order[next] {
+        match slot {
             RoomSlot::News => {
                 let changed = !self.news_selected;
                 if changed {
@@ -542,8 +537,51 @@ impl ChatState {
         }
     }
 
+    pub fn move_selection(&mut self, delta: isize) -> bool {
+        let order = self.visual_order();
+        if order.is_empty() {
+            return false;
+        }
+
+        let current_item = if self.notifications_selected {
+            RoomSlot::Notifications
+        } else if self.news_selected {
+            RoomSlot::News
+        } else {
+            self.selected_room_id
+                .map(RoomSlot::Room)
+                .unwrap_or(RoomSlot::News)
+        };
+        let current = order
+            .iter()
+            .position(|item| *item == current_item)
+            .unwrap_or(0) as isize;
+        let next = wrapped_index(current, delta, order.len());
+        self.select_room_slot(order[next])
+    }
+
+    pub fn activate_room_jump(&mut self) {
+        self.room_jump_active = !self.composing && !self.rooms.is_empty();
+    }
+
+    pub fn cancel_room_jump(&mut self) {
+        self.room_jump_active = false;
+    }
+
+    pub fn handle_room_jump_key(&mut self, byte: u8) -> bool {
+        let targets = self.room_jump_targets();
+        let Some(slot) = resolve_room_jump_target(&targets, byte) else {
+            self.room_jump_active = false;
+            return false;
+        };
+
+        self.room_jump_active = false;
+        self.select_room_slot(slot)
+    }
+
     pub fn stop_composing(&mut self) {
         self.composing = false;
+        self.room_jump_active = false;
         self.composer_room_id = None;
         self.composer_cursor = self.composer.chars().count();
         self.reply_target = None;
@@ -553,6 +591,7 @@ impl ChatState {
         self.composer.clear();
         self.composer_cursor = 0;
         self.composing = false;
+        self.room_jump_active = false;
         self.composer_room_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
@@ -564,6 +603,7 @@ impl ChatState {
         self.composer.clear();
         self.composer_cursor = 0;
         self.composing = false;
+        self.room_jump_active = false;
         self.composer_room_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
@@ -948,6 +988,7 @@ impl ChatState {
     }
 
     pub fn select_news(&mut self) {
+        self.room_jump_active = false;
         self.news_selected = true;
         self.notifications_selected = false;
         self.selected_message_id = None;
@@ -961,6 +1002,7 @@ impl ChatState {
     }
 
     pub fn select_notifications(&mut self) {
+        self.room_jump_active = false;
         self.notifications_selected = true;
         self.news_selected = false;
         self.selected_message_id = None;
@@ -1571,6 +1613,13 @@ fn wrapped_index(current: isize, delta: isize, len: usize) -> usize {
     (current + delta).rem_euclid(len as isize) as usize
 }
 
+fn resolve_room_jump_target(targets: &[(u8, RoomSlot)], byte: u8) -> Option<RoomSlot> {
+    let byte = byte.to_ascii_lowercase();
+    targets
+        .iter()
+        .find_map(|(key, slot)| (*key == byte).then_some(*slot))
+}
+
 /// Parse `/<command>` or `/<command> [@]username`. Returns:
 /// - `None` if `input` is not the given command,
 /// - `Some(None)` for the bare command (caller treats as "list"),
@@ -1684,6 +1733,30 @@ mod tests {
     fn wrapped_index_wraps_backward() {
         assert_eq!(wrapped_index(0, -1, 3), 2);
         assert_eq!(wrapped_index(1, -5, 3), 2);
+    }
+
+    #[test]
+    fn resolve_room_jump_target_is_case_insensitive() {
+        let room_id = Uuid::from_u128(7);
+        let targets = [
+            (b'a', RoomSlot::Room(room_id)),
+            (b's', RoomSlot::News),
+            (b'd', RoomSlot::Notifications),
+        ];
+
+        assert_eq!(
+            resolve_room_jump_target(&targets, b'A'),
+            Some(RoomSlot::Room(room_id))
+        );
+        assert_eq!(
+            resolve_room_jump_target(&targets, b's'),
+            Some(RoomSlot::News)
+        );
+        assert_eq!(
+            resolve_room_jump_target(&targets, b'D'),
+            Some(RoomSlot::Notifications)
+        );
+        assert_eq!(resolve_room_jump_target(&targets, b'x'), None);
     }
 
     #[test]
