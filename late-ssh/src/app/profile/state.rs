@@ -57,7 +57,7 @@ impl ProfileState {
             editing_username: false,
             username_composer: String::new(),
             bg_task,
-            settings_row: 0,
+            settings_row: Self::notify_row_index(0),
             ai_model,
             theme_id: theme::normalize_id(&initial_theme_id).to_string(),
             scroll_offset: 0,
@@ -160,7 +160,7 @@ impl ProfileState {
     }
 
     pub fn move_settings_row(&mut self, delta: isize) {
-        let last = Self::theme_row_index() as isize;
+        let last = Self::cooldown_row_index() as isize;
         self.settings_row = clamp_settings_row(self.settings_row as isize + delta, last);
     }
 
@@ -407,5 +407,10 @@ mod tests {
     #[test]
     fn first_notify_row_follows_theme_row() {
         assert_eq!(ProfileState::notify_row_index(0), 1);
+    }
+
+    #[test]
+    fn cooldown_row_is_last_selectable_row() {
+        assert_eq!(ProfileState::cooldown_row_index(), 4);
     }
 }

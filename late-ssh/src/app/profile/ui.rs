@@ -143,6 +143,10 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     let theme_label_text = " Theme";
     let theme_pad = " ".repeat(label_pad.saturating_sub(theme_label_text.len() + 1));
     lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  Themes: {}.", theme::help_text()),
+        Style::default().fg(theme::TEXT_MUTED()),
+    )));
     lines.push(Line::from(vec![
         Span::styled(format!(" {theme_marker}"), nav_style),
         Span::styled(theme_label_text, theme_row_style),
@@ -156,6 +160,10 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     ]));
 
     lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Notification settings",
+        Style::default().fg(theme::TEXT_MUTED()),
+    )));
 
     // Kind checkboxes. Keep this list in sync with ProfileState::NOTIFY_KINDS.
     let kinds: [(&str, &str); 3] = [
@@ -220,6 +228,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
         Span::styled(cooldown_val, Style::default().fg(theme::AMBER())),
         Span::styled(" \u{25b6}", Style::default().fg(theme::TEXT_DIM())),
     ]));
+    lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Up/Down select a setting. Left/Right change it. Space/Enter toggles.",
         dim,
@@ -249,13 +258,6 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     )));
     lines.push(Line::from(Span::styled(
         "  tmux is not supported — run directly in a terminal.",
-        dim,
-    )));
-    lines.push(Line::from(Span::styled(
-        format!(
-            "  Notification settings live above. Themes: {}.",
-            theme::help_text()
-        ),
         dim,
     )));
 

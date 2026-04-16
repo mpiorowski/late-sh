@@ -47,6 +47,12 @@ ssh localhost -p 2222   # connect to your local instance
 That's it. Postgres, Icecast, and Liquidsoap all come up automatically. No
 extra setup needed.
 
+### Contributing themes
+
+If you want to add a built-in SSH theme, read [`THEME.md`](THEME.md) before
+opening a PR. It covers the required code changes, stable `theme_id` rules, and
+theme-specific review expectations.
+
 ## Project structure
 
 ### Domain modules

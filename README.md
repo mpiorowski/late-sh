@@ -132,4 +132,5 @@ If you distribute a fork, do not present it as the official `late.sh` service or
 
 - [CONTEXT.md](CONTEXT.md) — architecture, invariants, and working context. Written for LLMs — feed this to your AI editor for best results.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — workflow, test rules, module patterns, and AI-assisted development tips.
+- [THEME.md](THEME.md) — how to contribute a new built-in SSH theme via PR.
 - [late-cli/README.md](late-cli/README.md) — CLI-specific usage and behavior.
