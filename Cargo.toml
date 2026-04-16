@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-rust-version = "1.85.0"
+rust-version = "1.87.0"
 
 [workspace.dependencies]
 # Core Utils
@@ -45,7 +45,7 @@ askama = "0.14.0"
 async-stream = "0.3"
 base64 = "0.22"
 bytes = "1"
-cpal = "0.17"
+cpal = "0.16"
 crossterm = "0.29"
 deadpool-postgres = "0.14"
 emojis = "0.8"
@@ -55,11 +55,11 @@ ipnet = "2.12"
 late-core = { path = "late-core", default-features = false }
 nix = "0.31.2"
 qrcodegen = "1.8.0"
-rand_core = "0.10"
+rand_core = "0.6"
 ratatui = "0.29"
 rstest = "0.26.1"
 rumenx-sudoku = "1.0.0"
-russh = "0.60.0"
+russh = "0.56.0"
 rustfft = "6.4.1"
 shlex = "1.3.0"
 symphonia = "0.5.5"

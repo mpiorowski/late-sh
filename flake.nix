@@ -85,6 +85,7 @@
           # Matches .mise.toml / CONTRIBUTING tooling
           mold
           cargo-nextest
+          typos
 
           # Commonly useful cargo helpers
           cargo-llvm-cov
