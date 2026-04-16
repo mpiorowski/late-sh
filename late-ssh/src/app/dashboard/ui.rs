@@ -54,8 +54,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     if area.width <= DASHBOARD_HIDE_VOTE_AT_WIDTH {
         draw_stream_card(frame, sections[0], &stream_props);
     } else {
-        let top =
-            Layout::horizontal([Constraint::Fill(2), Constraint::Fill(1)]).split(sections[0]);
+        let top = Layout::horizontal([Constraint::Fill(2), Constraint::Fill(1)]).split(sections[0]);
         draw_stream_card(frame, top[0], &stream_props);
         draw_vote_card(
             frame,

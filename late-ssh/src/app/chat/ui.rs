@@ -94,7 +94,11 @@ impl ComposerTitleStage {
     }
 
     fn enter_label(self) -> &'static str {
-        if self.use_return_symbol { "⏎" } else { "Enter" }
+        if self.use_return_symbol {
+            "⏎"
+        } else {
+            "Enter"
+        }
     }
 
     fn alt_enter_label(self) -> &'static str {
