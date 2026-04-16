@@ -27,6 +27,9 @@ const DASHBOARD_HIDE_VOTE_AT_WIDTH: u16 = 51;
 // we drop the top stream/music card entirely so chat can use the reclaimed
 // vertical space.
 const DASHBOARD_HIDE_STREAM_AT_WIDTH: u16 = 39;
+// Below this many rows the fixed 5-row stream card plus chat card no longer
+// fit cleanly, so we collapse to chat-only rather than render clipped blocks.
+const DASHBOARD_MIN_FULL_HEIGHT: u16 = 16;
 
 pub struct DashboardRenderInput<'a> {
     pub now_playing: Option<&'a str>,
@@ -44,7 +47,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         leading_genre: view.vote_counts.winner_or(view.current_genre),
         next_switch_in: view.next_switch_in,
     };
-    if area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH {
+    if area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH || area.height < DASHBOARD_MIN_FULL_HEIGHT {
         draw_dashboard_chat_card(frame, area, view.chat_view);
         return;
     }
@@ -132,7 +135,11 @@ mod tests {
     use uuid::Uuid;
 
     fn render_dashboard(width: u16) -> Vec<String> {
-        let backend = TestBackend::new(width, 20);
+        render_dashboard_with_size(width, 20)
+    }
+
+    fn render_dashboard_with_size(width: u16, height: u16) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let vote_counts = VoteCount {
             lofi: 3,
@@ -147,7 +154,7 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                let area = Rect::new(0, 0, width, 20);
+                let area = Rect::new(0, 0, width, height);
                 draw_dashboard(
                     frame,
                     area,
@@ -183,7 +190,7 @@ mod tests {
             .expect("draw");
 
         let buffer = terminal.backend().buffer();
-        (0..20)
+        (0..height)
             .map(|y| {
                 let mut out = String::new();
                 for x in 0..width {
@@ -223,6 +230,23 @@ mod tests {
         assert!(!rendered.contains("Dashboard view too small."));
         assert!(!rendered.contains("Stream"));
         assert!(!rendered.contains("Vote Next"));
+        assert!(rendered.contains("Chat"));
+    }
+
+    #[test]
+    fn dashboard_collapses_to_chat_when_height_below_minimum() {
+        let lines = render_dashboard_with_size(100, DASHBOARD_MIN_FULL_HEIGHT - 1);
+        let rendered = lines.join("\n");
+        assert!(!rendered.contains("Stream"));
+        assert!(!rendered.contains("Vote Next"));
+        assert!(rendered.contains("Chat"));
+    }
+
+    #[test]
+    fn dashboard_keeps_full_layout_at_minimum_height() {
+        let lines = render_dashboard_with_size(100, DASHBOARD_MIN_FULL_HEIGHT);
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("Stream"));
         assert!(rendered.contains("Chat"));
     }
 }
