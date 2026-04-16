@@ -85,10 +85,13 @@
           # Matches .mise.toml / CONTRIBUTING tooling
           mold
           cargo-nextest
+          typos
 
           # Commonly useful cargo helpers
           cargo-llvm-cov
           cargo-watch
+          cargo-autoinherit
+          cargo-msrv
 
           # late-web frontend tooling
           nodejs
@@ -97,6 +100,9 @@
           # Integration / infra tooling (docker-compose stack, migrations, etc.)
           postgresql
           docker-compose
+
+          # Commit signing
+          gnupg
         ];
 
         # on macOS and Linux, use faster parallel linkers that are much more

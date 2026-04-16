@@ -8,8 +8,7 @@ default = []
 otel = ["late-core/otel", "opentelemetry", "tracing-opentelemetry", "opentelemetry-http"]
 
 [dependencies]
-# Workspace Crates
-late-core = { path = "../late-core", default-features = false }
+late-core.workspace = true
 
 # Core Utils
 anyhow = { workspace = true }
@@ -19,31 +18,27 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-ipnet = "2.11"
+ipnet.workspace = true
 
 # Async Runtime
 tokio = { workspace = true }
 
 # Database
 tokio-postgres = { workspace = true }
-
-# Terminal UI
-crossterm = "0.29"
-ratatui = "0.30"
-emojis = "0.7"
-rand_core = { version = "0.6", features = ["std"] }
-base64 = "0.22"
-vte = "0.15"
-
-# SSH
-russh = "0.56.0"
+crossterm.workspace = true
+ratatui.workspace = true
+emojis.workspace = true
+rand_core = { workspace = true, features = ["std"] }
+base64.workspace = true
+vte.workspace = true
+russh.workspace = true
 
 # Web / HTTP
 axum = { workspace = true, features = ["ws"] }
 reqwest = { workspace = true, features = ["json"] }
 tower-http = { workspace = true, features = ["cors", "trace"] }
-qrcodegen = "1.8.0"
-rumenx-sudoku = "1.0.0"
+qrcodegen.workspace = true
+rumenx-sudoku.workspace = true
 
 # Telemetry (optional — gated behind "otel" feature)
 opentelemetry = { workspace = true, optional = true }
@@ -51,5 +46,5 @@ tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry-http = { workspace = true, optional = true }
 
 [dev-dependencies]
-late-core = { path = "../late-core", features = ["testing"] }
-rstest = "0.26.1"
+late-core = { workspace = true, features = ["testing"] }
+rstest.workspace = true
