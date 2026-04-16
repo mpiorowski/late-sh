@@ -88,8 +88,8 @@ impl ComposerTitleStage {
         Self {
             show_compose_label: terminal_width > 82,
             use_return_symbol: terminal_width <= 74,
-            show_primary_action: terminal_width > 50,
-            show_newline_hint: terminal_width > 64,
+            show_primary_action: terminal_width > 51,
+            show_newline_hint: terminal_width > 66,
         }
     }
 
@@ -1031,7 +1031,7 @@ mod tests {
             }
         );
         assert_eq!(
-            ComposerTitleStage::for_terminal_width(65),
+            ComposerTitleStage::for_terminal_width(67),
             ComposerTitleStage {
                 show_compose_label: false,
                 use_return_symbol: true,
@@ -1040,7 +1040,7 @@ mod tests {
             }
         );
         assert_eq!(
-            ComposerTitleStage::for_terminal_width(64),
+            ComposerTitleStage::for_terminal_width(66),
             ComposerTitleStage {
                 show_compose_label: false,
                 use_return_symbol: true,
@@ -1049,7 +1049,16 @@ mod tests {
             }
         );
         assert_eq!(
-            ComposerTitleStage::for_terminal_width(50),
+            ComposerTitleStage::for_terminal_width(52),
+            ComposerTitleStage {
+                show_compose_label: false,
+                use_return_symbol: true,
+                show_primary_action: true,
+                show_newline_hint: false,
+            }
+        );
+        assert_eq!(
+            ComposerTitleStage::for_terminal_width(51),
             ComposerTitleStage {
                 show_compose_label: false,
                 use_return_symbol: true,
@@ -1091,24 +1100,28 @@ mod tests {
     }
 
     #[test]
-    fn composer_title_drops_newline_hint_at_64_columns_and_below() {
+    fn composer_title_drops_newline_hint_at_66_columns_and_below() {
         let view = composer_view();
-        assert_eq!(composer_title(&view, 64), " (⏎ send, Esc cancel) ");
+        assert_eq!(composer_title(&view, 66), " (⏎ send, Esc cancel) ");
         assert_eq!(composer_title(&view, 58), " (⏎ send, Esc cancel) ");
-        assert_eq!(composer_title(&view, 51), " (⏎ send, Esc cancel) ");
+        assert_eq!(composer_title(&view, 52), " (⏎ send, Esc cancel) ");
     }
 
     #[test]
     fn composer_title_fits_composer_block_at_narrow_terminal_widths() {
         use ratatui::{Terminal, backend::TestBackend};
-        // Composer block is drawn inside content_area, which is
-        // terminal_width - outer_border(2) - sidebar(24) = terminal_width - 26.
-        for term_w in 40u16..=120 {
-            let composer_w = term_w.saturating_sub(26).max(10);
+        // Composer block sits inside: outer border(2) + sidebar(24) + chat-block border(2),
+        // so its width is terminal_width - 28. Render into a backend exactly that size and
+        // verify the computed title appears intact in the top border row (no truncation).
+        // Start at 44 — narrower terminals can't even fit the minimal " (Esc cancel) " title
+        // and the rest of the UI is non-viable at those sizes too.
+        for term_w in 44u16..=120 {
+            let composer_w = term_w.saturating_sub(28).max(10);
             let backend = TestBackend::new(composer_w, 3);
             let mut terminal = Terminal::new(backend).expect("term");
             let mut view = composer_view();
             view.terminal_width = term_w;
+            let expected_title = composer_title(&view, term_w);
             terminal
                 .draw(|f| {
                     let area = Rect::new(0, 0, composer_w, 3);
@@ -1116,18 +1129,20 @@ mod tests {
                 })
                 .unwrap();
             let buf = terminal.backend().buffer();
-            let last = buf[(composer_w - 1, 0)].symbol().to_string();
-            assert_eq!(
-                last, "┐",
-                "title overflowed right border at term_w={term_w} composer_w={composer_w}",
+            let row: String = (0..composer_w)
+                .map(|x| buf[(x, 0)].symbol().to_string())
+                .collect();
+            assert!(
+                row.contains(&expected_title),
+                "title {expected_title:?} truncated at term_w={term_w} composer_w={composer_w}: rendered {row:?}",
             );
         }
     }
 
     #[test]
-    fn composer_title_drops_send_hint_at_50_columns_and_below() {
+    fn composer_title_drops_send_hint_at_51_columns_and_below() {
         let view = composer_view();
-        assert_eq!(composer_title(&view, 50), " (Esc cancel) ");
-        assert_eq!(composer_title(&view, 40), " (Esc cancel) ");
+        assert_eq!(composer_title(&view, 51), " (Esc cancel) ");
+        assert_eq!(composer_title(&view, 44), " (Esc cancel) ");
     }
 }
