@@ -176,7 +176,6 @@ mod tests {
                             reply_author: None,
                             is_editing: false,
                             bonsai_glyphs: &bonsai_glyphs,
-                            terminal_width: width,
                         },
                     },
                 );

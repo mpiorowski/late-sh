@@ -10,6 +10,7 @@ use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
+use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use crate::app::common::{
@@ -56,7 +57,6 @@ pub struct DashboardChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
-    pub terminal_width: u16,
 }
 
 /// Shared composer block rendering for both the dashboard card and the chat
@@ -72,78 +72,102 @@ pub(super) struct ComposerBlockView<'a> {
     pub mention_active: bool,
     pub mention_matches: &'a [String],
     pub mention_selected: usize,
-    pub terminal_width: u16,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ComposerTitleStage {
-    show_compose_label: bool,
-    use_return_symbol: bool,
-    show_primary_action: bool,
-    show_newline_hint: bool,
+/// Pick the longest tier whose display width fits inside a titled `Block`
+/// of the given outer `block_width`. Titles sit on the top border between
+/// the two corner glyphs, so the available cells are `block_width - 2`.
+/// Tiers should be ordered longest → shortest; the last one is returned
+/// if none fit (so include `""` as a terminal fallback).
+///
+/// Padding convention: any " " around the title text (" Compose … ") is
+/// baked into the tier string itself, not reserved by this function. We
+/// may later want to make "1 col of padding on each side" a style-guide
+/// rule enforced by a layout helper (which would shift the budget to
+/// `block_width - 4` and strip authored padding). For now, padding is a
+/// design choice of the tier-list author. Tradeoffs either way:
+///   - padding-in-string: self-documenting ("what you see is what renders")
+///     and easy to vary per tier (e.g. drop padding at the tightest tier).
+///   - padding-in-layout: centralized, uniform, lets the title be
+///     right-aligned or centered without extra machinery.
+///
+/// Keeping this a free function for now — if a second caller wants the
+/// same collapse behavior, promote to a `TitledCollapseBlock` widget that
+/// owns the `Block` builder plus the tier list.
+fn pick_title_that_fits<'a>(block_width: u16, tiers: &[&'a str]) -> &'a str {
+    let available = block_width.saturating_sub(2) as usize;
+    tiers
+        .iter()
+        .copied()
+        .find(|t| UnicodeWidthStr::width(*t) <= available)
+        .unwrap_or("")
 }
 
-impl ComposerTitleStage {
-    fn for_terminal_width(terminal_width: u16) -> Self {
-        Self {
-            show_compose_label: terminal_width > 82,
-            use_return_symbol: terminal_width <= 74,
-            show_primary_action: terminal_width > 51,
-            show_newline_hint: terminal_width > 66,
-        }
+fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
+    if !view.composing {
+        return pick_title_that_fits(
+            block_width,
+            &[" Compose (press i) ", " (press i) ", " i ", ""],
+        )
+        .to_string();
     }
 
-    fn enter_label(self) -> &'static str {
-        if self.use_return_symbol {
-            "⏎"
-        } else {
-            "Enter"
-        }
+    if let Some(author) = view.reply_author {
+        let long = format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ");
+        let mid = format!(" Reply to @{author} (⏎ send, Alt+⏎ newline, Esc cancel) ");
+        let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
+        let minimal = format!(" Reply to @{author} (Esc) ");
+        let name_only = format!(" Reply to @{author} ");
+        return pick_title_that_fits(
+            block_width,
+            &[
+                long.as_str(),
+                mid.as_str(),
+                short.as_str(),
+                minimal.as_str(),
+                name_only.as_str(),
+                " Reply ",
+                " Esc ",
+                "",
+            ],
+        )
+        .to_string();
     }
 
-    fn alt_enter_label(self) -> &'static str {
-        if self.use_return_symbol {
-            "Alt+⏎"
-        } else {
-            "Alt+Enter"
-        }
+    if view.is_editing {
+        return pick_title_that_fits(
+            block_width,
+            &[
+                " Edit message (Enter save, Alt+Enter newline, Esc cancel) ",
+                " Edit message (⏎ save, Alt+⏎ newline, Esc cancel) ",
+                " Edit message (⏎ save, Esc cancel) ",
+                " Edit message (Esc) ",
+                " Edit message ",
+                " Edit ",
+                " Esc ",
+                "",
+            ],
+        )
+        .to_string();
     }
 
-    fn hint_body(self, primary_verb: &str) -> String {
-        let mut parts = Vec::new();
-        if self.show_primary_action {
-            parts.push(format!("{} {primary_verb}", self.enter_label()));
-        }
-        if self.show_newline_hint {
-            parts.push(format!("{} newline", self.alt_enter_label()));
-        }
-        parts.push("Esc cancel".to_string());
-        parts.join(", ")
-    }
-}
-
-fn composer_title(view: &ComposerBlockView<'_>, terminal_width: u16) -> String {
-    let stage = ComposerTitleStage::for_terminal_width(terminal_width);
-
-    if view.composing {
-        if let Some(author) = view.reply_author {
-            format!(" Reply to @{author} ({}) ", stage.hint_body("send"))
-        } else if view.is_editing {
-            format!(" Edit message ({}) ", stage.hint_body("save"))
-        } else if !stage.show_compose_label {
-            format!(" ({}) ", stage.hint_body("send"))
-        } else {
-            format!(" Compose ({}) ", stage.hint_body("send"))
-        }
-    } else if !stage.show_compose_label {
-        " (press i) ".to_string()
-    } else {
-        " Compose (press i) ".to_string()
-    }
+    pick_title_that_fits(
+        block_width,
+        &[
+            " Compose (Enter send, Alt+Enter newline, Esc cancel) ",
+            " (Enter send, Alt+Enter newline, Esc cancel) ",
+            " (⏎ send, Alt+⏎ newline, Esc cancel) ",
+            " (⏎ send, Esc cancel) ",
+            " (Esc cancel) ",
+            " Esc ",
+            "",
+        ],
+    )
+    .to_string()
 }
 
 pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &ComposerBlockView<'_>) {
-    let composer_title = composer_title(view, view.terminal_width);
+    let composer_title = composer_title(view, area.width);
     let composer_style = if view.composing {
         Style::default().fg(theme::BORDER_ACTIVE())
     } else {
@@ -236,7 +260,6 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
-                terminal_width: view.terminal_width,
             },
         );
     }
@@ -571,7 +594,6 @@ pub struct ChatRenderInput<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
-    pub terminal_width: u16,
     pub news_composer: &'a str,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -950,7 +972,6 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
-                terminal_width: view.terminal_width,
             },
         );
     }
@@ -997,152 +1018,116 @@ mod tests {
             mention_active: false,
             mention_matches: &[],
             mention_selected: 0,
-            terminal_width: 100,
         }
     }
 
     #[test]
-    fn composer_title_stage_tracks_all_collapse_breakpoints() {
-        assert_eq!(
-            ComposerTitleStage::for_terminal_width(83),
-            ComposerTitleStage {
-                show_compose_label: true,
-                use_return_symbol: false,
-                show_primary_action: true,
-                show_newline_hint: true,
-            }
-        );
-        assert_eq!(
-            ComposerTitleStage::for_terminal_width(82),
-            ComposerTitleStage {
-                show_compose_label: false,
-                use_return_symbol: false,
-                show_primary_action: true,
-                show_newline_hint: true,
-            }
-        );
-        assert_eq!(
-            ComposerTitleStage::for_terminal_width(74),
-            ComposerTitleStage {
-                show_compose_label: false,
-                use_return_symbol: true,
-                show_primary_action: true,
-                show_newline_hint: true,
-            }
-        );
-        assert_eq!(
-            ComposerTitleStage::for_terminal_width(67),
-            ComposerTitleStage {
-                show_compose_label: false,
-                use_return_symbol: true,
-                show_primary_action: true,
-                show_newline_hint: true,
-            }
-        );
-        assert_eq!(
-            ComposerTitleStage::for_terminal_width(66),
-            ComposerTitleStage {
-                show_compose_label: false,
-                use_return_symbol: true,
-                show_primary_action: true,
-                show_newline_hint: false,
-            }
-        );
-        assert_eq!(
-            ComposerTitleStage::for_terminal_width(52),
-            ComposerTitleStage {
-                show_compose_label: false,
-                use_return_symbol: true,
-                show_primary_action: true,
-                show_newline_hint: false,
-            }
-        );
-        assert_eq!(
-            ComposerTitleStage::for_terminal_width(51),
-            ComposerTitleStage {
-                show_compose_label: false,
-                use_return_symbol: true,
-                show_primary_action: false,
-                show_newline_hint: false,
-            }
-        );
+    fn pick_title_that_fits_selects_longest_tier_that_fits() {
+        let tiers = ["aaaaaa", "bbbb", "cc", ""];
+        // block_width = N, available for title = N - 2.
+        assert_eq!(pick_title_that_fits(8, &tiers), "aaaaaa");
+        assert_eq!(pick_title_that_fits(7, &tiers), "bbbb");
+        assert_eq!(pick_title_that_fits(5, &tiers), "cc");
+        assert_eq!(pick_title_that_fits(3, &tiers), "");
     }
 
     #[test]
-    fn composer_title_keeps_compose_label_above_82_columns() {
+    fn pick_title_that_fits_uses_display_width_not_byte_length() {
+        // ⏎ is 3 bytes but 1 display column.
+        let tiers = ["⏎⏎⏎⏎", ""];
+        assert_eq!(pick_title_that_fits(6, &tiers), "⏎⏎⏎⏎");
+    }
+
+    #[test]
+    fn composer_title_collapses_across_block_widths() {
         let view = composer_view();
+        // " Compose (Enter send, Alt+Enter newline, Esc cancel) " = 53 cols → needs 55
         assert_eq!(
-            composer_title(&view, 83),
+            composer_title(&view, 55),
             " Compose (Enter send, Alt+Enter newline, Esc cancel) "
         );
-    }
-
-    #[test]
-    fn composer_title_drops_compose_label_between_74_and_82_columns() {
-        let view = composer_view();
+        // " (Enter send, Alt+Enter newline, Esc cancel) " = 45 → needs 47
         assert_eq!(
-            composer_title(&view, 82),
+            composer_title(&view, 54),
             " (Enter send, Alt+Enter newline, Esc cancel) "
         );
         assert_eq!(
-            composer_title(&view, 74),
-            " (⏎ send, Alt+⏎ newline, Esc cancel) "
+            composer_title(&view, 47),
+            " (Enter send, Alt+Enter newline, Esc cancel) "
         );
-    }
-
-    #[test]
-    fn composer_title_uses_return_symbol_at_74_columns_and_below() {
-        let view = composer_view();
+        // " (⏎ send, Alt+⏎ newline, Esc cancel) " = 37 → needs 39
         assert_eq!(
-            composer_title(&view, 73),
+            composer_title(&view, 46),
             " (⏎ send, Alt+⏎ newline, Esc cancel) "
         );
+        assert_eq!(
+            composer_title(&view, 39),
+            " (⏎ send, Alt+⏎ newline, Esc cancel) "
+        );
+        // " (⏎ send, Esc cancel) " = 22 → needs 24
+        assert_eq!(composer_title(&view, 38), " (⏎ send, Esc cancel) ");
+        assert_eq!(composer_title(&view, 24), " (⏎ send, Esc cancel) ");
+        // " (Esc cancel) " = 14 → needs 16
+        assert_eq!(composer_title(&view, 23), " (Esc cancel) ");
+        assert_eq!(composer_title(&view, 16), " (Esc cancel) ");
+        // " Esc " = 5 → needs 7
+        assert_eq!(composer_title(&view, 15), " Esc ");
+        assert_eq!(composer_title(&view, 7), " Esc ");
+        // Otherwise empty.
+        assert_eq!(composer_title(&view, 6), "");
     }
 
     #[test]
-    fn composer_title_drops_newline_hint_at_66_columns_and_below() {
-        let view = composer_view();
-        assert_eq!(composer_title(&view, 66), " (⏎ send, Esc cancel) ");
-        assert_eq!(composer_title(&view, 58), " (⏎ send, Esc cancel) ");
-        assert_eq!(composer_title(&view, 52), " (⏎ send, Esc cancel) ");
+    fn composer_title_reply_state_degrades_through_name_only_and_label() {
+        let mut view = composer_view();
+        view.reply_author = Some("alice");
+        assert_eq!(
+            composer_title(&view, 100),
+            " Reply to @alice (Enter send, Alt+Enter newline, Esc cancel) "
+        );
+        // Far too narrow for even the shortest reply form → drops to " Reply ".
+        // " Reply " = 7 cols → needs block_w ≥ 9.
+        assert_eq!(composer_title(&view, 10), " Reply ");
+        assert_eq!(composer_title(&view, 9), " Reply ");
+        // " Esc " = 5 cols → needs block_w ≥ 7.
+        assert_eq!(composer_title(&view, 8), " Esc ");
+        assert_eq!(composer_title(&view, 7), " Esc ");
+        assert_eq!(composer_title(&view, 6), "");
     }
 
     #[test]
-    fn composer_title_fits_composer_block_at_narrow_terminal_widths() {
+    fn composer_title_when_not_composing_shows_press_i_prompt() {
+        let mut view = composer_view();
+        view.composing = false;
+        assert_eq!(composer_title(&view, 30), " Compose (press i) ");
+        assert_eq!(composer_title(&view, 13), " (press i) ");
+        // " i " = 3 cols → needs block_w ≥ 5.
+        assert_eq!(composer_title(&view, 5), " i ");
+        assert_eq!(composer_title(&view, 4), "");
+    }
+
+    #[test]
+    fn composer_title_never_truncates_across_block_widths() {
         use ratatui::{Terminal, backend::TestBackend};
-        // Composer block sits inside: outer border(2) + sidebar(24) + chat-block border(2),
-        // so its width is terminal_width - 28. Render into a backend exactly that size and
-        // verify the computed title appears intact in the top border row (no truncation).
-        // Start at 44 — narrower terminals can't even fit the minimal " (Esc cancel) " title
-        // and the rest of the UI is non-viable at those sizes too.
-        for term_w in 44u16..=120 {
-            let composer_w = term_w.saturating_sub(28).max(10);
-            let backend = TestBackend::new(composer_w, 3);
+        // Render the composer block at every block width where a non-empty
+        // title is expected (≥7 for the " Esc " fallback). At each width,
+        // confirm the picked title survives intact in the top border row.
+        let view = composer_view();
+        for block_w in 7u16..=120 {
+            let backend = TestBackend::new(block_w, 3);
             let mut terminal = Terminal::new(backend).expect("term");
-            let mut view = composer_view();
-            view.terminal_width = term_w;
-            let expected_title = composer_title(&view, term_w);
+            let expected_title = composer_title(&view, block_w);
             terminal
-                .draw(|f| {
-                    let area = Rect::new(0, 0, composer_w, 3);
-                    draw_composer_block(f, area, &view);
-                })
+                .draw(|f| draw_composer_block(f, Rect::new(0, 0, block_w, 3), &view))
                 .unwrap();
             let buf = terminal.backend().buffer();
-            let row: String = (0..composer_w)
+            let row: String = (0..block_w)
                 .map(|x| buf[(x, 0)].symbol().to_string())
                 .collect();
             assert!(
                 row.contains(&expected_title),
-                "title {expected_title:?} truncated at term_w={term_w} composer_w={composer_w}: rendered {row:?}",
+                "title {expected_title:?} truncated at block_w={block_w}: rendered {row:?}",
             );
         }
-    }
-
-    #[test]
-    fn composer_title_drops_send_hint_at_51_columns_and_below() {
-        let view = composer_view();
-        assert_eq!(composer_title(&view, 51), " (Esc cancel) ");
-        assert_eq!(composer_title(&view, 44), " (Esc cancel) ");
     }
 }
