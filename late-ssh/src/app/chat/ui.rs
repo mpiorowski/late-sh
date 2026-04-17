@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
@@ -115,9 +115,8 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
 
     if let Some(author) = view.reply_author {
         let long =
-            format!(" Reply to @{author} (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) ");
-        let mid =
-            format!(" Reply to @{author} (⏎ send, Ctrl+⏎ stay, Alt+⏎ newline, Esc cancel) ");
+            format!(" Reply to @{author} (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ");
+        let mid = format!(" Reply to @{author} (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ");
         let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
         let minimal = format!(" Reply to @{author} (Esc) ");
         let name_only = format!(" Reply to @{author} ");
@@ -141,8 +140,8 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
         return pick_title_that_fits(
             block_width,
             &[
-                " Edit message (Enter save, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) ",
-                " Edit message (⏎ save, Ctrl+⏎ stay, Alt+⏎ newline, Esc cancel) ",
+                " Edit message (Enter save, Alt+S stay, Alt+Enter newline, Esc cancel) ",
+                " Edit message (⏎ save, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
                 " Edit message (⏎ save, Esc cancel) ",
                 " Edit message (Esc) ",
                 " Edit message ",
@@ -157,9 +156,9 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     pick_title_that_fits(
         block_width,
         &[
-            " Compose (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) ",
-            " (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) ",
-            " (⏎ send, Ctrl+⏎ stay, Alt+⏎ newline, Esc cancel) ",
+            " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
+            " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
+            " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
             " (⏎ send, Esc cancel) ",
             " (Esc cancel) ",
             " Esc ",
@@ -1087,40 +1086,31 @@ mod tests {
     #[test]
     fn composer_title_collapses_across_block_widths() {
         let view = composer_view();
-        // " Compose (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) " = 70 cols → needs 72
-        assert_eq!(
-            composer_title(&view, 72),
-            " Compose (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) "
-        );
-        // " (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) " = 62 → needs 64
-        assert_eq!(
-            composer_title(&view, 71),
-            " (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) "
-        );
-        assert_eq!(
-            composer_title(&view, 64),
-            " (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) "
-        );
-        // " (⏎ send, Ctrl+⏎ stay, Alt+⏎ newline, Esc cancel) " = 54 → needs 56
-        assert_eq!(
-            composer_title(&view, 63),
-            " (⏎ send, Ctrl+⏎ stay, Alt+⏎ newline, Esc cancel) "
-        );
-        assert_eq!(
-            composer_title(&view, 56),
-            " (⏎ send, Ctrl+⏎ stay, Alt+⏎ newline, Esc cancel) "
-        );
-        // " (⏎ send, Esc cancel) " = 22 → needs 24
-        assert_eq!(composer_title(&view, 55), " (⏎ send, Esc cancel) ");
-        assert_eq!(composer_title(&view, 24), " (⏎ send, Esc cancel) ");
-        // " (Esc cancel) " = 14 → needs 16
-        assert_eq!(composer_title(&view, 23), " (Esc cancel) ");
-        assert_eq!(composer_title(&view, 16), " (Esc cancel) ");
-        // " Esc " = 5 → needs 7
-        assert_eq!(composer_title(&view, 15), " Esc ");
-        assert_eq!(composer_title(&view, 7), " Esc ");
-        // Otherwise empty.
-        assert_eq!(composer_title(&view, 6), "");
+        let full = " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
+        let long = " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
+        let short = " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ";
+        let minimal = " (⏎ send, Esc cancel) ";
+        let cancel = " (Esc cancel) ";
+        let esc = " Esc ";
+        let need = |title: &str| (UnicodeWidthStr::width(title) + 2) as u16;
+
+        assert_eq!(composer_title(&view, need(full)), full);
+        assert_eq!(composer_title(&view, need(full) - 1), long);
+
+        assert_eq!(composer_title(&view, need(long)), long);
+        assert_eq!(composer_title(&view, need(long) - 1), short);
+
+        assert_eq!(composer_title(&view, need(short)), short);
+        assert_eq!(composer_title(&view, need(short) - 1), minimal);
+
+        assert_eq!(composer_title(&view, need(minimal)), minimal);
+        assert_eq!(composer_title(&view, need(minimal) - 1), cancel);
+
+        assert_eq!(composer_title(&view, need(cancel)), cancel);
+        assert_eq!(composer_title(&view, need(cancel) - 1), esc);
+
+        assert_eq!(composer_title(&view, need(esc)), esc);
+        assert_eq!(composer_title(&view, need(esc) - 1), "");
     }
 
     #[test]
@@ -1129,7 +1119,7 @@ mod tests {
         view.reply_author = Some("alice");
         assert_eq!(
             composer_title(&view, 100),
-            " Reply to @alice (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel) "
+            " Reply to @alice (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) "
         );
         // Far too narrow for even the shortest reply form → drops to " Reply ".
         // " Reply " = 7 cols → needs block_w ≥ 9.

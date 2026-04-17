@@ -50,13 +50,18 @@ enum ParsedInput {
     Byte(u8),
     Arrow(u8),
     CtrlArrow(u8),
-    CtrlEnter,
     CtrlBackspace,
     CtrlDelete,
     Scroll(isize),
     MousePress { x: u16, y: u16 },
     BackTab,
+    // Alt+Enter inserts a newline. `ESC + CR/LF` is pre-scanned because vte
+    // routes C0 bytes through `execute`, not `esc_dispatch`.
     AltEnter,
+    // Alt+S submits without closing the composer. Picked over Ctrl+Enter
+    // because tmux collapses Ctrl-modified Enter to bare `\r` unless the
+    // kitty keyboard protocol is forwarded, which it isn't by default.
+    AltS,
     Paste(Vec<u8>),
     PageUp,
     PageDown,
@@ -203,7 +208,6 @@ impl Perform for VtCollector {
             .collect();
         let p0 = params.first().copied();
         let p1 = params.get(1).copied();
-        let p2 = params.get(2).copied();
 
         match action {
             '~' if p0 == Some(200) => {
@@ -226,15 +230,6 @@ impl Perform for VtCollector {
             '~' if p0 == Some(8) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
-            // Ctrl+Enter comes through in a few terminal-specific forms:
-            // - kitty keyboard protocol: CSI 13;5u
-            // - xterm modifyOtherKeys style: CSI 27;5;13~
-            // - some terminals shorten that to CSI 13;5~
-            '~' if (p0 == Some(13) && p1 == Some(5))
-                || (p0 == Some(27) && p1 == Some(5) && p2 == Some(13)) =>
-            {
-                self.events.push(ParsedInput::CtrlEnter);
-            }
             // PageUp / PageDown / End (numeric form: CSI n ~). rxvt/linux
             // console encode End as 4~; xterm uses 8~. Home is intentionally
             // not bound — jumping to the oldest message in a long-lived room
@@ -249,9 +244,6 @@ impl Perform for VtCollector {
             }
             // Kitty keyboard protocol: some terminals report Backspace as
             // codepoint 127, others as 8 (BS). Accept both for Ctrl+Backspace.
-            'u' if p0 == Some(13) && p1 == Some(5) => {
-                self.events.push(ParsedInput::CtrlEnter);
-            }
             'u' if (p0 == Some(127) || p0 == Some(8)) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
@@ -290,6 +282,14 @@ impl Perform for VtCollector {
 
         if intermediates.is_empty() && byte == b'O' {
             self.ss3_pending = true;
+            return;
+        }
+
+        // Alt+S: "send and stay in compose". Picked over Ctrl+Enter because
+        // tmux collapses Ctrl-modified Enter to bare `\r` without the kitty
+        // keyboard protocol, but `ESC + <letter>` passes through unchanged.
+        if intermediates.is_empty() && (byte == b's' || byte == b'S') {
+            self.events.push(ParsedInput::AltS);
         }
 
         // Alt+printable falls through and is intentionally ignored, so ESC does
@@ -466,12 +466,12 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 app.chat.update_autocomplete();
             }
         }
-        ParsedInput::CtrlEnter => {
-            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
+        ParsedInput::AltS => {
+            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat)
+                && ctx.chat_composing
+                && let Some(b) = app.chat.submit_composer(true)
             {
-                if let Some(b) = app.chat.submit_composer(true) {
-                    app.banner = Some(b);
-                }
+                app.banner = Some(b);
             }
         }
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
@@ -1220,9 +1220,6 @@ mod tests {
             parser.feed(b"\x1b[127;5u"),
             vec![ParsedInput::CtrlBackspace]
         );
-        assert_eq!(parser.feed(b"\x1b[13;5u"), vec![ParsedInput::CtrlEnter]);
-        assert_eq!(parser.feed(b"\x1b[13;5~"), vec![ParsedInput::CtrlEnter]);
-        assert_eq!(parser.feed(b"\x1b[27;5;13~"), vec![ParsedInput::CtrlEnter]);
         assert_eq!(parser.feed(b"\x1b[8;5u"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[8;5~"), vec![ParsedInput::CtrlBackspace]);
     }

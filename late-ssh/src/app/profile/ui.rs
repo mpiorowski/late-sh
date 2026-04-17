@@ -166,10 +166,18 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>, width: u16) -> Vec<Line<'a>> {
     } else {
         dim
     };
-    let background_color_marker = if background_color_selected { "\u{203a}" } else { " " };
+    let background_color_marker = if background_color_selected {
+        "\u{203a}"
+    } else {
+        " "
+    };
     let bb_label = " Enable Background Color";
     let bb_pad = " ".repeat(label_pad.saturating_sub(bb_label.len() + 1));
-    let checkbox = if view.profile.enable_background_color { "[x]" } else { "[ ]" };
+    let checkbox = if view.profile.enable_background_color {
+        "[x]"
+    } else {
+        "[ ]"
+    };
     let checkbox_style = if view.profile.enable_background_color {
         Style::default().fg(theme::AMBER())
     } else {
