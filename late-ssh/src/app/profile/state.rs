@@ -61,7 +61,7 @@ impl ProfileState {
             editing_username: false,
             username_composer: String::new(),
             bg_task,
-            settings_row: Self::notify_row_index(0),
+            settings_row: 0,
             ai_model,
             scroll_offset: 0,
             viewport_height: 0,
