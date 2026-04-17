@@ -154,8 +154,11 @@ impl ProfileState {
         0
     }
 
+    const BACKGROUND_COLOR_ROW: usize = 1;
+    const NOTIFY_START_ROW: usize = 2;
+
     fn notify_row_index(kind_idx: usize) -> usize {
-        Self::theme_row_index() + 1 + kind_idx
+        Self::NOTIFY_START_ROW + kind_idx
     }
 
     fn cooldown_row_index() -> usize {
@@ -178,13 +181,16 @@ impl ProfileState {
             let next = theme::cycle_id(current, forward).to_string();
             self.profile.theme_id = Some(next.clone());
             self.profile_service.set_theme_id(self.user_id, next);
+        } else if self.settings_row == Self::BACKGROUND_COLOR_ROW {
+            self.profile.enable_background_color = !self.profile.enable_background_color;
+            self.save_profile();
         } else if self.settings_row == Self::cooldown_row_index() {
             self.profile.notify_cooldown_mins =
                 cycle_cooldown_value(self.profile.notify_cooldown_mins, forward);
             self.save_profile();
         } else if let Some(kind) = self
             .settings_row
-            .checked_sub(Self::theme_row_index() + 1)
+            .checked_sub(Self::NOTIFY_START_ROW)
             .and_then(|idx| Self::NOTIFY_KINDS.get(idx))
         {
             toggle_notify_kind(&mut self.profile.notify_kinds, kind);
@@ -199,6 +205,7 @@ impl ProfileState {
                 username: self.profile.username.clone(),
                 notify_kinds: self.profile.notify_kinds.clone(),
                 notify_cooldown_mins: self.profile.notify_cooldown_mins,
+                enable_background_color: self.profile.enable_background_color,
             },
         );
     }
@@ -417,17 +424,17 @@ mod tests {
     }
 
     #[test]
-    fn theme_row_index_is_after_cooldown() {
+    fn theme_row_index_is_zero() {
         assert_eq!(ProfileState::theme_row_index(), 0);
     }
 
     #[test]
-    fn first_notify_row_follows_theme_row() {
-        assert_eq!(ProfileState::notify_row_index(0), 1);
+    fn first_notify_row_follows_background_color_row() {
+        assert_eq!(ProfileState::notify_row_index(0), 2);
     }
 
     #[test]
     fn cooldown_row_is_last_selectable_row() {
-        assert_eq!(ProfileState::cooldown_row_index(), 4);
+        assert_eq!(ProfileState::cooldown_row_index(), 5);
     }
 }

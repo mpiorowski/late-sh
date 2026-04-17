@@ -26,6 +26,7 @@ const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
+const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -283,6 +284,13 @@ pub fn extract_notify_cooldown_mins(settings: &Value) -> i32 {
         .and_then(Value::as_i64)
         .unwrap_or(0)
         .max(0) as i32
+}
+
+pub fn extract_enable_background_color(settings: &Value) -> bool {
+    settings
+        .get(ENABLE_BACKGROUND_COLOR_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 pub fn sanitize_username_input(username: &str) -> String {

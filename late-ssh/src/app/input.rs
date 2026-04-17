@@ -55,7 +55,13 @@ enum ParsedInput {
     Scroll(isize),
     MousePress { x: u16, y: u16 },
     BackTab,
+    // Alt+Enter inserts a newline. `ESC + CR/LF` is pre-scanned because vte
+    // routes C0 bytes through `execute`, not `esc_dispatch`.
     AltEnter,
+    // Alt+S submits without closing the composer. Picked over Ctrl+Enter
+    // because tmux collapses Ctrl-modified Enter to bare `\r` unless the
+    // kitty keyboard protocol is forwarded, which it isn't by default.
+    AltS,
     Paste(Vec<u8>),
     PageUp,
     PageDown,
@@ -276,6 +282,14 @@ impl Perform for VtCollector {
 
         if intermediates.is_empty() && byte == b'O' {
             self.ss3_pending = true;
+            return;
+        }
+
+        // Alt+S: "send and stay in compose". Picked over Ctrl+Enter because
+        // tmux collapses Ctrl-modified Enter to bare `\r` without the kitty
+        // keyboard protocol, but `ESC + <letter>` passes through unchanged.
+        if intermediates.is_empty() && (byte == b's' || byte == b'S') {
+            self.events.push(ParsedInput::AltS);
         }
 
         // Alt+printable falls through and is intentionally ignored, so ESC does
@@ -450,6 +464,14 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             {
                 app.chat.composer_push('\n');
                 app.chat.update_autocomplete();
+            }
+        }
+        ParsedInput::AltS => {
+            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat)
+                && ctx.chat_composing
+                && let Some(b) = app.chat.submit_composer(true)
+            {
+                app.banner = Some(b);
             }
         }
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),

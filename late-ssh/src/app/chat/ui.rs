@@ -114,8 +114,9 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     }
 
     if let Some(author) = view.reply_author {
-        let long = format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ");
-        let mid = format!(" Reply to @{author} (⏎ send, Alt+⏎ newline, Esc cancel) ");
+        let long =
+            format!(" Reply to @{author} (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ");
+        let mid = format!(" Reply to @{author} (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ");
         let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
         let minimal = format!(" Reply to @{author} (Esc) ");
         let name_only = format!(" Reply to @{author} ");
@@ -139,8 +140,8 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
         return pick_title_that_fits(
             block_width,
             &[
-                " Edit message (Enter save, Alt+Enter newline, Esc cancel) ",
-                " Edit message (⏎ save, Alt+⏎ newline, Esc cancel) ",
+                " Edit message (Enter save, Alt+S stay, Alt+Enter newline, Esc cancel) ",
+                " Edit message (⏎ save, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
                 " Edit message (⏎ save, Esc cancel) ",
                 " Edit message (Esc) ",
                 " Edit message ",
@@ -155,9 +156,9 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     pick_title_that_fits(
         block_width,
         &[
-            " Compose (Enter send, Alt+Enter newline, Esc cancel) ",
-            " (Enter send, Alt+Enter newline, Esc cancel) ",
-            " (⏎ send, Alt+⏎ newline, Esc cancel) ",
+            " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
+            " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
+            " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
             " (⏎ send, Esc cancel) ",
             " (Esc cancel) ",
             " Esc ",
@@ -178,6 +179,7 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
         .title(composer_title.as_str())
         .borders(Borders::ALL)
         .border_style(composer_style);
+    let composer_inner = composer_block.inner(area);
     let composer_lines = build_composer_lines_from_rows(
         view.composer,
         view.composer_rows,
@@ -192,6 +194,14 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
             .scroll((scroll, 0)),
         area,
     );
+
+    if !view.composing && view.composer.is_empty() && !view.mention_active {
+        let placeholder = Paragraph::new(Line::from(Span::styled(
+            " Type a message or /help",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+        frame.render_widget(placeholder, composer_inner);
+    }
 
     if view.mention_active {
         draw_mention_autocomplete(frame, area, view.mention_matches, view.mention_selected);
@@ -1076,40 +1086,31 @@ mod tests {
     #[test]
     fn composer_title_collapses_across_block_widths() {
         let view = composer_view();
-        // " Compose (Enter send, Alt+Enter newline, Esc cancel) " = 53 cols → needs 55
-        assert_eq!(
-            composer_title(&view, 55),
-            " Compose (Enter send, Alt+Enter newline, Esc cancel) "
-        );
-        // " (Enter send, Alt+Enter newline, Esc cancel) " = 45 → needs 47
-        assert_eq!(
-            composer_title(&view, 54),
-            " (Enter send, Alt+Enter newline, Esc cancel) "
-        );
-        assert_eq!(
-            composer_title(&view, 47),
-            " (Enter send, Alt+Enter newline, Esc cancel) "
-        );
-        // " (⏎ send, Alt+⏎ newline, Esc cancel) " = 37 → needs 39
-        assert_eq!(
-            composer_title(&view, 46),
-            " (⏎ send, Alt+⏎ newline, Esc cancel) "
-        );
-        assert_eq!(
-            composer_title(&view, 39),
-            " (⏎ send, Alt+⏎ newline, Esc cancel) "
-        );
-        // " (⏎ send, Esc cancel) " = 22 → needs 24
-        assert_eq!(composer_title(&view, 38), " (⏎ send, Esc cancel) ");
-        assert_eq!(composer_title(&view, 24), " (⏎ send, Esc cancel) ");
-        // " (Esc cancel) " = 14 → needs 16
-        assert_eq!(composer_title(&view, 23), " (Esc cancel) ");
-        assert_eq!(composer_title(&view, 16), " (Esc cancel) ");
-        // " Esc " = 5 → needs 7
-        assert_eq!(composer_title(&view, 15), " Esc ");
-        assert_eq!(composer_title(&view, 7), " Esc ");
-        // Otherwise empty.
-        assert_eq!(composer_title(&view, 6), "");
+        let full = " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
+        let long = " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
+        let short = " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ";
+        let minimal = " (⏎ send, Esc cancel) ";
+        let cancel = " (Esc cancel) ";
+        let esc = " Esc ";
+        let need = |title: &str| (UnicodeWidthStr::width(title) + 2) as u16;
+
+        assert_eq!(composer_title(&view, need(full)), full);
+        assert_eq!(composer_title(&view, need(full) - 1), long);
+
+        assert_eq!(composer_title(&view, need(long)), long);
+        assert_eq!(composer_title(&view, need(long) - 1), short);
+
+        assert_eq!(composer_title(&view, need(short)), short);
+        assert_eq!(composer_title(&view, need(short) - 1), minimal);
+
+        assert_eq!(composer_title(&view, need(minimal)), minimal);
+        assert_eq!(composer_title(&view, need(minimal) - 1), cancel);
+
+        assert_eq!(composer_title(&view, need(cancel)), cancel);
+        assert_eq!(composer_title(&view, need(cancel) - 1), esc);
+
+        assert_eq!(composer_title(&view, need(esc)), esc);
+        assert_eq!(composer_title(&view, need(esc) - 1), "");
     }
 
     #[test]
@@ -1118,7 +1119,7 @@ mod tests {
         view.reply_author = Some("alice");
         assert_eq!(
             composer_title(&view, 100),
-            " Reply to @alice (Enter send, Alt+Enter newline, Esc cancel) "
+            " Reply to @alice (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) "
         );
         // Far too narrow for even the shortest reply form → drops to " Reply ".
         // " Reply " = 7 cols → needs block_w ≥ 9.

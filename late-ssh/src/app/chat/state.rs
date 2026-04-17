@@ -653,7 +653,7 @@ impl ChatState {
         MUSIC_HELP_TEXT.lines().map(str::to_string).collect()
     }
 
-    pub fn submit_composer(&mut self) -> Option<Banner> {
+    pub fn submit_composer(&mut self, keep_open: bool) -> Option<Banner> {
         let body = self.composer.trim_end().to_string();
 
         if body.trim() == "/help" {
@@ -787,7 +787,11 @@ impl ChatState {
             }
             self.pending_send_notices.push_back(request_id);
         }
-        self.clear_composer_after_send();
+        if keep_open {
+            self.clear_composer_after_send();
+        } else {
+            self.clear_composer_after_submit();
+        }
         None
     }
 
@@ -1502,7 +1506,8 @@ fn chat_help_lines() -> Vec<String> {
         "  d                  delete selected message",
         "",
         "Compose",
-        "  Enter              send",
+        "  Enter              send and exit",
+        "  Ctrl+Enter         send and keep open",
         "  Alt+Enter          newline",
         "  Esc                exit compose",
         "  Backspace          delete char",

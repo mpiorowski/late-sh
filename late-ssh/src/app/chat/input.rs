@@ -29,7 +29,7 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             app.chat.reset_composer();
         }
         b'\r' | b'\n' => {
-            if let Some(b) = app.chat.submit_composer() {
+            if let Some(b) = app.chat.submit_composer(false) {
                 app.banner = Some(b);
             }
         }

@@ -49,9 +49,10 @@ async fn profile_notification_checkbox_toggle_persists_across_reconnect() {
             "Game events row should start unchecked:\n{initial}"
         );
 
-        // settings_row defaults to 0 (Theme). Move to the first notification
+        // settings_row defaults to 0 (Theme). Row 1 is the background-color
+        // toggle, so it takes two Down presses to reach the first notification
         // row ("Direct messages"), then toggle it.
-        app.handle_input(b"j");
+        app.handle_input(b"jj");
         app.handle_input(b" ");
 
         // Wait for the toggled frame. The in-memory flip is immediate but

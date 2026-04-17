@@ -58,6 +58,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             username: "night-owl".to_string(),
             notify_kinds: Vec::new(),
             notify_cooldown_mins: 0,
+            enable_background_color: false,
         },
     );
 
@@ -107,6 +108,7 @@ async fn edit_profile_normalizes_username_before_persisting() {
             username: "  late night!!!  ".to_string(),
             notify_kinds: Vec::new(),
             notify_cooldown_mins: 0,
+            enable_background_color: false,
         },
     );
 
@@ -151,6 +153,7 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             username: "merge-user".to_string(),
             notify_kinds: vec!["dms".to_string()],
             notify_cooldown_mins: 5,
+            enable_background_color: false,
         },
     );
 
