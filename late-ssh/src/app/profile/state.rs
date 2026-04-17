@@ -1,4 +1,5 @@
-use late_core::models::profile::{Profile, ProfileParams, sanitize_username_input};
+use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::user::sanitize_username_input;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -23,7 +24,6 @@ pub struct ProfileState {
 
     // Display config (informational)
     pub(crate) ai_model: String,
-    pub(crate) theme_id: String,
 
     // Scroll
     pub(crate) scroll_offset: u16,
@@ -48,10 +48,14 @@ impl ProfileState {
         let snapshot_rx = profile_service.subscribe_snapshot(user_id);
         let event_rx = profile_service.subscribe_events();
         let bg_task = profile_service.start_user_refresh_task(user_id);
+        let profile = Profile {
+            theme_id: Some(theme::normalize_id(&initial_theme_id).to_string()),
+            ..Profile::default()
+        };
         Self {
             profile_service,
             user_id,
-            profile: Profile::default(),
+            profile,
             snapshot_rx,
             event_rx,
             editing_username: false,
@@ -59,7 +63,6 @@ impl ProfileState {
             bg_task,
             settings_row: Self::notify_row_index(0),
             ai_model,
-            theme_id: theme::normalize_id(&initial_theme_id).to_string(),
             scroll_offset: 0,
             viewport_height: 0,
         }
@@ -86,7 +89,10 @@ impl ProfileState {
     }
 
     pub fn theme_id(&self) -> &str {
-        &self.theme_id
+        self.profile
+            .theme_id
+            .as_deref()
+            .unwrap_or_else(|| theme::normalize_id(""))
     }
 
     pub fn scroll_offset(&self) -> u16 {
@@ -167,9 +173,14 @@ impl ProfileState {
     /// Cycle the currently selected setting and save immediately.
     pub fn cycle_setting(&mut self, forward: bool) {
         if self.settings_row == Self::theme_row_index() {
-            self.theme_id = theme::cycle_id(&self.theme_id, forward).to_string();
-            self.profile_service
-                .set_theme_id(self.user_id, self.theme_id.clone());
+            let current = self
+                .profile
+                .theme_id
+                .as_deref()
+                .unwrap_or_else(|| theme::normalize_id(""));
+            let next = theme::cycle_id(current, forward).to_string();
+            self.profile.theme_id = Some(next.clone());
+            self.profile_service.set_theme_id(self.user_id, next);
         } else if self.settings_row == Self::cooldown_row_index() {
             self.profile.notify_cooldown_mins =
                 cycle_cooldown_value(self.profile.notify_cooldown_mins, forward);
@@ -187,11 +198,8 @@ impl ProfileState {
     fn save_profile(&self) {
         self.profile_service.edit_profile(
             self.user_id,
-            self.profile.id,
             ProfileParams {
-                user_id: self.user_id,
                 username: self.profile.username.clone(),
-                enable_ghost: self.profile.enable_ghost,
                 notify_kinds: self.profile.notify_kinds.clone(),
                 notify_cooldown_mins: self.profile.notify_cooldown_mins,
             },
@@ -212,13 +220,11 @@ impl ProfileState {
                     return;
                 }
                 let profile = snapshot.profile.clone();
-                let theme_id = snapshot.theme_id.clone();
                 drop(snapshot);
-                if let Some(profile) = profile {
+                if let Some(mut profile) = profile {
+                    let normalized = theme::normalize_id(profile.theme_id.as_deref().unwrap_or(""));
+                    profile.theme_id = Some(normalized.to_string());
                     self.profile = profile;
-                }
-                if let Some(theme_id) = theme_id {
-                    self.theme_id = theme::normalize_id(&theme_id).to_string();
                 }
             }
             Ok(false) => (),

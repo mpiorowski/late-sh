@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use late_core::MutexRecover;
-use late_core::models::user::{User, UserParams};
+use late_core::models::user::{User, UserParams, extract_theme_id};
 use russh::keys::PrivateKey;
 use russh::server::{Auth, Msg, Session};
 use russh::*;
@@ -967,13 +967,7 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
 }
 
 fn late_ssh_theme_id(settings: &Value) -> String {
-    settings
-        .get("theme_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("late")
-        .to_string()
+    extract_theme_id(settings).unwrap_or_else(|| "late".to_string())
 }
 
 fn reject_publickey_only() -> Auth {

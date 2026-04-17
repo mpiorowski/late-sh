@@ -5,8 +5,6 @@ use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::profile::{USERNAME_MAX_LEN, sanitize_username_input};
-
 crate::model! {
     table = "users";
     params = UserParams;
@@ -22,9 +20,10 @@ crate::model! {
     }
 }
 
+pub const USERNAME_MAX_LEN: usize = 32;
+
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
-const ENABLE_GHOST_KEY: &str = "enable_ghost";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 
@@ -186,10 +185,21 @@ impl User {
         Ok((true, ids))
     }
 
+    /// Atomically merge `theme_id` into `settings` without clobbering other keys.
     pub async fn set_theme_id(client: &Client, user_id: Uuid, theme_id: &str) -> Result<()> {
-        let mut settings = Self::settings_for_user(client, user_id).await?;
-        set_theme_id(&mut settings, theme_id);
-        Self::update_settings(client, user_id, &settings).await
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&THEME_ID_KEY, &theme_id, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
     }
 
     async fn settings_for_user(client: &Client, user_id: Uuid) -> Result<Value> {
@@ -197,7 +207,7 @@ impl User {
             .query_opt("SELECT settings FROM users WHERE id = $1", &[&user_id])
             .await?;
         let Some(row) = row else {
-            bail!("User not found");
+            bail!("user not found");
         };
         Ok(row.get("settings"))
     }
@@ -212,7 +222,7 @@ impl User {
             )
             .await?;
         if updated == 0 {
-            bail!("User not found");
+            bail!("user not found");
         }
         Ok(())
     }
@@ -239,34 +249,13 @@ fn set_ignored_user_ids(settings: &mut Value, ids: &[Uuid]) {
     settings[IGNORED_USER_IDS_KEY] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
 }
 
-fn extract_theme_id(settings: &Value) -> Option<String> {
+pub fn extract_theme_id(settings: &Value) -> Option<String> {
     settings
         .get(THEME_ID_KEY)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-}
-
-fn set_theme_id(settings: &mut Value, theme_id: &str) {
-    if !settings.is_object() {
-        *settings = json!({});
-    }
-    settings[THEME_ID_KEY] = json!(theme_id);
-}
-
-pub fn extract_enable_ghost(settings: &Value) -> bool {
-    settings
-        .get(ENABLE_GHOST_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-}
-
-pub fn set_enable_ghost(settings: &mut Value, enable_ghost: bool) {
-    if !settings.is_object() {
-        *settings = json!({});
-    }
-    settings[ENABLE_GHOST_KEY] = json!(enable_ghost);
 }
 
 pub fn extract_notify_kinds(settings: &Value) -> Vec<String> {
@@ -285,13 +274,6 @@ pub fn extract_notify_kinds(settings: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn set_notify_kinds(settings: &mut Value, notify_kinds: &[String]) {
-    if !settings.is_object() {
-        *settings = json!({});
-    }
-    settings[NOTIFY_KINDS_KEY] = json!(notify_kinds);
-}
-
 pub fn extract_notify_cooldown_mins(settings: &Value) -> i32 {
     settings
         .get(NOTIFY_COOLDOWN_MINS_KEY)
@@ -300,11 +282,40 @@ pub fn extract_notify_cooldown_mins(settings: &Value) -> i32 {
         .max(0) as i32
 }
 
-pub fn set_notify_cooldown_mins(settings: &mut Value, notify_cooldown_mins: i32) {
-    if !settings.is_object() {
-        *settings = json!({});
+pub fn sanitize_username_input(username: &str) -> String {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return "user".to_string();
     }
-    settings[NOTIFY_COOLDOWN_MINS_KEY] = json!(notify_cooldown_mins.max(0));
+
+    let mut normalized = String::with_capacity(trimmed.len());
+    let mut previous_was_separator = false;
+
+    for ch in trimmed.chars() {
+        if ch == '@' {
+            continue;
+        }
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
+            normalized.push(ch);
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            normalized.push('_');
+            previous_was_separator = true;
+        }
+    }
+
+    let normalized = normalized.trim_matches('_');
+    if normalized.is_empty() {
+        return "user".to_string();
+    }
+
+    let truncated = truncate_to_boundary(normalized, USERNAME_MAX_LEN);
+    let truncated = truncated.trim_matches('_');
+    if truncated.is_empty() {
+        "user".to_string()
+    } else {
+        truncated.to_string()
+    }
 }
 
 fn truncate_to_boundary(value: &str, max_len: usize) -> String {
@@ -322,9 +333,35 @@ mod tests {
     }
 
     #[test]
-    fn set_theme_id_creates_settings_object() {
-        let mut settings = Value::Null;
-        set_theme_id(&mut settings, "contrast");
-        assert_eq!(extract_theme_id(&settings).as_deref(), Some("contrast"));
+    fn extract_theme_id_missing_returns_none() {
+        let settings = json!({});
+        assert_eq!(extract_theme_id(&settings), None);
+    }
+
+    #[test]
+    fn sanitize_username_input_trims_and_falls_back() {
+        assert_eq!(sanitize_username_input("  night-owl  "), "night-owl");
+        assert_eq!(sanitize_username_input("   "), "user");
+    }
+
+    #[test]
+    fn sanitize_username_input_replaces_spaces_and_invalid_chars() {
+        assert_eq!(sanitize_username_input("  night owl  "), "night_owl");
+        assert_eq!(sanitize_username_input("alice!!!bob"), "alice_bob");
+        assert_eq!(sanitize_username_input("@alice"), "alice");
+        assert_eq!(sanitize_username_input("a@b"), "ab");
+        assert_eq!(sanitize_username_input("...alice..."), "...alice...");
+    }
+
+    #[test]
+    fn sanitize_username_input_collapses_repeated_separators() {
+        assert_eq!(sanitize_username_input("a   b\t\tc"), "a_b_c");
+        assert_eq!(sanitize_username_input("a@@@b###c"), "ab_c");
+    }
+
+    #[test]
+    fn truncate_to_boundary_respects_char_boundaries() {
+        assert_eq!(truncate_to_boundary("abcdef", 4), "abcd");
+        assert_eq!(truncate_to_boundary("żółw", 3), "żół");
     }
 }

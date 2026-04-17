@@ -8,7 +8,6 @@ WITH source_rows AS (
     SELECT
         u.id,
         COALESCE(u.settings, '{}'::jsonb) AS existing_settings,
-        COALESCE(p.enable_ghost, true) AS enable_ghost,
         COALESCE(p.notify_kinds, '{}'::text[]) AS notify_kinds,
         COALESCE(p.notify_cooldown_mins, 0) AS notify_cooldown_mins,
         COALESCE(NULLIF(BTRIM(p.username), ''), NULLIF(BTRIM(u.username), ''), 'user') AS raw_username
@@ -19,7 +18,6 @@ sanitized AS (
     SELECT
         id,
         existing_settings,
-        enable_ghost,
         notify_kinds,
         notify_cooldown_mins,
         CASE
@@ -30,7 +28,6 @@ sanitized AS (
         SELECT
             id,
             existing_settings,
-            enable_ghost,
             notify_kinds,
             notify_cooldown_mins,
             REGEXP_REPLACE(
@@ -51,7 +48,6 @@ candidate_names AS (
     SELECT
         id,
         existing_settings,
-        enable_ghost,
         notify_kinds,
         notify_cooldown_mins,
         LEFT(base_username, 32) AS candidate_username
@@ -61,7 +57,6 @@ resolved_names AS (
     SELECT
         id,
         existing_settings,
-        enable_ghost,
         notify_kinds,
         notify_cooldown_mins,
         CASE
@@ -74,7 +69,6 @@ resolved_names AS (
 UPDATE users u
 SET username = r.final_username,
     settings = r.existing_settings || jsonb_build_object(
-        'enable_ghost', r.enable_ghost,
         'notify_kinds', to_jsonb(r.notify_kinds),
         'notify_cooldown_mins', GREATEST(r.notify_cooldown_mins, 0)
     ),
