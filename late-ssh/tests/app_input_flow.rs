@@ -72,6 +72,32 @@ async fn screen_number_keys_switch_between_dashboard_games_and_chat() {
 }
 
 #[tokio::test]
+async fn shift_tab_cycles_screens_backwards() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "screen-backtab-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Profile ").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " The Arcade ").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Dashboard ").await;
+}
+
+#[tokio::test]
 async fn active_game_blocks_screen_number_hotkeys() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "games-hotkey-it").await;
