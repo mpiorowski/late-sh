@@ -203,6 +203,7 @@ impl Perform for VtCollector {
             .collect();
         let p0 = params.first().copied();
         let p1 = params.get(1).copied();
+        let p2 = params.get(2).copied();
 
         match action {
             '~' if p0 == Some(200) => {
@@ -224,6 +225,15 @@ impl Perform for VtCollector {
             }
             '~' if p0 == Some(8) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
+            }
+            // Ctrl+Enter comes through in a few terminal-specific forms:
+            // - kitty keyboard protocol: CSI 13;5u
+            // - xterm modifyOtherKeys style: CSI 27;5;13~
+            // - some terminals shorten that to CSI 13;5~
+            '~' if (p0 == Some(13) && p1 == Some(5))
+                || (p0 == Some(27) && p1 == Some(5) && p2 == Some(13)) =>
+            {
+                self.events.push(ParsedInput::CtrlEnter);
             }
             // PageUp / PageDown / End (numeric form: CSI n ~). rxvt/linux
             // console encode End as 4~; xterm uses 8~. Home is intentionally
@@ -1210,6 +1220,9 @@ mod tests {
             parser.feed(b"\x1b[127;5u"),
             vec![ParsedInput::CtrlBackspace]
         );
+        assert_eq!(parser.feed(b"\x1b[13;5u"), vec![ParsedInput::CtrlEnter]);
+        assert_eq!(parser.feed(b"\x1b[13;5~"), vec![ParsedInput::CtrlEnter]);
+        assert_eq!(parser.feed(b"\x1b[27;5;13~"), vec![ParsedInput::CtrlEnter]);
         assert_eq!(parser.feed(b"\x1b[8;5u"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[8;5~"), vec![ParsedInput::CtrlBackspace]);
     }

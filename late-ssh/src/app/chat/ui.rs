@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
@@ -180,6 +180,7 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
         .title(composer_title.as_str())
         .borders(Borders::ALL)
         .border_style(composer_style);
+    let composer_inner = composer_block.inner(area);
     let composer_lines = build_composer_lines_from_rows(
         view.composer,
         view.composer_rows,
@@ -195,13 +196,12 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
         area,
     );
 
-    if view.composing && view.composer.is_empty() && !view.mention_active {
+    if !view.composing && view.composer.is_empty() && !view.mention_active {
         let placeholder = Paragraph::new(Line::from(Span::styled(
-            "Type a message or /help",
+            " Type a message or /help",
             Style::default().fg(theme::TEXT_DIM()),
-        )))
-        .block(Block::default().padding(Padding::horizontal(1)));
-        frame.render_widget(placeholder, area);
+        )));
+        frame.render_widget(placeholder, composer_inner);
     }
 
     if view.mention_active {
