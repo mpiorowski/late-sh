@@ -199,6 +199,11 @@ impl VoteService {
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, genre = %genre))]
     pub async fn cast_vote(&self, user_id: Uuid, genre: Genre) -> Result<VoteSnapshot> {
+        let previous_vote = {
+            let client = self.db.get().await?;
+            Vote::find_by_user(&client, user_id).await?
+        };
+
         {
             let client = self.db.get().await?;
             if let Err(e) = Vote::upsert(&client, user_id, genre.as_str()).await {
@@ -211,7 +216,14 @@ impl VoteService {
         }
         self.publish_event(VoteEvent::Success { user_id, genre });
         metrics::record_vote_cast(genre.as_str());
-        self.publish_activity(user_id, genre);
+
+        // Only publish activity if the vote actually changed
+        let vote_changed = previous_vote
+            .map(|v| v.genre != genre.as_str())
+            .unwrap_or(true);
+        if vote_changed {
+            self.publish_activity(user_id, genre);
+        }
 
         let counts = self.load_counts().await?;
         Ok(self.publish_status(counts).await)
