@@ -205,6 +205,9 @@ pub struct App {
     /// Last time a desktop notification was emitted (shared cooldown).
     pub(crate) last_notify_at: Option<Instant>,
 
+    /// Last background color sent to the terminal via OSC 11 (if any).
+    pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
+
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
 
@@ -418,6 +421,7 @@ impl App {
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
+            last_terminal_bg: None,
         })
     }
 
@@ -478,13 +482,18 @@ impl App {
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
         // 1006h = SGR extended encoding (ESC[< sequences instead of legacy X11)
         // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~)
+        // OSC 11 = set background to black
         buf.extend_from_slice(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h");
         buf
     }
 
     pub fn leave_alt_screen() -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1000l");
+        // 2004l = disable bracketed paste
+        // 1006l = disable SGR mouse tracking
+        // 1000l = disable basic mouse tracking
+        // OSC 111 = reset terminal background color
+        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b]111\x1b\\");
         crossterm::execute!(buf, cursor::Show, terminal::LeaveAlternateScreen)
             .expect("failed to leave alt screen");
         buf

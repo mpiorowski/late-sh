@@ -64,7 +64,7 @@ The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-
 **Integration tests (`late-ssh/tests/`, `late-web/tests/`, `late-core/tests/`):**
 - MUST use testcontainers for database access — always go through `late_core::test_utils::test_db()` (or the `helpers::new_test_db()` wrapper in `late-ssh`).
 - NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings in integration tests.
-- `late-core::test_utils` owns shared test infrastructure: `test_db()`, `create_test_user()` (creates user + profile). Use these everywhere instead of rolling per-test user creation — except in `late-core` model tests that are testing `User::create` itself or don't need a profile.
+- `late-core::test_utils` owns shared test infrastructure: `test_db()`, `create_test_user()`. Use these everywhere instead of rolling per-test user creation — except in `late-core` model tests that are testing `User::create` itself.
 - `late-ssh/tests/helpers/mod.rs` re-exports `create_test_user` from `late-core` and adds ssh-specific helpers (`test_config`, `test_app_state`, `make_app`, etc.). Domain test directories access these via `#[path = "../helpers/mod.rs"] mod helpers;` in their `main.rs`.
 - Any test that touches DB, services, network, or cross-module orchestration belongs here.
 - Preferred integration layout is domain-oriented under crate `tests/`, mirroring the source structure: `tests/<domain>/main.rs` with sibling `svc.rs`, `state.rs`, etc. as needed. `late-core` tests are named after their domain (`user.rs`, `vote.rs`, `chat/`).
@@ -475,7 +475,7 @@ late-sh/
 
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE, `settings` JSONB (holds `ignored_user_ids: [uuid]` — keyed by id, not username, so renames don't drop ignores) |
+| User | `users` | `fingerprint` UNIQUE; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
@@ -483,7 +483,6 @@ late-sh/
 | Article | `articles` | `url` UNIQUE, `user_id` FK |
 | ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
-| Profile | `profiles` | `user_id` UNIQUE, username (trimmed length 1-32, case-insensitive UNIQUE, canonical public handle), `notify_kinds TEXT[]` (desktop-notification kinds the user opted in to: `dms`, `mentions`, `game_events`), `notify_cooldown_mins INT CHECK >= 0` (0 = no throttle) |
 | SudokuDailyWin | `sudoku_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, score tracked |
 | NonogramDailyWin | `nonogram_daily_wins` | `UNIQUE(user_id, size_key, puzzle_date)`, binary completion |
 | MinesweeperGame | `minesweeper_games` | `UNIQUE(user_id, difficulty_key, mode)`, stores seeded mine_map + player_grid + lives (3-life system) |
@@ -646,6 +645,14 @@ An always-running game where every connected SSH session is automatically a part
 - Events (coffee breaks, AMAs, mini coding jams)
 - Personalization (accent color, favorite vibe, custom tagline)
 
+### Global-cache for cross-user chat data (future)
+
+`ChatService::start_user_refresh_task` polls `list_chat_rooms` every 10s per SSH session. That method currently mixes per-user reads (rooms, unread counts, selected-room tail, ignore list) with two genuinely global reads: `User::list_all_username_map` (mention autocomplete) and `Tree::list_all` (bonsai glyphs for other users' chat lines). With N online users, both global queries run N times every 10s for identical results.
+
+Pattern to steal: `LeaderboardService` — singleton background task refreshes a shared `watch::Receiver<Arc<_>>` on a fixed interval; per-user code reads the cache instead of hitting DB. Applied here, a new `ChatGlobalsService` (or similar) would publish `{ all_usernames, bonsai_glyphs }` every 10s, `list_chat_rooms` would consume the cache, and the per-user query list would shrink to only the genuinely per-user joins.
+
+Not urgent at today's user count — the per-user refresh remains load-bearing for dropped-broadcast-event recovery (lagged `MessageCreated`/`MessageEdited`), so the task itself stays either way; only the two global queries move out.
+
 ### Multi-replica readiness (future)
 
 Currently the SSH app assumes a single process. These in-memory structures would need to be externalized (Redis / Postgres) for multiple replicas:
@@ -672,8 +679,8 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - Chat room visibility enforced via `ChatRoom::list_for_user` (membership join) - never expose rooms user hasn't joined
 - `#announcements` is read-joinable like other permanent public rooms, but only admins may post there; enforce this in the chat service send path, not only in the UI
 - DM rooms canonicalize user IDs (`dm_user_a < dm_user_b` text order) to prevent duplicate DM pairs
-- Profile usernames are the canonical public handles for chat/DM lookup; SSH login ensures a profile row exists immediately, seeds it from the SSH username, and adds `-N` suffixes in Rust when needed to stay unique
-- @bot and @graybeard bootstrap on app startup: ensure DB user + profile, sync `profiles.username`, join public rooms, and insert into `active_users` (always online). Both are dedicated users with fixed fingerprints (`bot-fp-000`, `graybeard-fp-000`)
+- `users.username` is the canonical public handle for chat/DM lookup; SSH login seeds it from the SSH username via `User::next_available_username` (sanitizes to `[A-Za-z0-9._-]`, adds `-N` suffixes to stay unique on `LOWER(username)`)
+- @bot and @graybeard bootstrap on app startup: ensure DB user with a fixed `username`, join public rooms, and insert into `active_users` (always online). Both are dedicated users with fixed fingerprints (`bot-fp-000`, `graybeard-fp-000`)
 - Connection limits (global semaphore + per-IP counter) plus SSH attempt rate limit (sliding window) MUST be enforced before any auth (effective client IP is resolved from PROXY protocol when enabled)
 - Chat message deletes are hard deletes; any moderation/delete path must remove rows directly rather than relying on tombstones
 
@@ -712,7 +719,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 **Chat roster/help overlay flow:**
 1. Trigger: User submits `/help`, `/active`, or `/list` in the composer
 2. Processing: `ChatState::submit_composer()` intercepts these before any message send. `/help` opens a static overlay, `/active` snapshots the shared in-memory `active_users` registry, and `/list` spawns `ChatService::list_room_members_task` for the selected non-auto-join room.
-3. Side effects: `/active` renders usernames in an overlay immediately and annotates repeated SSH sessions as `(<n> sessions)`. `/list` resolves `chat_room_members` to profile usernames and opens a room-member overlay when the async event arrives.
+3. Side effects: `/active` renders usernames in an overlay immediately and annotates repeated SSH sessions as `(<n> sessions)`. `/list` resolves `chat_room_members` to `users.username` and opens a room-member overlay when the async event arrives.
 4. Guardrail: `/list` is only allowed for the product's "private" rooms, defined in the TUI as `auto_join = false` and `kind != 'dm'`; it is rejected in `general`, permanent/public auto-join rooms, and DMs.
 5. Failure: `/list` on the wrong room shows a red banner; DB/service errors surface via `RoomMembersListFailed`.
 
@@ -724,7 +731,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 **Chat @mention autocomplete:**
 1. Trigger: User types `@` in composer (at start or after space)
-2. Processing: `ChatState::update_autocomplete()` filters `all_usernames` (loaded from profiles DB via `ChatSnapshot`) case-insensitively by the query after `@`
+2. Processing: `ChatState::update_autocomplete()` filters `all_usernames` (loaded from `users` via `ChatSnapshot`) case-insensitively by the query after `@`
 3. Interaction: Arrow keys navigate matches, Tab/Enter confirms (inserts `@username `), Esc dismisses popup without leaving compose mode
 4. Rendering: `draw_mention_autocomplete()` renders a popup above the composer with up to 8 filtered matches; confirm must also move `composer_cursor` to the end of the inserted mention including the trailing space
 
@@ -751,7 +758,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Transcript render cost is cache-sensitive:** every member room keeps a warm tail (broadcast-driven, hard-capped at 1000 messages per room). The chat UI caches wrapped transcript rows for the dashboard general card and the active room; invalidation must track width, message content/order, usernames, badges, and bonsai glyphs. Only the selected room and general are fetched from DB on snapshot refresh — other rooms warm up from broadcasts and pull a one-shot backfill via `request_list` on first open per session.
 - **Composer render cost is cache-sensitive:** The chat composer caches wrapped `ComposerRow`s in `ChatState`; any change to composer text or width must invalidate that cache before render/cursor-up/down.
 - **Icon picker is chat-composer-only:** `Ctrl+]` (byte `0x1D`) opens `app::icon_picker` as a modal overlay, lazy-loads the catalog on first open (two sections each for Emoji and Nerd Font — no Unicode tab, no `unicode_names2` dep), and auto-starts `ChatState::start_composing` if the user isn't already composing. Selected icons are only ever pushed into `app.chat.composer`; Profile and news composers are intentionally not targets. The picker intercepts all input via an early return in `handle_parsed_input`, so while it is open nothing else on screen receives keys.
-- **@mention detection:** Uses simple `@username` substring match in message body. The `all_usernames` field on `ChatSnapshot` is loaded from profiles DB every refresh (10s) via `User::list_all_usernames` — includes all users, not just online ones.
+- **@mention detection:** Uses simple `@username` substring match in message body. The `all_usernames` field on `ChatSnapshot` is loaded from `users` every refresh (10s) via `User::list_all_usernames` — includes all users, not just online ones.
 - **Reply persistence is currently body-encoded:** There is no reply DB column yet. Replies are stored as a quoted first line in `body` and rendered back out in the TUI. If/when true threaded metadata is added, both send and render paths need coordinated migration.
 - **All services are singletons** shared across SSH sessions. `ProfileService` snapshots are per-user channels keyed by `user_id`; events still require `user_id` filtering in UI state. Per-user background refresh tasks are spawned on session init and aborted on `Drop`, and profile snapshot channels are pruned when receivers go away.
 - **Chat room `updated` timestamp:** Intentionally NOT used for room ordering to keep stable sort - rooms ordered by type (general → language → private → dm)
@@ -767,16 +774,16 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Activity feed broadcast timing:** `broadcast::Receiver` only sees messages sent AFTER subscription. The receiver must be created in `auth_publickey` (before login event is sent), stored on `ClientHandler`, then `.take()`'d into `SessionConfig` in `pty_request`. Creating the receiver later misses the user's own login event.
 - **Leaderboard refresh is async, badges are eventually consistent:** `LeaderboardService` refreshes every 30s. A new daily win won't appear in the leaderboard or chat badges until the next refresh cycle. Activity feed callouts are immediate (fire-and-forget from `record_win_task`).
 - **Streak SQL uses gaps-and-islands:** A streak is "current" if its last day is today or yesterday. This means a user who hasn't played today still keeps their streak visible until midnight UTC tomorrow. The `UNION` across `sudoku_daily_wins` and `nonogram_daily_wins` deduplicates dates so playing both games on the same day counts as one streak day.
-- **Game services hold `activity_feed` sender:** `SudokuService` and `NonogramService` both hold a clone of the `broadcast::Sender<ActivityEvent>` for win callouts. The username is looked up from `profiles` table inside the fire-and-forget task, not passed from the caller.
+- **Game services hold `activity_feed` sender:** `SudokuService` and `NonogramService` both hold a clone of the `broadcast::Sender<ActivityEvent>` for win callouts. The username is looked up from `users` inside the fire-and-forget task (via `late_core::models::profile::fetch_username`), not passed from the caller.
 - **Bonsai death check runs on login:** `BonsaiService::ensure_tree()` checks `last_watered` against UTC today on every SSH session start. If 7+ days have passed, the tree is killed and a graveyard record is created. This means death is only detected when the user reconnects, not while offline.
 - **Bonsai passive growth is per-session:** The tick counter in `BonsaiState` grants 1 growth point every ~9000 ticks (~10 min at 15fps). If a user has multiple sessions, each grants growth independently. This is acceptable — it rewards being connected, not gaming the system.
 - **Bonsai chat glyph is current-user only:** The bonsai stage glyph (· ⚘ 🌲 🌳 🌸) is only shown next to the current user's own messages. Other users' bonsai stages are not queried or displayed in chat (would require a new cross-user lookup).
 - **Bonsai cut changes seed optimistically:** The `cut()` method updates `self.seed` in memory immediately and fires a background DB task. If the DB write fails, the in-memory seed diverges from persisted until next login.
 - **Help modal (`?`) intercepts all input:** When `show_help` is true, the input handler dismisses the modal on any keypress before any other input processing. This includes `?` itself (toggle off) and `Esc`.
 - **Desktop notifications bypass the frame diff:** OSC 777 (kitty/Ghostty/rxvt-unicode/foot/wezterm/konsole) and OSC 9 (iTerm2 fallback) payloads are written to `App::pending_terminal_commands`, not into the ratatui frame. `late-ssh::ssh::render_once` drains that buffer **after** pushing the frame diff and sends each payload as a separate `handle.data` call. Writing them inline with `write!(self.shared, …)` would slip them into the diff and get re-emitted on every redraw. Same rule applies to OSC 52 clipboard copies.
-- **Notification pipeline is kind-tagged and throttled server-side:** `ChatState::pending_notifications` holds `PendingNotification { kind: &'static str, title, body }` entries drained each render. `render.rs` picks the first pending whose `kind` is in `profiles.notify_kinds` and honors the shared `notify_cooldown_mins` via `App::last_notify_at`. Adding a new kind means: (1) append to `ProfileState::NOTIFY_KINDS`, (2) add a row in `profile/ui.rs` `kinds` tuple, (3) enqueue it from the relevant event handler, (4) update the unit test `notify_kinds_constant_matches_ui_expectations` in `profile/state.rs`. No tmux DCS wrapping — tmux is explicitly unsupported.
-- **Profile notifications default to all-off:** Migration 025 ships `notify_kinds = '{}'` and `notify_cooldown_mins = 0`. `render.rs` only fires if the kind string is present in the user's array, so a brand-new account is silent until they opt in on the profile screen. A focus-tracking `"unfocused"` policy used to exist (DEC mode 1004) but was removed — `notify_kinds` is the whole model now.
-- **`Profile::save_profile` needs a loaded profile id:** `submit_username` and the notification toggles all go through `save_profile`, which calls `Profile::update_by_user_id(… profile.id …)`. `ProfileState` seeds with `Profile::default()` (id = `Uuid::nil()`) until the async `find_profile` snapshot lands. If you save before the snapshot arrives, the UPDATE matches zero rows and silently succeeds. Integration tests must `wait_for_render_contains` on the current username (not just a static label) before asserting persistence.
+- **Notification pipeline is kind-tagged and throttled server-side:** `ChatState::pending_notifications` holds `PendingNotification { kind: &'static str, title, body }` entries drained each render. `render.rs` picks the first pending whose `kind` is in `users.settings.notify_kinds` and honors the shared `notify_cooldown_mins` via `App::last_notify_at`. Adding a new kind means: (1) append to `ProfileState::NOTIFY_KINDS`, (2) add a row in `profile/ui.rs` `kinds` tuple, (3) enqueue it from the relevant event handler, (4) update the unit test `notify_kinds_constant_matches_ui_expectations` in `profile/state.rs`. No tmux DCS wrapping — tmux is explicitly unsupported.
+- **Profile notifications default to all-off:** Migration 026 merges profile fields into `users.settings` with `notify_kinds = []` and `notify_cooldown_mins = 0`. `render.rs` only fires if the kind string is present in the user's array, so a brand-new account is silent until they opt in on the profile screen. A focus-tracking `"unfocused"` policy used to exist (DEC mode 1004) but was removed — `notify_kinds` is the whole model now.
+- **`Profile` is a view, not a table:** Migration 026 dropped the `profiles` table — username + notify settings + theme now live on `users` (column + `settings` JSONB). `late_core::models::profile::Profile` is a projection loaded via `Profile::load(client, user_id)` and saved via `Profile::update(client, user_id, params)`, which merges into `settings` with `settings || jsonb_build_object(...)` to preserve unrelated keys (theme_id, ignored_user_ids) under concurrent writes.
 
 ---
 
@@ -808,9 +815,10 @@ let vote_rx = vote_service.subscribe_state();   // watch::Receiver<VoteSnapshot>
 let vote_ev = vote_service.subscribe_events();  // broadcast::Receiver<VoteEvent>
 vote_service.cast_vote_task(user_id, Genre::Lofi);
 
-// === Profile ===
-let profile = Profile::find_or_create_by_user(&client, user_id).await?;
-Profile::update_by_user_id(&client, user_id, id, ProfileParams { .. }).await?;
+// === Profile (view over users.username + users.settings) ===
+let profile = Profile::load(&client, user_id).await?;
+Profile::update(&client, user_id, ProfileParams { username, notify_kinds, notify_cooldown_mins }).await?;
+User::set_theme_id(&client, user_id, "purple").await?;
 
 // === Leaderboard ===
 let lb_rx = leaderboard_service.subscribe();        // watch::Receiver<Arc<LeaderboardData>>

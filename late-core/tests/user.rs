@@ -295,5 +295,5 @@ async fn ignored_user_ids_require_existing_user() {
     let err = User::ignored_user_ids(&client, missing_user_id)
         .await
         .expect_err("expected missing user error");
-    assert!(err.to_string().contains("User not found"));
+    assert!(err.to_string().to_ascii_lowercase().contains("not found"));
 }

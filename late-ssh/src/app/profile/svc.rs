@@ -1,6 +1,6 @@
 use anyhow::Result;
 use late_core::models::profile::{Profile, ProfileParams};
-use late_core::models::user::User;
+use late_core::models::user::{User, sanitize_username_input};
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
@@ -25,7 +25,6 @@ pub struct ProfileService {
 pub struct ProfileSnapshot {
     pub user_id: Option<Uuid>,
     pub profile: Option<Profile>,
-    pub theme_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -74,27 +73,6 @@ impl ProfileService {
         }
     }
 
-    // Tick
-    pub fn start_user_refresh_task(&self, user_id: Uuid) -> tokio::task::AbortHandle {
-        let service = self.clone();
-        let handle = tokio::spawn(
-            async move {
-                loop {
-                    if let Err(e) = service.do_find_profile(user_id).await {
-                        late_core::error_span!(
-                            "profile_refresh_failed",
-                            error = ?e,
-                            "failed to refresh profile"
-                        );
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                }
-            }
-            .instrument(info_span!("profile.refresh_loop", user_id = %user_id)),
-        );
-        handle.abort_handle()
-    }
-
     // Prune
     pub fn prune_user_snapshot_channel(&self, user_id: Uuid) {
         let mut channels = self.snapshot_txs.lock_recover();
@@ -128,24 +106,22 @@ impl ProfileService {
     #[tracing::instrument(skip(self), fields(user_id = %user_id))]
     async fn do_find_profile(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        let profile = Profile::find_or_create_by_user(&client, user_id).await?;
-        let theme_id = User::theme_id(&client, user_id).await?;
+        let profile = Profile::load(&client, user_id).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
                 user_id: Some(user_id),
                 profile: Some(profile),
-                theme_id,
             },
         )?;
         Ok(())
     }
 
-    pub fn edit_profile(&self, user_id: Uuid, id: Uuid, params: ProfileParams) {
+    pub fn edit_profile(&self, user_id: Uuid, params: ProfileParams) {
         let service = self.clone();
         tokio::spawn(
             async move {
-                if let Err(e) = service.do_edit_profile(user_id, id, params).await {
+                if let Err(e) = service.do_edit_profile(user_id, params).await {
                     late_core::error_span!(
                         "profile_edit_failed",
                         error = ?e,
@@ -157,17 +133,17 @@ impl ProfileService {
                     });
                 }
             }
-            .instrument(info_span!("profile.edit_task", user_id = %user_id, id = %id)),
+            .instrument(info_span!("profile.edit_task", user_id = %user_id)),
         );
     }
 
-    #[tracing::instrument(skip(self, params), fields(user_id = %user_id, id = %id))]
-    async fn do_edit_profile(&self, user_id: Uuid, id: Uuid, params: ProfileParams) -> Result<()> {
+    #[tracing::instrument(skip(self, params), fields(user_id = %user_id))]
+    async fn do_edit_profile(&self, user_id: Uuid, mut params: ProfileParams) -> Result<()> {
         let client = self.db.get().await?;
-        let _ = Profile::update_by_user_id(&client, user_id, id, params).await?;
+        params.username = sanitize_username_input(&params.username);
+        let _ = Profile::update(&client, user_id, params).await?;
 
-        if let Ok(mut usernames) =
-            late_core::models::user::User::list_usernames_by_ids(&client, &[user_id]).await
+        if let Ok(mut usernames) = User::list_usernames_by_ids(&client, &[user_id]).await
             && let Some(username) = usernames.remove(&user_id)
             && let Ok(mut users) = self.active_users.lock()
             && let Some(user) = users.get_mut(&user_id)

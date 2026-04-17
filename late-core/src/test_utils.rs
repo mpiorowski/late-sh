@@ -1,5 +1,4 @@
 use crate::db::{Db, DbConfig};
-use crate::models::profile::Profile;
 use crate::models::user::{User, UserParams};
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
@@ -114,23 +113,22 @@ async fn test_db_container() -> TestDb {
     }
 }
 
-/// Create a user + profile for integration tests. Returns the `User`.
+/// Create a user for integration tests. Returns the `User`.
 pub async fn create_test_user(db: &Db, username: &str) -> User {
     let client = db.get().await.expect("db client");
-    let user = User::create(
+    let username = User::next_available_username(&client, username)
+        .await
+        .expect("next available username");
+    User::create(
         &client,
         UserParams {
             fingerprint: format!("fp-{}", uuid::Uuid::now_v7()),
-            username: username.to_string(),
+            username,
             settings: serde_json::json!({}),
         },
     )
     .await
-    .expect("create user");
-    Profile::find_or_create_by_user(&client, user.id)
-        .await
-        .expect("create profile");
-    user
+    .expect("create user")
 }
 
 async fn wait_for_db(config: &DbConfig) {

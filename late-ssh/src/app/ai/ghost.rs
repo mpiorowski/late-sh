@@ -6,7 +6,6 @@ use late_core::{
         chat_message::ChatMessage,
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
-        profile::{Profile, ProfileParams},
         user::{User, UserParams},
     },
 };
@@ -560,6 +559,17 @@ impl GhostService {
 
         let user = if let Some(existing) = User::find_by_fingerprint(&client, fingerprint).await? {
             if existing.username != username {
+                User::update(
+                    &client,
+                    existing.id,
+                    UserParams {
+                        fingerprint: existing.fingerprint.clone(),
+                        username: username.to_string(),
+                        settings: settings.clone(),
+                    },
+                )
+                .await?;
+            } else {
                 client
                     .execute(
                         "UPDATE users SET settings = $1, updated = current_timestamp WHERE id = $2",
@@ -579,23 +589,6 @@ impl GhostService {
             )
             .await?
         };
-        // Sync profile username if needed
-        let profile = Profile::find_or_create_by_user(&client, user.id).await?;
-        if profile.username != username {
-            Profile::update_by_user_id(
-                &client,
-                user.id,
-                profile.id,
-                ProfileParams {
-                    user_id: user.id,
-                    username: username.to_string(),
-                    enable_ghost: profile.enable_ghost,
-                    notify_kinds: profile.notify_kinds.clone(),
-                    notify_cooldown_mins: profile.notify_cooldown_mins,
-                },
-            )
-            .await?;
-        }
 
         ChatRoomMember::auto_join_public_rooms(&client, user.id).await?;
 

@@ -30,9 +30,7 @@ async fn find_profile_creates_profile_and_publishes_snapshot() {
     let profile = snapshot.profile.expect("profile in snapshot");
 
     assert_eq!(snapshot.user_id, Some(user.id));
-    assert_eq!(profile.user_id, user.id);
     assert_eq!(profile.username, "profile-user");
-    assert!(profile.enable_ghost);
 }
 
 #[tokio::test]
@@ -48,7 +46,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         .await
         .expect("initial snapshot timeout")
         .expect("watch changed");
-    let current = snapshot_rx
+    let _ = snapshot_rx
         .borrow_and_update()
         .profile
         .clone()
@@ -56,13 +54,11 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
 
     service.edit_profile(
         user.id,
-        current.id,
         ProfileParams {
-            user_id: user.id,
             username: "night-owl".to_string(),
-            enable_ghost: true,
             notify_kinds: Vec::new(),
             notify_cooldown_mins: 0,
+            enable_background_color: false,
         },
     );
 
@@ -86,49 +82,93 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         .expect("updated profile");
 
     assert_eq!(updated.username, "night-owl");
-    assert!(updated.enable_ghost);
 }
 
 #[tokio::test]
-async fn edit_profile_does_not_modify_another_users_profile() {
+async fn edit_profile_normalizes_username_before_persisting() {
     let test_db = new_test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let owner = create_test_user(&test_db.db, "profile-owner").await;
-    let intruder = create_test_user(&test_db.db, "profile-intruder").await;
+    let user = create_test_user(&test_db.db, "profile-normalize-user").await;
     let service = ProfileService::new(test_db.db.clone(), default_active_users());
-    let mut owner_snapshot_rx = service.subscribe_snapshot(owner.id);
+    let mut snapshot_rx = service.subscribe_snapshot(user.id);
 
-    service.find_profile(owner.id);
-    timeout(Duration::from_secs(2), owner_snapshot_rx.changed())
+    service.find_profile(user.id);
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
         .await
-        .expect("owner snapshot timeout")
+        .expect("initial snapshot timeout")
         .expect("watch changed");
-    let owner_profile = owner_snapshot_rx
+    let _ = snapshot_rx
         .borrow_and_update()
         .profile
         .clone()
-        .expect("owner profile");
+        .expect("initial profile");
 
     service.edit_profile(
-        intruder.id,
-        owner_profile.id,
+        user.id,
         ProfileParams {
-            user_id: intruder.id,
-            username: "hijack".to_string(),
-            enable_ghost: true,
+            username: "  late night!!!  ".to_string(),
             notify_kinds: Vec::new(),
             notify_cooldown_mins: 0,
+            enable_background_color: false,
         },
     );
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let stored = Profile::find_or_create_by_user(&client, owner.id)
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
         .await
-        .expect("owner profile from db");
-    assert_eq!(stored.id, owner_profile.id);
-    assert_eq!(stored.username, owner_profile.username);
-    assert_eq!(stored.enable_ghost, owner_profile.enable_ghost);
+        .expect("updated snapshot timeout")
+        .expect("watch changed");
+    let updated = snapshot_rx
+        .borrow_and_update()
+        .profile
+        .clone()
+        .expect("updated profile");
+
+    assert_eq!(updated.username, "late_night");
+}
+
+#[tokio::test]
+async fn edit_profile_preserves_unrelated_settings_keys() {
+    // Concurrent write paths (theme_id, ignored_user_ids) must survive a
+    // profile save. The atomic `settings || jsonb_build_object(...)` merge
+    // in Profile::update is what guarantees this.
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "profile-merge-user").await;
+
+    late_core::models::user::User::set_theme_id(&client, user.id, "purple")
+        .await
+        .expect("set theme");
+
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(user.id);
+
+    service.find_profile(user.id);
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("initial snapshot timeout")
+        .expect("watch changed");
+
+    service.edit_profile(
+        user.id,
+        ProfileParams {
+            username: "merge-user".to_string(),
+            notify_kinds: vec!["dms".to_string()],
+            notify_cooldown_mins: 5,
+            enable_background_color: false,
+        },
+    );
+
+    // Wait for the DB write to land.
+    let mut events = service.subscribe_events();
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    assert!(matches!(event, ProfileEvent::Saved { .. }));
+
+    let theme = late_core::models::user::User::theme_id(&client, user.id)
+        .await
+        .expect("load theme");
+    assert_eq!(theme.as_deref(), Some("purple"));
 }
 
 #[tokio::test]
@@ -138,10 +178,10 @@ async fn creating_profiles_for_same_ssh_username_assigns_unique_handles() {
     let first = create_test_user(&test_db.db, "alice").await;
     let second = create_test_user(&test_db.db, "alice").await;
 
-    let first_profile = Profile::find_or_create_by_user(&client, first.id)
+    let first_profile = Profile::load(&client, first.id)
         .await
         .expect("first profile");
-    let second_profile = Profile::find_or_create_by_user(&client, second.id)
+    let second_profile = Profile::load(&client, second.id)
         .await
         .expect("second profile");
 
