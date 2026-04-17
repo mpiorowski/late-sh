@@ -56,6 +56,16 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
         key_hint("d/p/n", "daily/pers/new"),
         key_hint("[ ]", "difficulty"),
         key_hint("Esc", "exit"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Reveal tips",
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        )),
+        info_tagline("Press a matching number on"),
+        info_tagline("a revealed cell to open"),
+        info_tagline("all adjacent unflagged cells."),
     ];
 
     let board_area = draw_game_frame(frame, area, "Minesweeper", info_lines);

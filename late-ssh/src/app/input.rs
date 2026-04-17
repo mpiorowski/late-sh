@@ -462,14 +462,25 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         // and chat messages wrap to ~3 rows each, so we divide terminal
         // height by 6 to get something that feels like half a visible page.
         ParsedInput::PageUp => {
+            if ctx.screen == Screen::Chat && app.chat.room_jump_active {
+                return;
+            }
             let step = (app.size.1 / 6).max(1) as isize;
             handle_scroll_for_screen(app, ctx.screen, step);
         }
         ParsedInput::PageDown => {
+            if ctx.screen == Screen::Chat && app.chat.room_jump_active {
+                return;
+            }
             let step = (app.size.1 / 6).max(1) as isize;
             handle_scroll_for_screen(app, ctx.screen, -step);
         }
-        ParsedInput::End => handle_scroll_for_screen(app, ctx.screen, isize::MIN),
+        ParsedInput::End => {
+            if ctx.screen == Screen::Chat && app.chat.room_jump_active {
+                return;
+            }
+            handle_scroll_for_screen(app, ctx.screen, isize::MIN)
+        }
         ParsedInput::CtrlBackspace
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
                 && ctx.chat_composing =>
@@ -507,6 +518,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::CtrlArrow(_) | ParsedInput::CtrlBackspace | ParsedInput::CtrlDelete => {}
         ParsedInput::Arrow(key) => {
+            if ctx.screen == Screen::Chat && app.chat.room_jump_active {
+                let _ = chat::input::handle_arrow(app, key);
+                return;
+            }
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
                 && ctx.chat_composing
                 && !ctx.chat_ac_active
@@ -542,6 +557,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Byte(0x1D) => try_open_icon_picker(app),
         ParsedInput::Byte(byte) => {
+            if ctx.screen == Screen::Chat && app.chat.room_jump_active {
+                let _ = chat::input::handle_byte(app, byte);
+                return;
+            }
+
             if handle_modal_input(app, ctx, byte) {
                 return;
             }
@@ -562,6 +582,11 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     let ctx = InputContext::from_app(app);
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.room_jump_active
+    {
+        app.chat.cancel_room_jump();
+        return;
+    }
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
@@ -933,8 +958,9 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Arrow(b'A') => picker_move_selection(app, -1),
         ParsedInput::Arrow(b'B') => picker_move_selection(app, 1),
-        ParsedInput::Byte(b'k') | ParsedInput::Byte(b'K') => picker_move_selection(app, -1),
-        ParsedInput::Byte(b'j') | ParsedInput::Byte(b'J') => picker_move_selection(app, 1),
+        // Ctrl+K / Ctrl+J mirror vim-style up/down without stealing plain j/k from the search box.
+        ParsedInput::Byte(0x0B) => picker_move_selection(app, -1),
+        ParsedInput::Byte(0x0A) => picker_move_selection(app, 1),
         ParsedInput::Scroll(delta) => picker_move_selection(app, -delta * 3),
         ParsedInput::Arrow(b'C') => {
             let len = app.icon_picker_state.search_query.chars().count();

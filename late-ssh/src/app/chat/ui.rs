@@ -10,6 +10,7 @@ use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
+use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use crate::app::common::{
@@ -23,6 +24,7 @@ pub use super::ui_text::ComposerRow;
 pub(super) use super::ui_text::build_composer_rows;
 pub(crate) use super::ui_text::{composer_cursor_scroll_for_rows, composer_line_count_for_rows};
 
+use super::state::ROOM_JUMP_KEYS;
 use super::ui_text::{
     build_composer_lines, build_composer_lines_from_rows, composer_line_count,
     wrap_chat_entry_to_lines,
@@ -73,18 +75,100 @@ pub(super) struct ComposerBlockView<'a> {
     pub mention_selected: usize,
 }
 
+/// Pick the longest tier whose display width fits inside a titled `Block`
+/// of the given outer `block_width`. Titles sit on the top border between
+/// the two corner glyphs, so the available cells are `block_width - 2`.
+/// Tiers should be ordered longest → shortest; the last one is returned
+/// if none fit (so include `""` as a terminal fallback).
+///
+/// Padding convention: any " " around the title text (" Compose … ") is
+/// baked into the tier string itself, not reserved by this function. We
+/// may later want to make "1 col of padding on each side" a style-guide
+/// rule enforced by a layout helper (which would shift the budget to
+/// `block_width - 4` and strip authored padding). For now, padding is a
+/// design choice of the tier-list author. Tradeoffs either way:
+///   - padding-in-string: self-documenting ("what you see is what renders")
+///     and easy to vary per tier (e.g. drop padding at the tightest tier).
+///   - padding-in-layout: centralized, uniform, lets the title be
+///     right-aligned or centered without extra machinery.
+///
+/// Keeping this a free function for now — if a second caller wants the
+/// same collapse behavior, promote to a `TitledCollapseBlock` widget that
+/// owns the `Block` builder plus the tier list.
+fn pick_title_that_fits<'a>(block_width: u16, tiers: &[&'a str]) -> &'a str {
+    let available = block_width.saturating_sub(2) as usize;
+    tiers
+        .iter()
+        .copied()
+        .find(|t| UnicodeWidthStr::width(*t) <= available)
+        .unwrap_or("")
+}
+
+fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
+    if !view.composing {
+        return pick_title_that_fits(
+            block_width,
+            &[" Compose (press i) ", " (press i) ", " i ", ""],
+        )
+        .to_string();
+    }
+
+    if let Some(author) = view.reply_author {
+        let long = format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ");
+        let mid = format!(" Reply to @{author} (⏎ send, Alt+⏎ newline, Esc cancel) ");
+        let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
+        let minimal = format!(" Reply to @{author} (Esc) ");
+        let name_only = format!(" Reply to @{author} ");
+        return pick_title_that_fits(
+            block_width,
+            &[
+                long.as_str(),
+                mid.as_str(),
+                short.as_str(),
+                minimal.as_str(),
+                name_only.as_str(),
+                " Reply ",
+                " Esc ",
+                "",
+            ],
+        )
+        .to_string();
+    }
+
+    if view.is_editing {
+        return pick_title_that_fits(
+            block_width,
+            &[
+                " Edit message (Enter save, Alt+Enter newline, Esc cancel) ",
+                " Edit message (⏎ save, Alt+⏎ newline, Esc cancel) ",
+                " Edit message (⏎ save, Esc cancel) ",
+                " Edit message (Esc) ",
+                " Edit message ",
+                " Edit ",
+                " Esc ",
+                "",
+            ],
+        )
+        .to_string();
+    }
+
+    pick_title_that_fits(
+        block_width,
+        &[
+            " Compose (Enter send, Alt+Enter newline, Esc cancel) ",
+            " (Enter send, Alt+Enter newline, Esc cancel) ",
+            " (⏎ send, Alt+⏎ newline, Esc cancel) ",
+            " (⏎ send, Esc cancel) ",
+            " (Esc cancel) ",
+            " Esc ",
+            "",
+        ],
+    )
+    .to_string()
+}
+
 pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &ComposerBlockView<'_>) {
-    let composer_title = if view.composing {
-        if let Some(author) = view.reply_author {
-            format!(" Reply to @{author} (Enter send, Alt+Enter newline, Esc cancel) ")
-        } else if view.is_editing {
-            " Edit message (Enter save, Alt+Enter newline, Esc cancel) ".to_string()
-        } else {
-            " Compose (Enter send, Alt+Enter newline, Esc cancel) ".to_string()
-        }
-    } else {
-        " Compose (press i) ".to_string()
-    };
+    let composer_title = composer_title(view, area.width);
     let composer_style = if view.composing {
         Style::default().fg(theme::BORDER_ACTIVE())
     } else {
@@ -497,6 +581,7 @@ pub struct ChatRenderInput<'a> {
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub selected_room_id: Option<Uuid>,
+    pub room_jump_active: bool,
     pub selected_message_id: Option<Uuid>,
     pub highlighted_message_id: Option<Uuid>,
     pub composer: &'a str,
@@ -519,12 +604,24 @@ pub struct ChatRenderInput<'a> {
     pub notifications_view: super::notifications::ui::NotificationListView<'a>,
 }
 
+fn room_jump_prefix(key: Option<u8>, active: bool, is_selected: bool) -> String {
+    if active {
+        key.map(|key| format!("[{}] ", key as char))
+            .unwrap_or_else(|| "    ".to_string())
+    } else if is_selected {
+        "> ".to_string()
+    } else {
+        "  ".to_string()
+    }
+}
+
 pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let chat_rooms = view.chat_rooms;
     let usernames = view.usernames;
     let unread_counts = view.unread_counts;
     let news_unread_count = view.news_unread_count;
     let selected_room_id = view.selected_room_id;
+    let room_jump_active = view.room_jump_active;
     let composer = view.composer;
     let composing = view.composing;
     let current_user_id = view.current_user_id;
@@ -561,25 +658,29 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let body_layout = Layout::horizontal([Constraint::Length(26), Constraint::Fill(1)]).split(body);
     let rooms_area = body_layout[0];
     let messages_area = body_layout[1];
+    let mut jump_keys = ROOM_JUMP_KEYS.iter().copied();
 
-    let room_line =
-        |room: &late_core::models::chat_room::ChatRoom, label: String, is_selected: bool| -> Line {
-            let unread = unread_counts.get(&room.id).copied().unwrap_or(0);
-            let prefix = if is_selected { ">" } else { " " };
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let text = if unread > 0 {
-                format!("{prefix} {label} ({unread})")
-            } else {
-                format!("{prefix} {label}")
-            };
-            Line::from(Span::styled(text, style))
+    let room_line = |room: &late_core::models::chat_room::ChatRoom,
+                     label: String,
+                     is_selected: bool,
+                     jump_key: Option<u8>|
+     -> Line {
+        let unread = unread_counts.get(&room.id).copied().unwrap_or(0);
+        let style = if is_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
         };
+        let prefix = room_jump_prefix(jump_key, room_jump_active, is_selected);
+        let text = if unread > 0 {
+            format!("{prefix}{label} ({unread})")
+        } else {
+            format!("{prefix}{label}")
+        };
+        Line::from(Span::styled(text, style))
+    };
     let section_divider = |label: &str, width: u16| -> Line {
         let prefix = "── ";
         let suffix_len = (width as usize).saturating_sub(prefix.len() + label.len() + 1); // +1 for space after label
@@ -605,6 +706,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 room,
                 slug.to_string(),
                 !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
         }
     }
@@ -621,11 +723,16 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             room,
             label,
             !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+            room_jump_active.then(|| jump_keys.next()).flatten(),
         ));
     }
     // News virtual room
     {
-        let prefix = if news_selected { ">" } else { " " };
+        let prefix = room_jump_prefix(
+            room_jump_active.then(|| jump_keys.next()).flatten(),
+            room_jump_active,
+            news_selected,
+        );
         let style = if news_selected {
             Style::default()
                 .fg(theme::AMBER())
@@ -634,9 +741,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             Style::default().fg(theme::TEXT())
         };
         let label = if news_unread_count > 0 {
-            format!("{prefix} news ({news_unread_count})")
+            format!("{prefix}news ({news_unread_count})")
         } else {
-            format!("{prefix} news")
+            format!("{prefix}news")
         };
         room_lines.push(Line::from(Span::styled(label, style)));
     }
@@ -644,7 +751,11 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     {
         let notifications_selected = view.notifications_selected;
         let notifications_unread_count = view.notifications_unread_count;
-        let prefix = if notifications_selected { ">" } else { " " };
+        let prefix = room_jump_prefix(
+            room_jump_active.then(|| jump_keys.next()).flatten(),
+            room_jump_active,
+            notifications_selected,
+        );
         let style = if notifications_selected {
             Style::default()
                 .fg(theme::AMBER())
@@ -653,9 +764,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             Style::default().fg(theme::TEXT())
         };
         let label = if notifications_unread_count > 0 {
-            format!("{prefix} mentions ({notifications_unread_count})")
+            format!("{prefix}mentions ({notifications_unread_count})")
         } else {
-            format!("{prefix} mentions")
+            format!("{prefix}mentions")
         };
         room_lines.push(Line::from(Span::styled(label, style)));
     }
@@ -679,6 +790,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 room,
                 label,
                 !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
         }
     }
@@ -702,6 +814,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 room,
                 label,
                 !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
         }
     }
@@ -722,6 +835,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 room,
                 label,
                 !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
         }
     }
@@ -738,7 +852,11 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     )));
 
     let rooms_block = Block::default()
-        .title(" Rooms (h/l) ")
+        .title(if room_jump_active {
+            " Rooms (h/l) Space/Esc cancel jump "
+        } else {
+            " Rooms (h/l) Space jump "
+        })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let rooms_paragraph = Paragraph::new(room_lines).block(rooms_block);
@@ -921,5 +1039,141 @@ mod tests {
     fn effective_chat_scroll_keeps_selected_message_off_bottom_edge() {
         let scroll = effective_chat_scroll(40, 10, Some((29, 31)));
         assert_eq!(scroll, 3);
+    }
+
+    fn composer_view() -> ComposerBlockView<'static> {
+        ComposerBlockView {
+            composer: "",
+            composer_rows: &[],
+            composer_cursor: 0,
+            composing: true,
+            cursor_visible: false,
+            reply_author: None,
+            is_editing: false,
+            mention_active: false,
+            mention_matches: &[],
+            mention_selected: 0,
+        }
+    }
+
+    #[test]
+    fn pick_title_that_fits_selects_longest_tier_that_fits() {
+        let tiers = ["aaaaaa", "bbbb", "cc", ""];
+        // block_width = N, available for title = N - 2.
+        assert_eq!(pick_title_that_fits(8, &tiers), "aaaaaa");
+        assert_eq!(pick_title_that_fits(7, &tiers), "bbbb");
+        assert_eq!(pick_title_that_fits(5, &tiers), "cc");
+        assert_eq!(pick_title_that_fits(3, &tiers), "");
+    }
+
+    #[test]
+    fn pick_title_that_fits_uses_display_width_not_byte_length() {
+        // ⏎ is 3 bytes but 1 display column.
+        let tiers = ["⏎⏎⏎⏎", ""];
+        assert_eq!(pick_title_that_fits(6, &tiers), "⏎⏎⏎⏎");
+    }
+
+    #[test]
+    fn composer_title_collapses_across_block_widths() {
+        let view = composer_view();
+        // " Compose (Enter send, Alt+Enter newline, Esc cancel) " = 53 cols → needs 55
+        assert_eq!(
+            composer_title(&view, 55),
+            " Compose (Enter send, Alt+Enter newline, Esc cancel) "
+        );
+        // " (Enter send, Alt+Enter newline, Esc cancel) " = 45 → needs 47
+        assert_eq!(
+            composer_title(&view, 54),
+            " (Enter send, Alt+Enter newline, Esc cancel) "
+        );
+        assert_eq!(
+            composer_title(&view, 47),
+            " (Enter send, Alt+Enter newline, Esc cancel) "
+        );
+        // " (⏎ send, Alt+⏎ newline, Esc cancel) " = 37 → needs 39
+        assert_eq!(
+            composer_title(&view, 46),
+            " (⏎ send, Alt+⏎ newline, Esc cancel) "
+        );
+        assert_eq!(
+            composer_title(&view, 39),
+            " (⏎ send, Alt+⏎ newline, Esc cancel) "
+        );
+        // " (⏎ send, Esc cancel) " = 22 → needs 24
+        assert_eq!(composer_title(&view, 38), " (⏎ send, Esc cancel) ");
+        assert_eq!(composer_title(&view, 24), " (⏎ send, Esc cancel) ");
+        // " (Esc cancel) " = 14 → needs 16
+        assert_eq!(composer_title(&view, 23), " (Esc cancel) ");
+        assert_eq!(composer_title(&view, 16), " (Esc cancel) ");
+        // " Esc " = 5 → needs 7
+        assert_eq!(composer_title(&view, 15), " Esc ");
+        assert_eq!(composer_title(&view, 7), " Esc ");
+        // Otherwise empty.
+        assert_eq!(composer_title(&view, 6), "");
+    }
+
+    #[test]
+    fn composer_title_reply_state_degrades_through_name_only_and_label() {
+        let mut view = composer_view();
+        view.reply_author = Some("alice");
+        assert_eq!(
+            composer_title(&view, 100),
+            " Reply to @alice (Enter send, Alt+Enter newline, Esc cancel) "
+        );
+        // Far too narrow for even the shortest reply form → drops to " Reply ".
+        // " Reply " = 7 cols → needs block_w ≥ 9.
+        assert_eq!(composer_title(&view, 10), " Reply ");
+        assert_eq!(composer_title(&view, 9), " Reply ");
+        // " Esc " = 5 cols → needs block_w ≥ 7.
+        assert_eq!(composer_title(&view, 8), " Esc ");
+        assert_eq!(composer_title(&view, 7), " Esc ");
+        assert_eq!(composer_title(&view, 6), "");
+    }
+
+    #[test]
+    fn composer_title_when_not_composing_shows_press_i_prompt() {
+        let mut view = composer_view();
+        view.composing = false;
+        assert_eq!(composer_title(&view, 30), " Compose (press i) ");
+        assert_eq!(composer_title(&view, 13), " (press i) ");
+        // " i " = 3 cols → needs block_w ≥ 5.
+        assert_eq!(composer_title(&view, 5), " i ");
+        assert_eq!(composer_title(&view, 4), "");
+    }
+
+    #[test]
+    fn composer_title_never_truncates_across_block_widths() {
+        use ratatui::{Terminal, backend::TestBackend};
+        // Render the composer block at every block width where a non-empty
+        // title is expected (≥7 for the " Esc " fallback). At each width,
+        // confirm the picked title survives intact in the top border row.
+        let view = composer_view();
+        for block_w in 7u16..=120 {
+            let backend = TestBackend::new(block_w, 3);
+            let mut terminal = Terminal::new(backend).expect("term");
+            let expected_title = composer_title(&view, block_w);
+            terminal
+                .draw(|f| draw_composer_block(f, Rect::new(0, 0, block_w, 3), &view))
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            let row: String = (0..block_w)
+                .map(|x| buf[(x, 0)].symbol().to_string())
+                .collect();
+            assert!(
+                row.contains(&expected_title),
+                "title {expected_title:?} truncated at block_w={block_w}: rendered {row:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn room_jump_prefix_shows_jump_key_when_active() {
+        assert_eq!(room_jump_prefix(Some(b'a'), true, false), "[a] ");
+    }
+
+    #[test]
+    fn room_jump_prefix_shows_selected_marker_when_inactive() {
+        assert_eq!(room_jump_prefix(None, false, true), "> ");
+        assert_eq!(room_jump_prefix(None, false, false), "  ");
     }
 }

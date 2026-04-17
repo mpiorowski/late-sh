@@ -178,6 +178,7 @@ impl App {
             badges: &chat_badges,
             unread_counts: &self.chat.unread_counts,
             selected_room_id: self.chat.selected_room_id,
+            room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
             highlighted_message_id: self.chat.highlighted_message_id,
             composer: self.chat.composer.as_str(),
