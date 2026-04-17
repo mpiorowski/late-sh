@@ -720,6 +720,28 @@ impl russh::server::Handler for ClientHandler {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, data, session), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr, len = data.len()))]
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let command = String::from_utf8_lossy(data);
+        let preview: String = command.chars().take(128).collect();
+        tracing::info!(
+            command = %preview,
+            "rejecting exec request; only interactive shell is supported"
+        );
+        if let Err(e) = session.channel_failure(channel) {
+            tracing::error!(error = ?e, "exec channel_failure failed");
+        }
+        if let Err(e) = session.close(channel) {
+            tracing::error!(error = ?e, "exec channel close failed");
+        }
+        Ok(())
+    }
+
     #[tracing::instrument(skip(self, session), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
     async fn shell_request(
         &mut self,
