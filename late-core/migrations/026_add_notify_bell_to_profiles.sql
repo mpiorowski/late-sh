@@ -1,1 +1,0 @@
-ALTER TABLE profiles ADD COLUMN notify_bell BOOLEAN NOT NULL DEFAULT false;
