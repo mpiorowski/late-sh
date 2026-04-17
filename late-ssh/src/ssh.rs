@@ -12,10 +12,10 @@ use std::net::{IpAddr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{self, Duration};
+use std::time::{self, Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit};
+use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
@@ -29,6 +29,14 @@ const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
+
+/// World tick advances animations, game clocks, splash timer, visualizer
+/// decay, etc. Keeps the rate users see animations at before this commit.
+const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
+/// Minimum wall-clock gap between any two consecutive renders. Bounds the
+/// per-session render rate so that keystroke floods or other signal sources
+/// can't drive renders faster than this.
+const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
 
 #[derive(Clone)]
 struct Server {
@@ -56,6 +64,9 @@ struct ClientHandler {
     /// Session bindings
     channel: Option<Channel<Msg>>,
     app: Option<Arc<TokioMutex<crate::app::state::App>>>,
+    /// Signaled by input/resize paths to request an immediate (world-stateless)
+    /// render, so typed characters echo without waiting for the next world tick.
+    render_notify: Option<Arc<Notify>>,
     cli_mode: bool,
     session_token: Option<String>,
 }
@@ -252,6 +263,7 @@ impl Server {
             over_limit,
             channel: None,
             app: None,
+            render_notify: None,
             cli_mode: false,
             session_token: None,
         }
@@ -752,13 +764,57 @@ impl russh::server::Handler for ClientHandler {
 
             let app = Arc::clone(app);
             let frame_drop_log_every = self.state.config.frame_drop_log_every;
+            let notify = Arc::new(Notify::new());
+            self.render_notify = Some(Arc::clone(&notify));
             tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(66));
-                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
+                world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                let mut previous_render: Option<Instant> = None;
+                let mut input_pending = false;
                 loop {
-                    interval.tick().await;
-                    match render_once(&app, &handle, channel_id, frame_drop_log_every).await {
+                    // Three wake sources, polled `biased` so the world tick wins
+                    // when multiple are ready at once (avoids starving animations
+                    // under a keystroke flood):
+                    //  - world_tick:  advance animations + render + ship frame.
+                    //  - sleep_until: a previously-noticed input is past its
+                    //                 MIN_RENDER_GAP throttle; render (no world
+                    //                 advance) and clear the pending flag.
+                    //  - notify:      input/resize happened. Just arm the
+                    //                 throttle by setting input_pending; the
+                    //                 sleep_until branch will render it.
+                    let advance_world = tokio::select! {
+                        biased;
+                        _ = world_tick.tick() => {
+                            // A world-tick render also satisfies any pending input
+                            // render, so clear the flag.
+                            input_pending = false;
+                            true
+                        }
+                        _ = tokio::time::sleep_until(
+                            previous_render
+                                .map(|t| t + MIN_RENDER_GAP)
+                                .unwrap_or_else(Instant::now)
+                                .into(),
+                        ), if input_pending => {
+                            input_pending = false;
+                            false
+                        }
+                        _ = notify.notified(), if !input_pending => {
+                            input_pending = true;
+                            continue;
+                        }
+                    };
+                    match render_once(
+                        &app,
+                        &handle,
+                        channel_id,
+                        frame_drop_log_every,
+                        advance_world,
+                    )
+                    .await
+                    {
                         Ok(should_quit) => {
+                            previous_render = Some(Instant::now());
                             if should_quit {
                                 tracing::debug!("app requested quit, closing connection");
                                 clean_disconnect(&handle, channel_id).await;
@@ -797,6 +853,9 @@ impl russh::server::Handler for ClientHandler {
                 clean_disconnect(&session.handle(), channel).await;
                 return Ok(());
             }
+        }
+        if let Some(notify) = self.render_notify.as_ref() {
+            notify.notify_one();
         }
         Ok(())
     }
@@ -849,6 +908,9 @@ impl russh::server::Handler for ClientHandler {
                 tracing::error!(error = ?e, "error resizing app");
             }
         }
+        if let Some(notify) = self.render_notify.as_ref() {
+            notify.notify_one();
+        }
         Ok(())
     }
 }
@@ -858,13 +920,16 @@ async fn render_once(
     handle: &russh::server::Handle,
     channel_id: ChannelId,
     frame_drop_log_every: u64,
+    advance_world: bool,
 ) -> anyhow::Result<bool> {
     let (frame, terminal_commands) = {
         let mut app = app.lock().await;
         if !app.running {
             return Ok(true);
         }
-        app.tick();
+        if advance_world {
+            app.tick();
+        }
         let frame = app.render().context("rendering frame")?;
         let terminal_commands = std::mem::take(&mut app.pending_terminal_commands);
         (frame, terminal_commands)
