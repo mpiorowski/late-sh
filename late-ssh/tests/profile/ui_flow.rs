@@ -49,7 +49,9 @@ async fn profile_notification_checkbox_toggle_persists_across_reconnect() {
             "Game events row should start unchecked:\n{initial}"
         );
 
-        // settings_row defaults to 0 ("dms"). Space toggles the current row.
+        // settings_row defaults to 0 (Theme). Move to the first notification
+        // row ("Direct messages"), then toggle it.
+        app.handle_input(b"j");
         app.handle_input(b" ");
 
         // Wait for the toggled frame. The in-memory flip is immediate but
@@ -87,9 +89,7 @@ async fn profile_notification_checkbox_toggle_persists_across_reconnect() {
                 let db = db.clone();
                 async move {
                     let client = db.get().await.expect("db client");
-                    let profile = Profile::find_or_create_by_user(&client, user.id)
-                        .await
-                        .expect("profile");
+                    let profile = Profile::load(&client, user.id).await.expect("profile");
                     profile.notify_kinds == vec!["dms".to_string()]
                 }
             },
@@ -165,13 +165,44 @@ async fn profile_username_edit_trims_whitespace_and_persists() {
             let db = db.clone();
             async move {
                 let client = db.get().await.expect("db client");
-                let profile = Profile::find_or_create_by_user(&client, user.id)
-                    .await
-                    .expect("profile");
+                let profile = Profile::load(&client, user.id).await.expect("profile");
                 profile.username == "alice"
             }
         },
         "profile.username to persist as trimmed value",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn profile_username_edit_replaces_spaces_and_invalid_chars() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "normalize-orig").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "normalize-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "normalize-orig").await;
+
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Username (Enter save, Esc cancel)").await;
+
+    app.handle_input(b"\x15");
+    app.handle_input(b"late night!!!\r");
+
+    wait_for_render_contains(&mut app, "Username (i edit)").await;
+    wait_for_render_contains(&mut app, "late_night").await;
+
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                let profile = Profile::load(&client, user.id).await.expect("profile");
+                profile.username == "late_night"
+            }
+        },
+        "profile.username to persist as normalized value",
     )
     .await;
 }

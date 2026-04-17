@@ -289,7 +289,7 @@ impl App {
         }
 
         // Emit OSC 777/OSC 9 desktop notifications for pending chat events.
-        // Kind strings ("dms", "mentions", …) must match profiles.notify_kinds.
+        // Kind strings ("dms", "mentions", …) must match users.settings.notify_kinds.
         if !self.chat.pending_notifications.is_empty() {
             let profile = self.profile_state.profile();
             let enabled_kinds = profile.notify_kinds.clone();
@@ -405,11 +405,10 @@ impl App {
             return;
         }
 
-        let mut block = Block::default()
+        let block = Block::default()
             .title(" late.sh ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-
 
         let inner = block.inner(area);
         frame.render_widget(block, area);

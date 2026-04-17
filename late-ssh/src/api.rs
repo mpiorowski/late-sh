@@ -5,8 +5,8 @@ use axum::{
         ConnectInfo, Query, State as AxumState, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    http::HeaderValue,
     http::StatusCode,
+    http::{HeaderMap, HeaderValue},
     middleware::{self},
     response::IntoResponse,
     routing::get,
@@ -15,7 +15,7 @@ use late_core::MutexRecover;
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
 use late_core::telemetry::http_telemetry_middleware;
 use serde::Deserialize;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use tokio::net::TcpListener;
 use tower_http::cors::Any;
 use tower_http::cors::CorsLayer;
@@ -176,17 +176,21 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<PairParams>,
     AxumState(state): AxumState<State>,
+    headers: HeaderMap,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
+    let client_ip = effective_client_ip(&headers, peer_addr, &state);
     let token_hint = token_hint(&params.token);
     tracing::info!(
-        ip = %peer_addr.ip(),
+        ip = %client_ip,
+        peer_ip = %peer_addr.ip(),
         token_hint = %token_hint,
         "ws pair request received"
     );
-    if !state.ws_pair_limiter.allow(peer_addr.ip()) {
+    if !state.ws_pair_limiter.allow(client_ip) {
         tracing::warn!(
-            ip = %peer_addr.ip(),
+            ip = %client_ip,
+            peer_ip = %peer_addr.ip(),
             max_attempts = state.ws_pair_limiter.max_attempts(),
             window_secs = state.ws_pair_limiter.window_secs(),
             "ws pair rate limit exceeded for peer ip"
@@ -310,10 +314,31 @@ fn token_hint(token: &str) -> String {
     format!("{prefix}..({})", token.len())
 }
 
+fn effective_client_ip(headers: &HeaderMap, peer_addr: SocketAddr, state: &State) -> IpAddr {
+    if is_trusted_proxy_peer(peer_addr.ip(), &state.config.ssh_proxy_trusted_cidrs)
+        && let Some(ip) = forwarded_for_ip(headers)
+    {
+        return ip;
+    }
+
+    peer_addr.ip()
+}
+
+fn is_trusted_proxy_peer(ip: IpAddr, trusted_cidrs: &[ipnet::IpNet]) -> bool {
+    trusted_cidrs.iter().any(|cidr| cidr.contains(&ip))
+}
+
+fn forwarded_for_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    let value = headers.get("x-forwarded-for")?.to_str().ok()?;
+    let first = value.split(',').next()?.trim();
+    first.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::ActiveUser;
+    use ipnet::IpNet;
     use std::{
         collections::HashMap,
         sync::{Arc, Mutex},
@@ -438,5 +463,88 @@ mod tests {
         drop(users);
 
         assert_eq!(active_user_count(&active_users), 2);
+    }
+
+    #[test]
+    fn forwarded_for_ip_uses_first_entry() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.10, 10.42.0.89"),
+        );
+
+        assert_eq!(
+            forwarded_for_ip(&headers),
+            Some("203.0.113.10".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn effective_client_ip_uses_forwarded_header_for_trusted_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.10, 10.42.0.89"),
+        );
+        let trusted_cidrs = test_trusted_cidrs(vec!["10.42.0.0/16"]);
+        let peer_addr: SocketAddr = "10.42.0.89:12345".parse().unwrap();
+
+        assert_eq!(
+            if is_trusted_proxy_peer(peer_addr.ip(), &trusted_cidrs)
+                && let Some(ip) = forwarded_for_ip(&headers)
+            {
+                ip
+            } else {
+                peer_addr.ip()
+            },
+            "203.0.113.10".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn effective_client_ip_falls_back_for_untrusted_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.10, 10.42.0.89"),
+        );
+        let trusted_cidrs = test_trusted_cidrs(vec!["192.168.0.0/16"]);
+        let peer_addr: SocketAddr = "10.42.0.89:12345".parse().unwrap();
+
+        assert_eq!(
+            if is_trusted_proxy_peer(peer_addr.ip(), &trusted_cidrs)
+                && let Some(ip) = forwarded_for_ip(&headers)
+            {
+                ip
+            } else {
+                peer_addr.ip()
+            },
+            "10.42.0.89".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn effective_client_ip_falls_back_when_header_missing() {
+        let headers = HeaderMap::new();
+        let trusted_cidrs = test_trusted_cidrs(vec!["10.42.0.0/16"]);
+        let peer_addr: SocketAddr = "10.42.0.89:12345".parse().unwrap();
+
+        assert_eq!(
+            if is_trusted_proxy_peer(peer_addr.ip(), &trusted_cidrs)
+                && let Some(ip) = forwarded_for_ip(&headers)
+            {
+                ip
+            } else {
+                peer_addr.ip()
+            },
+            "10.42.0.89".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    fn test_trusted_cidrs(cidr_strings: Vec<&str>) -> Vec<IpNet> {
+        cidr_strings
+            .into_iter()
+            .map(|s| s.parse::<IpNet>().unwrap())
+            .collect()
     }
 }

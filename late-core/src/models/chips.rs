@@ -105,9 +105,9 @@ impl UserChips {
     pub async fn top_balances(client: &Client, limit: i64) -> Result<Vec<ChipLeader>> {
         let rows = client
             .query(
-                "SELECT p.username, c.user_id, c.balance
+                "SELECT u.username, c.user_id, c.balance
                  FROM user_chips c
-                 JOIN profiles p ON p.user_id = c.user_id
+                 JOIN users u ON u.id = c.user_id
                  WHERE c.balance > 0
                  ORDER BY c.balance DESC
                  LIMIT $1",

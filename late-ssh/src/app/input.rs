@@ -50,6 +50,7 @@ enum ParsedInput {
     Byte(u8),
     Arrow(u8),
     CtrlArrow(u8),
+    CtrlEnter,
     CtrlBackspace,
     CtrlDelete,
     Scroll(isize),
@@ -238,6 +239,9 @@ impl Perform for VtCollector {
             }
             // Kitty keyboard protocol: some terminals report Backspace as
             // codepoint 127, others as 8 (BS). Accept both for Ctrl+Backspace.
+            'u' if p0 == Some(13) && p1 == Some(5) => {
+                self.events.push(ParsedInput::CtrlEnter);
+            }
             'u' if (p0 == Some(127) || p0 == Some(8)) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
@@ -450,6 +454,14 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             {
                 app.chat.composer_push('\n');
                 app.chat.update_autocomplete();
+            }
+        }
+        ParsedInput::CtrlEnter => {
+            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
+            {
+                if let Some(b) = app.chat.submit_composer(true) {
+                    app.banner = Some(b);
+                }
             }
         }
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),

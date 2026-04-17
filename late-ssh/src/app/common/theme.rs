@@ -9,7 +9,6 @@ pub enum ThemeKind {
     Purple = 2,
 }
 
-
 #[derive(Clone, Copy)]
 pub struct ThemeOption {
     pub kind: ThemeKind,

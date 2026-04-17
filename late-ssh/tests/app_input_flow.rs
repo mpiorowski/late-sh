@@ -133,7 +133,7 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     wait_for_render_contains(&mut app, "2hey").await;
     wait_for_render_contains(
         &mut app,
-        "Compose (Enter send, Alt+Enter newline, Esc cancel)",
+        "Compose (Enter send, Ctrl+Enter stay, Alt+Enter newline, Esc cancel)",
     )
     .await;
 
