@@ -119,7 +119,7 @@ pub async fn create_test_user(db: &Db, username: &str) -> User {
     let username = User::next_available_username(&client, username)
         .await
         .expect("next available username");
-    let user = User::create(
+    User::create(
         &client,
         UserParams {
             fingerprint: format!("fp-{}", uuid::Uuid::now_v7()),
@@ -128,8 +128,7 @@ pub async fn create_test_user(db: &Db, username: &str) -> User {
         },
     )
     .await
-    .expect("create user");
-    user
+    .expect("create user")
 }
 
 async fn wait_for_db(config: &DbConfig) {

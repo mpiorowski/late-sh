@@ -30,7 +30,10 @@ const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
         let row = client
-            .query_opt("SELECT * FROM users WHERE fingerprint = $1", &[&fingerprint])
+            .query_opt(
+                "SELECT * FROM users WHERE fingerprint = $1",
+                &[&fingerprint],
+            )
             .await?;
         Ok(row.map(Self::from))
     }

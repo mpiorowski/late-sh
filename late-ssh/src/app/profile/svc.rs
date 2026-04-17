@@ -73,27 +73,6 @@ impl ProfileService {
         }
     }
 
-    // Tick
-    pub fn start_user_refresh_task(&self, user_id: Uuid) -> tokio::task::AbortHandle {
-        let service = self.clone();
-        let handle = tokio::spawn(
-            async move {
-                loop {
-                    if let Err(e) = service.do_find_profile(user_id).await {
-                        late_core::error_span!(
-                            "profile_refresh_failed",
-                            error = ?e,
-                            "failed to refresh profile"
-                        );
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                }
-            }
-            .instrument(info_span!("profile.refresh_loop", user_id = %user_id)),
-        );
-        handle.abort_handle()
-    }
-
     // Prune
     pub fn prune_user_snapshot_channel(&self, user_id: Uuid) {
         let mut channels = self.snapshot_txs.lock_recover();

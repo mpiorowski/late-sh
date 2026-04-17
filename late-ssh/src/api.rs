@@ -5,8 +5,8 @@ use axum::{
         ConnectInfo, Query, State as AxumState, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    http::{HeaderMap, HeaderValue},
     http::StatusCode,
+    http::{HeaderMap, HeaderValue},
     middleware::{self},
     response::IntoResponse,
     routing::get,
@@ -315,10 +315,10 @@ fn token_hint(token: &str) -> String {
 }
 
 fn effective_client_ip(headers: &HeaderMap, peer_addr: SocketAddr, state: &State) -> IpAddr {
-    if is_trusted_proxy_peer(peer_addr.ip(), state) {
-        if let Some(ip) = forwarded_for_ip(headers) {
-            return ip;
-        }
+    if is_trusted_proxy_peer(peer_addr.ip(), state)
+        && let Some(ip) = forwarded_for_ip(headers)
+    {
+        return ip;
     }
 
     peer_addr.ip()
@@ -346,13 +346,13 @@ mod tests {
         state::ActiveUser,
     };
     use ipnet::IpNet;
+    use late_core::db::DbConfig;
     use std::{
         collections::HashMap,
         path::PathBuf,
         sync::{Arc, Mutex},
         time::Instant,
     };
-    use late_core::db::DbConfig;
     use uuid::Uuid;
 
     #[test]
@@ -482,7 +482,10 @@ mod tests {
             HeaderValue::from_static("203.0.113.10, 10.42.0.89"),
         );
 
-        assert_eq!(forwarded_for_ip(&headers), Some("203.0.113.10".parse().unwrap()));
+        assert_eq!(
+            forwarded_for_ip(&headers),
+            Some("203.0.113.10".parse().unwrap())
+        );
     }
 
     #[test]
@@ -497,7 +500,7 @@ mod tests {
 
         assert_eq!(
             effective_client_ip(&headers, peer_addr, &state),
-            "203.0.113.10".parse().unwrap()
+            "203.0.113.10".parse::<IpAddr>().unwrap()
         );
     }
 
@@ -513,7 +516,7 @@ mod tests {
 
         assert_eq!(
             effective_client_ip(&headers, peer_addr, &state),
-            "10.42.0.89".parse().unwrap()
+            "10.42.0.89".parse::<IpAddr>().unwrap()
         );
     }
 
@@ -525,7 +528,7 @@ mod tests {
 
         assert_eq!(
             effective_client_ip(&headers, peer_addr, &state),
-            "10.42.0.89".parse().unwrap()
+            "10.42.0.89".parse::<IpAddr>().unwrap()
         );
     }
 

@@ -16,7 +16,6 @@ pub struct ProfileState {
     event_rx: broadcast::Receiver<ProfileEvent>,
     pub(crate) editing_username: bool,
     pub(crate) username_composer: String,
-    bg_task: tokio::task::AbortHandle,
 
     /// Which settings row is selected. Rows 0..NOTIFY_KINDS.len() are the
     /// kind checkboxes; the last row is the cooldown selector.
@@ -32,7 +31,6 @@ pub struct ProfileState {
 
 impl Drop for ProfileState {
     fn drop(&mut self) {
-        self.bg_task.abort();
         self.profile_service
             .prune_user_snapshot_channel(self.user_id);
     }
@@ -47,7 +45,7 @@ impl ProfileState {
     ) -> Self {
         let snapshot_rx = profile_service.subscribe_snapshot(user_id);
         let event_rx = profile_service.subscribe_events();
-        let bg_task = profile_service.start_user_refresh_task(user_id);
+        profile_service.find_profile(user_id);
         let profile = Profile {
             theme_id: Some(theme::normalize_id(&initial_theme_id).to_string()),
             ..Profile::default()
@@ -60,7 +58,6 @@ impl ProfileState {
             event_rx,
             editing_username: false,
             username_composer: String::new(),
-            bg_task,
             settings_row: 0,
             ai_model,
             scroll_offset: 0,

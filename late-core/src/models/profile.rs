@@ -2,9 +2,7 @@ use anyhow::Result;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::user::{
-    User, extract_notify_cooldown_mins, extract_notify_kinds, extract_theme_id,
-};
+use super::user::{User, extract_notify_cooldown_mins, extract_notify_kinds, extract_theme_id};
 
 #[derive(Clone, Debug, Default)]
 pub struct Profile {

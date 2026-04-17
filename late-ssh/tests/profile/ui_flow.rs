@@ -87,9 +87,7 @@ async fn profile_notification_checkbox_toggle_persists_across_reconnect() {
                 let db = db.clone();
                 async move {
                     let client = db.get().await.expect("db client");
-                    let profile = Profile::load(&client, user.id)
-                        .await
-                        .expect("profile");
+                    let profile = Profile::load(&client, user.id).await.expect("profile");
                     profile.notify_kinds == vec!["dms".to_string()]
                 }
             },
@@ -165,9 +163,7 @@ async fn profile_username_edit_trims_whitespace_and_persists() {
             let db = db.clone();
             async move {
                 let client = db.get().await.expect("db client");
-                let profile = Profile::load(&client, user.id)
-                    .await
-                    .expect("profile");
+                let profile = Profile::load(&client, user.id).await.expect("profile");
                 profile.username == "alice"
             }
         },
@@ -200,9 +196,7 @@ async fn profile_username_edit_replaces_spaces_and_invalid_chars() {
             let db = db.clone();
             async move {
                 let client = db.get().await.expect("db client");
-                let profile = Profile::load(&client, user.id)
-                    .await
-                    .expect("profile");
+                let profile = Profile::load(&client, user.id).await.expect("profile");
                 profile.username == "late_night"
             }
         },

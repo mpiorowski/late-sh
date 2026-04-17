@@ -610,6 +610,15 @@ impl ChatState {
         self.invalidate_composer_layout();
     }
 
+    fn clear_composer_after_send(&mut self) {
+        self.composer.clear();
+        self.composer_cursor = 0;
+        self.room_jump_active = false;
+        self.reply_target = None;
+        self.edited_message_id = None;
+        self.invalidate_composer_layout();
+    }
+
     fn open_overlay(&mut self, title: &str, lines: Vec<String>) {
         if lines.is_empty() {
             return;
@@ -778,7 +787,7 @@ impl ChatState {
             }
             self.pending_send_notices.push_back(request_id);
         }
-        self.clear_composer_after_submit();
+        self.clear_composer_after_send();
         None
     }
 
