@@ -141,7 +141,12 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     // Ctrl+J and is aliased to "insert newline in chat composer", so we'd
     // end up composing "2hey\n" instead of submitting.
     app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, "Compose (press i)").await;
+    wait_for_render_contains(&mut app, "2hey").await;
+    wait_for_render_contains(
+        &mut app,
+        "Compose (Enter send, Alt+Enter newline, Esc cancel)",
+    )
+    .await;
 }
 
 #[tokio::test]

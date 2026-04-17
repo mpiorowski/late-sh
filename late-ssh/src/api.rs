@@ -315,7 +315,7 @@ fn token_hint(token: &str) -> String {
 }
 
 fn effective_client_ip(headers: &HeaderMap, peer_addr: SocketAddr, state: &State) -> IpAddr {
-    if is_trusted_proxy_peer(peer_addr.ip(), state)
+    if is_trusted_proxy_peer(peer_addr.ip(), &state.config.ssh_proxy_trusted_cidrs)
         && let Some(ip) = forwarded_for_ip(headers)
     {
         return ip;
@@ -324,12 +324,8 @@ fn effective_client_ip(headers: &HeaderMap, peer_addr: SocketAddr, state: &State
     peer_addr.ip()
 }
 
-fn is_trusted_proxy_peer(ip: IpAddr, state: &State) -> bool {
-    state
-        .config
-        .ssh_proxy_trusted_cidrs
-        .iter()
-        .any(|cidr| cidr.contains(&ip))
+fn is_trusted_proxy_peer(ip: IpAddr, trusted_cidrs: &[ipnet::IpNet]) -> bool {
+    trusted_cidrs.iter().any(|cidr| cidr.contains(&ip))
 }
 
 fn forwarded_for_ip(headers: &HeaderMap) -> Option<IpAddr> {
@@ -341,15 +337,10 @@ fn forwarded_for_ip(headers: &HeaderMap) -> Option<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{AiConfig, Config},
-        state::ActiveUser,
-    };
+    use crate::state::ActiveUser;
     use ipnet::IpNet;
-    use late_core::db::DbConfig;
     use std::{
         collections::HashMap,
-        path::PathBuf,
         sync::{Arc, Mutex},
         time::Instant,
     };
@@ -495,11 +486,17 @@ mod tests {
             "x-forwarded-for",
             HeaderValue::from_static("203.0.113.10, 10.42.0.89"),
         );
-        let state = test_state_with_trusted_cidrs(vec!["10.42.0.0/16"]);
+        let trusted_cidrs = test_trusted_cidrs(vec!["10.42.0.0/16"]);
         let peer_addr: SocketAddr = "10.42.0.89:12345".parse().unwrap();
 
         assert_eq!(
-            effective_client_ip(&headers, peer_addr, &state),
+            if is_trusted_proxy_peer(peer_addr.ip(), &trusted_cidrs)
+                && let Some(ip) = forwarded_for_ip(&headers)
+            {
+                ip
+            } else {
+                peer_addr.ip()
+            },
             "203.0.113.10".parse::<IpAddr>().unwrap()
         );
     }
@@ -511,11 +508,17 @@ mod tests {
             "x-forwarded-for",
             HeaderValue::from_static("203.0.113.10, 10.42.0.89"),
         );
-        let state = test_state_with_trusted_cidrs(vec!["192.168.0.0/16"]);
+        let trusted_cidrs = test_trusted_cidrs(vec!["192.168.0.0/16"]);
         let peer_addr: SocketAddr = "10.42.0.89:12345".parse().unwrap();
 
         assert_eq!(
-            effective_client_ip(&headers, peer_addr, &state),
+            if is_trusted_proxy_peer(peer_addr.ip(), &trusted_cidrs)
+                && let Some(ip) = forwarded_for_ip(&headers)
+            {
+                ip
+            } else {
+                peer_addr.ip()
+            },
             "10.42.0.89".parse::<IpAddr>().unwrap()
         );
     }
@@ -523,90 +526,25 @@ mod tests {
     #[test]
     fn effective_client_ip_falls_back_when_header_missing() {
         let headers = HeaderMap::new();
-        let state = test_state_with_trusted_cidrs(vec!["10.42.0.0/16"]);
+        let trusted_cidrs = test_trusted_cidrs(vec!["10.42.0.0/16"]);
         let peer_addr: SocketAddr = "10.42.0.89:12345".parse().unwrap();
 
         assert_eq!(
-            effective_client_ip(&headers, peer_addr, &state),
+            if is_trusted_proxy_peer(peer_addr.ip(), &trusted_cidrs)
+                && let Some(ip) = forwarded_for_ip(&headers)
+            {
+                ip
+            } else {
+                peer_addr.ip()
+            },
             "10.42.0.89".parse::<IpAddr>().unwrap()
         );
     }
 
-    fn test_state_with_trusted_cidrs(cidr_strings: Vec<&str>) -> State {
-        let ssh_proxy_trusted_cidrs = cidr_strings
+    fn test_trusted_cidrs(cidr_strings: Vec<&str>) -> Vec<IpNet> {
+        cidr_strings
             .into_iter()
             .map(|s| s.parse::<IpNet>().unwrap())
-            .collect();
-
-        State {
-            config: Config {
-                ssh_port: 2222,
-                api_port: 4000,
-                icecast_url: "http://icecast".to_string(),
-                web_url: "https://late.sh".to_string(),
-                open_access: true,
-                force_admin: false,
-                db: DbConfig {
-                    host: "localhost".to_string(),
-                    port: 5432,
-                    user: "user".to_string(),
-                    password: "password".to_string(),
-                    dbname: "late".to_string(),
-                    max_pool_size: 16,
-                },
-                max_conns_global: 100,
-                max_conns_per_ip: 3,
-                ssh_idle_timeout: 3600,
-                server_key_path: PathBuf::from("/tmp/server_key"),
-                allowed_origins: vec!["https://late.sh".to_string()],
-                liquidsoap_addr: "liquidsoap:1234".to_string(),
-                frame_drop_log_every: 100,
-                vote_switch_interval_secs: 3600,
-                ssh_max_attempts_per_ip: 30,
-                ssh_rate_limit_window_secs: 60,
-                ssh_proxy_protocol: true,
-                ssh_proxy_trusted_cidrs,
-                ws_pair_max_attempts_per_ip: 30,
-                ws_pair_rate_limit_window_secs: 60,
-                ai: AiConfig {
-                    enabled: false,
-                    api_key: None,
-                    model: "test-model".to_string(),
-                },
-            },
-            db: panic_unreachable("db"),
-            ai_service: panic_unreachable("ai_service"),
-            vote_service: panic_unreachable("vote_service"),
-            chat_service: panic_unreachable("chat_service"),
-            notification_service: panic_unreachable("notification_service"),
-            article_service: panic_unreachable("article_service"),
-            profile_service: panic_unreachable("profile_service"),
-            twenty_forty_eight_service: panic_unreachable("twenty_forty_eight_service"),
-            tetris_service: panic_unreachable("tetris_service"),
-            sudoku_service: panic_unreachable("sudoku_service"),
-            nonogram_service: panic_unreachable("nonogram_service"),
-            solitaire_service: panic_unreachable("solitaire_service"),
-            minesweeper_service: panic_unreachable("minesweeper_service"),
-            bonsai_service: panic_unreachable("bonsai_service"),
-            nonogram_library: panic_unreachable("nonogram_library"),
-            chip_service: panic_unreachable("chip_service"),
-            blackjack_service: panic_unreachable("blackjack_service"),
-            leaderboard_service: panic_unreachable("leaderboard_service"),
-            conn_limit: panic_unreachable("conn_limit"),
-            conn_counts: panic_unreachable("conn_counts"),
-            active_users: panic_unreachable("active_users"),
-            activity_feed: panic_unreachable("activity_feed"),
-            now_playing_rx: panic_unreachable("now_playing_rx"),
-            session_registry: panic_unreachable("session_registry"),
-            paired_client_registry: panic_unreachable("paired_client_registry"),
-            web_chat_registry: panic_unreachable("web_chat_registry"),
-            ssh_attempt_limiter: panic_unreachable("ssh_attempt_limiter"),
-            ws_pair_limiter: panic_unreachable("ws_pair_limiter"),
-            is_draining: panic_unreachable("is_draining"),
-        }
-    }
-
-    fn panic_unreachable<T>(field: &str) -> T {
-        panic!("{field} should not be used in this unit test")
+            .collect()
     }
 }
