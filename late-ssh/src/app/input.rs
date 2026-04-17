@@ -958,8 +958,9 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Arrow(b'A') => picker_move_selection(app, -1),
         ParsedInput::Arrow(b'B') => picker_move_selection(app, 1),
-        ParsedInput::Byte(b'k') | ParsedInput::Byte(b'K') => picker_move_selection(app, -1),
-        ParsedInput::Byte(b'j') | ParsedInput::Byte(b'J') => picker_move_selection(app, 1),
+        // Ctrl+K / Ctrl+J mirror vim-style up/down without stealing plain j/k from the search box.
+        ParsedInput::Byte(0x0B) => picker_move_selection(app, -1),
+        ParsedInput::Byte(0x0A) => picker_move_selection(app, 1),
         ParsedInput::Scroll(delta) => picker_move_selection(app, -delta * 3),
         ParsedInput::Arrow(b'C') => {
             let len = app.icon_picker_state.search_query.chars().count();

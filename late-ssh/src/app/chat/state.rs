@@ -1512,7 +1512,7 @@ fn chat_help_lines() -> Vec<String> {
         "  Ctrl+]             open emoji / nerd font picker",
         "",
         "Icon picker",
-        "  ↑ / ↓ or j / k     move selection",
+        "  ↑/↓ or Ctrl+K/J    move selection",
         "  Ctrl+U / Ctrl+D    half page up / down",
         "  PageUp / PageDown  jump a page",
         "  type to filter     search by name",
