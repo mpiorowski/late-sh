@@ -24,7 +24,7 @@ pub use super::ui_text::ComposerRow;
 pub(super) use super::ui_text::build_composer_rows;
 pub(crate) use super::ui_text::{composer_cursor_scroll_for_rows, composer_line_count_for_rows};
 
-use super::state::ROOM_JUMP_KEYS;
+use super::state::{MentionMatch, ROOM_JUMP_KEYS};
 use super::ui_text::{
     build_composer_lines, build_composer_lines_from_rows, composer_line_count,
     wrap_chat_entry_to_lines,
@@ -52,7 +52,7 @@ pub struct DashboardChatView<'a> {
     pub composer_cursor: usize,
     pub composing: bool,
     pub cursor_visible: bool,
-    pub mention_matches: &'a [String],
+    pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
@@ -71,7 +71,7 @@ pub(super) struct ComposerBlockView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub mention_active: bool,
-    pub mention_matches: &'a [String],
+    pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
 }
 
@@ -526,7 +526,12 @@ fn dm_label(
 
 // ── Mention autocomplete popup ──────────────────────────────
 
-fn draw_mention_autocomplete(frame: &mut Frame, anchor: Rect, matches: &[String], selected: usize) {
+fn draw_mention_autocomplete(
+    frame: &mut Frame,
+    anchor: Rect,
+    matches: &[MentionMatch],
+    selected: usize,
+) {
     if matches.is_empty() {
         return;
     }
@@ -549,7 +554,7 @@ fn draw_mention_autocomplete(frame: &mut Frame, anchor: Rect, matches: &[String]
         .iter()
         .enumerate()
         .take(8)
-        .map(|(i, name)| {
+        .map(|(i, m)| {
             let style = if i == selected {
                 Style::default()
                     .fg(theme::AMBER())
@@ -558,7 +563,7 @@ fn draw_mention_autocomplete(frame: &mut Frame, anchor: Rect, matches: &[String]
                 Style::default().fg(theme::TEXT())
             };
             let prefix = if i == selected { " > " } else { "   " };
-            Line::from(Span::styled(format!("{prefix}@{name}"), style))
+            Line::from(Span::styled(format!("{prefix}@{}", m.name), style))
         })
         .collect();
 
@@ -590,7 +595,7 @@ pub struct ChatRenderInput<'a> {
     pub composing: bool,
     pub current_user_id: Uuid,
     pub cursor_visible: bool,
-    pub mention_matches: &'a [String],
+    pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,

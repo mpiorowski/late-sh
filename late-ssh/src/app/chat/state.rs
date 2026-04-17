@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
+use late_core::{
+    MutexRecover,
+    models::{chat_message::ChatMessage, chat_room::ChatRoom},
+};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -36,12 +39,18 @@ The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY
 
 pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MentionMatch {
+    pub name: String,
+    pub online: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct MentionAutocomplete {
     pub active: bool,
     pub query: String,
     pub trigger_offset: usize,
-    pub matches: Vec<String>,
+    pub matches: Vec<MentionMatch>,
     pub selected: usize,
 }
 
@@ -1044,12 +1053,8 @@ impl ChatState {
 
         let query = &self.composer[offset + 1..];
         let query_lower = query.to_ascii_lowercase();
-        let matches: Vec<String> = self
-            .all_usernames
-            .iter()
-            .filter(|name| name.to_ascii_lowercase().starts_with(&query_lower))
-            .cloned()
-            .collect();
+        let online = online_username_set(self.active_users.as_ref());
+        let matches = rank_mention_matches(&self.all_usernames, &query_lower, &online);
 
         if matches.is_empty() {
             self.mention_ac.active = false;
@@ -1079,7 +1084,7 @@ impl ChatState {
         if !self.mention_ac.active || self.mention_ac.matches.is_empty() {
             return;
         }
-        let username = self.mention_ac.matches[self.mention_ac.selected].clone();
+        let username = self.mention_ac.matches[self.mention_ac.selected].name.clone();
         self.composer.truncate(self.mention_ac.trigger_offset);
         self.composer.push('@');
         self.composer.push_str(&username);
@@ -1585,12 +1590,48 @@ fn room_supports_member_list(room: &ChatRoom) -> bool {
     room.kind != "dm" && !room.auto_join
 }
 
+fn online_username_set(active_users: Option<&ActiveUsers>) -> HashSet<String> {
+    let Some(active_users) = active_users else {
+        return HashSet::new();
+    };
+    let guard = active_users.lock_recover();
+    guard
+        .values()
+        .map(|u| u.username.to_ascii_lowercase())
+        .collect()
+}
+
+pub(crate) fn rank_mention_matches(
+    all_usernames: &[String],
+    query_lower: &str,
+    online: &HashSet<String>,
+) -> Vec<MentionMatch> {
+    let mut matches: Vec<MentionMatch> = all_usernames
+        .iter()
+        .filter(|name| name.to_ascii_lowercase().starts_with(query_lower))
+        .map(|name| {
+            let lower = name.to_ascii_lowercase();
+            let is_online = online.contains(&lower);
+            MentionMatch {
+                name: name.clone(),
+                online: is_online,
+            }
+        })
+        .collect();
+    matches.sort_by(|a, b| {
+        b.online
+            .cmp(&a.online)
+            .then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()))
+    });
+    matches
+}
+
 fn format_active_user_lines(active_users: Option<&ActiveUsers>) -> Vec<String> {
     let Some(active_users) = active_users else {
         return vec!["Active user list unavailable".to_string()];
     };
 
-    let guard = active_users.lock().expect("active users lock poisoned");
+    let guard = active_users.lock_recover();
     if guard.is_empty() {
         return vec!["No active users".to_string()];
     }
@@ -1687,6 +1728,56 @@ fn reply_preview_text(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn names(matches: &[MentionMatch]) -> Vec<&str> {
+        matches.iter().map(|m| m.name.as_str()).collect()
+    }
+
+    #[test]
+    fn rank_mention_matches_orders_online_before_offline() {
+        let all = vec![
+            "alice".to_string(),
+            "bob".to_string(),
+            "carol".to_string(),
+            "dave".to_string(),
+        ];
+        let online: HashSet<String> = ["bob".to_string(), "dave".to_string()]
+            .into_iter()
+            .collect();
+        let ranked = rank_mention_matches(&all, "", &online);
+        assert_eq!(names(&ranked), vec!["bob", "dave", "alice", "carol"]);
+        assert!(ranked[0].online && ranked[1].online);
+        assert!(!ranked[2].online && !ranked[3].online);
+    }
+
+    #[test]
+    fn rank_mention_matches_applies_prefix_filter() {
+        let all = vec![
+            "alice".to_string(),
+            "albert".to_string(),
+            "bob".to_string(),
+        ];
+        let online: HashSet<String> = ["bob".to_string()].into_iter().collect();
+        let ranked = rank_mention_matches(&all, "al", &online);
+        assert_eq!(names(&ranked), vec!["albert", "alice"]);
+    }
+
+    #[test]
+    fn rank_mention_matches_prefix_is_case_insensitive() {
+        let all = vec!["Alice".to_string(), "alBert".to_string()];
+        let online = HashSet::new();
+        let ranked = rank_mention_matches(&all, "al", &online);
+        assert_eq!(names(&ranked), vec!["alBert", "Alice"]);
+    }
+
+    #[test]
+    fn rank_mention_matches_falls_back_to_alpha_when_no_online_info() {
+        let all = vec!["zed".to_string(), "alice".to_string(), "bob".to_string()];
+        let online = HashSet::new();
+        let ranked = rank_mention_matches(&all, "", &online);
+        assert_eq!(names(&ranked), vec!["alice", "bob", "zed"]);
+        assert!(ranked.iter().all(|m| !m.online));
+    }
 
     #[test]
     fn reply_preview_text_uses_message_body_for_nested_replies() {
