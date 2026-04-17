@@ -9,14 +9,14 @@ fn is_prev_room_key(byte: u8) -> bool {
     matches!(byte, b'h' | b'H' | 0x10)
 }
 
-pub fn handle_compose_input(app: &mut App, byte: u8) {
+pub fn handle_compose_input(app: &mut App, c: char) {
     if app.chat.is_autocomplete_active() {
-        match byte {
-            0x1B => {
+        match c {
+            '\x1B' => {
                 app.chat.ac_dismiss();
                 return;
             }
-            b'\t' | b'\r' | b'\n' => {
+            '\t' | '\r' | '\n' => {
                 app.chat.ac_confirm();
                 return;
             }
@@ -24,26 +24,26 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
         }
     }
 
-    match byte {
-        0x1B => {
+    match c {
+        '\x1B' => {
             app.chat.reset_composer();
         }
-        b'\r' | b'\n' => {
+        '\r' | '\n' => {
             if let Some(b) = app.chat.submit_composer(false) {
                 app.banner = Some(b);
             }
         }
-        0x15 => {
+        '\x15' => {
             // Ctrl-U: clear composer
             app.chat.composer_clear();
             app.chat.update_autocomplete();
         }
-        0x7F => {
+        '\x7F' => {
             app.chat.composer_backspace();
             app.chat.update_autocomplete();
         }
-        b if (32..127).contains(&b) => {
-            app.chat.composer_push(b as char);
+        c if !c.is_control() => {
+            app.chat.composer_push(c);
             app.chat.update_autocomplete();
         }
         _ => {}

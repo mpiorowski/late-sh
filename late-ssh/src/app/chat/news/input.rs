@@ -1,23 +1,23 @@
 use crate::app::state::App;
 
-pub fn handle_composer_input(app: &mut App, byte: u8) {
-    match byte {
-        0x1B => {
+pub fn handle_composer_input(app: &mut App, ch: char) {
+    match ch {
+        '\x1B' => {
             // Escape cancels composing and aborts any in-flight URL task.
             app.chat.news.stop_composing();
         }
-        b'\r' | b'\n' => {
+        '\r' | '\n' => {
             app.chat.news.submit_composer();
         }
-        0x15 => {
+        '\x15' => {
             // Ctrl-U: clear composer
             app.chat.news.composer_clear();
         }
-        0x7F | 0x08 => {
+        '\x7F' | '\x08' => {
             app.chat.news.composer_pop();
         }
-        b if (32..127).contains(&b) => {
-            app.chat.news.composer_push(b as char);
+        c if !c.is_control() => {
+            app.chat.news.composer_push(c);
         }
         _ => {}
     }

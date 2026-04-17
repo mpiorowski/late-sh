@@ -48,6 +48,8 @@ enum PasteTarget {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ParsedInput {
     Byte(u8),
+    // For non ASCII characters
+    Char(char),
     Arrow(u8),
     CtrlArrow(u8),
     CtrlBackspace,
@@ -68,6 +70,15 @@ enum ParsedInput {
     End,
     FocusGained,
     FocusLost,
+}
+
+impl ParsedInput {
+    fn unwrap_byte(&self) -> u8 {
+        match self {
+            ParsedInput::Byte(b) => *b,
+            _ => panic!("unwrap_byte called on non-byte variant"),
+        }
+    }
 }
 
 /// Walk `data` and split it on inline `ESC` + `CR`/`LF` pairs (Alt+Enter).
@@ -426,9 +437,34 @@ fn handle_vt_segment(app: &mut App, data: &[u8]) {
     }
 
     let events = app.vt_input.feed(data);
-    for event in events {
+    for event in agg_input_bytes_into_char(events) {
         handle_parsed_input(app, event);
     }
+}
+
+fn agg_input_bytes_into_char(events: Vec<ParsedInput>) -> Vec<ParsedInput> {
+    // if all bytes are UTF-8, aggregate into a single char
+    if events.len() <= 4
+        && events
+            .iter()
+            .all(|i| matches!(i, ParsedInput::Byte(b) if *b & 128 != 0))
+    {
+        let mut buf = [0u8; 4];
+        for (i, event) in events.iter().enumerate() {
+            buf[i] = event.unwrap_byte();
+        }
+
+        if let Some(c) = std::str::from_utf8(&buf[..events.len()])
+            .ok()
+            .and_then(|x| x.chars().next())
+        {
+            return vec![ParsedInput::Char(c)];
+        } else {
+            return events;
+        }
+    }
+
+    events
 }
 
 fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
@@ -584,7 +620,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 return;
             }
 
-            if handle_modal_input(app, ctx, byte) {
+            if handle_modal_input(app, ctx, byte as char) {
                 return;
             }
 
@@ -595,6 +631,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
             dispatch_screen_key(app, ctx.screen, byte);
         }
+        // keys are ASCII characters and will be handled by previous match arm
+        ParsedInput::Char(ch) => _ = handle_modal_input(app, ctx, ch),
     }
 }
 
@@ -609,7 +647,7 @@ fn dispatch_escape(app: &mut App) {
         app.chat.cancel_room_jump();
         return;
     }
-    if handle_modal_input(app, ctx, 0x1B) {
+    if handle_modal_input(app, ctx, '\x1B') {
         return;
     }
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
@@ -725,19 +763,20 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
     }
 }
 
-fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
+fn handle_modal_input(app: &mut App, ctx: InputContext, ch: char) -> bool {
     if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing {
-        chat::input::handle_compose_input(app, byte);
+        chat::input::handle_compose_input(app, ch);
         return true;
     }
 
     if ctx.screen == Screen::Chat && ctx.news_composing {
-        chat::news::input::handle_composer_input(app, byte);
+        chat::news::input::handle_composer_input(app, ch);
         return true;
     }
 
-    if ctx.screen == Screen::Profile && ctx.profile_composing {
-        profile::input::handle_composer_input(app, byte);
+    // only allow ASCII for profile composer input
+    if ctx.screen == Screen::Profile && ctx.profile_composing && ch.is_ascii() {
+        profile::input::handle_composer_input(app, ch);
         return true;
     }
 
@@ -963,20 +1002,18 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'\r') => apply_icon_selection(app, false),
         ParsedInput::AltEnter => apply_icon_selection(app, true),
-        ParsedInput::Byte(0x7f) => {
-            if app.icon_picker_state.search_cursor > 0 {
-                let byte_pos = app
-                    .icon_picker_state
-                    .search_query
-                    .char_indices()
-                    .nth(app.icon_picker_state.search_cursor - 1)
-                    .map(|(i, _)| i)
-                    .unwrap_or(0);
-                app.icon_picker_state.search_query.remove(byte_pos);
-                app.icon_picker_state.search_cursor -= 1;
-                app.icon_picker_state.selected_index = 0;
-                app.icon_picker_state.scroll_offset = 0;
-            }
+        ParsedInput::Byte(0x7f) if app.icon_picker_state.search_cursor > 0 => {
+            let byte_pos = app
+                .icon_picker_state
+                .search_query
+                .char_indices()
+                .nth(app.icon_picker_state.search_cursor - 1)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            app.icon_picker_state.search_query.remove(byte_pos);
+            app.icon_picker_state.search_cursor -= 1;
+            app.icon_picker_state.selected_index = 0;
+            app.icon_picker_state.scroll_offset = 0;
         }
         ParsedInput::Arrow(b'A') => picker_move_selection(app, -1),
         ParsedInput::Arrow(b'B') => picker_move_selection(app, 1),
@@ -1418,5 +1455,125 @@ mod tests {
             profile_composing: false,
         };
         assert!(ctx.blocks_arrow_sequence());
+    }
+
+    // Pure ASCII alphanumeric: a single Byte event passes through unchanged.
+    #[test]
+    fn ascii_alpha_passthrough() {
+        let input = vec![ParsedInput::Byte(b'a')];
+        assert_eq!(
+            agg_input_bytes_into_char(input),
+            vec![ParsedInput::Byte(b'a')]
+        );
+    }
+
+    #[test]
+    fn ascii_digit_passthrough() {
+        let input = vec![ParsedInput::Byte(b'7')];
+        assert_eq!(
+            agg_input_bytes_into_char(input),
+            vec![ParsedInput::Byte(b'7')]
+        );
+    }
+
+    #[test]
+    fn ascii_uppercase_passthrough() {
+        let input = vec![ParsedInput::Byte(b'Z')];
+        assert_eq!(
+            agg_input_bytes_into_char(input),
+            vec![ParsedInput::Byte(b'Z')]
+        );
+    }
+
+    // ASCII control bytes: high bit is clear, so they pass through as Byte.
+    #[test]
+    fn ascii_ctrl_nul_passthrough() {
+        let input = vec![ParsedInput::Byte(0x00)];
+        assert_eq!(
+            agg_input_bytes_into_char(input),
+            vec![ParsedInput::Byte(0x00)]
+        );
+    }
+
+    #[test]
+    fn ascii_ctrl_escape_passthrough() {
+        let input = vec![ParsedInput::Byte(0x1B)];
+        assert_eq!(
+            agg_input_bytes_into_char(input),
+            vec![ParsedInput::Byte(0x1B)]
+        );
+    }
+
+    #[test]
+    fn ascii_ctrl_del_passthrough() {
+        // DEL (0x7F) has the high bit clear, so it is not aggregated.
+        let input = vec![ParsedInput::Byte(0x7F)];
+        assert_eq!(
+            agg_input_bytes_into_char(input),
+            vec![ParsedInput::Byte(0x7F)]
+        );
+    }
+
+    // Two-byte UTF-8 sequence (U+0142 LATIN SMALL LETTER L WITH STROKE, "ł").
+    #[test]
+    fn utf8_two_byte_aggregated_into_char() {
+        let bytes: Vec<u8> = 'ł'.to_string().into_bytes(); // [0xC5, 0x82]
+        let input = bytes.iter().copied().map(ParsedInput::Byte).collect();
+        assert_eq!(
+            agg_input_bytes_into_char(input),
+            vec![ParsedInput::Char('ł')]
+        );
+    }
+
+    // Three-byte UTF-8 sequence (U+4E2D CJK UNIFIED IDEOGRAPH, "中").
+    #[test]
+    fn utf8_three_byte_aggregated_into_char() {
+        let bytes: Vec<u8> = '中'.to_string().into_bytes(); // [0xE4, 0xB8, 0xAD]
+        let input = bytes.iter().copied().map(ParsedInput::Byte).collect();
+        assert_eq!(
+            agg_input_bytes_into_char(input),
+            vec![ParsedInput::Char('中')]
+        );
+    }
+
+    // Four-byte UTF-8 sequence (U+1F600 GRINNING FACE, "😀").
+    #[test]
+    fn utf8_four_byte_aggregated_into_char() {
+        let bytes: Vec<u8> = '😀'.to_string().into_bytes(); // [0xF0, 0x9F, 0x98, 0x80]
+        let input = bytes.iter().copied().map(ParsedInput::Byte).collect();
+        assert_eq!(
+            agg_input_bytes_into_char(input),
+            vec![ParsedInput::Char('😀')]
+        );
+    }
+
+    // A mix of event types (e.g. Arrow alongside Byte) is never aggregated,
+    // even when all Bytes happen to have their high bit set.
+    #[test]
+    fn mixed_event_types_passthrough_unchanged() {
+        let input = vec![ParsedInput::Arrow(b'A'), ParsedInput::Byte(0xC5)];
+        let expected = vec![ParsedInput::Arrow(b'A'), ParsedInput::Byte(0xC5)];
+        assert_eq!(agg_input_bytes_into_char(input), expected);
+    }
+
+    // Five or more high-bit bytes cannot form a valid UTF-8 scalar, so they
+    // pass through as-is.
+    #[test]
+    fn too_many_high_bit_bytes_passthrough() {
+        let input = vec![
+            ParsedInput::Byte(0x80),
+            ParsedInput::Byte(0x81),
+            ParsedInput::Byte(0x82),
+            ParsedInput::Byte(0x83),
+            ParsedInput::Byte(0x84),
+        ];
+        let expected = input.clone();
+        assert_eq!(agg_input_bytes_into_char(input), expected);
+    }
+
+    // An empty event list should come back empty.
+    #[test]
+    fn empty_input_returns_empty() {
+        assert_eq!(agg_input_bytes_into_char(vec![]), vec![]);
     }
 }
