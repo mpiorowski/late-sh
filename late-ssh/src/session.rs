@@ -120,6 +120,11 @@ impl SessionRegistry {
         sessions.remove(token);
     }
 
+    pub async fn has_session(&self, token: &str) -> bool {
+        let sessions = self.sessions.read().await;
+        sessions.contains_key(token)
+    }
+
     pub async fn send_message(&self, token: &str, msg: SessionMessage) -> bool {
         // 1. Get the Sender (holding read lock)
         let tx = {
@@ -153,12 +158,23 @@ impl PairedClientRegistry {
 
     pub fn register(&self, token: String, tx: UnboundedSender<PairControlMessage>) -> u64 {
         let registration_id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        tracing::info!(
-            token_hint = %token_hint(&token),
-            registration_id,
-            "registered paired client session"
-        );
         let mut clients = self.clients.lock_recover();
+        if let Some(previous) = clients.get(&token) {
+            // Legitimate reconnects hit this path; a surprise overwrite with an
+            // unknown peer would indicate token takeover, so surface it loudly.
+            tracing::warn!(
+                token_hint = %token_hint(&token),
+                previous_registration_id = previous.registration_id,
+                registration_id,
+                "paired client registration replaced existing entry"
+            );
+        } else {
+            tracing::info!(
+                token_hint = %token_hint(&token),
+                registration_id,
+                "registered paired client session"
+            );
+        }
         clients.insert(
             token,
             PairControlEntry {
@@ -259,6 +275,19 @@ mod tests {
             .send_message("unknown", SessionMessage::Heartbeat)
             .await;
         assert!(!sent);
+    }
+
+    #[tokio::test]
+    async fn has_session_reflects_registration() {
+        let registry = SessionRegistry::new();
+        assert!(!registry.has_session("tok1").await);
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        registry.register("tok1".to_string(), tx).await;
+        assert!(registry.has_session("tok1").await);
+
+        registry.unregister("tok1").await;
+        assert!(!registry.has_session("tok1").await);
     }
 
     #[tokio::test]

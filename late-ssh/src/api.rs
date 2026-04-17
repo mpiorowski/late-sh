@@ -197,6 +197,16 @@ async fn ws_handler(
         );
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
+    if !state.session_registry.has_session(&params.token).await {
+        tracing::warn!(
+            ip = %client_ip,
+            peer_ip = %peer_addr.ip(),
+            token_hint = %token_hint,
+            "ws pair rejected: no live session for token"
+        );
+        metrics::record_ws_pair_rejected_unknown_token();
+        return StatusCode::NOT_FOUND.into_response();
+    }
     ws.on_upgrade(move |socket| async move { handle_socket(socket, params.token, state).await })
 }
 

@@ -47,7 +47,7 @@ use tracing_subscriber::EnvFilter;
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const DEFAULT_SSH_TARGET: &str = "late.sh";
-const DEFAULT_AUDIO_BASE_URL: &str = "http://audio.late.sh";
+const DEFAULT_AUDIO_BASE_URL: &str = "https://audio.late.sh";
 const DEFAULT_API_BASE_URL: &str = "https://api.late.sh";
 #[cfg(any(
     target_os = "macos",
