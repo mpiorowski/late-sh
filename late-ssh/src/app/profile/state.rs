@@ -443,6 +443,6 @@ mod tests {
 
     #[test]
     fn cooldown_row_is_last_selectable_row() {
-        assert_eq!(ProfileState::cooldown_row_index(), 5);
+        assert_eq!(ProfileState::cooldown_row_index(), 6);
     }
 }

@@ -83,6 +83,27 @@ async fn profile_notification_checkbox_toggle_persists_across_reconnect() {
             "Game events should remain unchecked:\n{after}"
         );
 
+        // The bell setting should be independent of the other settings.
+        assert!(
+            row_has_marker(&after, "Bell", "[ ]"),
+            "Bell should remain unchecked:\n{after}"
+        );
+
+        app.handle_input(b"jjj");
+        app.handle_input(b" ");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut toggled = false;
+        while Instant::now() < deadline {
+            let plain = render_plain(&mut app);
+            if row_has_marker(&plain, "Bell", "[x]") {
+                toggled = true;
+                break;
+            }
+            sleep(Duration::from_millis(30)).await;
+        }
+        assert!(toggled, "Bell row should flip to [x] after Space");
+
         // Wait for the save task to reach the DB before tearing down the app.
         let db = test_db.db.clone();
         wait_until(
