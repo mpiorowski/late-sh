@@ -90,6 +90,49 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
 }
 
 #[tokio::test]
+async fn edit_profile_normalizes_username_before_persisting() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "profile-normalize-user").await;
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(user.id);
+
+    service.find_profile(user.id);
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("initial snapshot timeout")
+        .expect("watch changed");
+    let current = snapshot_rx
+        .borrow_and_update()
+        .profile
+        .clone()
+        .expect("initial profile");
+
+    service.edit_profile(
+        user.id,
+        current.id,
+        ProfileParams {
+            user_id: user.id,
+            username: "  late night!!!  ".to_string(),
+            enable_ghost: true,
+            notify_kinds: Vec::new(),
+            notify_cooldown_mins: 0,
+        },
+    );
+
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("updated snapshot timeout")
+        .expect("watch changed");
+    let updated = snapshot_rx
+        .borrow_and_update()
+        .profile
+        .clone()
+        .expect("updated profile");
+
+    assert_eq!(updated.username, "late_night");
+}
+
+#[tokio::test]
 async fn edit_profile_does_not_modify_another_users_profile() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");

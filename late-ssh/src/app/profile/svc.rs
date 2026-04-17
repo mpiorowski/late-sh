@@ -1,5 +1,5 @@
 use anyhow::Result;
-use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::profile::{Profile, ProfileParams, sanitize_username_input};
 use late_core::models::user::User;
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
@@ -162,8 +162,14 @@ impl ProfileService {
     }
 
     #[tracing::instrument(skip(self, params), fields(user_id = %user_id, id = %id))]
-    async fn do_edit_profile(&self, user_id: Uuid, id: Uuid, params: ProfileParams) -> Result<()> {
+    async fn do_edit_profile(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+        mut params: ProfileParams,
+    ) -> Result<()> {
         let client = self.db.get().await?;
+        params.username = sanitize_username_input(&params.username);
         let _ = Profile::update_by_user_id(&client, user_id, id, params).await?;
 
         if let Ok(mut usernames) =

@@ -104,7 +104,7 @@ pub struct ChatState {
     pub(crate) notifications: notifications::state::State,
 
     /// Pending desktop notifications drained on render. `kind` matches the
-    /// string identifiers stored in `profiles.notify_kinds` ("dms", "mentions").
+    /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
     pub(crate) pending_notifications: Vec<PendingNotification>,
 }
 

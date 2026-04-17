@@ -1,4 +1,4 @@
-use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::profile::{Profile, ProfileParams, sanitize_username_input};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -260,10 +260,15 @@ const COOLDOWN_OPTIONS: &[i32] = &[0, 1, 2, 5, 10, 15, 30, 60, 120, 240];
 /// after trimming or unchanged from the current value.
 fn normalize_username_submission(composer: &str, current: &str) -> Option<String> {
     let trimmed = composer.trim();
-    if trimmed.is_empty() || trimmed == current {
+    if trimmed.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        let normalized = sanitize_username_input(trimmed);
+        if normalized == current {
+            None
+        } else {
+            Some(normalized)
+        }
     }
 }
 
@@ -313,6 +318,14 @@ mod tests {
     }
 
     #[test]
+    fn normalize_username_submission_replaces_spaces_and_invalid_chars() {
+        assert_eq!(
+            normalize_username_submission("  late night!!!  ", "old"),
+            Some("late_night".to_string())
+        );
+    }
+
+    #[test]
     fn normalize_username_submission_skips_when_empty_after_trim() {
         assert_eq!(normalize_username_submission("", "old"), None);
         assert_eq!(normalize_username_submission("   ", "old"), None);
@@ -323,6 +336,7 @@ mod tests {
         assert_eq!(normalize_username_submission("alice", "alice"), None);
         // Trim then compare — whitespace-padded copy of current still skips.
         assert_eq!(normalize_username_submission("  alice ", "alice"), None);
+        assert_eq!(normalize_username_submission("alice!!!", "alice"), None);
     }
 
     #[test]

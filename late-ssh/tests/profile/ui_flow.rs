@@ -175,3 +175,38 @@ async fn profile_username_edit_trims_whitespace_and_persists() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn profile_username_edit_replaces_spaces_and_invalid_chars() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "normalize-orig").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "normalize-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "normalize-orig").await;
+
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Username (Enter save, Esc cancel)").await;
+
+    app.handle_input(b"\x15");
+    app.handle_input(b"late night!!!\r");
+
+    wait_for_render_contains(&mut app, "Username (i edit)").await;
+    wait_for_render_contains(&mut app, "late_night").await;
+
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                let profile = Profile::find_or_create_by_user(&client, user.id)
+                    .await
+                    .expect("profile");
+                profile.username == "late_night"
+            }
+        },
+        "profile.username to persist as normalized value",
+    )
+    .await;
+}

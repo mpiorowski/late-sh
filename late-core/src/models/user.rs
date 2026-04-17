@@ -5,6 +5,8 @@ use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::profile::{USERNAME_MAX_LEN, sanitize_username_input};
+
 crate::model! {
     table = "users";
     params = UserParams;
@@ -22,17 +24,14 @@ crate::model! {
 
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
+const ENABLE_GHOST_KEY: &str = "enable_ghost";
+const NOTIFY_KINDS_KEY: &str = "notify_kinds";
+const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
         let row = client
-            .query_opt(
-                "SELECT u.id, u.created, u.updated, u.last_seen, u.is_admin, u.fingerprint, COALESCE(p.username, '') AS username, u.settings
-                 FROM users u
-                 LEFT JOIN profiles p ON u.id = p.user_id
-                 WHERE u.fingerprint = $1",
-                &[&fingerprint],
-            )
+            .query_opt("SELECT * FROM users WHERE fingerprint = $1", &[&fingerprint])
             .await?;
         Ok(row.map(Self::from))
     }
@@ -57,9 +56,9 @@ impl User {
 
         let rows = client
             .query(
-                "SELECT p.user_id AS id, p.username
-                 FROM profiles p
-                 WHERE p.user_id = ANY($1)",
+                "SELECT id, username
+                 FROM users
+                 WHERE id = ANY($1) AND username <> ''",
                 &[&user_ids],
             )
             .await?;
@@ -74,9 +73,9 @@ impl User {
     pub async fn list_all_usernames(client: &Client) -> Result<Vec<String>> {
         let rows = client
             .query(
-                "SELECT p.username FROM profiles p
-                 WHERE p.username IS NOT NULL AND p.username != ''
-                 ORDER BY p.username",
+                "SELECT username FROM users
+                 WHERE username <> ''
+                 ORDER BY username",
                 &[],
             )
             .await?;
@@ -86,9 +85,9 @@ impl User {
     pub async fn list_all_username_map(client: &Client) -> Result<HashMap<Uuid, String>> {
         let rows = client
             .query(
-                "SELECT p.user_id AS id, p.username
-                 FROM profiles p
-                 WHERE p.username IS NOT NULL AND p.username != ''",
+                "SELECT id, username
+                 FROM users
+                 WHERE username <> ''",
                 &[],
             )
             .await?;
@@ -102,15 +101,38 @@ impl User {
     pub async fn find_by_username(client: &Client, username: &str) -> Result<Option<Self>> {
         let row = client
             .query_opt(
-                "SELECT u.id, u.created, u.updated, u.last_seen, u.is_admin, u.fingerprint,
-                        p.username AS username, u.settings
-                 FROM users u
-                 JOIN profiles p ON u.id = p.user_id
-                 WHERE LOWER(p.username) = LOWER($1)",
+                "SELECT * FROM users WHERE LOWER(username) = LOWER($1)",
                 &[&username],
             )
             .await?;
         Ok(row.map(Self::from))
+    }
+
+    pub async fn next_available_username(client: &Client, desired: &str) -> Result<String> {
+        let base_username = sanitize_username_input(desired);
+        let mut candidate = base_username.clone();
+        let mut suffix = 2usize;
+
+        loop {
+            let row = client
+                .query_opt(
+                    "SELECT 1 FROM users WHERE LOWER(username) = LOWER($1)",
+                    &[&candidate],
+                )
+                .await?;
+            if row.is_none() {
+                return Ok(candidate);
+            }
+
+            let suffix_text = format!("-{suffix}");
+            let max_base_len = USERNAME_MAX_LEN.saturating_sub(suffix_text.len());
+            candidate = format!(
+                "{}{}",
+                truncate_to_boundary(&base_username, max_base_len),
+                suffix_text
+            );
+            suffix += 1;
+        }
     }
 
     pub async fn ignored_user_ids(client: &Client, user_id: Uuid) -> Result<Vec<Uuid>> {
@@ -231,6 +253,62 @@ fn set_theme_id(settings: &mut Value, theme_id: &str) {
         *settings = json!({});
     }
     settings[THEME_ID_KEY] = json!(theme_id);
+}
+
+pub fn extract_enable_ghost(settings: &Value) -> bool {
+    settings
+        .get(ENABLE_GHOST_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+pub fn set_enable_ghost(settings: &mut Value, enable_ghost: bool) {
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+    settings[ENABLE_GHOST_KEY] = json!(enable_ghost);
+}
+
+pub fn extract_notify_kinds(settings: &Value) -> Vec<String> {
+    settings
+        .get(NOTIFY_KINDS_KEY)
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn set_notify_kinds(settings: &mut Value, notify_kinds: &[String]) {
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+    settings[NOTIFY_KINDS_KEY] = json!(notify_kinds);
+}
+
+pub fn extract_notify_cooldown_mins(settings: &Value) -> i32 {
+    settings
+        .get(NOTIFY_COOLDOWN_MINS_KEY)
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .max(0) as i32
+}
+
+pub fn set_notify_cooldown_mins(settings: &mut Value, notify_cooldown_mins: i32) {
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+    settings[NOTIFY_COOLDOWN_MINS_KEY] = json!(notify_cooldown_mins.max(0));
+}
+
+fn truncate_to_boundary(value: &str, max_len: usize) -> String {
+    value.chars().take(max_len).collect()
 }
 
 #[cfg(test)]

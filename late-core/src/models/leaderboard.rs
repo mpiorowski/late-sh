@@ -112,9 +112,9 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
     // Tetris top scores
     let rows = client
         .query(
-            "SELECT p.username, h.user_id, h.score
+            "SELECT u.username, h.user_id, h.score
              FROM tetris_high_scores h
-             JOIN profiles p ON p.user_id = h.user_id
+             JOIN users u ON u.id = h.user_id
              ORDER BY h.score DESC
              LIMIT $1",
             &[&limit],
@@ -132,9 +132,9 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
     // 2048 top scores
     let rows = client
         .query(
-            "SELECT p.username, h.user_id, h.score
+            "SELECT u.username, h.user_id, h.score
              FROM twenty_forty_eight_high_scores h
-             JOIN profiles p ON p.user_id = h.user_id
+             JOIN users u ON u.id = h.user_id
              ORDER BY h.score DESC
              LIMIT $1",
             &[&limit],
@@ -164,10 +164,10 @@ async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<Leader
                 UNION ALL
                 SELECT user_id FROM minesweeper_daily_wins WHERE puzzle_date = CURRENT_DATE
             )
-            SELECT p.username, a.user_id, COUNT(*)::int AS wins
+            SELECT u.username, a.user_id, COUNT(*)::int AS wins
             FROM all_today a
-            JOIN profiles p ON p.user_id = a.user_id
-            GROUP BY a.user_id, p.username
+            JOIN users u ON u.id = a.user_id
+            GROUP BY a.user_id, u.username
             ORDER BY wins DESC
             LIMIT $1",
             &[&limit],
@@ -211,9 +211,9 @@ async fn fetch_all_streaks(client: &Client) -> Result<Vec<LeaderboardEntry>> {
                 FROM with_grp
                 GROUP BY user_id, grp
             )
-            SELECT p.username, s.user_id, s.streak_len
+            SELECT u.username, s.user_id, s.streak_len
             FROM streaks s
-            JOIN profiles p ON p.user_id = s.user_id
+            JOIN users u ON u.id = s.user_id
             WHERE s.end_date >= (CURRENT_DATE - 1)
             ORDER BY s.streak_len DESC",
             &[],
