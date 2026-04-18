@@ -14,21 +14,17 @@ use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use crate::app::common::{
+    composer::{
+        ComposerRow, build_composer_lines, build_composer_lines_from_rows,
+        composer_cursor_scroll_for_rows, composer_line_count, composer_line_count_for_rows,
+    },
     overlay::{Overlay, draw_overlay},
     theme,
 };
 use late_core::models::leaderboard::BadgeTier;
 
-// Re-export types that external modules reference via `chat::ui::`.
-pub use super::ui_text::ComposerRow;
-pub(super) use super::ui_text::build_composer_rows;
-pub(crate) use super::ui_text::{composer_cursor_scroll_for_rows, composer_line_count_for_rows};
-
 use super::state::{MentionMatch, ROOM_JUMP_KEYS};
-use super::ui_text::{
-    build_composer_lines, build_composer_lines_from_rows, composer_line_count,
-    wrap_chat_entry_to_lines,
-};
+use super::ui_text::wrap_chat_entry_to_lines;
 
 fn contributor_badge_for_username(username: &str) -> Option<&'static str> {
     match username.trim().to_ascii_lowercase().as_str() {
@@ -511,6 +507,25 @@ fn effective_chat_scroll(
     total_rows.saturating_sub(target_end).min(max_scroll)
 }
 
+/// Scroll the rooms sidebar so the selected row stays at or above 2/3 of the
+/// visible height. No selection, or a selection that already fits without
+/// scrolling, yields 0.
+fn rooms_scroll_for_selection(
+    total_rows: usize,
+    visible_height: usize,
+    selected_row_index: Option<usize>,
+) -> usize {
+    if visible_height == 0 {
+        return 0;
+    }
+    let max_scroll = total_rows.saturating_sub(visible_height);
+    let Some(idx) = selected_row_index else {
+        return 0;
+    };
+    let threshold = (visible_height * 2) / 3;
+    idx.saturating_sub(threshold).min(max_scroll)
+}
+
 // ── Small helpers ───────────────────────────────────────────
 
 fn short_user_id(user_id: Uuid) -> String {
@@ -709,6 +724,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let rooms_width = rooms_area.width.saturating_sub(2); // inner width minus borders
 
     let mut room_lines: Vec<Line> = Vec::new();
+    let mut selected_row_index: Option<usize> = None;
 
     // ── Core (hardcoded order: general, announcements, news) ──
     room_lines.push(section_divider("Core", rooms_width));
@@ -718,12 +734,17 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             .iter()
             .find(|(r, _)| r.permanent && r.slug.as_deref() == Some(slug))
         {
+            let is_selected =
+                !news_selected && !view.notifications_selected && selected_room_id == Some(room.id);
             room_lines.push(room_line(
                 room,
                 slug.to_string(),
-                !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                is_selected,
                 room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
+            if is_selected {
+                selected_row_index = Some(room_lines.len() - 1);
+            }
         }
     }
     // Any other permanent rooms not in the hardcoded list
@@ -735,12 +756,17 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             .as_deref()
             .map(str::to_string)
             .unwrap_or_else(|| room.kind.clone());
+        let is_selected =
+            !news_selected && !view.notifications_selected && selected_room_id == Some(room.id);
         room_lines.push(room_line(
             room,
             label,
-            !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+            is_selected,
             room_jump_active.then(|| jump_keys.next()).flatten(),
         ));
+        if is_selected {
+            selected_row_index = Some(room_lines.len() - 1);
+        }
     }
     // News virtual room
     {
@@ -762,6 +788,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             format!("{prefix}news")
         };
         room_lines.push(Line::from(Span::styled(label, style)));
+        if news_selected {
+            selected_row_index = Some(room_lines.len() - 1);
+        }
     }
     // Mentions / notifications virtual room
     {
@@ -785,6 +814,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             format!("{prefix}mentions")
         };
         room_lines.push(Line::from(Span::styled(label, style)));
+        if notifications_selected {
+            selected_row_index = Some(room_lines.len() - 1);
+        }
     }
 
     // ── Rooms (public, via /create, alpha sorted) ──
@@ -802,12 +834,18 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .as_deref()
                 .map(str::to_string)
                 .unwrap_or_else(|| room.kind.clone());
+            let is_selected = !news_selected
+                && !view.notifications_selected
+                && selected_room_id == Some(room.id);
             room_lines.push(room_line(
                 room,
                 label,
-                !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                is_selected,
                 room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
+            if is_selected {
+                selected_row_index = Some(room_lines.len() - 1);
+            }
         }
     }
 
@@ -826,12 +864,18 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .as_deref()
                 .map(str::to_string)
                 .unwrap_or_else(|| room.kind.clone());
+            let is_selected = !news_selected
+                && !view.notifications_selected
+                && selected_room_id == Some(room.id);
             room_lines.push(room_line(
                 room,
                 label,
-                !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                is_selected,
                 room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
+            if is_selected {
+                selected_row_index = Some(room_lines.len() - 1);
+            }
         }
     }
 
@@ -847,12 +891,18 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         room_lines.push(section_divider("DMs", rooms_width));
         for (room, _) in &dm_rooms {
             let label = dm_label(room, current_user_id, usernames);
+            let is_selected = !news_selected
+                && !view.notifications_selected
+                && selected_room_id == Some(room.id);
             room_lines.push(room_line(
                 room,
                 label,
-                !news_selected && !view.notifications_selected && selected_room_id == Some(room.id),
+                is_selected,
                 room_jump_active.then(|| jump_keys.next()).flatten(),
             ));
+            if is_selected {
+                selected_row_index = Some(room_lines.len() - 1);
+            }
         }
     }
 
@@ -875,7 +925,14 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
-    let rooms_paragraph = Paragraph::new(room_lines).block(rooms_block);
+    let rooms_scroll = rooms_scroll_for_selection(
+        room_lines.len(),
+        rooms_area.height.saturating_sub(2) as usize,
+        selected_row_index,
+    );
+    let rooms_paragraph = Paragraph::new(room_lines)
+        .block(rooms_block)
+        .scroll((rooms_scroll as u16, 0));
     frame.render_widget(rooms_paragraph, rooms_area);
 
     if view.notifications_selected {
@@ -1171,6 +1228,26 @@ mod tests {
                 "title {expected_title:?} truncated at block_w={block_w}: rendered {row:?}",
             );
         }
+    }
+
+    #[test]
+    fn rooms_scroll_keeps_selection_above_two_thirds_threshold() {
+        // height=9 → threshold = 6. idx=6 still fits without scroll.
+        assert_eq!(rooms_scroll_for_selection(20, 9, Some(6)), 0);
+        // idx=7 passes the threshold → scroll by 1.
+        assert_eq!(rooms_scroll_for_selection(20, 9, Some(7)), 1);
+        // Selections near the end clamp to max_scroll = total - height.
+        assert_eq!(rooms_scroll_for_selection(20, 9, Some(19)), 11);
+    }
+
+    #[test]
+    fn rooms_scroll_with_no_selection_does_not_scroll() {
+        assert_eq!(rooms_scroll_for_selection(50, 10, None), 0);
+    }
+
+    #[test]
+    fn rooms_scroll_when_content_fits_returns_zero() {
+        assert_eq!(rooms_scroll_for_selection(5, 10, Some(4)), 0);
     }
 
     #[test]

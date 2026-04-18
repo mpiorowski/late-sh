@@ -19,7 +19,7 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar},
         theme,
     },
-    dashboard, icon_picker, profile,
+    dashboard, icon_picker, profile, welcome_modal,
     state::App,
     visualizer::Visualizer,
 };
@@ -70,9 +70,9 @@ struct DrawContext<'a> {
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     activity: &'a std::collections::VecDeque<crate::state::ActivityEvent>,
     banner: Option<&'a Banner>,
-    username: &'a str,
     is_admin: bool,
     show_welcome: bool,
+    welcome_modal_state: &'a welcome_modal::state::WelcomeModalState,
     show_help: bool,
     help_scroll: u16,
     show_splash: bool,
@@ -148,9 +148,9 @@ impl App {
                 badges: &chat_badges,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
-                composer: self.chat.composer.as_str(),
+                composer: self.chat.composer_text(),
                 composer_rows: self.chat.composer_rows(),
-                composer_cursor: self.chat.composer_cursor,
+                composer_cursor: self.chat.composer_cursor(),
                 composing: self.chat.composing,
                 cursor_visible: self.chat.cursor_visible(),
                 mention_matches: &self.chat.mention_ac.matches,
@@ -183,9 +183,9 @@ impl App {
             room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
             highlighted_message_id: self.chat.highlighted_message_id,
-            composer: self.chat.composer.as_str(),
+            composer: self.chat.composer_text(),
             composer_rows: self.chat.composer_rows(),
-            composer_cursor: self.chat.composer_cursor,
+            composer_cursor: self.chat.composer_cursor(),
             composing: self.chat.composing,
             current_user_id: self.user_id,
             cursor_visible: self.chat.cursor_visible(),
@@ -213,21 +213,15 @@ impl App {
             .unwrap_or(0);
         let profile_view = profile::ui::ProfileRenderInput {
             profile: self.profile_state.profile(),
-            editing_username: self.profile_state.editing_username(),
-            username_composer: self.profile_state.username_composer(),
             ai_model: self.profile_state.ai_model(),
-            theme_id: self.profile_state.theme_id(),
             scroll_offset: self.profile_state.scroll_offset(),
             current_streak: user_streak,
             chip_balance: self.chip_balance,
             tetris_best: self.tetris_state.best_score,
             twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
-            cursor_visible: self.profile_state.cursor_visible(),
-            notify_kinds: &self.profile_state.profile().notify_kinds,
-            notify_bell: self.profile_state.profile().notify_bell,
-            notify_cooldown_mins: self.profile_state.profile().notify_cooldown_mins,
-            settings_row: self.profile_state.settings_row,
         };
+        self.welcome_modal_state
+            .set_modal_width(area.width.saturating_sub(8));
         let online_count = self
             .active_users
             .as_ref()
@@ -263,9 +257,9 @@ impl App {
                         bonsai: &self.bonsai_state,
                         activity: &self.activity,
                         banner: banner.as_ref(),
-                        username: &self.profile_state.profile().username,
                         is_admin: self.is_admin,
                         show_welcome: self.show_welcome,
+                        welcome_modal_state: &self.welcome_modal_state,
                         show_help: self.show_help,
                         help_scroll: self.help_scroll,
                         show_splash: self.show_splash,
@@ -499,7 +493,7 @@ impl App {
         }
 
         if ctx.show_welcome {
-            draw_welcome_overlay(frame, inner, ctx.username);
+            welcome_modal::ui::draw(frame, inner, ctx.welcome_modal_state);
         }
 
         if ctx.show_help {
@@ -716,162 +710,6 @@ fn draw_help_overlay(
         footer.push(Span::styled("scroll", dim));
     }
     frame.render_widget(Paragraph::new(Line::from(footer)).centered(), footer_area);
-}
-
-fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
-    use ratatui::style::Modifier;
-    use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Clear, Paragraph, Wrap};
-
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let bold_cyan = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-    let white = Style::default().fg(theme::TEXT_BRIGHT());
-    let green = Style::default().fg(theme::SUCCESS());
-
-    let greeting = format!("Welcome back, @{username}.");
-
-    let lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  ", dim),
-            Span::styled(
-                greeting,
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(Span::styled(
-            "  A cozy terminal clubhouse for developers.",
-            white,
-        )),
-        Line::from(""),
-        // ── Music ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("Music", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    Lofi, ambient, classical & jazz streams.",
-            white,
-        )),
-        Line::from(vec![
-            Span::styled("    Listen via ", dim),
-            Span::styled("CLI", green),
-            Span::styled(" (recommended) or the ", dim),
-            Span::styled("web player", green),
-            Span::styled(".", dim),
-        ]),
-        Line::from(""),
-        // ── Chat ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("Chat", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    Hang out in rooms with other devs.",
-            white,
-        )),
-        Line::from(Span::styled(
-            "    Tied to your SSH key, same chats anywhere.",
-            dim,
-        )),
-        Line::from(""),
-        // ── Arcade ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("Arcade", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    2048, Tetris & daily puzzles with leaderboards.",
-            white,
-        )),
-        Line::from(Span::styled("    Multiplayer coming soon.", dim)),
-        Line::from(""),
-        // ── News ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("News", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    Share links and watch the community feed.",
-            white,
-        )),
-        Line::from(Span::styled(
-            "    Auto-generated summaries keep you in the loop.",
-            dim,
-        )),
-        Line::from(""),
-        // ── Your Identity ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("Your Identity", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    No passwords. No OAuth. No accounts.",
-            white,
-        )),
-        Line::from(Span::styled("    Your SSH key is your identity.", white)),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    Chats, scores, leaderboards, badges, your bonsai,",
-            dim,
-        )),
-        Line::from(Span::styled(
-            "    all tied to your public key fingerprint.",
-            dim,
-        )),
-        Line::from(Span::styled("    Same key, same data anywhere.", dim)),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("    Back up ", dim),
-            Span::styled("~/.ssh/id_*", green),
-            Span::styled(" to keep your account.", dim),
-        ]),
-        Line::from(Span::styled(
-            "    Grab headphones, pick a vibe, build something.",
-            white,
-        )),
-        Line::from(""),
-        Line::from(Span::styled("    Want your music on late.sh?", white)),
-        Line::from(vec![
-            Span::styled("    Write to ", dim),
-            Span::styled("admin@dwarfforge.io", green),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Press any key to start.", dim)),
-        Line::from(""),
-    ];
-
-    let w = 64u16.min(area.width.saturating_sub(4));
-    let content_h = lines.len() as u16;
-    let h = (content_h + 2).min(area.height.saturating_sub(4));
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let popup_area = Rect::new(x, y, w, h);
-
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .title(" late.sh ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 #[cfg(test)]

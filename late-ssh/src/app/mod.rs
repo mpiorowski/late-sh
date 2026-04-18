@@ -13,3 +13,4 @@ pub mod state;
 mod tick;
 pub mod visualizer;
 pub mod vote;
+pub(crate) mod welcome_modal;

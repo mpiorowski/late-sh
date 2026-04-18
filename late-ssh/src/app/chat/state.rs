@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
 
-use crate::app::common::primitives::Banner;
+use crate::app::common::{composer::ComposerState, primitives::Banner};
 use crate::state::{ActiveUser, ActiveUsers};
 
 use super::{
@@ -84,8 +84,7 @@ pub struct ChatState {
     room_tx: watch::Sender<Option<Uuid>>,
     pub(crate) selected_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
-    pub(crate) composer: String,
-    pub(crate) composer_cursor: usize, // char position within composer
+    composer: ComposerState,
     pub(crate) composing: bool,
     composer_room_id: Option<Uuid>,
     pending_send_notices: VecDeque<Uuid>,
@@ -98,11 +97,6 @@ pub struct ChatState {
     pub(crate) edited_message_id: Option<Uuid>,
     pub(crate) reply_target: Option<ReplyTarget>,
     bg_task: tokio::task::AbortHandle,
-
-    /// Width (in chars) available for composer text, updated each render.
-    pub(crate) composer_text_width: usize,
-    composer_rows: Vec<super::ui::ComposerRow>,
-    composer_layout_dirty: bool,
 
     /// News (shown as a virtual room in the room list)
     pub(crate) news_selected: bool,
@@ -160,8 +154,7 @@ impl ChatState {
             room_tx,
             selected_room_id: None,
             room_jump_active: false,
-            composer: String::new(),
-            composer_cursor: 0,
+            composer: ComposerState::new(80),
             composing: false,
             composer_room_id: None,
             pending_send_notices: VecDeque::new(),
@@ -174,9 +167,6 @@ impl ChatState {
             edited_message_id: None,
             reply_target: None,
             bg_task,
-            composer_text_width: 80,
-            composer_rows: Vec::new(),
-            composer_layout_dirty: true,
             news_selected: false,
             news: news::state::State::new(article_service, user_id, is_admin),
             notifications_selected: false,
@@ -185,29 +175,24 @@ impl ChatState {
         }
     }
 
-    fn invalidate_composer_layout(&mut self) {
-        self.composer_layout_dirty = true;
-    }
-
     pub fn set_composer_text_width(&mut self, width: usize) {
-        let width = width.max(1);
-        if self.composer_text_width != width {
-            self.composer_text_width = width;
-            self.invalidate_composer_layout();
-        }
+        self.composer.set_text_width(width);
     }
 
     pub fn sync_composer_layout(&mut self) {
-        if !self.composer_layout_dirty {
-            return;
-        }
-        self.composer_rows =
-            super::ui::build_composer_rows(&self.composer, self.composer_text_width);
-        self.composer_layout_dirty = false;
+        self.composer.sync_layout();
     }
 
-    pub(crate) fn composer_rows(&self) -> &[super::ui::ComposerRow] {
-        &self.composer_rows
+    pub(crate) fn composer_rows(&self) -> &[crate::app::common::composer::ComposerRow] {
+        self.composer.rows()
+    }
+
+    pub(crate) fn composer_text(&self) -> &str {
+        self.composer.text()
+    }
+
+    pub(crate) fn composer_cursor(&self) -> usize {
+        self.composer.cursor()
     }
 
     pub fn is_composing(&self) -> bool {
@@ -224,7 +209,6 @@ impl ChatState {
         self.room_jump_active = false;
         self.composing = true;
         self.composer_room_id = Some(room_id);
-        self.composer_cursor = self.composer.chars().count();
         self.selected_message_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
@@ -343,7 +327,6 @@ impl ChatState {
         });
         self.composing = true;
         self.composer_room_id = Some(room_id);
-        self.composer_cursor = self.composer.chars().count();
         self.edited_message_id = None;
         true
     }
@@ -371,12 +354,9 @@ impl ChatState {
             return Some(Banner::error("Can only edit your own messages"));
         }
         self.edited_message_id = Some(selected_id);
-        self.composer.clear();
-        self.composer.push_str(body);
+        self.composer.set_text(body);
         self.composing = true;
         self.composer_room_id = Some(room_id);
-        self.composer_cursor = self.composer.chars().count();
-        self.invalidate_composer_layout();
         None
     }
 
@@ -592,40 +572,33 @@ impl ChatState {
         self.composing = false;
         self.room_jump_active = false;
         self.composer_room_id = None;
-        self.composer_cursor = self.composer.chars().count();
         self.reply_target = None;
     }
 
     pub fn reset_composer(&mut self) {
         self.composer.clear();
-        self.composer_cursor = 0;
         self.composing = false;
         self.room_jump_active = false;
         self.composer_room_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
         self.mention_ac = MentionAutocomplete::default();
-        self.invalidate_composer_layout();
     }
 
     fn clear_composer_after_submit(&mut self) {
         self.composer.clear();
-        self.composer_cursor = 0;
         self.composing = false;
         self.room_jump_active = false;
         self.composer_room_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
-        self.invalidate_composer_layout();
     }
 
     fn clear_composer_after_send(&mut self) {
         self.composer.clear();
-        self.composer_cursor = 0;
         self.room_jump_active = false;
         self.reply_target = None;
         self.edited_message_id = None;
-        self.invalidate_composer_layout();
     }
 
     fn open_overlay(&mut self, title: &str, lines: Vec<String>) {
@@ -663,7 +636,7 @@ impl ChatState {
     }
 
     pub fn submit_composer(&mut self, keep_open: bool) -> Option<Banner> {
-        let body = self.composer.trim_end().to_string();
+        let body = self.composer.text().trim_end().to_string();
 
         if body.trim() == "/help" {
             self.clear_composer_after_submit();
@@ -806,220 +779,49 @@ impl ChatState {
 
     pub fn composer_clear(&mut self) {
         self.composer.clear();
-        self.composer_cursor = 0;
-        self.invalidate_composer_layout();
     }
     pub fn composer_backspace(&mut self) {
-        if self.composer_cursor == 0 {
-            return;
-        }
-        let byte_pos = self
-            .composer
-            .char_indices()
-            .nth(self.composer_cursor - 1)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let next_byte = self
-            .composer
-            .char_indices()
-            .nth(self.composer_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        self.composer.replace_range(byte_pos..next_byte, "");
-        self.composer_cursor -= 1;
-        self.invalidate_composer_layout();
+        self.composer.backspace();
     }
 
     pub fn composer_delete_right(&mut self) {
-        let char_count = self.composer.chars().count();
-        if self.composer_cursor >= char_count {
-            return;
-        }
-
-        let byte_pos = self
-            .composer
-            .char_indices()
-            .nth(self.composer_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        let next_byte = self
-            .composer
-            .char_indices()
-            .nth(self.composer_cursor + 1)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        self.composer.replace_range(byte_pos..next_byte, "");
-        self.invalidate_composer_layout();
+        self.composer.delete_right();
     }
 
     pub fn composer_delete_word_right(&mut self) {
-        let chars: Vec<char> = self.composer.chars().collect();
-        let len = chars.len();
-        let start = self.composer_cursor.min(len);
-        if start >= len {
-            return;
-        }
-
-        let mut end = start;
-        while end < len && chars[end].is_whitespace() {
-            end += 1;
-        }
-        while end < len && !chars[end].is_whitespace() {
-            end += 1;
-        }
-
-        let start_byte = self
-            .composer
-            .char_indices()
-            .nth(start)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        let end_byte = self
-            .composer
-            .char_indices()
-            .nth(end)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        self.composer.replace_range(start_byte..end_byte, "");
-        self.invalidate_composer_layout();
+        self.composer.delete_word_right();
     }
 
     pub fn composer_delete_word_left(&mut self) {
-        if self.composer_cursor == 0 {
-            return;
-        }
-
-        let chars: Vec<char> = self.composer.chars().collect();
-        let end = self.composer_cursor.min(chars.len());
-        let mut start = end;
-        let at_word_boundary = end == chars.len() || chars[end].is_whitespace();
-
-        while start > 0 && chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        while start > 0 && !chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        if at_word_boundary {
-            while start > 0 && chars[start - 1].is_whitespace() {
-                start -= 1;
-            }
-        }
-
-        let start_byte = self
-            .composer
-            .char_indices()
-            .nth(start)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let end_byte = self
-            .composer
-            .char_indices()
-            .nth(end)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        self.composer.replace_range(start_byte..end_byte, "");
-        self.composer_cursor = start;
-        self.invalidate_composer_layout();
+        self.composer.delete_word_left();
     }
 
     pub fn composer_push(&mut self, ch: char) {
-        let char_count = self.composer.chars().count();
-        if self.composer_cursor >= char_count {
-            self.composer.push(ch);
-        } else {
-            let byte_pos = self
-                .composer
-                .char_indices()
-                .nth(self.composer_cursor)
-                .map(|(i, _)| i)
-                .unwrap_or(self.composer.len());
-            self.composer.insert(byte_pos, ch);
-        }
-        self.composer_cursor += 1;
-        self.invalidate_composer_layout();
+        self.composer.push(ch);
     }
 
     pub fn composer_cursor_left(&mut self) {
-        self.composer_cursor = self.composer_cursor.saturating_sub(1);
+        self.composer.cursor_left();
     }
 
     pub fn composer_cursor_right(&mut self) {
-        let char_count = self.composer.chars().count();
-        if self.composer_cursor < char_count {
-            self.composer_cursor += 1;
-        }
+        self.composer.cursor_right();
     }
 
     pub fn composer_cursor_word_left(&mut self) {
-        if self.composer_cursor == 0 {
-            return;
-        }
-
-        let chars: Vec<char> = self.composer.chars().collect();
-        let mut cursor = self.composer_cursor.min(chars.len());
-
-        while cursor > 0 && chars[cursor - 1].is_whitespace() {
-            cursor -= 1;
-        }
-        while cursor > 0 && !chars[cursor - 1].is_whitespace() {
-            cursor -= 1;
-        }
-
-        self.composer_cursor = cursor;
+        self.composer.cursor_word_left();
     }
 
     pub fn composer_cursor_word_right(&mut self) {
-        let chars: Vec<char> = self.composer.chars().collect();
-        let len = chars.len();
-        let mut cursor = self.composer_cursor.min(len);
-
-        while cursor < len && chars[cursor].is_whitespace() {
-            cursor += 1;
-        }
-        while cursor < len && !chars[cursor].is_whitespace() {
-            cursor += 1;
-        }
-
-        self.composer_cursor = cursor;
+        self.composer.cursor_word_right();
     }
 
     pub fn composer_cursor_up(&mut self) {
-        self.sync_composer_layout();
-        let rows = &self.composer_rows;
-        if rows.is_empty() {
-            return;
-        }
-        let row_idx = rows
-            .iter()
-            .position(|r| self.composer_cursor <= r.end)
-            .unwrap_or(rows.len() - 1);
-        if row_idx == 0 {
-            return;
-        }
-        let col = self.composer_cursor.saturating_sub(rows[row_idx].start);
-        let prev = &rows[row_idx - 1];
-        let row_len = prev.text.chars().count();
-        self.composer_cursor = prev.start + col.min(row_len);
+        self.composer.cursor_up();
     }
 
     pub fn composer_cursor_down(&mut self) {
-        self.sync_composer_layout();
-        let rows = &self.composer_rows;
-        if rows.is_empty() {
-            return;
-        }
-        let row_idx = rows
-            .iter()
-            .position(|r| self.composer_cursor <= r.end)
-            .unwrap_or(rows.len() - 1);
-        if row_idx >= rows.len() - 1 {
-            return;
-        }
-        let col = self.composer_cursor.saturating_sub(rows[row_idx].start);
-        let next = &rows[row_idx + 1];
-        let row_len = next.text.chars().count();
-        self.composer_cursor = next.start + col.min(row_len);
+        self.composer.cursor_down();
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
@@ -1065,7 +867,7 @@ impl ChatState {
 
     pub fn update_autocomplete(&mut self) {
         // Scan backward from end of composer to find a trigger `@`
-        let bytes = self.composer.as_bytes();
+        let bytes = self.composer.text().as_bytes();
         let mut at_offset = None;
         for i in (0..bytes.len()).rev() {
             if bytes[i] == b'@' {
@@ -1086,7 +888,7 @@ impl ChatState {
             return;
         };
 
-        let query = &self.composer[offset + 1..];
+        let query = &self.composer.text()[offset + 1..];
         let query_lower = query.to_ascii_lowercase();
         let active_users = self.active_users.as_ref();
         let matches = rank_mention_matches(&self.all_usernames, &query_lower, || {
@@ -1124,13 +926,13 @@ impl ChatState {
         let username = self.mention_ac.matches[self.mention_ac.selected]
             .name
             .clone();
-        self.composer.truncate(self.mention_ac.trigger_offset);
-        self.composer.push('@');
-        self.composer.push_str(&username);
-        self.composer.push(' ');
-        self.composer_cursor = self.composer.chars().count();
+        let next = format!(
+            "{}@{} ",
+            &self.composer.text()[..self.mention_ac.trigger_offset],
+            username
+        );
+        self.composer.set_text(next);
         self.mention_ac = MentionAutocomplete::default();
-        self.invalidate_composer_layout();
     }
 
     pub fn ac_dismiss(&mut self) {

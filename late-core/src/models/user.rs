@@ -28,6 +28,9 @@ const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
+const BIO_KEY: &str = "bio";
+const COUNTRY_KEY: &str = "country";
+const TIMEZONE_KEY: &str = "timezone";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -301,6 +304,34 @@ pub fn extract_enable_background_color(settings: &Value) -> bool {
         .unwrap_or(false)
 }
 
+pub fn extract_bio(settings: &Value) -> String {
+    settings
+        .get(BIO_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
+pub fn extract_country(settings: &Value) -> Option<String> {
+    settings
+        .get(COUNTRY_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_uppercase())
+}
+
+pub fn extract_timezone(settings: &Value) -> Option<String> {
+    settings
+        .get(TIMEZONE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 pub fn sanitize_username_input(username: &str) -> String {
     let trimmed = username.trim();
     if trimmed.is_empty() {
@@ -355,6 +386,24 @@ mod tests {
     fn extract_theme_id_missing_returns_none() {
         let settings = json!({});
         assert_eq!(extract_theme_id(&settings), None);
+    }
+
+    #[test]
+    fn extract_bio_missing_returns_empty() {
+        let settings = json!({});
+        assert_eq!(extract_bio(&settings), "");
+    }
+
+    #[test]
+    fn extract_country_normalizes_uppercase() {
+        let settings = json!({ "country": " pl " });
+        assert_eq!(extract_country(&settings).as_deref(), Some("PL"));
+    }
+
+    #[test]
+    fn extract_timezone_reads_trimmed_value() {
+        let settings = json!({ "timezone": " Europe/Warsaw " });
+        assert_eq!(extract_timezone(&settings).as_deref(), Some("Europe/Warsaw"));
     }
 
     #[test]

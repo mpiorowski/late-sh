@@ -15,6 +15,7 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::profile::Profile;
 
 use crate::{
     app::{
@@ -28,6 +29,7 @@ use crate::{
         visualizer::Visualizer,
         vote,
         vote::svc::{Genre, VoteService},
+        welcome_modal,
     },
     session::{
         ClientAudioState, PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry,
@@ -174,6 +176,7 @@ pub struct App {
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
+    pub(crate) welcome_modal_state: welcome_modal::state::WelcomeModalState,
 
     /// Leaderboard
     pub(super) leaderboard_rx: Option<watch::Receiver<Arc<LeaderboardData>>>,
@@ -350,6 +353,11 @@ impl App {
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        let mut initial_profile = Profile::default();
+        initial_profile.theme_id = Some(config.initial_theme_id.clone());
+        let mut welcome_modal_state =
+            welcome_modal::state::WelcomeModalState::new(config.profile_service.clone(), config.user_id);
+        welcome_modal_state.open_from_profile(&initial_profile, cols.saturating_sub(8));
 
         Ok(Self {
             running: true,
@@ -396,11 +404,12 @@ impl App {
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             profile_state: profile::state::ProfileState::new(
-                config.profile_service,
+                config.profile_service.clone(),
                 config.user_id,
                 config.ai_model,
                 config.initial_theme_id,
             ),
+            welcome_modal_state,
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,

@@ -56,9 +56,13 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         user.id,
         ProfileParams {
             username: "night-owl".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
             notify_kinds: Vec::new(),
             notify_bell: false,
             notify_cooldown_mins: 0,
+            theme_id: "late".to_string(),
             enable_background_color: false,
         },
     );
@@ -107,9 +111,13 @@ async fn edit_profile_normalizes_username_before_persisting() {
         user.id,
         ProfileParams {
             username: "  late night!!!  ".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
             notify_kinds: Vec::new(),
             notify_bell: false,
             notify_cooldown_mins: 0,
+            theme_id: "late".to_string(),
             enable_background_color: false,
         },
     );
@@ -153,9 +161,13 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
         user.id,
         ProfileParams {
             username: "merge-user".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
             notify_kinds: vec!["dms".to_string()],
             notify_bell: false,
             notify_cooldown_mins: 5,
+            theme_id: "late".to_string(),
             enable_background_color: false,
         },
     );

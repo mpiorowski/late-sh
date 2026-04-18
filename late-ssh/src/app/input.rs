@@ -1,4 +1,4 @@
-use super::{chat, dashboard, icon_picker, profile, state::App};
+use super::{chat, dashboard, icon_picker, profile, state::App, welcome_modal};
 use crate::app::common::primitives::Screen;
 use std::{mem, time::Duration};
 use vte::{Params, Parser, Perform};
@@ -46,7 +46,7 @@ enum PasteTarget {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum ParsedInput {
+pub(crate) enum ParsedInput {
     Char(char),
     Byte(u8),
     Arrow(u8),
@@ -335,11 +335,6 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-    if app.show_welcome && !data.is_empty() {
-        app.show_welcome = false;
-        return;
-    }
-
     // Help overlay: scroll with j/k/arrows/mouse wheel, dismiss with ?/Esc/q
     if app.show_help && !data.is_empty() {
         let mut i = 0;
@@ -449,6 +444,11 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    if app.show_welcome {
+        welcome_modal::input::handle_input(app, event);
+        return;
+    }
+
     // Picker intercepts all input when open (ESC is handled via dispatch_escape).
     if app.icon_picker_open {
         handle_icon_picker_input(app, event);
@@ -659,6 +659,10 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
 }
 
 fn dispatch_escape(app: &mut App) {
+    if app.show_welcome {
+        welcome_modal::input::handle_escape(app);
+        return;
+    }
     if app.icon_picker_open {
         app.icon_picker_open = false;
         return;

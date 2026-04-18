@@ -1,3 +1,4 @@
+pub mod composer;
 pub mod overlay;
 pub mod primitives;
 pub mod sidebar;
