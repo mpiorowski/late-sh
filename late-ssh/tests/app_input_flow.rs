@@ -3,7 +3,8 @@
 mod helpers;
 
 use helpers::{
-    make_app, make_app_with_chat_service, new_test_db, wait_for_render_contains, wait_until,
+    chat_compose_app, make_app, make_app_with_chat_service, new_test_db, wait_for_render_contains,
+    wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -12,6 +13,7 @@ use late_core::models::{
     user::User,
 };
 use late_core::test_utils::create_test_user;
+use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;
 
@@ -168,6 +170,18 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     // end up composing "2hey\n" instead of submitting.
     app.handle_input(b"\r");
     wait_for_render_contains(&mut app, "Compose (press i)").await;
+}
+
+#[rstest]
+#[case::cyrillic("cyrillic", "тест")]
+#[case::han("han", "漢字")]
+#[case::latin_diacritic("accented", "café")]
+#[case::greek("greek", "αβγ")]
+#[tokio::test]
+async fn chat_compose_accepts_non_ascii_typing(#[case] label: &str, #[case] input: &str) {
+    let (_db, mut app) = chat_compose_app(&format!("utf8-{label}")).await;
+    app.handle_input(input.as_bytes());
+    wait_for_render_contains(&mut app, input).await;
 }
 
 #[tokio::test]

@@ -83,7 +83,16 @@ async fn profile_notification_checkbox_toggle_persists_across_reconnect() {
             "Game events should remain unchecked:\n{after}"
         );
 
-        // Wait for the save task to reach the DB before tearing down the app.
+        // The bell setting should be independent of the other settings.
+        assert!(
+            row_has_marker(&after, "Bell", "[ ]"),
+            "Bell should remain unchecked:\n{after}"
+        );
+
+        // Each Space press spawns an independent save task; wait for the DMs
+        // save to land before toggling Bell so the two writes serialize in DB
+        // order (otherwise save-2 can race ahead and get overwritten by save-1,
+        // clobbering notify_bell back to false).
         let db = test_db.db.clone();
         wait_until(
             || {
@@ -94,7 +103,37 @@ async fn profile_notification_checkbox_toggle_persists_across_reconnect() {
                     profile.notify_kinds == vec!["dms".to_string()]
                 }
             },
-            "profile.notify_kinds to persist as [dms]",
+            "profile.notify_kinds to persist as [dms] before toggling Bell",
+        )
+        .await;
+
+        app.handle_input(b"jjj");
+        app.handle_input(b" ");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut toggled = false;
+        while Instant::now() < deadline {
+            let plain = render_plain(&mut app);
+            if row_has_marker(&plain, "Bell", "[x]") {
+                toggled = true;
+                break;
+            }
+            sleep(Duration::from_millis(30)).await;
+        }
+        assert!(toggled, "Bell row should flip to [x] after Space");
+
+        // Wait for the save task to reach the DB before tearing down the app.
+        let db = test_db.db.clone();
+        wait_until(
+            || {
+                let db = db.clone();
+                async move {
+                    let client = db.get().await.expect("db client");
+                    let profile = Profile::load(&client, user.id).await.expect("profile");
+                    profile.notify_kinds == vec!["dms".to_string()] && profile.notify_bell
+                }
+            },
+            "profile.notify_kinds to persist as [dms] and notify_bell as true",
         )
         .await;
     }
@@ -114,7 +153,8 @@ async fn profile_notification_checkbox_toggle_persists_across_reconnect() {
     let mut restored = false;
     while Instant::now() < deadline {
         let plain = render_plain(&mut reconnected);
-        if row_has_marker(&plain, "Direct messages", "[x]") {
+        if row_has_marker(&plain, "Direct messages", "[x]") && row_has_marker(&plain, "Bell", "[x]")
+        {
             restored = true;
             break;
         }
@@ -122,7 +162,7 @@ async fn profile_notification_checkbox_toggle_persists_across_reconnect() {
     }
     assert!(
         restored,
-        "Direct messages row should remain [x] after reconnect"
+        "Direct messages and Bell rows should remain [x] after reconnect"
     );
 }
 
