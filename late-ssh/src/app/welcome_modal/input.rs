@@ -37,10 +37,8 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
 }
 
 fn open_help(app: &mut App) {
-    app.help_modal_state.open(
-        crate::app::help_modal::data::HelpTopic::Overview,
-        app.size.0.saturating_sub(8),
-    );
+    app.help_modal_state
+        .open(crate::app::help_modal::data::HelpTopic::Overview);
     app.show_help = true;
 }
 

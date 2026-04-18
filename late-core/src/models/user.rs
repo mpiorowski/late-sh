@@ -105,6 +105,25 @@ impl User {
         Ok(map)
     }
 
+    pub async fn list_all_country_map(client: &Client) -> Result<HashMap<Uuid, String>> {
+        let rows = client
+            .query(
+                "SELECT id, settings
+                 FROM users
+                 WHERE settings ? $1",
+                &[&COUNTRY_KEY],
+            )
+            .await?;
+        let mut map = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let settings: Value = row.get("settings");
+            if let Some(country) = extract_country(&settings) {
+                map.insert(row.get("id"), country);
+            }
+        }
+        Ok(map)
+    }
+
     pub async fn find_by_username(client: &Client, username: &str) -> Result<Option<Self>> {
         let row = client
             .query_opt(

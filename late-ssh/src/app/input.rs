@@ -449,8 +449,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                     app.banner = Some(b);
                 }
                 if let Some(topic) = app.chat.take_requested_help_topic() {
-                    app.help_modal_state
-                        .open(topic, app.size.0.saturating_sub(8));
+                    app.help_modal_state.open(topic);
                     app.show_help = true;
                 }
             }
@@ -796,10 +795,8 @@ fn reset_composers_for_page_change(app: &mut App) {
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     // ? opens help unless composing text
     if byte == b'?' && !ctx.chat_composing && !ctx.news_composing && !ctx.profile_composing {
-        app.help_modal_state.open(
-            crate::app::help_modal::data::HelpTopic::Overview,
-            app.size.0.saturating_sub(8),
-        );
+        app.help_modal_state
+            .open(crate::app::help_modal::data::HelpTopic::Overview);
         app.show_help = true;
         return true;
     }
