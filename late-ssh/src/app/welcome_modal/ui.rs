@@ -7,14 +7,12 @@ use ratatui::{
 };
 
 use crate::app::common::{
-    composer::{
-        build_composer_lines_from_rows, composer_cursor_scroll_for_rows,
-    },
+    composer::{build_composer_lines_from_rows, composer_cursor_scroll_for_rows},
     theme,
 };
 
 use super::{
-    data::{country_label, country_flag},
+    data::{country_flag, country_label},
     state::{PickerKind, Row, WelcomeModalState},
 };
 
@@ -37,9 +35,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     .split(inner);
 
     let title_lines = vec![
-        Line::from(vec![
-            Span::styled("  Set up your late.sh identity.", Style::default().fg(theme::TEXT())),
-        ]),
+        Line::from(vec![Span::styled(
+            "  Set up your late.sh identity.",
+            Style::default().fg(theme::TEXT()),
+        )]),
         Line::from(Span::styled(
             "  This modal now owns profile settings. Save when it looks right.",
             Style::default().fg(theme::TEXT_DIM()),
@@ -59,10 +58,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Alt+Enter", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(
-            " newline in bio",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
+        Span::styled(" newline in bio", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[2]);
 
@@ -171,7 +167,7 @@ fn draw_rows(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
 
 fn draw_side_panel(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     let block = Block::default()
-        .title(" Bio ")
+        .title(" Bio (Alt+Enter newline) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if state.editing_bio() {
             theme::BORDER_ACTIVE()
@@ -189,7 +185,8 @@ fn draw_side_panel(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
         state.editing_bio(),
         state.editing_bio(),
     );
-    let scroll = composer_cursor_scroll_for_rows(composer.rows(), composer.cursor(), inner.height as usize);
+    let scroll =
+        composer_cursor_scroll_for_rows(composer.rows(), composer.cursor(), inner.height as usize);
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
 
     if !state.editing_bio() && composer.text().is_empty() {
@@ -219,9 +216,12 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let layout =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)])
-            .split(inner);
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .split(inner);
 
     let search = Line::from(vec![
         Span::styled("  search ", Style::default().fg(theme::TEXT_DIM())),
@@ -271,7 +271,10 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
         };
         let marker = if selected { "›" } else { " " };
         lines.push(Line::from(vec![
-            Span::styled(format!(" {marker} "), Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(
+                format!(" {marker} "),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ),
             Span::styled(entry.clone(), style),
         ]));
     }
@@ -306,7 +309,10 @@ fn row(state: &WelcomeModalState, row: Row, label: &str, value: String) -> Line<
         Style::default().fg(theme::TEXT())
     };
     Line::from(vec![
-        Span::styled(format!(" {marker} "), Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(
+            format!(" {marker} "),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ),
         Span::styled(format!("{label:<14}"), label_style),
         Span::styled(value, value_style),
     ])

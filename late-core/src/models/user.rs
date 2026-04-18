@@ -403,7 +403,10 @@ mod tests {
     #[test]
     fn extract_timezone_reads_trimmed_value() {
         let settings = json!({ "timezone": " Europe/Warsaw " });
-        assert_eq!(extract_timezone(&settings).as_deref(), Some("Europe/Warsaw"));
+        assert_eq!(
+            extract_timezone(&settings).as_deref(),
+            Some("Europe/Warsaw")
+        );
     }
 
     #[test]

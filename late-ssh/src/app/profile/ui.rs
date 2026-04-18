@@ -61,7 +61,10 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>) -> Vec<Line<'a>> {
         ),
     ]));
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("  Bio", Style::default().fg(theme::TEXT_MUTED()))));
+    lines.push(Line::from(Span::styled(
+        "  Bio",
+        Style::default().fg(theme::TEXT_MUTED()),
+    )));
     if view.profile.bio.trim().is_empty() {
         lines.push(Line::from(Span::styled("  Not set", dim)));
     } else {

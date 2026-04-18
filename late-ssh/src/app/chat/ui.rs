@@ -834,9 +834,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .as_deref()
                 .map(str::to_string)
                 .unwrap_or_else(|| room.kind.clone());
-            let is_selected = !news_selected
-                && !view.notifications_selected
-                && selected_room_id == Some(room.id);
+            let is_selected =
+                !news_selected && !view.notifications_selected && selected_room_id == Some(room.id);
             room_lines.push(room_line(
                 room,
                 label,
@@ -864,9 +863,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .as_deref()
                 .map(str::to_string)
                 .unwrap_or_else(|| room.kind.clone());
-            let is_selected = !news_selected
-                && !view.notifications_selected
-                && selected_room_id == Some(room.id);
+            let is_selected =
+                !news_selected && !view.notifications_selected && selected_room_id == Some(room.id);
             room_lines.push(room_line(
                 room,
                 label,
@@ -891,9 +889,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         room_lines.push(section_divider("DMs", rooms_width));
         for (room, _) in &dm_rooms {
             let label = dm_label(room, current_user_id, usernames);
-            let is_selected = !news_selected
-                && !view.notifications_selected
-                && selected_room_id == Some(room.id);
+            let is_selected =
+                !news_selected && !view.notifications_selected && selected_room_id == Some(room.id);
             room_lines.push(room_line(
                 room,
                 label,

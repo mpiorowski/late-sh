@@ -141,9 +141,6 @@ impl ProfileService {
     async fn do_edit_profile(&self, user_id: Uuid, mut params: ProfileParams) -> Result<()> {
         let client = self.db.get().await?;
         params.username = sanitize_username_input(&params.username);
-        if params.theme_id.trim().is_empty() {
-            params.theme_id = "late".to_string();
-        }
         let _ = Profile::update(&client, user_id, params).await?;
 
         if let Ok(mut usernames) = User::list_usernames_by_ids(&client, &[user_id]).await

@@ -307,11 +307,12 @@ impl WelcomeModalState {
                 notify_kinds: self.draft.notify_kinds.clone(),
                 notify_bell: self.draft.notify_bell,
                 notify_cooldown_mins: self.draft.notify_cooldown_mins,
-                theme_id: self
-                    .draft
-                    .theme_id
-                    .clone()
-                    .unwrap_or_else(|| "late".to_string()),
+                theme_id: Some(
+                    self.draft
+                        .theme_id
+                        .clone()
+                        .unwrap_or_else(|| "late".to_string()),
+                ),
                 enable_background_color: self.draft.enable_background_color,
             },
         );
@@ -328,7 +329,10 @@ fn toggle_kind(kinds: &mut Vec<String>, kind: &str) {
 
 fn cycle_cooldown_value(current: i32, forward: bool) -> i32 {
     const OPTIONS: &[i32] = &[0, 1, 2, 5, 10, 15, 30, 60, 120, 240];
-    let idx = OPTIONS.iter().position(|value| *value == current).unwrap_or(0);
+    let idx = OPTIONS
+        .iter()
+        .position(|value| *value == current)
+        .unwrap_or(0);
     let next = if forward {
         (idx + 1) % OPTIONS.len()
     } else {

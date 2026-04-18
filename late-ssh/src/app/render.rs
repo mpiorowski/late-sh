@@ -19,9 +19,10 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar},
         theme,
     },
-    dashboard, icon_picker, profile, welcome_modal,
+    dashboard, icon_picker, profile,
     state::App,
     visualizer::Visualizer,
+    welcome_modal,
 };
 use crate::session::ClientAudioState;
 

@@ -355,8 +355,10 @@ impl App {
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
         let mut initial_profile = Profile::default();
         initial_profile.theme_id = Some(config.initial_theme_id.clone());
-        let mut welcome_modal_state =
-            welcome_modal::state::WelcomeModalState::new(config.profile_service.clone(), config.user_id);
+        let mut welcome_modal_state = welcome_modal::state::WelcomeModalState::new(
+            config.profile_service.clone(),
+            config.user_id,
+        );
         welcome_modal_state.open_from_profile(&initial_profile, cols.saturating_sub(8));
 
         Ok(Self {

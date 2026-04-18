@@ -29,7 +29,7 @@ pub struct ProfileParams {
     pub notify_kinds: Vec<String>,
     pub notify_bell: bool,
     pub notify_cooldown_mins: i32,
-    pub theme_id: String,
+    pub theme_id: Option<String>,
     pub enable_background_color: bool,
 }
 
@@ -61,6 +61,17 @@ impl Profile {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
+        let current_user = User::get(client, user_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+        let theme_id = params
+            .theme_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .or_else(|| extract_theme_id(&current_user.settings))
+            .unwrap_or_else(|| "late".to_string());
 
         let row = client
             .query_opt(
@@ -87,7 +98,7 @@ impl Profile {
                     &kinds_json,
                     &params.notify_bell,
                     &cooldown,
-                    &params.theme_id,
+                    &theme_id,
                     &params.enable_background_color,
                     &user_id,
                 ],
