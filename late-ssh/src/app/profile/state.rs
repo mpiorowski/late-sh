@@ -100,6 +100,11 @@ impl ProfileState {
         self.viewport_height = h;
     }
 
+    pub fn scroll_by(&mut self, delta: i16) {
+        let next = self.scroll_offset as i32 + delta as i32;
+        self.scroll_offset = next.clamp(0, u16::MAX as i32) as u16;
+    }
+
     pub fn ensure_field_visible(&mut self, field_line: u16) {
         let h = self.viewport_height;
         if h == 0 {
@@ -210,9 +215,13 @@ impl ProfileState {
             self.user_id,
             ProfileParams {
                 username: self.profile.username.clone(),
+                bio: self.profile.bio.clone(),
+                country: self.profile.country.clone(),
+                timezone: self.profile.timezone.clone(),
                 notify_kinds: self.profile.notify_kinds.clone(),
                 notify_bell: self.profile.notify_bell,
                 notify_cooldown_mins: self.profile.notify_cooldown_mins,
+                theme_id: Some(self.theme_id().to_string()),
                 enable_background_color: self.profile.enable_background_color,
             },
         );

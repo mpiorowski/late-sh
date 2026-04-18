@@ -1,3 +1,4 @@
+use crate::app::help_modal::data::HelpTopic;
 use crate::app::state::App;
 use uuid::Uuid;
 
@@ -30,6 +31,9 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             if let Some(b) = app.chat.submit_composer(false) {
                 app.banner = Some(b);
             }
+            if let Some(topic) = app.chat.take_requested_help_topic() {
+                open_help_modal(app, topic);
+            }
         }
         0x15 => {
             // Ctrl-U: clear composer
@@ -42,6 +46,11 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
         }
         _ => {}
     }
+}
+
+fn open_help_modal(app: &mut App, topic: HelpTopic) {
+    app.help_modal_state.open(topic);
+    app.show_help = true;
 }
 
 pub fn handle_compose_char(app: &mut App, ch: char) {
@@ -77,7 +86,7 @@ fn switch_room(app: &mut App, delta: isize) {
 }
 
 /// Shared message-list navigation and actions. Consumed by both the chat page
-/// and the dashboard card so that d/r/e/j/k/etc. behave identically on both
+/// and the dashboard card so that d/r/e/p/j/k/etc. behave identically on both
 /// screens and new message actions only need to be wired here.
 ///
 /// Returns true if the key was handled.
@@ -93,6 +102,7 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     // reap a run of your own messages with repeated presses.
     // `r` enters reply mode and drops the selection.
     // `e` enters edit mode and drops the selection.
+    // `p` opens a read-only profile modal for the selected author.
     match byte {
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message_in_room(room_id) {
@@ -112,6 +122,13 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 app.chat.clear_message_selection();
             }
             return true;
+        }
+        b'p' => {
+            if let Some((user_id, username)) = app.chat.selected_message_author_in_room(room_id) {
+                app.profile_modal_state.open(user_id, username);
+                app.show_profile_modal = true;
+                return true;
+            }
         }
         _ => {}
     }

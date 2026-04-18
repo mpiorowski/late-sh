@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
 
-use crate::app::common::primitives::Banner;
+use crate::app::common::{composer::ComposerState, primitives::Banner};
+use crate::app::help_modal::data::HelpTopic;
 use crate::state::{ActiveUser, ActiveUsers};
 
 use super::{
@@ -17,25 +18,6 @@ use super::{
     notifications::svc::NotificationService,
     svc::{ChatEvent, ChatService, ChatSnapshot},
 };
-
-const MUSIC_HELP_TEXT: &str = "\
-How music works on late.sh
-
-SSH is a terminal protocol - it carries text, not audio. To hear music, you need a second audio channel that pairs with your SSH session.
-
-Option 1 (recommended): Install the CLI
-  curl -fsSL https://cli.late.sh/install.sh | bash
-  Then run `late` instead of `ssh late.sh`. It launches SSH + local audio playback in one process - no browser needed. The CLI decodes the MP3 stream locally, plays through your system audio, and pairs with the TUI over WebSocket for visualizer + controls.
-  Don't trust the install script? Build from source: git clone https://github.com/mpiorowski/late-sh && cargo install --path late-cli
-
-Option 2: Browser pairing
-  Press `p` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
-
-Both options give you:
-  m = mute | +/- = volume | visualizer in the sidebar
-  Vote for genres on the Dashboard: L C A
-
-The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";
 
 pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
 
@@ -77,6 +59,7 @@ pub struct ChatState {
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
     general_room_id: Option<Uuid>,
     pub(crate) usernames: HashMap<Uuid, String>,
+    pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
     overlay: Option<Overlay>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
@@ -84,8 +67,7 @@ pub struct ChatState {
     room_tx: watch::Sender<Option<Uuid>>,
     pub(crate) selected_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
-    pub(crate) composer: String,
-    pub(crate) composer_cursor: usize, // char position within composer
+    composer: ComposerState,
     pub(crate) composing: bool,
     composer_room_id: Option<Uuid>,
     pending_send_notices: VecDeque<Uuid>,
@@ -99,11 +81,6 @@ pub struct ChatState {
     pub(crate) reply_target: Option<ReplyTarget>,
     bg_task: tokio::task::AbortHandle,
 
-    /// Width (in chars) available for composer text, updated each render.
-    pub(crate) composer_text_width: usize,
-    composer_rows: Vec<super::ui::ComposerRow>,
-    composer_layout_dirty: bool,
-
     /// News (shown as a virtual room in the room list)
     pub(crate) news_selected: bool,
     pub(crate) news: news::state::State,
@@ -115,6 +92,7 @@ pub struct ChatState {
     /// Pending desktop notifications drained on render. `kind` matches the
     /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
     pub(crate) pending_notifications: Vec<PendingNotification>,
+    requested_help_topic: Option<HelpTopic>,
 }
 
 pub(crate) struct PendingNotification {
@@ -153,6 +131,7 @@ impl ChatState {
             rooms: Vec::new(),
             general_room_id: None,
             usernames: HashMap::new(),
+            countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             overlay: None,
             unread_counts: HashMap::new(),
@@ -160,8 +139,7 @@ impl ChatState {
             room_tx,
             selected_room_id: None,
             room_jump_active: false,
-            composer: String::new(),
-            composer_cursor: 0,
+            composer: ComposerState::new(80),
             composing: false,
             composer_room_id: None,
             pending_send_notices: VecDeque::new(),
@@ -174,40 +152,33 @@ impl ChatState {
             edited_message_id: None,
             reply_target: None,
             bg_task,
-            composer_text_width: 80,
-            composer_rows: Vec::new(),
-            composer_layout_dirty: true,
             news_selected: false,
             news: news::state::State::new(article_service, user_id, is_admin),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
             pending_notifications: Vec::new(),
+            requested_help_topic: None,
         }
-    }
-
-    fn invalidate_composer_layout(&mut self) {
-        self.composer_layout_dirty = true;
     }
 
     pub fn set_composer_text_width(&mut self, width: usize) {
-        let width = width.max(1);
-        if self.composer_text_width != width {
-            self.composer_text_width = width;
-            self.invalidate_composer_layout();
-        }
+        self.composer.set_text_width(width);
     }
 
     pub fn sync_composer_layout(&mut self) {
-        if !self.composer_layout_dirty {
-            return;
-        }
-        self.composer_rows =
-            super::ui::build_composer_rows(&self.composer, self.composer_text_width);
-        self.composer_layout_dirty = false;
+        self.composer.sync_layout();
     }
 
-    pub(crate) fn composer_rows(&self) -> &[super::ui::ComposerRow] {
-        &self.composer_rows
+    pub(crate) fn composer_rows(&self) -> &[crate::app::common::composer::ComposerRow] {
+        self.composer.rows()
+    }
+
+    pub(crate) fn composer_text(&self) -> &str {
+        self.composer.text()
+    }
+
+    pub(crate) fn composer_cursor(&self) -> usize {
+        self.composer.cursor()
     }
 
     pub fn is_composing(&self) -> bool {
@@ -224,7 +195,6 @@ impl ChatState {
         self.room_jump_active = false;
         self.composing = true;
         self.composer_room_id = Some(room_id);
-        self.composer_cursor = self.composer.chars().count();
         self.selected_message_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
@@ -288,6 +258,10 @@ impl ChatState {
         }
     }
 
+    pub fn take_requested_help_topic(&mut self) -> Option<HelpTopic> {
+        self.requested_help_topic.take()
+    }
+
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
         if ids.is_empty() {
             self.selected_message_id = None;
@@ -343,7 +317,6 @@ impl ChatState {
         });
         self.composing = true;
         self.composer_room_id = Some(room_id);
-        self.composer_cursor = self.composer.chars().count();
         self.edited_message_id = None;
         true
     }
@@ -371,12 +344,9 @@ impl ChatState {
             return Some(Banner::error("Can only edit your own messages"));
         }
         self.edited_message_id = Some(selected_id);
-        self.composer.clear();
-        self.composer.push_str(body);
+        self.composer.set_text(body);
         self.composing = true;
         self.composer_room_id = Some(room_id);
-        self.composer_cursor = self.composer.chars().count();
-        self.invalidate_composer_layout();
         None
     }
 
@@ -411,6 +381,19 @@ impl ChatState {
     fn selected_message_in_room(&self, room_id: Uuid) -> Option<&ChatMessage> {
         let selected_id = self.selected_message_id?;
         self.find_message_in_room(room_id, selected_id)
+    }
+
+    pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
+        let message = self.selected_message_in_room(room_id)?;
+        let user_id = message.user_id;
+        let display_name = self
+            .usernames
+            .get(&user_id)
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| short_user_id(user_id));
+        Some((user_id, display_name))
     }
 
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {
@@ -592,40 +575,33 @@ impl ChatState {
         self.composing = false;
         self.room_jump_active = false;
         self.composer_room_id = None;
-        self.composer_cursor = self.composer.chars().count();
         self.reply_target = None;
     }
 
     pub fn reset_composer(&mut self) {
         self.composer.clear();
-        self.composer_cursor = 0;
         self.composing = false;
         self.room_jump_active = false;
         self.composer_room_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
         self.mention_ac = MentionAutocomplete::default();
-        self.invalidate_composer_layout();
     }
 
     fn clear_composer_after_submit(&mut self) {
         self.composer.clear();
-        self.composer_cursor = 0;
         self.composing = false;
         self.room_jump_active = false;
         self.composer_room_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
-        self.invalidate_composer_layout();
     }
 
     fn clear_composer_after_send(&mut self) {
         self.composer.clear();
-        self.composer_cursor = 0;
         self.room_jump_active = false;
         self.reply_target = None;
         self.edited_message_id = None;
-        self.invalidate_composer_layout();
     }
 
     fn open_overlay(&mut self, title: &str, lines: Vec<String>) {
@@ -658,22 +634,18 @@ impl ChatState {
         format_active_user_lines(self.active_users.as_ref())
     }
 
-    fn music_help_lines(&self) -> Vec<String> {
-        MUSIC_HELP_TEXT.lines().map(str::to_string).collect()
-    }
-
     pub fn submit_composer(&mut self, keep_open: bool) -> Option<Banner> {
-        let body = self.composer.trim_end().to_string();
+        let body = self.composer.text().trim_end().to_string();
 
         if body.trim() == "/help" {
             self.clear_composer_after_submit();
-            self.open_overlay("Chat Help", chat_help_lines());
+            self.requested_help_topic = Some(HelpTopic::Chat);
             return None;
         }
 
         if body.trim() == "/music" {
             self.clear_composer_after_submit();
-            self.open_overlay("Music Help", self.music_help_lines());
+            self.requested_help_topic = Some(HelpTopic::Music);
             return None;
         }
 
@@ -806,220 +778,49 @@ impl ChatState {
 
     pub fn composer_clear(&mut self) {
         self.composer.clear();
-        self.composer_cursor = 0;
-        self.invalidate_composer_layout();
     }
     pub fn composer_backspace(&mut self) {
-        if self.composer_cursor == 0 {
-            return;
-        }
-        let byte_pos = self
-            .composer
-            .char_indices()
-            .nth(self.composer_cursor - 1)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let next_byte = self
-            .composer
-            .char_indices()
-            .nth(self.composer_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        self.composer.replace_range(byte_pos..next_byte, "");
-        self.composer_cursor -= 1;
-        self.invalidate_composer_layout();
+        self.composer.backspace();
     }
 
     pub fn composer_delete_right(&mut self) {
-        let char_count = self.composer.chars().count();
-        if self.composer_cursor >= char_count {
-            return;
-        }
-
-        let byte_pos = self
-            .composer
-            .char_indices()
-            .nth(self.composer_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        let next_byte = self
-            .composer
-            .char_indices()
-            .nth(self.composer_cursor + 1)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        self.composer.replace_range(byte_pos..next_byte, "");
-        self.invalidate_composer_layout();
+        self.composer.delete_right();
     }
 
     pub fn composer_delete_word_right(&mut self) {
-        let chars: Vec<char> = self.composer.chars().collect();
-        let len = chars.len();
-        let start = self.composer_cursor.min(len);
-        if start >= len {
-            return;
-        }
-
-        let mut end = start;
-        while end < len && chars[end].is_whitespace() {
-            end += 1;
-        }
-        while end < len && !chars[end].is_whitespace() {
-            end += 1;
-        }
-
-        let start_byte = self
-            .composer
-            .char_indices()
-            .nth(start)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        let end_byte = self
-            .composer
-            .char_indices()
-            .nth(end)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        self.composer.replace_range(start_byte..end_byte, "");
-        self.invalidate_composer_layout();
+        self.composer.delete_word_right();
     }
 
     pub fn composer_delete_word_left(&mut self) {
-        if self.composer_cursor == 0 {
-            return;
-        }
-
-        let chars: Vec<char> = self.composer.chars().collect();
-        let end = self.composer_cursor.min(chars.len());
-        let mut start = end;
-        let at_word_boundary = end == chars.len() || chars[end].is_whitespace();
-
-        while start > 0 && chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        while start > 0 && !chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        if at_word_boundary {
-            while start > 0 && chars[start - 1].is_whitespace() {
-                start -= 1;
-            }
-        }
-
-        let start_byte = self
-            .composer
-            .char_indices()
-            .nth(start)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let end_byte = self
-            .composer
-            .char_indices()
-            .nth(end)
-            .map(|(i, _)| i)
-            .unwrap_or(self.composer.len());
-        self.composer.replace_range(start_byte..end_byte, "");
-        self.composer_cursor = start;
-        self.invalidate_composer_layout();
+        self.composer.delete_word_left();
     }
 
     pub fn composer_push(&mut self, ch: char) {
-        let char_count = self.composer.chars().count();
-        if self.composer_cursor >= char_count {
-            self.composer.push(ch);
-        } else {
-            let byte_pos = self
-                .composer
-                .char_indices()
-                .nth(self.composer_cursor)
-                .map(|(i, _)| i)
-                .unwrap_or(self.composer.len());
-            self.composer.insert(byte_pos, ch);
-        }
-        self.composer_cursor += 1;
-        self.invalidate_composer_layout();
+        self.composer.push(ch);
     }
 
     pub fn composer_cursor_left(&mut self) {
-        self.composer_cursor = self.composer_cursor.saturating_sub(1);
+        self.composer.cursor_left();
     }
 
     pub fn composer_cursor_right(&mut self) {
-        let char_count = self.composer.chars().count();
-        if self.composer_cursor < char_count {
-            self.composer_cursor += 1;
-        }
+        self.composer.cursor_right();
     }
 
     pub fn composer_cursor_word_left(&mut self) {
-        if self.composer_cursor == 0 {
-            return;
-        }
-
-        let chars: Vec<char> = self.composer.chars().collect();
-        let mut cursor = self.composer_cursor.min(chars.len());
-
-        while cursor > 0 && chars[cursor - 1].is_whitespace() {
-            cursor -= 1;
-        }
-        while cursor > 0 && !chars[cursor - 1].is_whitespace() {
-            cursor -= 1;
-        }
-
-        self.composer_cursor = cursor;
+        self.composer.cursor_word_left();
     }
 
     pub fn composer_cursor_word_right(&mut self) {
-        let chars: Vec<char> = self.composer.chars().collect();
-        let len = chars.len();
-        let mut cursor = self.composer_cursor.min(len);
-
-        while cursor < len && chars[cursor].is_whitespace() {
-            cursor += 1;
-        }
-        while cursor < len && !chars[cursor].is_whitespace() {
-            cursor += 1;
-        }
-
-        self.composer_cursor = cursor;
+        self.composer.cursor_word_right();
     }
 
     pub fn composer_cursor_up(&mut self) {
-        self.sync_composer_layout();
-        let rows = &self.composer_rows;
-        if rows.is_empty() {
-            return;
-        }
-        let row_idx = rows
-            .iter()
-            .position(|r| self.composer_cursor <= r.end)
-            .unwrap_or(rows.len() - 1);
-        if row_idx == 0 {
-            return;
-        }
-        let col = self.composer_cursor.saturating_sub(rows[row_idx].start);
-        let prev = &rows[row_idx - 1];
-        let row_len = prev.text.chars().count();
-        self.composer_cursor = prev.start + col.min(row_len);
+        self.composer.cursor_up();
     }
 
     pub fn composer_cursor_down(&mut self) {
-        self.sync_composer_layout();
-        let rows = &self.composer_rows;
-        if rows.is_empty() {
-            return;
-        }
-        let row_idx = rows
-            .iter()
-            .position(|r| self.composer_cursor <= r.end)
-            .unwrap_or(rows.len() - 1);
-        if row_idx >= rows.len() - 1 {
-            return;
-        }
-        let col = self.composer_cursor.saturating_sub(rows[row_idx].start);
-        let next = &rows[row_idx + 1];
-        let row_len = next.text.chars().count();
-        self.composer_cursor = next.start + col.min(row_len);
+        self.composer.cursor_down();
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
@@ -1065,7 +866,7 @@ impl ChatState {
 
     pub fn update_autocomplete(&mut self) {
         // Scan backward from end of composer to find a trigger `@`
-        let bytes = self.composer.as_bytes();
+        let bytes = self.composer.text().as_bytes();
         let mut at_offset = None;
         for i in (0..bytes.len()).rev() {
             if bytes[i] == b'@' {
@@ -1086,7 +887,7 @@ impl ChatState {
             return;
         };
 
-        let query = &self.composer[offset + 1..];
+        let query = &self.composer.text()[offset + 1..];
         let query_lower = query.to_ascii_lowercase();
         let active_users = self.active_users.as_ref();
         let matches = rank_mention_matches(&self.all_usernames, &query_lower, || {
@@ -1124,13 +925,13 @@ impl ChatState {
         let username = self.mention_ac.matches[self.mention_ac.selected]
             .name
             .clone();
-        self.composer.truncate(self.mention_ac.trigger_offset);
-        self.composer.push('@');
-        self.composer.push_str(&username);
-        self.composer.push(' ');
-        self.composer_cursor = self.composer.chars().count();
+        let next = format!(
+            "{}@{} ",
+            &self.composer.text()[..self.mention_ac.trigger_offset],
+            username
+        );
+        self.composer.set_text(next);
         self.mention_ac = MentionAutocomplete::default();
-        self.invalidate_composer_layout();
     }
 
     pub fn ac_dismiss(&mut self) {
@@ -1152,6 +953,10 @@ impl ChatState {
         &self.usernames
     }
 
+    pub fn countries(&self) -> &HashMap<Uuid, String> {
+        &self.countries
+    }
+
     pub fn bonsai_glyphs(&self) -> &HashMap<Uuid, String> {
         &self.bonsai_glyphs
     }
@@ -1167,6 +972,7 @@ impl ChatState {
         }
 
         self.usernames = snapshot.usernames;
+        self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;
@@ -1504,69 +1310,6 @@ fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>
         .and_then(|id| usernames.get(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
-}
-
-fn chat_help_lines() -> Vec<String> {
-    [
-        "Commands",
-        "  /join #room        join a room (creates it if new, solo)",
-        "  /create #room      create a room and add everyone",
-        "  /leave             leave the current room",
-        "  /dm @user          open a direct message",
-        "  /active            list active users",
-        "  /list              list users in this private room",
-        "  /ignore [@user]    ignore a user, or list ignored users",
-        "  /unignore [@user]  remove a user from your ignore list",
-        "  /music             explain how music works",
-        "  /help              show this help",
-        "",
-        "Rooms",
-        "  h / l              previous / next room",
-        "  Enter / i          start composing",
-        "  c                  copy a web-chat link to this session",
-        "",
-        "Messages",
-        "  j / k              select older / newer message",
-        "  ↑ / ↓              same as j / k",
-        "  Ctrl+U / Ctrl+D    half page up / down",
-        "  PageUp / PageDown  half page up / down",
-        "  End                jump to most recent",
-        "  g / G              clear selection (back to live view)",
-        "  r                  reply to selected message",
-        "  e                  edit selected message",
-        "  d                  delete selected message",
-        "",
-        "Compose",
-        "  Enter              send and exit",
-        "  Ctrl+Enter         send and keep open",
-        "  Alt+Enter          newline",
-        "  Esc                exit compose",
-        "  Backspace          delete char",
-        "  Ctrl+Backspace     delete word left",
-        "  Ctrl+Delete        delete word right",
-        "  Ctrl+U             clear composer",
-        "  Ctrl+← / Ctrl+→    move cursor by word",
-        "  @user              mention (Tab/Enter to confirm)",
-        "  Ctrl+]             open emoji / nerd font picker",
-        "",
-        "Icon picker",
-        "  ↑/↓ or Ctrl+K/J    move selection",
-        "  Ctrl+U / Ctrl+D    half page up / down",
-        "  PageUp / PageDown  jump a page",
-        "  type to filter     search by name",
-        "  Enter              insert and close",
-        "  Alt+Enter          insert and keep open",
-        "  click / wheel      select / scroll",
-        "  double-click       insert and keep open",
-        "  Esc                close",
-        "",
-        "Overlays (this window)",
-        "  j / k or ↑ / ↓     scroll",
-        "  q or Esc           close",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
 }
 
 /// Parse `/dm @username` or `/dm username` from the composer text.

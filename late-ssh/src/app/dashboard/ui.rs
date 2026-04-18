@@ -149,6 +149,7 @@ mod tests {
         };
         let mut rows_cache = ChatRowsCache::default();
         let usernames: HashMap<Uuid, String> = HashMap::new();
+        let countries: HashMap<Uuid, String> = HashMap::new();
         let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
 
@@ -169,6 +170,7 @@ mod tests {
                             overlay: None,
                             rows_cache: &mut rows_cache,
                             usernames: &usernames,
+                            countries: &countries,
                             badges: &badges,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,

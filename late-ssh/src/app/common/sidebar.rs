@@ -241,7 +241,7 @@ fn draw_status(
         Span::styled(" online", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("  ", Style::default()),
         Span::styled("?", Style::default().fg(theme::AMBER())),
-        Span::styled(" keys", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(" help", Style::default().fg(theme::TEXT_DIM())),
     ])];
 
     let activity_rows = inner.height.saturating_sub(1).min(20) as usize;

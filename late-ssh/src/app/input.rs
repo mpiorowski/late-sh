@@ -1,4 +1,6 @@
-use super::{chat, dashboard, icon_picker, profile, state::App};
+use super::{
+    chat, dashboard, help_modal, icon_picker, profile, profile_modal, state::App, welcome_modal,
+};
 use crate::app::common::primitives::Screen;
 use std::{mem, time::Duration};
 use vte::{Params, Parser, Perform};
@@ -46,7 +48,7 @@ enum PasteTarget {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum ParsedInput {
+pub(crate) enum ParsedInput {
     Char(char),
     Byte(u8),
     Arrow(u8),
@@ -335,47 +337,6 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-    if app.show_welcome && !data.is_empty() {
-        app.show_welcome = false;
-        return;
-    }
-
-    // Help overlay: scroll with j/k/arrows/mouse wheel, dismiss with ?/Esc/q
-    if app.show_help && !data.is_empty() {
-        let mut i = 0;
-        while i < data.len() {
-            // ESC sequences
-            if data[i] == 0x1B && i + 1 < data.len() && data[i + 1] == b'[' {
-                // Arrow keys: ESC [ A/B
-                if i + 2 < data.len() {
-                    match data[i + 2] {
-                        b'B' => app.help_scroll = app.help_scroll.saturating_add(1),
-                        b'A' => app.help_scroll = app.help_scroll.saturating_sub(1),
-                        _ => {}
-                    }
-                    i += 3;
-                    continue;
-                }
-            }
-            // Lone ESC = close
-            if data[i] == 0x1B {
-                app.show_help = false;
-                return;
-            }
-            match data[i] {
-                b'?' | b'q' => {
-                    app.show_help = false;
-                    return;
-                }
-                b'j' => app.help_scroll = app.help_scroll.saturating_add(1),
-                b'k' => app.help_scroll = app.help_scroll.saturating_sub(1),
-                _ => {}
-            }
-            i += 1;
-        }
-        return;
-    }
-
     // Web chat QR overlay: any key dismisses
     if app.show_web_chat_qr && !data.is_empty() {
         app.show_web_chat_qr = false;
@@ -449,6 +410,22 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    // Help is the topmost modal: when both are open it owns input.
+    if app.show_help {
+        help_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_welcome {
+        welcome_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_profile_modal {
+        profile_modal::input::handle_input(app, event);
+        return;
+    }
+
     // Picker intercepts all input when open (ESC is handled via dispatch_escape).
     if app.icon_picker_open {
         handle_icon_picker_input(app, event);
@@ -473,11 +450,15 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::AltS => {
-            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat)
-                && ctx.chat_composing
-                && let Some(b) = app.chat.submit_composer(true)
+            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
             {
-                app.banner = Some(b);
+                if let Some(b) = app.chat.submit_composer(true) {
+                    app.banner = Some(b);
+                }
+                if let Some(topic) = app.chat.take_requested_help_topic() {
+                    app.help_modal_state.open(topic);
+                    app.show_help = true;
+                }
             }
         }
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
@@ -659,6 +640,18 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
 }
 
 fn dispatch_escape(app: &mut App) {
+    if app.show_help {
+        help_modal::input::handle_escape(app);
+        return;
+    }
+    if app.show_welcome {
+        welcome_modal::input::handle_escape(app);
+        return;
+    }
+    if app.show_profile_modal {
+        profile_modal::input::handle_escape(app);
+        return;
+    }
     if app.icon_picker_open {
         app.icon_picker_open = false;
         return;
@@ -813,8 +806,9 @@ fn reset_composers_for_page_change(app: &mut App) {
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     // ? opens help unless composing text
     if byte == b'?' && !ctx.chat_composing && !ctx.news_composing && !ctx.profile_composing {
+        app.help_modal_state
+            .open(crate::app::help_modal::data::HelpTopic::Overview);
         app.show_help = true;
-        app.help_scroll = 0;
         return true;
     }
 
@@ -966,7 +960,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'p' | b'P' => {
+        b'P' => {
             app.pending_clipboard = Some(app.connect_url.clone());
             app.web_chat_qr_url = Some(app.connect_url.clone());
             app.show_web_chat_qr = true;
