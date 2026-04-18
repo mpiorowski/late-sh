@@ -225,7 +225,8 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     wait_for_render_contains(&mut app, " Rooms (h/l)").await;
 
     app.handle_input(b"i/help\r");
-    wait_for_render_contains(&mut app, "Chat Help").await;
+    wait_for_render_contains(&mut app, " Guide ").await;
+    wait_for_render_contains(&mut app, " Chat ").await;
     wait_for_render_contains(&mut app, "/ignore [@user]").await;
 
     let messages = ChatMessage::list_recent(&client, general.id, 20)

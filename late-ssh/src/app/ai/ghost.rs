@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::{
     app::ai::svc::AiService,
     app::chat::svc::{ChatEvent, ChatService},
+    app::help_modal::data::bot_app_context,
     state::{ActiveUser, ActiveUsers, ActivityEvent},
 };
 
@@ -43,28 +44,6 @@ const BOT_COOLDOWN: Duration = Duration::from_secs(30);
 pub const BOT_TIP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
 pub const BOT_TIP_MIN_NEW_MESSAGES: usize = 3;
 const BOT_TIP_HISTORY_SIZE: i64 = 50;
-const BOT_APP_CONTEXT: &str = "APP CONTEXT:\n\
-- late.sh is a cozy terminal clubhouse for developers. `ssh late.sh` is the only entry point — SSH key fingerprint is your identity, zero signup.\n\
-- It is terminal-first, always-on, and social: chat, tech news, games, music, and presence in one SSH session.\n\
-- The Rust workspace has four crates: `late-cli`, `late-core`, `late-ssh`, and `late-web`.\n\
-- `late-ssh` is the main SSH/TUI runtime.\n\
-- `late-web` serves the web UI and browser pairing flows.\n\
-- `late-core` holds shared models, database code, and common infrastructure.\n\
-- `late-cli` is the local CLI companion for paired audio and control flows.\n\
-- Persistence is PostgreSQL.\n\
-- Audio: users vote on a music genre (lofi, ambient, classical, jazz) and the winning genre plays for everyone. Votes reset every hour. Streamed via Icecast + Liquidsoap.\n\
-- The app supports paired browser/CLI clients over WebSocket for audio controls, state sync, and a visualizer.\n\
-- Important user-facing areas: Dashboard, Chat, News, Profile, and The Arcade (terminal games with daily puzzles).\n\
-- Chat is real-time and global, with link and YouTube sharing, AI summaries, and ASCII thumbnails.\n\
-- Late Chips: in-app currency. Everyone gets a daily stipend, and completing daily puzzles earns bonus chips.\n\
-- Daily streaks and leaderboard: playing daily puzzles builds streaks (shown as badges in chat), with a global leaderboard for streaks, high scores, and chip balances.\n\
-- There is a persistent bonsai tree in the sidebar. Water it daily and it grows through stages. Neglect it for 7 days and it dies — a gravestone is recorded.\n\
-- The project is licensed under FSL-1.1-MIT (source-available, converts to MIT after 2 years).\n\
-- Internally it is a multi-service app with shared state, real-time events, and paired client session routing.\n\
-- Highest-risk areas are SSH render loop backpressure, connection limiting, chat sync consistency, and paired-client state drift.\n\
-- If asked whether the project is open source, describe it as source-available unless the user explicitly says otherwise.\n\
-- When asked about architecture or features, answer from this context confidently and concisely. If a detail is missing, say so plainly instead of inventing it.";
-
 const GRAYBEARD_FINGERPRINT: &str = "graybeard-fp-000";
 const GRAYBEARD_USERNAME: &str = "graybeard";
 const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply nostalgic and resigned about the state of modern software. \
@@ -104,6 +83,7 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply n
     You speak in a weary, melancholic, slightly bitter tone. you trail off mid thought. you type in lowercase a lot. \
     you sigh. you 'hmph'. you say things like 'back in my day', 'you kids wouldn't know', 'bless your heart', 'oh sweet child'.";
 pub const GRAYBEARD_CHAT_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
+const GRAYBEARD_CHAT_PHASE_OFFSET: Duration = Duration::from_secs(60 * 30); // 30 min
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
 const GRAYBEARD_MIN_NEW_MESSAGES: usize = 3;
 
@@ -301,7 +281,7 @@ impl GhostService {
             If unsure, ask exactly one short clarifying question.\n\
             Output only raw message text.",
             bot_name = bot.username,
-            app_context = BOT_APP_CONTEXT,
+            app_context = bot_app_context(),
         );
 
         let Some(reply) = self
@@ -410,7 +390,7 @@ impl GhostService {
             A casual lead-in like 'did you know' or 'fun fact' is fine but optional. \
             If you truly have nothing worth saying, output exactly: SKIP",
             bot_name = bot.username,
-            app_context = BOT_APP_CONTEXT,
+            app_context = bot_app_context(),
         );
 
         let history_with_prompt = format!(
@@ -457,6 +437,10 @@ impl GhostService {
         let mut events = self.chat_service.subscribe_events();
         let mut last_reply: HashMap<Uuid, Instant> = HashMap::new();
 
+        // Offset graybeard's periodic chatter so it does not line up with @bot's schedule.
+        let phase_sleep = tokio::time::sleep(GRAYBEARD_CHAT_PHASE_OFFSET);
+        tokio::pin!(phase_sleep);
+        let mut periodic_chat_started = false;
         let mut chat_tick = tokio::time::interval(GRAYBEARD_CHAT_INTERVAL);
         chat_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -468,7 +452,10 @@ impl GhostService {
                     tracing::info!(username = %gb.username, "graybeard task shutting down");
                     break;
                 }
-                _ = chat_tick.tick() => {
+                _ = &mut phase_sleep, if !periodic_chat_started => {
+                    periodic_chat_started = true;
+                }
+                _ = chat_tick.tick(), if periodic_chat_started => {
                     let svc = self.clone();
                     let gb = gb.clone();
                     tokio::spawn(async move {

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-16 (chat room rail now has `Space` jump mode: pressing `Space` overlays single-key letter/digit hints beside rooms, `Esc`/`Space` cancels, and the next hint key jumps directly to that room; generic chat overlays now size height from wrapped visual rows, so long `/music` help lines fit without clipping; `/music` now opens the same scrollable overlay flow as `/help` instead of posting to chat; `?` help overlay Chat section lists `/music`; user-selectable SSH themes added with persisted `users.settings.theme_id`; built-in palettes now include default `late`, `contrast`, and opacity-friendly `purple`; profile settings gained a Theme selector; dashboard Stream card trimmed to 3 rows (now playing, vibe, `/music` hint) - CLI/browser URLs removed; sidebar Now Playing merged paired client info into one line (8->7 rows); visualizer empty state shows `/music` hint; QR modal shows URL as fallback text; chat pairing tokens switched to compact base64url (22 chars, same as session tokens); splash tips brighter)
+- Last updated: 2026-04-18 (welcome/profile modal redesigned with sectioned layout — Identity / Appearance / Notifications / Location plus a button-style Save CTA — and a prominent bordered amber `?` callout pointing to the help modal; selected row gets a `BG_SELECTION` highlight bar, toggles render `● on` / `○ off`, country/timezone show a trailing `…` picker hint; row order in `Row::ALL` reordered so Bio sits at index 1 right after Username (matches visual order); title is `late.sh` with tagline `Tune your identity, vibes, and pings.`; country labels switched from flag emoji to `[PL] Poland` text badges since terminal flag rendering is unreliable across fonts/SSH stacks; `country_flag()` helper deleted; render.rs now reads theme + `enable_background_color` from welcome-modal draft when `show_welcome` is open so cycling Theme / toggling Background previews live and reverts on Esc; pressing `?` inside the welcome modal opens help on top — input dispatch reordered so `show_help` is checked before `show_welcome`, matching the visual stack (help renders above welcome). Help modal cleaned up to **arrows + hjkl only**: `h`/`l`/`←`/`→` switch slides, `j`/`k`/`↑`/`↓` scroll, `Esc`/`?`/`q` close — removed `Ctrl+U`/`Ctrl+D`, `PageUp`/`PageDn`, and mouse wheel handlers, plus the `page_scroll` method and `visible_height` helper; scroll cap removed — `scroll()` only floors at 0, no ceiling, so users can scroll past content end (blank space at bottom signals "you've reached it"); deleted brittle width-tracking machinery (`set_modal_width`, `body_width`, `max_scroll_for`, `wrapped_row_count`, `modal_width` field, second arg to `open()`); help slide copy now follows the rule **prose at column 0, short bullets/code keep `  ` padding** so ratatui's `Wrap { trim: false }` doesn't strand wrapped continuation lines at column 0 while the original line was indented — Music slide rewritten, Arcade "Why it exists", Architecture "Important characteristics", Profile "Why country matters" all unindented their long-prose lines)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -956,7 +956,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
 | **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/help`) with grouped room sections and a synthetic `news` entry in the room list |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Profile** | 4 | Active | User profile: username, Notifications (OSC 777/9 desktop notifications — opt-in checkboxes for DMs / `@mentions` / game events, plus a shared cooldown; no tmux support), Your Stats (streak + badge, chips, high scores), @bot/@graybeard info, chat colors |
+| **Profile** | 4 | Active | Read-only public identity card: username, country, timezone, bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. All editing happens in the **welcome/profile modal** (auto-opens on first login, reopen via Profile's edit action) — sectioned into Identity / Appearance / Notifications / Location, with a Save CTA and a `?` callout that opens the help modal on top. Theme + background color preview live from the draft while the modal is open. |
 
 ### Layout
 
@@ -994,7 +994,10 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | Key | Context | Action |
 |-----|---------|--------|
 | `q` / `Q` / `Ctrl+C` | Global | Quit |
-| `?` | Global (not composing) | Open keybindings help modal (scrollable with j/k/arrows/mouse) |
+| `?` | Global (not composing) | Open help modal (multi-slide guide). Also works inside the welcome/profile modal, which renders help on top while keeping the draft intact. |
+| `h` / `l` / `←` / `→` | Help modal | Switch slides (Overview / Architecture / Chat / Music / News / Arcade / Bonsai / Profile) |
+| `j` / `k` / `↑` / `↓` | Help modal | Scroll current slide (uncapped — past the last line is blank space) |
+| `?` / `q` / `Esc` | Help modal | Close (returns to underlying screen, including welcome modal if it was open) |
 | `Tab` | Global | Cycle screens |
 | `1` | Global | Jump to Dashboard |
 | `2` | Global | Jump to Chat |
@@ -1055,10 +1058,12 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
 | `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
 | `q` / `Esc` | Chat overlay (`/help`, ignore list) | Close overlay |
-| `↑` / `↓` | Profile | Move between settings rows |
-| `←` / `→` | Profile | Adjust the current row (cycles the cooldown value; also toggles a checkbox) |
-| `Space` / `Enter` | Profile | Toggle the currently selected notification checkbox (or bump the cooldown forward) |
-| `i` | Profile | Edit username (Enter saves, Esc cancels; whitespace is trimmed on save) |
+| `Enter` | Profile screen | Open the welcome/profile modal to edit |
+| `↑` / `↓` / `j` / `k` | Welcome/profile modal | Move between rows (Username, Bio, Theme, Background, DMs, @mentions, Game events, Bell, Cooldown, Country, Timezone, Save) |
+| `←` / `→` | Welcome/profile modal | Cycle the current row's setting (theme, toggles, cooldown) |
+| `Space` / `Enter` / `e` | Welcome/profile modal | Activate row — edit username/bio, cycle a setting, open country/timezone picker, or fire Save |
+| `Alt+Enter` | Welcome/profile modal (bio editing) | Insert newline |
+| `?` | Welcome/profile modal | Open help modal on top |
 | `Esc` | Any modal | Close/cancel |
 | `c` | Chat (not composing) | Open web chat QR (copies URL + shows it as fallback) |
 | `Ctrl+]` | Dashboard / Chat | Open icon picker (emoji + nerd font). Auto-starts the composer if not already composing. Inserts into the chat composer only. |
@@ -1075,10 +1080,10 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 When modifying any keybinding, update **all** of the following:
 
 1. **Input handler** — the actual `match byte` in the relevant `input.rs` (screen-specific or `app/input.rs` for globals)
-2. **Help modal** — `app/render.rs` `draw_help_overlay()`, two-column keybinding list
-3. **Welcome modal** — `app/render.rs` `draw_welcome_overlay()`, if the key is mentioned in the getting-started section
+2. **Help modal** — `app/help_modal/data.rs` (slide copy, e.g. Overview "This modal" section) and `app/help_modal/ui.rs` `draw_footer()` keybind line
+3. **Welcome modal** — `app/welcome_modal/ui.rs` `draw_footer()` keybind line and the bordered help callout in `draw_help_callout()`
 4. **Sidebar hints** — `app/common/sidebar.rs`, e.g. the volume/mute hint line in Now Playing
-5. **Game guard** — `app/input.rs` `handle_global_key()` line ~540, the `!matches!(byte, ...)` allowlist for keys that pass through during active games
+5. **Game guard** — `app/input.rs` `handle_global_key()`, the `!matches!(byte, ...)` allowlist for keys that pass through during active games
 6. **This table** — the keyboard shortcuts table above in CONTEXT.md
 7. **Game info panels** — per-game UI panels that show controls (check each game's `ui.rs`)
 
