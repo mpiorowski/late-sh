@@ -342,6 +342,30 @@ where
     panic!("timed out waiting for condition: {label}");
 }
 
+/// Returns [`TestDb`] alongside the app so the Postgres container outlives
+/// the test body.
+pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
+    use late_core::models::{chat_room::ChatRoom, chat_room_member::ChatRoomMember};
+    use late_core::test_utils::create_test_user;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, &format!("{name}-it")).await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+
+    let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow-it"));
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
+    (test_db, app)
+}
+
 pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
@@ -382,26 +406,22 @@ pub fn render_plain(app: &mut App) -> String {
 }
 
 pub fn strip_ansi(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = String::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1B {
-            i += 1;
-            if i < bytes.len() && bytes[i] == b'[' {
-                i += 1;
-                while i < bytes.len() {
-                    let b = bytes[i];
-                    i += 1;
-                    if (0x40..=0x7E).contains(&b) {
-                        break;
-                    }
-                }
-            }
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1B}' {
+            out.push(ch);
             continue;
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        if !matches!(chars.peek(), Some('[')) {
+            continue;
+        }
+        chars.next();
+        for c in chars.by_ref() {
+            if matches!(c, '\u{40}'..='\u{7E}') {
+                break;
+            }
+        }
     }
     out
 }

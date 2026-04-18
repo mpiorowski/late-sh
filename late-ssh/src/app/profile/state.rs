@@ -161,8 +161,12 @@ impl ProfileState {
         Self::NOTIFY_START_ROW + kind_idx
     }
 
-    fn cooldown_row_index() -> usize {
+    fn bell_row_index() -> usize {
         Self::notify_row_index(Self::NOTIFY_KINDS.len())
+    }
+
+    fn cooldown_row_index() -> usize {
+        Self::bell_row_index() + 1
     }
 
     pub fn move_settings_row(&mut self, delta: isize) {
@@ -188,6 +192,9 @@ impl ProfileState {
             self.profile.notify_cooldown_mins =
                 cycle_cooldown_value(self.profile.notify_cooldown_mins, forward);
             self.save_profile();
+        } else if self.settings_row == Self::bell_row_index() {
+            self.profile.notify_bell ^= true;
+            self.save_profile();
         } else if let Some(kind) = self
             .settings_row
             .checked_sub(Self::NOTIFY_START_ROW)
@@ -204,6 +211,7 @@ impl ProfileState {
             ProfileParams {
                 username: self.profile.username.clone(),
                 notify_kinds: self.profile.notify_kinds.clone(),
+                notify_bell: self.profile.notify_bell,
                 notify_cooldown_mins: self.profile.notify_cooldown_mins,
                 enable_background_color: self.profile.enable_background_color,
             },
@@ -435,6 +443,6 @@ mod tests {
 
     #[test]
     fn cooldown_row_is_last_selectable_row() {
-        assert_eq!(ProfileState::cooldown_row_index(), 5);
+        assert_eq!(ProfileState::cooldown_row_index(), 6);
     }
 }

@@ -47,9 +47,11 @@ enum PasteTarget {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ParsedInput {
+    Char(char),
     Byte(u8),
     Arrow(u8),
     CtrlArrow(u8),
+    Delete,
     CtrlBackspace,
     CtrlDelete,
     Scroll(isize),
@@ -147,14 +149,15 @@ impl VtCollector {
     }
 
     fn push_char(&mut self, ch: char) {
-        let mut buf = [0; 4];
-        let bytes = ch.encode_utf8(&mut buf).as_bytes();
         if let Some(paste) = &mut self.paste {
-            paste.extend_from_slice(bytes);
+            let mut buf = [0; 4];
+            paste.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        } else if ch.is_ascii_control() {
+            // vte routes DEL (0x7F) through `print`, not `execute`. Keep it
+            // on the control-byte path so Backspace in composers still works.
+            self.events.push(ParsedInput::Byte(ch as u8));
         } else {
-            for &byte in bytes {
-                self.events.push(ParsedInput::Byte(byte));
-            }
+            self.events.push(ParsedInput::Char(ch));
         }
     }
 
@@ -226,6 +229,9 @@ impl Perform for VtCollector {
             }
             '~' if p0 == Some(3) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlDelete);
+            }
+            '~' if p0 == Some(3) => {
+                self.events.push(ParsedInput::Delete);
             }
             '~' if p0 == Some(8) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
@@ -477,7 +483,32 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
         // Mouse clicks only matter inside the icon picker today; ignore here.
         ParsedInput::MousePress { .. } => {}
-        ParsedInput::BackTab => {}
+        ParsedInput::BackTab => {
+            if ctx.screen == Screen::Chat && app.chat.room_jump_active {
+                return;
+            }
+            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
+            {
+                return;
+            }
+            if ctx.screen == Screen::Chat && ctx.news_composing {
+                return;
+            }
+            if ctx.screen == Screen::Profile && ctx.profile_composing {
+                return;
+            }
+            if ctx.screen == Screen::Games && app.is_playing_game {
+                return;
+            }
+            reset_composers_for_page_change(app);
+            app.screen = ctx.screen.prev();
+            if app.screen == Screen::Chat {
+                app.chat.request_list();
+                app.chat.sync_selection();
+                app.chat.mark_selected_room_read();
+            }
+            app.chat.clear_message_selection();
+        }
         // Page keys mirror Ctrl-U / Ctrl-D. Signs follow the existing scheme:
         // positive = toward older/top, negative = toward newer/bottom. See
         // `app.chat.select_message` — its `delta` is in MESSAGES, not rows,
@@ -502,6 +533,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 return;
             }
             handle_scroll_for_screen(app, ctx.screen, isize::MIN)
+        }
+        ParsedInput::Delete
+            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+                && ctx.chat_composing =>
+        {
+            app.chat.composer_delete_right();
+            app.chat.update_autocomplete();
         }
         ParsedInput::CtrlBackspace
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
@@ -538,7 +576,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 app.chat.composer_cursor_word_left();
             }
         }
-        ParsedInput::CtrlArrow(_) | ParsedInput::CtrlBackspace | ParsedInput::CtrlDelete => {}
+        ParsedInput::Delete
+        | ParsedInput::CtrlArrow(_)
+        | ParsedInput::CtrlBackspace
+        | ParsedInput::CtrlDelete => {}
         ParsedInput::Arrow(key) => {
             if ctx.screen == Screen::Chat && app.chat.room_jump_active {
                 let _ = chat::input::handle_arrow(app, key);
@@ -578,24 +619,43 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.chat.update_autocomplete();
         }
         ParsedInput::Byte(0x1D) => try_open_icon_picker(app),
-        ParsedInput::Byte(byte) => {
-            if ctx.screen == Screen::Chat && app.chat.room_jump_active {
-                let _ = chat::input::handle_byte(app, byte);
+        ParsedInput::Byte(byte) => handle_byte_event(app, ctx, byte),
+        ParsedInput::Char(ch) => {
+            if route_char_to_composer(app, ctx, ch) {
                 return;
             }
-
-            if handle_modal_input(app, ctx, byte) {
-                return;
+            // Hotkey dispatchers are byte-oriented; non-ASCII can't match.
+            if ch.is_ascii() {
+                handle_byte_event(app, ctx, ch as u8);
             }
-
-            if handle_global_key(app, ctx, byte) {
-                app.chat.clear_message_selection();
-                return;
-            }
-
-            dispatch_screen_key(app, ctx.screen, byte);
         }
     }
+}
+
+fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && ctx.chat_composing {
+        chat::input::handle_compose_char(app, ch);
+        return true;
+    }
+    false
+}
+
+fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
+    if ctx.screen == Screen::Chat && app.chat.room_jump_active {
+        let _ = chat::input::handle_byte(app, byte);
+        return;
+    }
+
+    if handle_modal_input(app, ctx, byte) {
+        return;
+    }
+
+    if handle_global_key(app, ctx, byte) {
+        app.chat.clear_message_selection();
+        return;
+    }
+
+    dispatch_screen_key(app, ctx.screen, byte);
 }
 
 fn dispatch_escape(app: &mut App) {
@@ -963,20 +1023,18 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'\r') => apply_icon_selection(app, false),
         ParsedInput::AltEnter => apply_icon_selection(app, true),
-        ParsedInput::Byte(0x7f) => {
-            if app.icon_picker_state.search_cursor > 0 {
-                let byte_pos = app
-                    .icon_picker_state
-                    .search_query
-                    .char_indices()
-                    .nth(app.icon_picker_state.search_cursor - 1)
-                    .map(|(i, _)| i)
-                    .unwrap_or(0);
-                app.icon_picker_state.search_query.remove(byte_pos);
-                app.icon_picker_state.search_cursor -= 1;
-                app.icon_picker_state.selected_index = 0;
-                app.icon_picker_state.scroll_offset = 0;
-            }
+        ParsedInput::Byte(0x7f) if app.icon_picker_state.search_cursor > 0 => {
+            let byte_pos = app
+                .icon_picker_state
+                .search_query
+                .char_indices()
+                .nth(app.icon_picker_state.search_cursor - 1)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            app.icon_picker_state.search_query.remove(byte_pos);
+            app.icon_picker_state.search_cursor -= 1;
+            app.icon_picker_state.selected_index = 0;
+            app.icon_picker_state.scroll_offset = 0;
         }
         ParsedInput::Arrow(b'A') => picker_move_selection(app, -1),
         ParsedInput::Arrow(b'B') => picker_move_selection(app, 1),
@@ -1012,19 +1070,18 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
             picker_move_selection(app, half);
         }
         ParsedInput::MousePress { x, y } => handle_icon_picker_click(app, x, y),
-        ParsedInput::Byte(byte) if (b' '..=b'~').contains(&byte) => {
-            let c = byte as char;
-            let byte_pos = app
-                .icon_picker_state
+        ParsedInput::Char(ch) if !ch.is_control() => {
+            let state = &mut app.icon_picker_state;
+            let byte_pos = state
                 .search_query
                 .char_indices()
-                .nth(app.icon_picker_state.search_cursor)
+                .nth(state.search_cursor)
                 .map(|(i, _)| i)
-                .unwrap_or(app.icon_picker_state.search_query.len());
-            app.icon_picker_state.search_query.insert(byte_pos, c);
-            app.icon_picker_state.search_cursor += 1;
-            app.icon_picker_state.selected_index = 0;
-            app.icon_picker_state.scroll_offset = 0;
+                .unwrap_or(state.search_query.len());
+            state.search_query.insert(byte_pos, ch);
+            state.search_cursor += 1;
+            state.selected_index = 0;
+            state.scroll_offset = 0;
         }
         _ => {}
     }
@@ -1198,6 +1255,12 @@ mod tests {
     }
 
     #[test]
+    fn vt_parser_reads_backtab_sequence() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b[Z"), vec![ParsedInput::BackTab]);
+    }
+
+    #[test]
     fn vt_parser_parses_scroll_events() {
         let mut parser = VtInputParser::default();
         assert_eq!(parser.feed(b"\x1b[<64;10;5M"), vec![ParsedInput::Scroll(1)]);
@@ -1215,6 +1278,7 @@ mod tests {
             vec![ParsedInput::CtrlArrow(b'C')]
         );
         assert_eq!(parser.feed(b"\x1b[5D"), vec![ParsedInput::CtrlArrow(b'D')]);
+        assert_eq!(parser.feed(b"\x1b[3~"), vec![ParsedInput::Delete]);
         assert_eq!(parser.feed(b"\x1b[3;5~"), vec![ParsedInput::CtrlDelete]);
         assert_eq!(
             parser.feed(b"\x1b[127;5u"),
@@ -1242,7 +1306,7 @@ mod tests {
         let mut parser = VtInputParser::default();
         assert!(parser.feed(b"\x1b").is_empty());
         parser.reset();
-        assert_eq!(parser.feed(b"j"), vec![ParsedInput::Byte(b'j')]);
+        assert_eq!(parser.feed(b"j"), vec![ParsedInput::Char('j')]);
     }
 
     #[test]
@@ -1354,15 +1418,55 @@ mod tests {
     }
 
     #[test]
-    fn vt_parser_emits_utf8_bytes_for_printable_non_ascii() {
+    fn vt_parser_emits_char_for_printable_non_ascii() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed("т".as_bytes()), vec![ParsedInput::Char('т')]);
+        assert_eq!(parser.feed("漢".as_bytes()), vec![ParsedInput::Char('漢')]);
+        assert_eq!(parser.feed("ł".as_bytes()), vec![ParsedInput::Char('ł')]);
+    }
+
+    #[test]
+    fn vt_parser_emits_char_for_ascii_printable() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"a"), vec![ParsedInput::Char('a')]);
+        assert_eq!(parser.feed(b" "), vec![ParsedInput::Char(' ')]);
+        assert_eq!(parser.feed(b"~"), vec![ParsedInput::Char('~')]);
+    }
+
+    #[test]
+    fn vt_parser_emits_one_char_per_codepoint_for_full_word() {
         let mut parser = VtInputParser::default();
         assert_eq!(
-            parser.feed("ł".as_bytes()),
-            "ł".as_bytes()
-                .iter()
-                .copied()
-                .map(ParsedInput::Byte)
-                .collect::<Vec<_>>()
+            parser.feed("тест".as_bytes()),
+            vec![
+                ParsedInput::Char('т'),
+                ParsedInput::Char('е'),
+                ParsedInput::Char('с'),
+                ParsedInput::Char('т'),
+            ]
+        );
+    }
+
+    #[test]
+    fn vt_parser_preserves_ascii_controls_as_bytes() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\r"), vec![ParsedInput::Byte(b'\r')]);
+        assert_eq!(parser.feed(b"\n"), vec![ParsedInput::Byte(b'\n')]);
+        assert_eq!(parser.feed(b"\x15"), vec![ParsedInput::Byte(0x15)]);
+        assert_eq!(parser.feed(b"\x7f"), vec![ParsedInput::Byte(0x7f)]);
+    }
+
+    #[test]
+    fn vt_parser_interleaves_ascii_and_non_ascii() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed("café".as_bytes()),
+            vec![
+                ParsedInput::Char('c'),
+                ParsedInput::Char('a'),
+                ParsedInput::Char('f'),
+                ParsedInput::Char('é'),
+            ]
         );
     }
 

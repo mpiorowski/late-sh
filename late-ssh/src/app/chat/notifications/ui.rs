@@ -14,6 +14,7 @@ pub struct NotificationListView<'a> {
 }
 
 const ITEM_HEIGHT: u16 = 4;
+const PREVIEW_ROWS: usize = 2;
 
 pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &NotificationListView<'_>) {
     let selected = if view.items.is_empty() {
@@ -81,44 +82,141 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
             Span::styled("* ", Style::default().fg(theme::MENTION()))
         };
 
-        let lines = vec![
-            Line::from(vec![
-                read_indicator,
-                Span::styled(
-                    format!("@{}", item.actor_username),
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(" mentioned you in {room_label}"),
-                    Style::default().fg(theme::TEXT()),
-                ),
-                Span::styled(
-                    format!("  {}", format_relative_time(item.created)),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ]),
+        let mut lines = vec![Line::from(vec![
+            read_indicator,
+            Span::styled(
+                format!("@{}", item.actor_username),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" mentioned you in {room_label}"),
+                Style::default().fg(theme::TEXT()),
+            ),
+            Span::styled(
+                format!("  {}", format_relative_time(item.created)),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])];
+
+        let preview_width = content_area.width.saturating_sub(2) as usize;
+        let preview_rows = preview_rows(&item.message_preview, preview_width, PREVIEW_ROWS);
+        lines.extend(preview_rows.into_iter().map(|row| {
             Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled(
-                    preview_text(&item.message_preview),
-                    Style::default().fg(theme::TEXT_FAINT()),
-                ),
-            ]),
-        ];
+                Span::styled(row, Style::default().fg(theme::TEXT_FAINT())),
+            ])
+        }));
 
         let p = Paragraph::new(lines).wrap(Wrap { trim: false });
         frame.render_widget(p, content_area);
     }
 }
 
-fn preview_text(body: &str) -> String {
-    let first_line = body.lines().next().unwrap_or("");
-    let trimmed = first_line.trim();
-    if trimmed.chars().count() > 80 {
-        format!("\"{}...\"", trimmed.chars().take(77).collect::<String>())
-    } else {
-        format!("\"{trimmed}\"")
+fn preview_rows(body: &str, width: usize, max_rows: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    let mut current = String::new();
+
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        for word in trimmed.split_whitespace() {
+            let next_len = if current.is_empty() {
+                word.chars().count()
+            } else {
+                current.chars().count() + 1 + word.chars().count()
+            };
+
+            if next_len > width && !current.is_empty() {
+                rows.push(current);
+                current = word.to_string();
+            } else if current.is_empty() {
+                current.push_str(word);
+            } else {
+                current.push(' ');
+                current.push_str(word);
+            }
+        }
+
+        if !current.is_empty() {
+            rows.push(std::mem::take(&mut current));
+        }
+    }
+
+    if !current.is_empty() {
+        rows.push(current);
+    }
+
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+
+    let truncated = rows.len() > max_rows;
+    finalize_preview_rows(rows, max_rows, truncated)
+}
+
+fn finalize_preview_rows(mut rows: Vec<String>, max_rows: usize, truncated: bool) -> Vec<String> {
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+
+    if rows.len() > max_rows {
+        rows.truncate(max_rows);
+    }
+
+    if truncated && let Some(last) = rows.last_mut() {
+        last.push_str("...");
+    }
+
+    if let Some(first) = rows.first_mut() {
+        first.insert(0, '"');
+    }
+    if let Some(last) = rows.last_mut() {
+        last.push('"');
+    }
+
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_rows;
+
+    #[test]
+    fn preview_rows_wraps_into_two_rows() {
+        let rows = preview_rows(
+            "@mat this is a long mention preview that should use both rows in the mentions panel",
+            24,
+            2,
+        );
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].starts_with('"'));
+        assert!(rows[1].ends_with('"'));
+    }
+
+    #[test]
+    fn preview_rows_uses_multiple_source_lines() {
+        let rows = preview_rows("> quoted line\nactual reply line", 40, 2);
+
+        assert_eq!(
+            rows,
+            vec![
+                "\"> quoted line".to_string(),
+                "actual reply line\"".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn preview_rows_handles_empty_preview() {
+        let rows = preview_rows("", 20, 2);
+
+        assert_eq!(rows, vec!["\"\"".to_string()]);
     }
 }

@@ -20,14 +20,12 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
                 app.chat.ac_confirm();
                 return;
             }
-            _ => {} // fall through to normal handling
+            _ => {}
         }
     }
 
     match byte {
-        0x1B => {
-            app.chat.reset_composer();
-        }
+        0x1B => app.chat.reset_composer(),
         b'\r' | b'\n' => {
             if let Some(b) = app.chat.submit_composer(false) {
                 app.banner = Some(b);
@@ -42,12 +40,13 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             app.chat.composer_backspace();
             app.chat.update_autocomplete();
         }
-        b if (32..127).contains(&b) => {
-            app.chat.composer_push(b as char);
-            app.chat.update_autocomplete();
-        }
         _ => {}
     }
+}
+
+pub fn handle_compose_char(app: &mut App, ch: char) {
+    app.chat.composer_push(ch);
+    app.chat.update_autocomplete();
 }
 
 pub fn handle_autocomplete_arrow(app: &mut App, key: u8) {

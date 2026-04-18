@@ -25,6 +25,7 @@ pub const USERNAME_MAX_LEN: usize = 32;
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
+const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 
@@ -276,6 +277,13 @@ pub fn extract_notify_kinds(settings: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+pub fn extract_notify_bell(settings: &Value) -> bool {
+    settings
+        .get(NOTIFY_BELL_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 pub fn extract_notify_cooldown_mins(settings: &Value) -> i32 {

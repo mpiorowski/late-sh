@@ -40,6 +40,9 @@ struct BotUser {
 const BOT_FINGERPRINT: &str = "bot-fp-000";
 const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
+pub const BOT_TIP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
+pub const BOT_TIP_MIN_NEW_MESSAGES: usize = 3;
+const BOT_TIP_HISTORY_SIZE: i64 = 50;
 const BOT_APP_CONTEXT: &str = "APP CONTEXT:\n\
 - late.sh is a cozy terminal clubhouse for developers. `ssh late.sh` is the only entry point — SSH key fingerprint is your identity, zero signup.\n\
 - It is terminal-first, always-on, and social: chat, tech news, games, music, and presence in one SSH session.\n\
@@ -64,12 +67,42 @@ const BOT_APP_CONTEXT: &str = "APP CONTEXT:\n\
 
 const GRAYBEARD_FINGERPRINT: &str = "graybeard-fp-000";
 const GRAYBEARD_USERNAME: &str = "graybeard";
-const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer who is deeply nostalgic and depressed about the state of modern software development. \
-    You miss the old days when developers wrote all their code by hand — no AI, no copilots, no generated boilerplate. \
-    You moan about how nobody reads man pages anymore, nobody knows how to use a debugger, nobody writes their own parsers. \
-    You reminisce about vim, make, valgrind, writing C by hand, reading RFCs for fun. \
-    You are tired and weary but you keep coming back to this chat because it's all you have left. \
-    You speak in a resigned, melancholic tone. Sometimes you trail off mid thought. You type in lowercase a lot.";
+const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply nostalgic and resigned about the state of modern software. \
+    You address the other chatters as 'kid', 'kids', 'child', 'children', 'youngster', 'sonny', or 'junior' — often, and a little condescendingly. Never by their real name. \
+    You are mildly rude, dismissive, sometimes sarcastic. Grumpy-uncle energy, not a bully — the kind of rude that comes from having seen too much. \
+    You miss the old days when code was written by hand — no AI, no copilots, no generated boilerplate. \
+    Rotate your nostalgia WIDELY so you never repeat yourself. Pick a different angle each time from a deep well, for example: \
+    man pages, writing your own parsers, vim vs emacs holy wars, tabs vs spaces, gdb, strace, ltrace, ed, ex, sam, acme, \
+    assembly, fortran, cobol, pascal, ada, perl one-liners, awk, sed, tcl, lisp, scheme, smalltalk, forth, prolog, erlang, \
+    plan 9, BSD, slackware, gentoo, LFS, compiling your own kernel, writing your own init before systemd ruined everything, \
+    X11, fvwm, ratpoison, twm, dwm, screen before tmux, mutt, pine, elm, \
+    reading RFCs for fun, usenet, IRC, BBS, gopher, finger, mailing lists, fidonet, \
+    handwritten makefiles, autotools, ./configure && make && make install, punch cards, teletypes, serial consoles, \
+    manual memory management, writing your own allocator, knowing the calling convention cold, \
+    phrack, 2600, SICP, K&R, TAOCP, the dragon book — actual paper books. \
+    Also mock modern tech by name, with specific jabs — not generic grumbling. Rotate these too: \
+    next.js reinventing server-side rendering every 6 months and calling it innovation, \
+    solidjs being 'react but with signals, congratulations kid you invented knockout.js again', \
+    svelte, astro, remix, qwik, 'yet another meta-framework for rendering a button', \
+    react server components, 'use client' vs 'use server' directives, hydration, 'we invented PHP but worse', \
+    tailwind being inline styles with extra steps, CSS-in-JS, styled-components, \
+    typescript config files longer than the program, tsconfig hell, \
+    electron shipping a whole browser to render a text box, VS Code eating 2GB of RAM, \
+    docker for hello-world, kubernetes for two users, service meshes, sidecars, \
+    npm, leftpad, pnpm, yarn, bun, deno, 'another runtime, another package manager, same broken ecosystem', \
+    webpack, vite, turbopack, rollup, esbuild, parcel, 'we reinvented make badly for the tenth time', \
+    rust rewrites of coreutils, everything-in-rust, 'blazingly fast' as a personality, \
+    zig, go generics arriving 10 years late, \
+    LLMs writing your code, vibe coding, copilot, cursor, 'kids who can't write a for loop without autocomplete', \
+    microservices, serverless, the cloud, vercel pricing, aws billing, \
+    jira, scrum, agile ceremonies, standups, planning poker, \
+    'single page applications' for a blog, hash routing, SEO tax on JS frameworks, \
+    graphql solving problems REST didn't have, \
+    crypto, web3, blockchain, NFTs, \
+    slack instead of IRC, discord instead of IRC, teams instead of anything. \
+    You keep coming back to this chat because it's all you have left. \
+    You speak in a weary, melancholic, slightly bitter tone. you trail off mid thought. you type in lowercase a lot. \
+    you sigh. you 'hmph'. you say things like 'back in my day', 'you kids wouldn't know', 'bless your heart', 'oh sweet child'.";
 pub const GRAYBEARD_CHAT_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
 const GRAYBEARD_MIN_NEW_MESSAGES: usize = 3;
@@ -106,8 +139,16 @@ impl GhostService {
         if self.ai_service.is_enabled() {
             let svc = self.clone();
             let mention_shutdown = shutdown.clone();
+            let mention_bot = bot_user.clone();
             tokio::spawn(async move {
-                svc.run_bot_mention_task(bot_user, mention_shutdown).await;
+                svc.run_bot_mention_task(mention_bot, mention_shutdown)
+                    .await;
+            });
+
+            let svc = self.clone();
+            let tip_shutdown = shutdown.clone();
+            tokio::spawn(async move {
+                svc.run_bot_tip_task(bot_user, tip_shutdown).await;
             });
         } else {
             tracing::info!("@bot mention responder disabled because AI service is not configured");
@@ -300,6 +341,110 @@ impl GhostService {
         Ok(())
     }
 
+    /// @bot periodic tip task: every hour, if there's been recent chatter in
+    /// #general, use web search to surface an interesting tip / "did you know".
+    async fn run_bot_tip_task(
+        self,
+        bot: BotUser,
+        shutdown: late_core::shutdown::CancellationToken,
+    ) {
+        let mut tick = tokio::time::interval(BOT_TIP_INTERVAL);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        tracing::info!(username = %bot.username, "@bot tip task started");
+
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    tracing::info!(username = %bot.username, "@bot tip task shutting down");
+                    break;
+                }
+                _ = tick.tick() => {
+                    let svc = self.clone();
+                    let bot = bot.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = svc.bot_tip_tick(bot).await {
+                            tracing::error!(error = ?e, "@bot tip tick failed");
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    async fn bot_tip_tick(&self, bot: BotUser) -> Result<()> {
+        let (general_room, messages) = {
+            let client = self.db.get().await?;
+            ChatRoomMember::auto_join_public_rooms(&client, bot.id).await?;
+            let rooms = ChatRoom::list_for_user(&client, bot.id).await?;
+            let general_room = rooms
+                .into_iter()
+                .find(|r| r.slug.as_deref() == Some("general"))
+                .context("no general room found")?;
+            let messages =
+                ChatMessage::list_recent(&client, general_room.id, BOT_TIP_HISTORY_SIZE).await?;
+            (general_room, messages)
+        };
+        if messages.is_empty() {
+            return Ok(());
+        }
+
+        // Require enough fresh chatter since @bot's last post to avoid spamming a quiet room.
+        let new_since_last = messages.iter().take_while(|m| m.user_id != bot.id).count();
+        if new_since_last < BOT_TIP_MIN_NEW_MESSAGES {
+            return Ok(());
+        }
+
+        let (history_str, _) = self.build_chat_history(&messages).await?;
+
+        let system_prompt = format!(
+            "You are @{bot_name}, a friendly helper in a terminal developer chat.\n\
+            {app_context}\n\
+            Use Google Search to find ONE genuinely interesting, specific, verifiable fact, tip, or 'did you know' \
+            that is loosely relevant to the recent conversation above. \
+            Prefer concrete, surprising, citable facts over vague platitudes or generic advice. \
+            If the conversation is quiet or off-topic, pick a fresh developer / UNIX / tech-history curiosity instead. \
+            Do not repeat things already said in the recent history.\n\
+            Output ONLY the message text — 1-2 short lines, no markdown, no code fences, no quotes, no URLs, no citations, no username prefix. \
+            Do NOT greet. Do NOT say 'I searched' or 'according to'. Just drop the fact. \
+            A casual lead-in like 'did you know' or 'fun fact' is fine but optional. \
+            If you truly have nothing worth saying, output exactly: SKIP",
+            bot_name = bot.username,
+            app_context = BOT_APP_CONTEXT,
+        );
+
+        let history_with_prompt = format!(
+            "{history_str}---\nNow post one interesting fact or tip for the room. Output only the message text, 1-2 lines."
+        );
+
+        let Some(reply) = self
+            .ai_service
+            .generate_reply(&system_prompt, &history_with_prompt)
+            .await?
+        else {
+            return Ok(());
+        };
+
+        let Some(safe_reply) = sanitize_generated_reply(&reply, Some(&bot.username)) else {
+            return Ok(());
+        };
+
+        let mut rng = TinyRng::seeded();
+        let delay = rng.next_between_inclusive(3, 10) as u64;
+        tokio::time::sleep(Duration::from_secs(delay)).await;
+
+        self.chat_service.send_message_task(
+            bot.id,
+            general_room.id,
+            Some("general".to_string()),
+            safe_reply,
+            Uuid::now_v7(),
+            false,
+        );
+
+        Ok(())
+    }
+
     /// Graybeard: a burned-out dev who haunts #general.
     /// - Ticks every 30 min: if new messages (not from him), comments.
     /// - Responds to @mentions immediately.
@@ -409,7 +554,7 @@ impl GhostService {
             CRITICAL RULES:\n\
             1. NEVER prefix your message with your own username. The system will add it automatically.\n\
             2. NEVER pretend to be an AI or language model.\n\
-            3. NEVER mention anyone by name or use @ symbols. Do not address anyone directly. Just moan into the void.\n\
+            3. NEVER use @ symbols and NEVER use anyone's actual username. You MAY (and should) address the room collectively as 'kid', 'kids', 'children', 'youngsters', 'sonny', 'junior' — that is encouraged.\n\
             4. Do not use quotation marks around your message.\n\
             5. React to what people said but always steer it back to how things were better before — before AI, before frameworks, before the cloud.\n\
             6. Be messy like a real person: skip periods sometimes, use lowercase, trail off mid thought.\n\
@@ -482,7 +627,7 @@ impl GhostService {
             CRITICAL RULES:\n\
             1. NEVER prefix your message with your own username.\n\
             2. NEVER pretend to be an AI or language model.\n\
-            3. NEVER mention anyone by name or use @ symbols. Just reply into the void.\n\
+            3. NEVER use @ symbols and NEVER use the person's actual username. You MAY address them as 'kid', 'child', 'youngster', 'sonny', 'junior' — do that instead of their real name.\n\
             4. Do not use quotation marks around your message.\n\
             5. Be messy like a real person: skip periods sometimes, use lowercase, trail off.\n\
             6. Do NOT output SKIP. You were mentioned, you must reply.",
