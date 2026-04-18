@@ -89,6 +89,22 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>) -> Vec<Line<'a>> {
         dim,
     )));
     lines.push(Line::from(Span::styled(
+        "  Best support today: kitty, Ghostty, rxvt-unicode, foot, wezterm, konsole, and iTerm2.",
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  tmux is not supported here, so notification escape sequences can get mangled or dropped.",
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  They can fire for DMs, mentions, and game events.",
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Bell and cooldown decide how loud and how often they show up.",
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
         "  Configure notification kinds, bell, and cooldown in the profile modal.",
         dim,
     )));
