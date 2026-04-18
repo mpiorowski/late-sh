@@ -549,14 +549,11 @@ fn short_user_id(user_id: Uuid) -> String {
 }
 
 fn format_username_with_country(
-    user_id: Uuid,
+    _user_id: Uuid,
     username: &str,
-    countries: &HashMap<Uuid, String>,
+    _countries: &HashMap<Uuid, String>,
 ) -> String {
-    match countries.get(&user_id).map(|country| country.trim()) {
-        Some(country) if !country.is_empty() => format!("@{username} [{country}]"),
-        _ => format!("@{username}"),
-    }
+    username.to_string()
 }
 
 fn dm_label(
