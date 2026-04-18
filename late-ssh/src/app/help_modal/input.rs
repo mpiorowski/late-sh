@@ -3,14 +3,18 @@ use crate::app::{input::ParsedInput, state::App};
 pub fn handle_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B | b'?' | b'q' | b'Q') => app.show_help = false,
-        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Arrow(b'C') => {
-            app.help_modal_state.move_topic(1)
-        }
-        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Arrow(b'D') => {
+        ParsedInput::Byte(b'h' | b'H') | ParsedInput::Arrow(b'D') => {
             app.help_modal_state.move_topic(-1)
         }
-        ParsedInput::Arrow(b'B') => app.help_modal_state.scroll(1, visible_height(app)),
-        ParsedInput::Arrow(b'A') => app.help_modal_state.scroll(-1, visible_height(app)),
+        ParsedInput::Byte(b'l' | b'L') | ParsedInput::Arrow(b'C') => {
+            app.help_modal_state.move_topic(1)
+        }
+        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Arrow(b'B') => {
+            app.help_modal_state.scroll(1, visible_height(app))
+        }
+        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Arrow(b'A') => {
+            app.help_modal_state.scroll(-1, visible_height(app))
+        }
         ParsedInput::Scroll(delta) => app
             .help_modal_state
             .scroll((-delta * 3) as i16, visible_height(app)),

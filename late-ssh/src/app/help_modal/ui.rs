@@ -55,14 +55,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
     );
 
     let footer = Line::from(vec![
-        Span::styled("  j/k", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("  ←/→ h/l", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" switch slides  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("↑/↓", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("↑/↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Ctrl+U/D", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("PgUp/PgDn", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" page  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc/?", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);

@@ -353,7 +353,9 @@ SSH is a terminal protocol - it carries text, not audio. To hear music, you need
 
 Option 1 (recommended): Install the CLI
   curl -fsSL https://cli.late.sh/install.sh | bash
+
   Then run `late` instead of `ssh late.sh`. It launches SSH + local audio playback in one process - no browser needed. The CLI decodes the MP3 stream locally, plays through your system audio, and pairs with the TUI over WebSocket for visualizer + controls.
+
   Don't trust the install script? Build from source: git clone https://github.com/mpiorowski/late-sh && cargo install --path late-cli
 
 Option 2: Browser pairing
