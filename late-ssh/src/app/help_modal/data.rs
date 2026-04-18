@@ -183,11 +183,8 @@ fn overview_lines() -> Vec<String> {
         "  p                 show browser pairing QR",
         "",
         "This modal",
-        "  j / → / ↓         next slide",
-        "  k / ← / ↑         previous slide",
-        "  Ctrl+U / Ctrl+D   scroll current slide",
-        "  PageUp / PageDown scroll current slide",
-        "  mouse wheel       scroll current slide",
+        "  h / l / ← / →     previous / next slide",
+        "  j / k / ↑ / ↓     scroll current slide",
         "  ? / q / Esc       close",
         "",
         "Use /help and /music in chat if you want to jump directly to those slides from the composer.",
@@ -225,8 +222,10 @@ fn architecture_lines() -> Vec<String> {
         "Important characteristics",
         "  terminal-first, always-on, social, and zero-signup",
         "  SSH key fingerprint is the identity anchor",
-        "  highest-risk runtime areas are render-loop backpressure, chat sync consistency, connection limiting, and paired-client state drift",
-        "  the project is source-available under FSL-1.1-MIT, converting to MIT after two years",
+        "",
+        "Highest-risk runtime areas are render-loop backpressure, chat sync consistency, connection limiting, and paired-client state drift.",
+        "",
+        "The project is source-available under FSL-1.1-MIT, converting to MIT after two years.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -287,7 +286,8 @@ fn arcade_help_lines() -> Vec<String> {
         "  chat badges reflect streak tiers",
         "",
         "Why it exists",
-        "  it gives the app a slower social loop than chat: drop in, play a run, show up on the board, come back tomorrow.",
+        "",
+        "It gives the app a slower social loop than chat: drop in, play a run, show up on the board, come back tomorrow.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -313,7 +313,8 @@ fn profile_help_lines() -> Vec<String> {
         "  from Profile, use the edit action to reopen it",
         "",
         "Why country matters",
-        "  the saved ISO country code can later render a flag in chat and other user surfaces",
+        "",
+        "The saved ISO country code can later render a flag in chat and other user surfaces.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -349,30 +350,25 @@ fn bonsai_help_lines() -> Vec<String> {
 const MUSIC_HELP_TEXT: &str = "\
 How music works on late.sh
 
-SSH is a terminal protocol - it carries text, not audio. To hear music
-you need a second audio channel that pairs with your SSH session.
+SSH is a terminal protocol - it carries text, not audio. To hear music you need a second audio channel that pairs with your SSH session.
 
 Option 1 (recommended): Install the CLI
+
   curl -fsSL https://cli.late.sh/install.sh | bash
 
-  Then run `late` instead of `ssh late.sh`. It launches SSH + local
-  audio playback in one process - no browser needed. The CLI decodes
-  the MP3 stream locally, plays through your system audio, and pairs
-  with the TUI over WebSocket for visualizer + controls.
+Then run `late` instead of `ssh late.sh`. It launches SSH + local audio playback in one process - no browser needed. The CLI decodes the MP3 stream locally, plays through your system audio, and pairs with the TUI over WebSocket for visualizer + controls.
 
-  Don't trust the install script? Build from source:
+Don't trust the install script? Build from source:
+
   git clone https://github.com/mpiorowski/late-sh
   cargo install --path late-cli
 
 Option 2: Browser pairing
-  Press `p` to open a QR code + copy the pairing URL. The browser
-  connects to your session via a token-based WebSocket, streams audio,
-  and feeds visualizer frames back to the sidebar.
+
+Press `p` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
 
 Both options give you:
   m = mute | +/- = volume | visualizer in the sidebar
   Vote for genres on the Dashboard: L C A
 
-The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists
-of CC0/CC-BY music. The winning genre switches every hour based on
-votes.";
+The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";

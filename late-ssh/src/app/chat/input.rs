@@ -49,8 +49,7 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
 }
 
 fn open_help_modal(app: &mut App, topic: HelpTopic) {
-    app.help_modal_state
-        .open(topic, app.size.0.saturating_sub(8));
+    app.help_modal_state.open(topic);
     app.show_help = true;
 }
 

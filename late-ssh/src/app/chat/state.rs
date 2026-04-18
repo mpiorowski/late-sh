@@ -59,6 +59,7 @@ pub struct ChatState {
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
     general_room_id: Option<Uuid>,
     pub(crate) usernames: HashMap<Uuid, String>,
+    pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
     overlay: Option<Overlay>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
@@ -130,6 +131,7 @@ impl ChatState {
             rooms: Vec::new(),
             general_room_id: None,
             usernames: HashMap::new(),
+            countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             overlay: None,
             unread_counts: HashMap::new(),
@@ -938,6 +940,10 @@ impl ChatState {
         &self.usernames
     }
 
+    pub fn countries(&self) -> &HashMap<Uuid, String> {
+        &self.countries
+    }
+
     pub fn bonsai_glyphs(&self) -> &HashMap<Uuid, String> {
         &self.bonsai_glyphs
     }
@@ -953,6 +959,7 @@ impl ChatState {
         }
 
         self.usernames = snapshot.usernames;
+        self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;

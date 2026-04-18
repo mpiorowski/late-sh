@@ -146,6 +146,7 @@ impl App {
         let visualizer = &self.visualizer;
         let paired_client_state = self.paired_client_state();
         let chat_usernames = self.chat.usernames();
+        let chat_countries = self.chat.countries();
         let chat_badges = self.leaderboard.badges();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let dashboard_view = dashboard::ui::DashboardRenderInput {
@@ -159,6 +160,7 @@ impl App {
                 overlay: self.chat.overlay(),
                 rows_cache: &mut self.dashboard_chat_rows_cache,
                 usernames: chat_usernames,
+                countries: chat_countries,
                 badges: &chat_badges,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
@@ -191,6 +193,7 @@ impl App {
             chat_rooms: self.chat.rooms.as_slice(),
             overlay: self.chat.overlay(),
             usernames: chat_usernames,
+            countries: chat_countries,
             badges: &chat_badges,
             unread_counts: &self.chat.unread_counts,
             selected_room_id: self.chat.selected_room_id,
@@ -235,8 +238,6 @@ impl App {
             twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
         };
         self.welcome_modal_state
-            .set_modal_width(area.width.saturating_sub(8));
-        self.help_modal_state
             .set_modal_width(area.width.saturating_sub(8));
         let online_count = self
             .active_users

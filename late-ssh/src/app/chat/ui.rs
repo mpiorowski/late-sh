@@ -40,6 +40,7 @@ pub struct DashboardChatView<'a> {
     pub overlay: Option<&'a Overlay>,
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
+    pub countries: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
@@ -240,6 +241,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
             ChatRowsContext {
                 current_user_id: view.current_user_id,
                 usernames: view.usernames,
+                countries: view.countries,
                 badges: view.badges,
                 bonsai_glyphs: view.bonsai_glyphs,
             },
@@ -277,6 +279,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
 struct ChatRowsContext<'a> {
     current_user_id: Uuid,
     usernames: &'a HashMap<Uuid, String>,
+    countries: &'a HashMap<Uuid, String>,
     badges: &'a HashMap<Uuid, BadgeTier>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
 }
@@ -307,6 +310,7 @@ fn chat_rows_fingerprint(
         msg.created.hash(&mut hasher);
         msg.body.hash(&mut hasher);
         ctx.usernames.get(&msg.user_id).hash(&mut hasher);
+        ctx.countries.get(&msg.user_id).hash(&mut hasher);
         ctx.badges
             .get(&msg.user_id)
             .map(|badge| badge.label())
@@ -347,15 +351,19 @@ fn ensure_chat_rows_cache(
             "[{}]",
             crate::app::common::primitives::format_relative_time(msg.created)
         );
-        let author = ctx
+        let raw_author = ctx
             .usernames
             .get(&msg.user_id)
             .map(|name| name.trim())
             .filter(|name| !name.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| short_user_id(msg.user_id));
-        let contributor_badge = contributor_badge_for_username(&author).unwrap_or_default();
-        let is_bot = author == "bot" || author == "graybeard";
+            .unwrap_or("");
+        let author = if raw_author.is_empty() {
+            short_user_id(msg.user_id)
+        } else {
+            format_username_with_country(msg.user_id, raw_author, ctx.countries)
+        };
+        let contributor_badge = contributor_badge_for_username(raw_author).unwrap_or_default();
+        let is_bot = raw_author == "bot" || raw_author == "graybeard";
         let badge = if !is_bot {
             ctx.badges.get(&msg.user_id).copied()
         } else {
@@ -533,10 +541,22 @@ fn short_user_id(user_id: Uuid) -> String {
     id[..id.len().min(8)].to_string()
 }
 
+fn format_username_with_country(
+    user_id: Uuid,
+    username: &str,
+    countries: &HashMap<Uuid, String>,
+) -> String {
+    match countries.get(&user_id).map(|country| country.trim()) {
+        Some(country) if !country.is_empty() => format!("@{username} [{country}]"),
+        _ => format!("@{username}"),
+    }
+}
+
 fn dm_label(
     room: &late_core::models::chat_room::ChatRoom,
     current_user_id: Uuid,
     usernames: &HashMap<Uuid, String>,
+    countries: &HashMap<Uuid, String>,
 ) -> String {
     let other_id = if room.dm_user_a == Some(current_user_id) {
         room.dm_user_b
@@ -544,8 +564,11 @@ fn dm_label(
         room.dm_user_a
     };
     other_id
-        .and_then(|id| usernames.get(&id))
-        .map(|name| format!("@{name}"))
+        .and_then(|id| {
+            usernames
+                .get(&id)
+                .map(|name| format_username_with_country(id, name, countries))
+        })
         .unwrap_or_else(|| "DM".to_string())
 }
 
@@ -609,6 +632,7 @@ pub struct ChatRenderInput<'a> {
     )],
     pub overlay: Option<&'a Overlay>,
     pub usernames: &'a HashMap<Uuid, String>,
+    pub countries: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub selected_room_id: Option<Uuid>,
@@ -649,6 +673,7 @@ fn room_jump_prefix(key: Option<u8>, active: bool, is_selected: bool) -> String 
 pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let chat_rooms = view.chat_rooms;
     let usernames = view.usernames;
+    let countries = view.countries;
     let unread_counts = view.unread_counts;
     let news_unread_count = view.news_unread_count;
     let selected_room_id = view.selected_room_id;
@@ -880,15 +905,15 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     // ── DMs (alpha sorted) ──
     let mut dm_rooms: Vec<_> = chat_rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
     dm_rooms.sort_by(|(a, _), (b, _)| {
-        let name_a = dm_label(a, current_user_id, usernames);
-        let name_b = dm_label(b, current_user_id, usernames);
+        let name_a = dm_label(a, current_user_id, usernames, countries);
+        let name_b = dm_label(b, current_user_id, usernames, countries);
         name_a.cmp(&name_b)
     });
     if !dm_rooms.is_empty() {
         room_lines.push(Line::from(""));
         room_lines.push(section_divider("DMs", rooms_width));
         for (room, _) in &dm_rooms {
-            let label = dm_label(room, current_user_id, usernames);
+            let label = dm_label(room, current_user_id, usernames, countries);
             let is_selected =
                 !news_selected && !view.notifications_selected && selected_room_id == Some(room.id);
             room_lines.push(room_line(
@@ -954,8 +979,11 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                         room.dm_user_a
                     };
                     other_id
-                        .and_then(|id| usernames.get(&id))
-                        .map(|name| format!("@{name}"))
+                        .and_then(|id| {
+                            usernames
+                                .get(&id)
+                                .map(|name| format_username_with_country(id, name, countries))
+                        })
                         .unwrap_or_else(|| "DM".to_string())
                 } else {
                     room.slug
@@ -973,6 +1001,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                     ChatRowsContext {
                         current_user_id,
                         usernames,
+                        countries,
                         badges: view.badges,
                         bonsai_glyphs: view.bonsai_glyphs,
                     },

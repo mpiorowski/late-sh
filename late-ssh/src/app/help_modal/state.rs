@@ -46,9 +46,4 @@ impl HelpModalState {
         let current = self.scroll_offsets[idx] as i32;
         self.scroll_offsets[idx] = (current + delta as i32).max(0) as u16;
     }
-
-    pub fn page_scroll(&mut self, delta_pages: i16, visible_height: u16) {
-        let step = visible_height.max(1) as i16;
-        self.scroll(delta_pages.saturating_mul(step));
-    }
 }
