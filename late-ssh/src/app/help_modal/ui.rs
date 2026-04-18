@@ -1,0 +1,98 @@
+use ratatui::{
+    Frame,
+    layout::{Constraint, Flex, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+};
+
+use crate::app::common::theme;
+
+use super::{data::HelpTopic, state::HelpModalState};
+
+pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
+    let popup = centered_rect(92, 28, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Guide ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(8),
+        Constraint::Length(2),
+    ])
+    .split(inner);
+
+    draw_tabs(frame, layout[0], state.selected_topic());
+
+    let body_block = Block::default()
+        .title(format!(" {} ", state.selected_topic().title()))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()));
+    let body_inner = body_block.inner(layout[1]);
+    frame.render_widget(body_block, layout[1]);
+
+    let lines: Vec<Line> = state
+        .current_lines()
+        .into_iter()
+        .map(|line| {
+            Line::from(Span::styled(
+                format!(" {line}"),
+                Style::default().fg(theme::TEXT()),
+            ))
+        })
+        .collect();
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((state.current_scroll(), 0)),
+        body_inner,
+    );
+
+    let footer = Line::from(vec![
+        Span::styled("  j/k", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" switch slides  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("↑/↓", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Ctrl+U/D", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("PgUp/PgDn", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" page  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Esc/?", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(footer), layout[2]);
+}
+
+fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTopic) {
+    let mut spans = vec![Span::raw(" ")];
+    for topic in HelpTopic::ALL {
+        let active = topic == selected;
+        let style = if active {
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .bg(theme::BG_HIGHLIGHT())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        spans.push(Span::styled(format!(" {} ", topic.short_label()), style));
+        spans.push(Span::raw(" "));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
+        .flex(Flex::Center)
+        .split(area);
+    let horizontal = Layout::horizontal([Constraint::Length(width.min(area.width))])
+        .flex(Flex::Center)
+        .split(vertical[0]);
+    horizontal[0]
+}
