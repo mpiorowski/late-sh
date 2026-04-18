@@ -477,7 +477,32 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
         // Mouse clicks only matter inside the icon picker today; ignore here.
         ParsedInput::MousePress { .. } => {}
-        ParsedInput::BackTab => {}
+        ParsedInput::BackTab => {
+            if ctx.screen == Screen::Chat && app.chat.room_jump_active {
+                return;
+            }
+            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
+            {
+                return;
+            }
+            if ctx.screen == Screen::Chat && ctx.news_composing {
+                return;
+            }
+            if ctx.screen == Screen::Profile && ctx.profile_composing {
+                return;
+            }
+            if ctx.screen == Screen::Games && app.is_playing_game {
+                return;
+            }
+            reset_composers_for_page_change(app);
+            app.screen = ctx.screen.prev();
+            if app.screen == Screen::Chat {
+                app.chat.request_list();
+                app.chat.sync_selection();
+                app.chat.mark_selected_room_read();
+            }
+            app.chat.clear_message_selection();
+        }
         // Page keys mirror Ctrl-U / Ctrl-D. Signs follow the existing scheme:
         // positive = toward older/top, negative = toward newer/bottom. See
         // `app.chat.select_message` — its `delta` is in MESSAGES, not rows,
@@ -1195,6 +1220,12 @@ mod tests {
     fn vt_parser_reads_ss3_arrow_sequence() {
         let mut parser = VtInputParser::default();
         assert_eq!(parser.feed(b"\x1bOD"), vec![ParsedInput::Arrow(b'D')]);
+    }
+
+    #[test]
+    fn vt_parser_reads_backtab_sequence() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b[Z"), vec![ParsedInput::BackTab]);
     }
 
     #[test]

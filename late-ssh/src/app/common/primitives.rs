@@ -63,6 +63,15 @@ impl Screen {
             Screen::Profile => Screen::Dashboard,
         }
     }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Screen::Dashboard => Screen::Profile,
+            Screen::Chat => Screen::Dashboard,
+            Screen::Games => Screen::Chat,
+            Screen::Profile => Screen::Games,
+        }
+    }
 }
 
 pub fn genre_label(genre: Genre) -> &'static str {
@@ -145,6 +154,14 @@ mod tests {
         assert_eq!(Screen::Chat.next(), Screen::Games);
         assert_eq!(Screen::Games.next(), Screen::Profile);
         assert_eq!(Screen::Profile.next(), Screen::Dashboard);
+    }
+
+    #[test]
+    fn screen_prev_cycles_all_screens() {
+        assert_eq!(Screen::Dashboard.prev(), Screen::Profile);
+        assert_eq!(Screen::Chat.prev(), Screen::Dashboard);
+        assert_eq!(Screen::Games.prev(), Screen::Chat);
+        assert_eq!(Screen::Profile.prev(), Screen::Games);
     }
 
     #[test]
