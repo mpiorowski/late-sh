@@ -35,22 +35,23 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
         .border_style(Style::default().fg(theme::BORDER()));
     let body_inner = body_block.inner(layout[1]);
     frame.render_widget(body_block, layout[1]);
+    let body_content = Rect {
+        x: body_inner.x.saturating_add(1),
+        y: body_inner.y,
+        width: body_inner.width.saturating_sub(2),
+        height: body_inner.height,
+    };
 
     let lines: Vec<Line> = state
         .current_lines()
         .into_iter()
-        .map(|line| {
-            Line::from(Span::styled(
-                format!(" {line}"),
-                Style::default().fg(theme::TEXT()),
-            ))
-        })
+        .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::TEXT()))))
         .collect();
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((state.current_scroll(), 0)),
-        body_inner,
+        body_content,
     );
 
     let footer = Line::from(vec![
