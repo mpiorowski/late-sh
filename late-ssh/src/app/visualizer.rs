@@ -101,7 +101,7 @@ impl Visualizer {
                 Line::from(vec![
                     Span::styled("Enter", key),
                     Span::styled(" cli  ", dim),
-                    Span::styled("p", key),
+                    Span::styled("P", key),
                     Span::styled(" web", dim),
                 ]),
             ];

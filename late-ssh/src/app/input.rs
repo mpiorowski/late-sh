@@ -1,4 +1,6 @@
-use super::{chat, dashboard, help_modal, icon_picker, profile, state::App, welcome_modal};
+use super::{
+    chat, dashboard, help_modal, icon_picker, profile, profile_modal, state::App, welcome_modal,
+};
 use crate::app::common::primitives::Screen;
 use std::{mem, time::Duration};
 use vte::{Params, Parser, Perform};
@@ -419,6 +421,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_profile_modal {
+        profile_modal::input::handle_input(app, event);
+        return;
+    }
+
     // Picker intercepts all input when open (ESC is handled via dispatch_escape).
     if app.icon_picker_open {
         handle_icon_picker_input(app, event);
@@ -639,6 +646,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_welcome {
         welcome_modal::input::handle_escape(app);
+        return;
+    }
+    if app.show_profile_modal {
+        profile_modal::input::handle_escape(app);
         return;
     }
     if app.icon_picker_open {
@@ -949,7 +960,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'p' | b'P' => {
+        b'P' => {
             app.pending_clipboard = Some(app.connect_url.clone());
             app.web_chat_qr_url = Some(app.connect_url.clone());
             app.show_web_chat_qr = true;

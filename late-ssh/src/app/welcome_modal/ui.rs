@@ -329,7 +329,7 @@ fn draw_save_cta(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
             if selected {
                 "   ↵ commits and closes"
             } else {
-                "   ↓ to highlight, then ↵"
+                "   highlight Save, then ↵"
             },
             Style::default().fg(theme::TEXT_DIM()),
         ),
@@ -340,7 +340,7 @@ fn draw_save_cta(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
 fn draw_footer(frame: &mut Frame, area: Rect) {
     let footer = Line::from(vec![
         Span::raw("  "),
-        Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("j/k ↑↓", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" cycle  ", Style::default().fg(theme::TEXT_DIM())),

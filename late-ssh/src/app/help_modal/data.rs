@@ -118,6 +118,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  PageUp / PageDown  half page up / down",
         "  End                jump to most recent",
         "  g / G              clear selection (back to live view)",
+        "  p                  open selected user's profile",
         "  r                  reply to selected message",
         "  e                  edit selected message",
         "  d                  delete selected message",
@@ -180,7 +181,7 @@ fn overview_lines() -> Vec<String> {
         "  q                 quit",
         "  m                 mute paired client",
         "  + / -             paired client volume",
-        "  p                 show browser pairing QR",
+        "  P                 show browser pairing QR",
         "",
         "This modal",
         "  h / l / ← / →     previous / next slide",
@@ -365,7 +366,7 @@ Don't trust the install script? Build from source:
 
 Option 2: Browser pairing
 
-Press `p` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
+Press `P` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
 
 Both options give you:
   m = mute | +/- = volume | visualizer in the sidebar

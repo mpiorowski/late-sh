@@ -19,7 +19,7 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar},
         theme,
     },
-    dashboard, help_modal, icon_picker, profile,
+    dashboard, help_modal, icon_picker, profile, profile_modal,
     state::App,
     visualizer::Visualizer,
     welcome_modal,
@@ -74,6 +74,8 @@ struct DrawContext<'a> {
     is_admin: bool,
     show_welcome: bool,
     welcome_modal_state: &'a welcome_modal::state::WelcomeModalState,
+    show_profile_modal: bool,
+    profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_splash: bool,
@@ -277,6 +279,8 @@ impl App {
                         is_admin: self.is_admin,
                         show_welcome: self.show_welcome,
                         welcome_modal_state: &self.welcome_modal_state,
+                        show_profile_modal: self.show_profile_modal,
+                        profile_modal_state: &self.profile_modal_state,
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_splash: self.show_splash,
@@ -511,6 +515,10 @@ impl App {
 
         if ctx.show_welcome {
             welcome_modal::ui::draw(frame, inner, ctx.welcome_modal_state);
+        }
+
+        if ctx.show_profile_modal {
+            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
         }
 
         if ctx.show_help {

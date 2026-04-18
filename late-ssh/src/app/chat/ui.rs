@@ -64,6 +64,7 @@ pub(super) struct ComposerBlockView<'a> {
     pub composer_rows: &'a [ComposerRow],
     pub composer_cursor: usize,
     pub composing: bool,
+    pub selected_message: bool,
     pub cursor_visible: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
@@ -193,8 +194,13 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
     );
 
     if !view.composing && view.composer.is_empty() && !view.mention_active {
+        let placeholder_text = if view.selected_message {
+            " r reply · e edit · d delete · p profile · i compose"
+        } else {
+            " Type a message or /help"
+        };
         let placeholder = Paragraph::new(Line::from(Span::styled(
-            " Type a message or /help",
+            placeholder_text,
             Style::default().fg(theme::TEXT_DIM()),
         )));
         frame.render_widget(placeholder, composer_inner);
@@ -263,6 +269,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 composer_rows: view.composer_rows,
                 composer_cursor: view.composer_cursor,
                 composing: view.composing,
+                selected_message: view.selected_message_id.is_some(),
                 cursor_visible: view.cursor_visible,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -1100,6 +1107,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 composer_rows: view.composer_rows,
                 composer_cursor: view.composer_cursor,
                 composing,
+                selected_message: view.selected_message_id.is_some(),
                 cursor_visible: view.cursor_visible,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -1146,6 +1154,7 @@ mod tests {
             composer_rows: &[],
             composer_cursor: 0,
             composing: true,
+            selected_message: false,
             cursor_visible: false,
             reply_author: None,
             is_editing: false,

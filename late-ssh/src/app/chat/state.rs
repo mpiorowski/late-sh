@@ -383,6 +383,19 @@ impl ChatState {
         self.find_message_in_room(room_id, selected_id)
     }
 
+    pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
+        let message = self.selected_message_in_room(room_id)?;
+        let user_id = message.user_id;
+        let display_name = self
+            .usernames
+            .get(&user_id)
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| short_user_id(user_id));
+        Some((user_id, display_name))
+    }
+
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {
         self.rooms
             .iter()

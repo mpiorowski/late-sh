@@ -1158,4 +1158,161 @@ mod tests {
         let line = b"PROXY TCP4 203.0.113.10 10.42.0.76 only-one-port\r\n";
         assert!(parse_proxy_v1_addr(line).is_err());
     }
+
+    #[test]
+    fn render_signal_starts_clean() {
+        let signal = RenderSignal::new();
+        assert!(!signal.dirty.load(Ordering::Acquire));
+    }
+
+    /// Core regression test for the stored-permit bug: after a render has
+    /// cleared `dirty`, a leftover `Notify` permit must NOT re-arm the
+    /// throttle. Otherwise every typing burst ends with a spurious render of
+    /// an unchanged frame.
+    #[tokio::test]
+    async fn stale_permit_does_not_arm_throttle() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+        world_tick.tick().await; // consume immediate first tick
+
+        // A prior input rang the bell and was batched into a render; the
+        // render cleared `dirty` but the permit is still sitting here.
+        signal.notify.notify_one();
+        assert!(!signal.dirty.load(Ordering::Acquire));
+
+        let mut input_pending = false;
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            Some(Instant::now()),
+        )
+        .await;
+
+        assert_eq!(action, RenderAction::Skip);
+        assert!(!input_pending, "stale permit must not arm the throttle");
+    }
+
+    #[tokio::test]
+    async fn dirty_permit_arms_throttle() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+        world_tick.tick().await;
+
+        signal.dirty.store(true, Ordering::Release);
+        signal.notify.notify_one();
+
+        let mut input_pending = false;
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            Some(Instant::now()),
+        )
+        .await;
+
+        assert_eq!(action, RenderAction::Skip);
+        assert!(input_pending, "dirty permit must arm the throttle");
+    }
+
+    #[tokio::test]
+    async fn throttle_fires_immediately_when_gap_elapsed() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+        world_tick.tick().await;
+
+        let mut input_pending = true;
+        // Pretend the last render was a long time ago — the throttle is
+        // already satisfied and should resolve without any wait.
+        let previous_render = Some(Instant::now() - Duration::from_secs(1));
+
+        let start = Instant::now();
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            previous_render,
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(action, RenderAction::Render);
+        assert!(!input_pending);
+        assert!(
+            elapsed < Duration::from_millis(5),
+            "should fire immediately, actually waited {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn throttle_waits_for_min_render_gap() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+        world_tick.tick().await;
+
+        let mut input_pending = true;
+        let previous_render = Some(Instant::now());
+
+        let start = Instant::now();
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            previous_render,
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(action, RenderAction::Render);
+        // Generous lower bound — timers can fire a tick or two early.
+        assert!(
+            elapsed >= Duration::from_millis(10),
+            "throttle should wait ~{}ms, waited {:?}",
+            MIN_RENDER_GAP.as_millis(),
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn world_tick_fires_when_idle() {
+        let signal = RenderSignal::new();
+        // Interval's first tick is immediate, so this resolves right away.
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+
+        let mut input_pending = false;
+        let action = next_render_action(&mut world_tick, &signal, &mut input_pending, None).await;
+
+        assert_eq!(action, RenderAction::AdvanceWorld);
+    }
+
+    /// When both the throttle timer and a world tick are ready at the same
+    /// instant, `biased` ensures world tick wins so animations aren't
+    /// starved under a keystroke flood.
+    #[tokio::test]
+    async fn world_tick_wins_tie_with_throttle() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_millis(1));
+        world_tick.tick().await; // consume immediate first tick
+        // Let the next world tick come due.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        let mut input_pending = true;
+        // Throttle is already satisfied too (previous render long ago).
+        let previous_render = Some(Instant::now() - Duration::from_secs(1));
+
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            previous_render,
+        )
+        .await;
+
+        assert_eq!(
+            action,
+            RenderAction::AdvanceWorld,
+            "world tick must beat the throttle branch under `biased` select"
+        );
+        assert!(!input_pending);
+    }
 }

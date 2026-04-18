@@ -22,12 +22,12 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B) => app.show_welcome = false,
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
-        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Arrow(b'B') => {
-            app.welcome_modal_state.move_row(1)
-        }
-        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Arrow(b'A') => {
-            app.welcome_modal_state.move_row(-1)
-        }
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => app.welcome_modal_state.move_row(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => app.welcome_modal_state.move_row(-1),
         ParsedInput::Arrow(b'C') => app.welcome_modal_state.cycle_setting(true),
         ParsedInput::Arrow(b'D') => app.welcome_modal_state.cycle_setting(false),
         ParsedInput::Byte(b' ') | ParsedInput::Byte(b'\r') => activate_selected_row(app),
@@ -107,12 +107,12 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x1B) => app.welcome_modal_state.close_picker(),
         ParsedInput::Byte(b'\r') => app.welcome_modal_state.apply_picker_selection(),
         ParsedInput::Byte(0x7F) => app.welcome_modal_state.picker_backspace(),
-        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Arrow(b'B') => {
-            app.welcome_modal_state.picker_move(1)
-        }
-        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Arrow(b'A') => {
-            app.welcome_modal_state.picker_move(-1)
-        }
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => app.welcome_modal_state.picker_move(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => app.welcome_modal_state.picker_move(-1),
         ParsedInput::PageDown => {
             let page = app.welcome_modal_state.picker().visible_height.get().max(1) as isize;
             app.welcome_modal_state.picker_move(page);

@@ -8,6 +8,7 @@ pub(crate) mod help_modal;
 pub(crate) mod icon_picker;
 pub mod input;
 pub mod profile;
+pub(crate) mod profile_modal;
 pub mod qr;
 mod render;
 pub mod state;

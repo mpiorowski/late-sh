@@ -26,6 +26,7 @@ use crate::{
         common::primitives::{Banner, Screen},
         help_modal, profile,
         profile::svc::ProfileService,
+        profile_modal,
         visualizer::Visualizer,
         vote,
         vote::svc::{Genre, VoteService},
@@ -138,6 +139,7 @@ pub struct App {
     pub(crate) splash_ticks: usize,
     pub(crate) splash_hint: String,
     pub(crate) show_help: bool,
+    pub(crate) show_profile_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -176,6 +178,7 @@ pub struct App {
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
+    pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
     pub(crate) welcome_modal_state: welcome_modal::state::WelcomeModalState,
 
     /// Leaderboard
@@ -373,6 +376,7 @@ impl App {
             splash_ticks: 0,
             splash_hint,
             show_help: false,
+            show_profile_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -412,6 +416,9 @@ impl App {
                 config.user_id,
                 config.ai_model,
                 config.initial_theme_id,
+            ),
+            profile_modal_state: profile_modal::state::ProfileModalState::new(
+                config.profile_service.clone(),
             ),
             welcome_modal_state,
             leaderboard_rx: config.leaderboard_rx,
