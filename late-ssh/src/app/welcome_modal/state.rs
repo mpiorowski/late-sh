@@ -8,6 +8,7 @@ use crate::app::common::{composer::ComposerState, theme};
 use crate::app::profile::svc::ProfileService;
 
 use super::data::{CountryOption, filter_countries, filter_timezones};
+use super::ui::bio_text_width;
 
 const USERNAME_MAX_LEN: usize = 12;
 const BIO_MAX_LEN: usize = 280;
@@ -93,18 +94,14 @@ impl WelcomeModalState {
         self.editing_username = false;
         self.username_input.clear();
         self.editing_bio = false;
-        self.bio_input = ComposerState::new(Self::bio_width(modal_width));
+        self.bio_input = ComposerState::new(bio_text_width(modal_width));
         self.bio_input.set_text(self.draft.bio.clone());
         self.picker = PickerState::default();
     }
 
-    pub fn set_modal_width(&mut self, width: u16) {
-        self.bio_input.set_text_width(Self::bio_width(width));
+    pub fn set_modal_width(&mut self, modal_width: u16) {
+        self.bio_input.set_text_width(bio_text_width(modal_width));
         self.bio_input.sync_layout();
-    }
-
-    fn bio_width(width: u16) -> usize {
-        width.saturating_sub(12).max(20) as usize
     }
 
     pub fn draft(&self) -> &Profile {

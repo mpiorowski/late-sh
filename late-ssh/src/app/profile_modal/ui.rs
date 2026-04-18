@@ -1,3 +1,4 @@
+use chrono::Utc;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
@@ -9,8 +10,9 @@ use ratatui::{
 use crate::app::{common::theme, welcome_modal::data::country_label};
 
 use super::state::ProfileModalState;
+use crate::app::profile::ui::timezone_current_time;
 
-const MODAL_WIDTH: u16 = 72;
+const MODAL_WIDTH: u16 = 80;
 const MODAL_HEIGHT: u16 = 22;
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
@@ -89,9 +91,16 @@ fn build_lines(state: &ProfileModalState) -> Vec<Line<'static>> {
                 text,
             ),
         ]),
-        Line::from(""),
-        section_heading("Bio"),
     ];
+
+    if let Some(current_time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
+        lines.push(Line::from(vec![
+            Span::styled("  Current time: ", dim),
+            Span::styled(current_time, text),
+        ]));
+    }
+
+    lines.extend([Line::from(""), section_heading("Bio")]);
 
     if profile.bio.trim().is_empty() {
         lines.push(Line::from(Span::styled("  Not set", dim)));

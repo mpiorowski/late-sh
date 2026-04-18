@@ -240,7 +240,7 @@ impl App {
             twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
         };
         self.welcome_modal_state
-            .set_modal_width(area.width.saturating_sub(8));
+            .set_modal_width(welcome_modal::ui::MODAL_WIDTH);
         let online_count = self
             .active_users
             .as_ref()

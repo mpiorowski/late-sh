@@ -3,8 +3,10 @@ use crate::app::state::App;
 pub fn handle_byte(app: &mut App, byte: u8) {
     match byte {
         b'e' | b'E' | b' ' | b'\r' => {
-            app.welcome_modal_state
-                .open_from_profile(app.profile_state.profile(), app.size.0.saturating_sub(8));
+            app.welcome_modal_state.open_from_profile(
+                app.profile_state.profile(),
+                crate::app::welcome_modal::ui::MODAL_WIDTH,
+            );
             app.show_welcome = true;
         }
         b'j' | b'J' => app.profile_state.scroll_by(1),

@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use late_core::models::leaderboard::BadgeTier;
 use late_core::models::profile::Profile;
 use ratatui::{
@@ -10,8 +12,8 @@ use ratatui::{
 
 use crate::app::{
     ai::ghost::{GRAYBEARD_CHAT_INTERVAL, GRAYBEARD_MENTION_COOLDOWN},
-    common::theme,
-    welcome_modal::data::country_label,
+    common::{composer::build_composer_rows, theme},
+    welcome_modal::{self, data::country_label},
 };
 
 pub struct ProfileRenderInput<'a> {
@@ -60,6 +62,13 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>) -> Vec<Line<'a>> {
             Style::default().fg(theme::TEXT()),
         ),
     ]));
+    if let Some(current_time) = timezone_current_time(Utc::now(), view.profile.timezone.as_deref())
+    {
+        lines.push(Line::from(vec![
+            Span::styled("  Current time: ", dim),
+            Span::styled(current_time, Style::default().fg(theme::TEXT())),
+        ]));
+    }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Bio",
@@ -68,9 +77,10 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>) -> Vec<Line<'a>> {
     if view.profile.bio.trim().is_empty() {
         lines.push(Line::from(Span::styled("  Not set", dim)));
     } else {
-        for line in view.profile.bio.lines() {
+        let wrap_width = welcome_modal::ui::bio_text_width(welcome_modal::ui::MODAL_WIDTH);
+        for row in build_composer_rows(&view.profile.bio, wrap_width) {
             lines.push(Line::from(Span::styled(
-                format!("  {line}"),
+                format!("  {}", row.text),
                 Style::default().fg(theme::TEXT()),
             )));
         }
@@ -204,9 +214,19 @@ fn section_heading(title: &str) -> Line<'static> {
     ])
 }
 
+pub(crate) fn timezone_current_time(now: DateTime<Utc>, timezone: Option<&str>) -> Option<String> {
+    let timezone = timezone?.trim();
+    if timezone.is_empty() {
+        return None;
+    }
+    let tz: Tz = timezone.parse().ok()?;
+    Some(now.with_timezone(&tz).format("%a %H:%M").to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn build_lines_contains_profile_summary_and_edit_hint() {
@@ -237,5 +257,26 @@ mod tests {
         assert!(text.contains("Timezone"));
         assert!(text.contains("@graybeard"));
         assert!(text.contains("gemini-3-flash"));
+    }
+
+    #[test]
+    fn timezone_current_time_formats_valid_timezone() {
+        let now = chrono::Utc
+            .with_ymd_and_hms(2026, 4, 19, 12, 30, 0)
+            .single()
+            .unwrap();
+        assert_eq!(
+            timezone_current_time(now, Some("Europe/Warsaw")).as_deref(),
+            Some("Sun 14:30")
+        );
+    }
+
+    #[test]
+    fn timezone_current_time_ignores_invalid_timezone() {
+        let now = chrono::Utc
+            .with_ymd_and_hms(2026, 4, 19, 12, 30, 0)
+            .single()
+            .unwrap();
+        assert_eq!(timezone_current_time(now, Some("not/a-timezone")), None);
     }
 }

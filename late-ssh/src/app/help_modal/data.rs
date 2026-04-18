@@ -13,13 +13,13 @@ pub enum HelpTopic {
 impl HelpTopic {
     pub const ALL: [HelpTopic; 8] = [
         HelpTopic::Overview,
-        HelpTopic::Architecture,
         HelpTopic::Chat,
         HelpTopic::Music,
         HelpTopic::News,
         HelpTopic::Arcade,
         HelpTopic::Bonsai,
         HelpTopic::Profile,
+        HelpTopic::Architecture,
     ];
 
     pub fn title(self) -> &'static str {
@@ -51,13 +51,13 @@ impl HelpTopic {
     pub fn index(self) -> usize {
         match self {
             HelpTopic::Overview => 0,
-            HelpTopic::Architecture => 1,
-            HelpTopic::Chat => 2,
-            HelpTopic::Music => 3,
-            HelpTopic::News => 4,
-            HelpTopic::Arcade => 5,
-            HelpTopic::Bonsai => 6,
-            HelpTopic::Profile => 7,
+            HelpTopic::Chat => 1,
+            HelpTopic::Music => 2,
+            HelpTopic::News => 3,
+            HelpTopic::Arcade => 4,
+            HelpTopic::Bonsai => 5,
+            HelpTopic::Profile => 6,
+            HelpTopic::Architecture => 7,
         }
     }
 }
@@ -105,12 +105,6 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /music             explain how music works",
         "  /help              open this guide",
         "",
-        "Rooms",
-        "  h / l              previous / next room",
-        "  Space              room jump hints",
-        "  Enter / i          start composing",
-        "  c                  copy a web-chat link to this session",
-        "",
         "Messages",
         "  j / k              select older / newer message",
         "  ↑ / ↓              same as j / k",
@@ -122,6 +116,12 @@ pub fn chat_help_lines() -> Vec<String> {
         "  r                  reply to selected message",
         "  e                  edit selected message",
         "  d                  delete selected message",
+        "",
+        "Rooms",
+        "  h / l              previous / next room",
+        "  Space              room jump hints",
+        "  Enter / i          start composing",
+        "  c                  copy a web-chat link to this session",
         "",
         "Compose",
         "  Enter              send and exit",

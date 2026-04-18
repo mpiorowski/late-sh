@@ -1,4 +1,4 @@
-use crate::app::input::ParsedInput;
+use crate::app::input::{ParsedInput, sanitize_paste_markers};
 use crate::app::state::App;
 
 use super::state::{PickerKind, Row};
@@ -72,6 +72,14 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'\r') => app.welcome_modal_state.submit_username(),
         ParsedInput::Byte(0x15) => app.welcome_modal_state.clear_username(),
         ParsedInput::Byte(0x7F) => app.welcome_modal_state.username_backspace(),
+        ParsedInput::Paste(pasted) => {
+            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
+            for ch in cleaned.chars() {
+                if !ch.is_control() && ch != '\n' && ch != '\r' {
+                    app.welcome_modal_state.username_push(ch);
+                }
+            }
+        }
         ParsedInput::Char(ch) if !ch.is_control() => app.welcome_modal_state.username_push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             app.welcome_modal_state.username_push(byte as char)
@@ -97,6 +105,15 @@ fn handle_bio_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Arrow(b'D') => composer.cursor_left(),
         ParsedInput::CtrlArrow(b'C') => composer.cursor_word_right(),
         ParsedInput::CtrlArrow(b'D') => composer.cursor_word_left(),
+        ParsedInput::Paste(pasted) => {
+            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
+            let normalized = cleaned.replace("\r\n", "\n").replace('\r', "\n");
+            for ch in normalized.chars() {
+                if ch == '\n' || (!ch.is_control() && ch != '\u{7f}') {
+                    app.welcome_modal_state.bio_push(ch);
+                }
+            }
+        }
         ParsedInput::Char(ch) if !ch.is_control() => app.welcome_modal_state.bio_push(ch),
         _ => {}
     }

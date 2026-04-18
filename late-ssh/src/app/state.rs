@@ -364,7 +364,7 @@ impl App {
             config.profile_service.clone(),
             config.user_id,
         );
-        welcome_modal_state.open_from_profile(&initial_profile, cols.saturating_sub(8));
+        welcome_modal_state.open_from_profile(&initial_profile, welcome_modal::ui::MODAL_WIDTH);
 
         Ok(Self {
             running: true,

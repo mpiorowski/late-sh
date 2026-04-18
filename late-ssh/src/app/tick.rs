@@ -46,8 +46,10 @@ impl App {
             && self.welcome_modal_state.draft().username.is_empty()
             && !self.profile_state.profile().username.is_empty()
         {
-            self.welcome_modal_state
-                .open_from_profile(self.profile_state.profile(), self.size.0.saturating_sub(8));
+            self.welcome_modal_state.open_from_profile(
+                self.profile_state.profile(),
+                crate::app::welcome_modal::ui::MODAL_WIDTH,
+            );
         }
 
         let mut updated = false;
