@@ -31,7 +31,6 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
     draw_tabs(frame, layout[0], state.selected_topic());
 
     let body_block = Block::default()
-        .title(format!(" {} ", state.selected_topic().title()))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let body_inner = body_block.inner(layout[1]);
@@ -70,7 +69,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTopic) {
-    let mut spans = vec![Span::raw(" ")];
+    let mut spans = vec![Span::raw("  ")];
     for topic in HelpTopic::ALL {
         let active = topic == selected;
         let style = if active {

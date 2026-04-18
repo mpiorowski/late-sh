@@ -12,7 +12,7 @@ use crate::app::common::{
 };
 
 use super::{
-    data::{country_flag, country_label},
+    data::country_label,
     state::{PickerKind, Row, WelcomeModalState},
 };
 
@@ -266,22 +266,24 @@ fn draw_bio_panel(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     if !editing && composer.text().is_empty() {
         let placeholder = vec![
             Line::from(""),
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    "A short multiline intro lives here.",
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ]),
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    "Select Bio and press Enter to write one.",
-                    Style::default().fg(theme::TEXT_FAINT()),
-                ),
-            ]),
+            Line::from(Span::styled(
+                "A short multiline intro lives here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Select Bio and press Enter to write one.",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )),
         ];
-        frame.render_widget(Paragraph::new(placeholder), inner);
+        let placeholder_inner = inner.inner(Margin {
+            horizontal: 1,
+            vertical: 0,
+        });
+        frame.render_widget(
+            Paragraph::new(placeholder).wrap(Wrap { trim: false }),
+            placeholder_inner,
+        );
         return;
     }
 
@@ -400,10 +402,7 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
         Some(PickerKind::Country) => state
             .filtered_countries()
             .into_iter()
-            .map(|country| {
-                let flag = country_flag(country.code).unwrap_or_default();
-                format!("{flag} {} ({})", country.name, country.code)
-            })
+            .map(|country| format!("[{}] {}", country.code, country.name))
             .collect(),
         Some(PickerKind::Timezone) => state
             .filtered_timezones()

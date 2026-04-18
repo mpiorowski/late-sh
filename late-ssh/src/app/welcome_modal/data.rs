@@ -257,24 +257,6 @@ pub const COUNTRIES: &[CountryOption] = &[
     },
 ];
 
-pub fn country_flag(code: &str) -> Option<String> {
-    let code = code.trim();
-    if code.len() != 2 || !code.is_ascii() {
-        return None;
-    }
-
-    let mut flag = String::new();
-    for ch in code.chars() {
-        let upper = ch.to_ascii_uppercase();
-        if !upper.is_ascii_uppercase() {
-            return None;
-        }
-        let value = 0x1F1E6 + (upper as u32 - 'A' as u32);
-        flag.push(char::from_u32(value)?);
-    }
-    Some(flag)
-}
-
 pub fn country_label(code: Option<&str>) -> String {
     let Some(code) = code else {
         return "Not set".to_string();
@@ -285,10 +267,7 @@ pub fn country_label(code: Option<&str>) -> String {
         .find(|country| country.code == normalized)
         .map(|country| country.name)
         .unwrap_or("Unknown");
-    match country_flag(&normalized) {
-        Some(flag) => format!("{flag} {name}"),
-        None => name.to_string(),
-    }
+    format!("[{normalized}] {name}")
 }
 
 pub fn filter_countries(query: &str) -> Vec<&'static CountryOption> {
