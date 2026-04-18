@@ -123,7 +123,6 @@ async fn does_not_emit_activity_when_revoting_same_genre() {
     let user = create_test_user(&test_db.db, "revote-user").await;
     let user_id = user.id;
 
-    // Create activity channel and track events
     let (activity_tx, mut activity_rx) = broadcast::channel::<ActivityEvent>(64);
     let mut active_users = HashMap::new();
     active_users.insert(
@@ -149,7 +148,7 @@ async fn does_not_emit_activity_when_revoting_same_genre() {
         .await
         .expect("first vote");
 
-    let activity = timeout(Duration::from_millis(500), activity_rx.recv())
+    let activity = timeout(Duration::from_millis(100), activity_rx.recv())
         .await
         .expect("activity timeout")
         .expect("activity event");
@@ -163,7 +162,7 @@ async fn does_not_emit_activity_when_revoting_same_genre() {
         .expect("revote same");
 
     // Try to receive activity - should timeout since none was sent
-    let no_activity = timeout(Duration::from_millis(500), activity_rx.recv()).await;
+    let no_activity = timeout(Duration::from_millis(100), activity_rx.recv()).await;
     assert!(
         no_activity.is_err(),
         "expected no activity event for revoting same genre"
@@ -175,7 +174,7 @@ async fn does_not_emit_activity_when_revoting_same_genre() {
         .await
         .expect("vote different");
 
-    let activity = timeout(Duration::from_millis(500), activity_rx.recv())
+    let activity = timeout(Duration::from_millis(100), activity_rx.recv())
         .await
         .expect("activity timeout")
         .expect("activity event");
