@@ -24,7 +24,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
     let layout = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(8),
-        Constraint::Length(2),
+        Constraint::Length(1),
     ])
     .split(inner);
 

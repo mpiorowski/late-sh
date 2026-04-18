@@ -89,8 +89,17 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
-        // Init theme and layout sync
-        theme::set_current_by_id(self.profile_state.theme_id());
+        // Init theme and layout sync — preview welcome-modal draft live while open.
+        let active_theme_id = if self.show_welcome {
+            self.welcome_modal_state
+                .draft()
+                .theme_id
+                .clone()
+                .unwrap_or_else(|| self.profile_state.theme_id().to_string())
+        } else {
+            self.profile_state.theme_id().to_string()
+        };
+        theme::set_current_by_id(&active_theme_id);
 
         // Keep composer text width in sync for cursor up/down navigation.
         // outer border(2) + sidebar(24) + chat-block border(2) + composer padding(3) = 31
@@ -99,7 +108,11 @@ impl App {
         self.chat.sync_composer_layout();
 
         // Synchronize terminal background color with theme bg_canvas if enabled
-        let enabled = self.profile_state.profile().enable_background_color;
+        let enabled = if self.show_welcome {
+            self.welcome_modal_state.draft().enable_background_color
+        } else {
+            self.profile_state.profile().enable_background_color
+        };
         let current_bg = if enabled {
             Some(theme::BG_CANVAS())
         } else {

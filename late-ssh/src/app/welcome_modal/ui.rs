@@ -346,8 +346,6 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         Span::styled(" cycle  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" edit/apply  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("?", Style::default().fg(theme::AMBER_GLOW())),
-        Span::styled(" help  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
