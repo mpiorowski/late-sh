@@ -11,7 +11,7 @@ use std::net::{IpAddr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{self, Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -37,6 +37,26 @@ const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
 /// per-session render rate so that keystroke floods or other signal sources
 /// can't drive renders faster than this.
 const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
+
+/// Paired "there is unrendered input" flag + wakeup. `Notify` is just the
+/// alarm clock; `dirty` is the source of truth. `dirty` is written under the
+/// app mutex so any render that subsequently grabs the same mutex either
+/// already covered the input or will see `dirty = true` and know to render.
+/// Using `Notify` alone leaves a stored permit after a batched render,
+/// causing one spurious identical frame per typing burst.
+struct RenderSignal {
+    dirty: AtomicBool,
+    notify: Notify,
+}
+
+impl RenderSignal {
+    fn new() -> Self {
+        Self {
+            dirty: AtomicBool::new(false),
+            notify: Notify::new(),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Server {
@@ -66,7 +86,7 @@ struct ClientHandler {
     app: Option<Arc<TokioMutex<crate::app::state::App>>>,
     /// Signaled by input/resize paths to request an immediate (world-stateless)
     /// render, so typed characters echo without waiting for the next world tick.
-    render_notify: Option<Arc<Notify>>,
+    render_signal: Option<Arc<RenderSignal>>,
     cli_mode: bool,
     session_token: Option<String>,
 }
@@ -263,7 +283,7 @@ impl Server {
             over_limit,
             channel: None,
             app: None,
-            render_notify: None,
+            render_signal: None,
             cli_mode: false,
             session_token: None,
         }
@@ -782,45 +802,25 @@ impl russh::server::Handler for ClientHandler {
 
             let app = Arc::clone(app);
             let frame_drop_log_every = self.state.config.frame_drop_log_every;
-            let notify = Arc::new(Notify::new());
-            self.render_notify = Some(Arc::clone(&notify));
+            let signal = Arc::new(RenderSignal::new());
+            self.render_signal = Some(Arc::clone(&signal));
             tokio::spawn(async move {
                 let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
                 world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
                 let mut previous_render: Option<Instant> = None;
                 let mut input_pending = false;
                 loop {
-                    // Three wake sources, polled `biased` so the world tick wins
-                    // when multiple are ready at once (avoids starving animations
-                    // under a keystroke flood):
-                    //  - world_tick:  advance animations + render + ship frame.
-                    //  - sleep_until: a previously-noticed input is past its
-                    //                 MIN_RENDER_GAP throttle; render (no world
-                    //                 advance) and clear the pending flag.
-                    //  - notify:      input/resize happened. Just arm the
-                    //                 throttle by setting input_pending; the
-                    //                 sleep_until branch will render it.
-                    let advance_world = tokio::select! {
-                        biased;
-                        _ = world_tick.tick() => {
-                            // A world-tick render also satisfies any pending input
-                            // render, so clear the flag.
-                            input_pending = false;
-                            true
-                        }
-                        _ = tokio::time::sleep_until(
-                            previous_render
-                                .map(|t| t + MIN_RENDER_GAP)
-                                .unwrap_or_else(Instant::now)
-                                .into(),
-                        ), if input_pending => {
-                            input_pending = false;
-                            false
-                        }
-                        _ = notify.notified(), if !input_pending => {
-                            input_pending = true;
-                            continue;
-                        }
+                    let advance_world = match next_render_action(
+                        &mut world_tick,
+                        &signal,
+                        &mut input_pending,
+                        previous_render,
+                    )
+                    .await
+                    {
+                        RenderAction::AdvanceWorld => true,
+                        RenderAction::Render => false,
+                        RenderAction::Skip => continue,
                     };
                     match render_once(
                         &app,
@@ -828,6 +828,7 @@ impl russh::server::Handler for ClientHandler {
                         channel_id,
                         frame_drop_log_every,
                         advance_world,
+                        &signal,
                     )
                     .await
                     {
@@ -871,9 +872,12 @@ impl russh::server::Handler for ClientHandler {
                 clean_disconnect(&session.handle(), channel).await;
                 return Ok(());
             }
+            if let Some(signal) = self.render_signal.as_ref() {
+                signal.dirty.store(true, Ordering::Release);
+            }
         }
-        if let Some(notify) = self.render_notify.as_ref() {
-            notify.notify_one();
+        if let Some(signal) = self.render_signal.as_ref() {
+            signal.notify.notify_one();
         }
         Ok(())
     }
@@ -925,11 +929,68 @@ impl russh::server::Handler for ClientHandler {
             if let Err(e) = app.resize(col_width as u16, row_height as u16) {
                 tracing::error!(error = ?e, "error resizing app");
             }
+            if let Some(signal) = self.render_signal.as_ref() {
+                signal.dirty.store(true, Ordering::Release);
+            }
         }
-        if let Some(notify) = self.render_notify.as_ref() {
-            notify.notify_one();
+        if let Some(signal) = self.render_signal.as_ref() {
+            signal.notify.notify_one();
         }
         Ok(())
+    }
+}
+
+/// What the render loop should do next.
+#[derive(Debug, PartialEq, Eq)]
+enum RenderAction {
+    /// World tick fired — advance animations and render.
+    AdvanceWorld,
+    /// Input throttle elapsed — render without advancing world time.
+    Render,
+    /// No render this iteration; loop back to waiting.
+    Skip,
+}
+
+/// Picks the next action for the render loop. Three wake sources are polled
+/// `biased` so world tick wins on ties (avoids starving animations under a
+/// keystroke flood):
+///
+/// - `world_tick`: fires every [`WORLD_TICK_INTERVAL`]; advance animations +
+///   render + ship frame.
+/// - `sleep_until(prev + MIN_RENDER_GAP)`: the throttle window for a
+///   previously-noticed input has elapsed; render without advancing world
+///   time. Only armed when `input_pending` is true.
+/// - `signal.notify.notified()`: input/resize happened. Arm the throttle iff
+///   `dirty` is actually set — a stored permit from input already covered by
+///   an earlier render has `dirty == false` and is silently eaten here.
+async fn next_render_action(
+    world_tick: &mut tokio::time::Interval,
+    signal: &RenderSignal,
+    input_pending: &mut bool,
+    previous_render: Option<Instant>,
+) -> RenderAction {
+    tokio::select! {
+        biased;
+        _ = world_tick.tick() => {
+            // A world-tick render also satisfies any pending input render.
+            *input_pending = false;
+            RenderAction::AdvanceWorld
+        }
+        _ = tokio::time::sleep_until(
+            previous_render
+                .map(|t| t + MIN_RENDER_GAP)
+                .unwrap_or_else(Instant::now)
+                .into(),
+        ), if *input_pending => {
+            *input_pending = false;
+            RenderAction::Render
+        }
+        _ = signal.notify.notified(), if !*input_pending => {
+            if signal.dirty.load(Ordering::Acquire) {
+                *input_pending = true;
+            }
+            RenderAction::Skip
+        }
     }
 }
 
@@ -939,12 +1000,17 @@ async fn render_once(
     channel_id: ChannelId,
     frame_drop_log_every: u64,
     advance_world: bool,
+    signal: &RenderSignal,
 ) -> anyhow::Result<bool> {
     let (frame, terminal_commands) = {
         let mut app = app.lock().await;
         if !app.running {
             return Ok(true);
         }
+        // Clear `dirty` under the same lock that gates input mutations.
+        // Any input arriving after we release the lock will re-set `dirty`
+        // and be picked up by a subsequent loop iteration.
+        signal.dirty.store(false, Ordering::Release);
         if advance_world {
             app.tick();
         }
