@@ -37,6 +37,7 @@ pub enum Row {
 impl Row {
     pub const ALL: [Row; 12] = [
         Row::Username,
+        Row::Bio,
         Row::Theme,
         Row::BackgroundColor,
         Row::DirectMessages,
@@ -46,7 +47,6 @@ impl Row {
         Row::Cooldown,
         Row::Country,
         Row::Timezone,
-        Row::Bio,
         Row::Save,
     ];
 }

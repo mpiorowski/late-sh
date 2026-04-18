@@ -1,3 +1,4 @@
+use crate::app::help_modal::data::HelpTopic;
 use crate::app::state::App;
 use uuid::Uuid;
 
@@ -30,6 +31,9 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             if let Some(b) = app.chat.submit_composer(false) {
                 app.banner = Some(b);
             }
+            if let Some(topic) = app.chat.take_requested_help_topic() {
+                open_help_modal(app, topic);
+            }
         }
         0x15 => {
             // Ctrl-U: clear composer
@@ -42,6 +46,12 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
         }
         _ => {}
     }
+}
+
+fn open_help_modal(app: &mut App, topic: HelpTopic) {
+    app.help_modal_state
+        .open(topic, app.size.0.saturating_sub(8));
+    app.show_help = true;
 }
 
 pub fn handle_compose_char(app: &mut App, ch: char) {

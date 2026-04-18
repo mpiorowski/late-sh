@@ -19,7 +19,7 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar},
         theme,
     },
-    dashboard, icon_picker, profile,
+    dashboard, help_modal, icon_picker, profile,
     state::App,
     visualizer::Visualizer,
     welcome_modal,
@@ -75,7 +75,7 @@ struct DrawContext<'a> {
     show_welcome: bool,
     welcome_modal_state: &'a welcome_modal::state::WelcomeModalState,
     show_help: bool,
-    help_scroll: u16,
+    help_modal_state: &'a help_modal::state::HelpModalState,
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
@@ -223,6 +223,8 @@ impl App {
         };
         self.welcome_modal_state
             .set_modal_width(area.width.saturating_sub(8));
+        self.help_modal_state
+            .set_modal_width(area.width.saturating_sub(8));
         let online_count = self
             .active_users
             .as_ref()
@@ -262,7 +264,7 @@ impl App {
                         show_welcome: self.show_welcome,
                         welcome_modal_state: &self.welcome_modal_state,
                         show_help: self.show_help,
-                        help_scroll: self.help_scroll,
+                        help_modal_state: &self.help_modal_state,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
@@ -498,14 +500,7 @@ impl App {
         }
 
         if ctx.show_help {
-            draw_help_overlay(
-                frame,
-                inner,
-                screen,
-                ctx.game_selection,
-                ctx.is_playing_game,
-                ctx.help_scroll,
-            );
+            help_modal::ui::draw(frame, inner, ctx.help_modal_state);
         }
 
         if ctx.show_web_chat_qr
@@ -525,192 +520,6 @@ impl App {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
     }
-}
-
-fn draw_help_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    _screen: Screen,
-    _game_selection: usize,
-    _is_playing_game: bool,
-    help_scroll: u16,
-) {
-    use ratatui::style::Modifier;
-    use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Clear, Paragraph};
-
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let faint = Style::default().fg(theme::TEXT_FAINT());
-    let muted = Style::default().fg(theme::TEXT_MUTED());
-    let bold_amber = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-    let key_s = Style::default().fg(theme::AMBER_DIM());
-    let desc_s = Style::default().fg(theme::TEXT());
-
-    let col_w: u16 = 34;
-
-    let key = |k: &str, d: &str| -> Line<'static> {
-        Line::from(vec![
-            Span::styled(format!("  {:<10}", k), key_s),
-            Span::styled(d.to_string(), desc_s),
-        ])
-    };
-
-    let section = |label: &str| -> Line<'static> {
-        Line::from(vec![
-            Span::styled("  ", faint),
-            Span::styled(label.to_string(), bold_amber),
-        ])
-    };
-
-    let divider = |w: u16| -> Line<'static> {
-        Line::from(Span::styled(
-            format!("  {}", "─".repeat((w as usize).saturating_sub(4))),
-            faint,
-        ))
-    };
-
-    let hint =
-        |text: &str| -> Line<'static> { Line::from(Span::styled(format!("  {text}"), muted)) };
-
-    // ── Left column ──
-    let left = vec![
-        Line::from(""),
-        section("Global"),
-        divider(col_w),
-        key("Tab / S-Tab", "next / prev screen"),
-        key("1-4", "jump to screen"),
-        key("m", "mute paired"),
-        key("+ / -", "volume"),
-        key("p", "pair audio (QR)"),
-        key("?", "this help"),
-        key("q", "quit"),
-        Line::from(""),
-        section("Dashboard"),
-        divider(col_w),
-        key("i", "compose chat"),
-        key("Enter", "copy CLI cmd"),
-        Line::from(""),
-        section("Chat"),
-        divider(col_w),
-        key("h / l", "switch room"),
-        key("i", "compose"),
-        key("/help", "commands"),
-        key("/music", "music setup"),
-        key("/active", "active users"),
-        key("/list", "private room users"),
-        Line::from(""),
-        section("Profile"),
-        divider(col_w),
-        key("j / k", "navigate"),
-        key("i", "edit username"),
-        key("Space", "toggle"),
-    ];
-
-    // ── Right column ──
-    let right = vec![
-        Line::from(""),
-        section("Bonsai"),
-        divider(col_w),
-        key("w", "water / replant"),
-        key("x", "prune (reshape)"),
-        key("s", "copy to clipboard"),
-        Line::from(""),
-        hint("Water daily to grow."),
-        hint("Grows while connected."),
-        hint("7 days dry = dies."),
-        hint("Prune costs 20% growth"),
-        hint("but changes tree shape."),
-        Line::from(""),
-        section("News"),
-        divider(col_w),
-        key("j / k", "navigate"),
-        key("i", "paste / share URL"),
-        key("Enter", "submit / copy URL"),
-        key("Esc", "cancel URL entry"),
-        key("d", "delete (own)"),
-        Line::from(""),
-        section("The Arcade"),
-        divider(col_w),
-        key("j / k", "browse"),
-        key("Enter", "play"),
-        key("Esc", "exit game"),
-        hint("Game keys in info panel."),
-    ];
-
-    let row_count = left.len().max(right.len());
-    let total_w = (col_w * 2 + 1).min(area.width.saturating_sub(4));
-    let total_h = ((row_count + 4) as u16).min(area.height.saturating_sub(2));
-    let x = area.x + (area.width.saturating_sub(total_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(total_h)) / 2;
-    let popup_area = Rect::new(x, y, total_w, total_h);
-
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .title(Span::styled(
-            " Keybindings ",
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    // Content area: leave 1 row at bottom for footer
-    let content_area = Rect::new(
-        inner.x,
-        inner.y,
-        inner.width,
-        inner.height.saturating_sub(1),
-    );
-
-    // Two columns with a thin separator
-    let cols = Layout::horizontal([
-        Constraint::Length(col_w),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-    ])
-    .split(content_area);
-
-    // Vertical separator
-    let sep_lines: Vec<Line<'static>> = (0..cols[1].height)
-        .map(|_| Line::from(Span::styled("│", faint)))
-        .collect();
-    frame.render_widget(Paragraph::new(sep_lines), cols[1]);
-
-    let content_h = left.len().max(right.len()) as u16;
-    let visible_h = cols[0].height;
-    let max_scroll = content_h.saturating_sub(visible_h);
-    let scroll = help_scroll.min(max_scroll);
-
-    frame.render_widget(Paragraph::new(left).scroll((scroll, 0)), cols[0]);
-    frame.render_widget(Paragraph::new(right).scroll((scroll, 0)), cols[2]);
-
-    // Footer
-    let footer_area = Rect::new(
-        inner.x,
-        inner.y + inner.height.saturating_sub(1),
-        inner.width,
-        1,
-    );
-    let can_scroll = max_scroll > 0;
-    let mut footer = vec![
-        Span::styled("  press ", dim),
-        Span::styled("? ", Style::default().fg(theme::TEXT_MUTED())),
-        Span::styled("to close", dim),
-    ];
-    if can_scroll {
-        footer.push(Span::styled(
-            "  j/k ",
-            Style::default().fg(theme::TEXT_MUTED()),
-        ));
-        footer.push(Span::styled("scroll", dim));
-    }
-    frame.render_widget(Paragraph::new(Line::from(footer)).centered(), footer_area);
 }
 
 #[cfg(test)]

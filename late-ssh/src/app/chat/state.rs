@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::app::common::overlay::Overlay;
 
 use crate::app::common::{composer::ComposerState, primitives::Banner};
+use crate::app::help_modal::data::HelpTopic;
 use crate::state::{ActiveUser, ActiveUsers};
 
 use super::{
@@ -17,25 +18,6 @@ use super::{
     notifications::svc::NotificationService,
     svc::{ChatEvent, ChatService, ChatSnapshot},
 };
-
-const MUSIC_HELP_TEXT: &str = "\
-How music works on late.sh
-
-SSH is a terminal protocol - it carries text, not audio. To hear music, you need a second audio channel that pairs with your SSH session.
-
-Option 1 (recommended): Install the CLI
-  curl -fsSL https://cli.late.sh/install.sh | bash
-  Then run `late` instead of `ssh late.sh`. It launches SSH + local audio playback in one process - no browser needed. The CLI decodes the MP3 stream locally, plays through your system audio, and pairs with the TUI over WebSocket for visualizer + controls.
-  Don't trust the install script? Build from source: git clone https://github.com/mpiorowski/late-sh && cargo install --path late-cli
-
-Option 2: Browser pairing
-  Press `p` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
-
-Both options give you:
-  m = mute | +/- = volume | visualizer in the sidebar
-  Vote for genres on the Dashboard: L C A
-
-The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";
 
 pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
 
@@ -109,6 +91,7 @@ pub struct ChatState {
     /// Pending desktop notifications drained on render. `kind` matches the
     /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
     pub(crate) pending_notifications: Vec<PendingNotification>,
+    requested_help_topic: Option<HelpTopic>,
 }
 
 pub(crate) struct PendingNotification {
@@ -172,6 +155,7 @@ impl ChatState {
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
             pending_notifications: Vec::new(),
+            requested_help_topic: None,
         }
     }
 
@@ -270,6 +254,10 @@ impl ChatState {
         if let Some(overlay) = &mut self.overlay {
             overlay.scroll(delta);
         }
+    }
+
+    pub fn take_requested_help_topic(&mut self) -> Option<HelpTopic> {
+        self.requested_help_topic.take()
     }
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
@@ -631,22 +619,18 @@ impl ChatState {
         format_active_user_lines(self.active_users.as_ref())
     }
 
-    fn music_help_lines(&self) -> Vec<String> {
-        MUSIC_HELP_TEXT.lines().map(str::to_string).collect()
-    }
-
     pub fn submit_composer(&mut self, keep_open: bool) -> Option<Banner> {
         let body = self.composer.text().trim_end().to_string();
 
         if body.trim() == "/help" {
             self.clear_composer_after_submit();
-            self.open_overlay("Chat Help", chat_help_lines());
+            self.requested_help_topic = Some(HelpTopic::Chat);
             return None;
         }
 
         if body.trim() == "/music" {
             self.clear_composer_after_submit();
-            self.open_overlay("Music Help", self.music_help_lines());
+            self.requested_help_topic = Some(HelpTopic::Music);
             return None;
         }
 
@@ -1306,69 +1290,6 @@ fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>
         .and_then(|id| usernames.get(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
-}
-
-fn chat_help_lines() -> Vec<String> {
-    [
-        "Commands",
-        "  /join #room        join a room (creates it if new, solo)",
-        "  /create #room      create a room and add everyone",
-        "  /leave             leave the current room",
-        "  /dm @user          open a direct message",
-        "  /active            list active users",
-        "  /list              list users in this private room",
-        "  /ignore [@user]    ignore a user, or list ignored users",
-        "  /unignore [@user]  remove a user from your ignore list",
-        "  /music             explain how music works",
-        "  /help              show this help",
-        "",
-        "Rooms",
-        "  h / l              previous / next room",
-        "  Enter / i          start composing",
-        "  c                  copy a web-chat link to this session",
-        "",
-        "Messages",
-        "  j / k              select older / newer message",
-        "  ↑ / ↓              same as j / k",
-        "  Ctrl+U / Ctrl+D    half page up / down",
-        "  PageUp / PageDown  half page up / down",
-        "  End                jump to most recent",
-        "  g / G              clear selection (back to live view)",
-        "  r                  reply to selected message",
-        "  e                  edit selected message",
-        "  d                  delete selected message",
-        "",
-        "Compose",
-        "  Enter              send and exit",
-        "  Ctrl+Enter         send and keep open",
-        "  Alt+Enter          newline",
-        "  Esc                exit compose",
-        "  Backspace          delete char",
-        "  Ctrl+Backspace     delete word left",
-        "  Ctrl+Delete        delete word right",
-        "  Ctrl+U             clear composer",
-        "  Ctrl+← / Ctrl+→    move cursor by word",
-        "  @user              mention (Tab/Enter to confirm)",
-        "  Ctrl+]             open emoji / nerd font picker",
-        "",
-        "Icon picker",
-        "  ↑/↓ or Ctrl+K/J    move selection",
-        "  Ctrl+U / Ctrl+D    half page up / down",
-        "  PageUp / PageDown  jump a page",
-        "  type to filter     search by name",
-        "  Enter              insert and close",
-        "  Alt+Enter          insert and keep open",
-        "  click / wheel      select / scroll",
-        "  double-click       insert and keep open",
-        "  Esc                close",
-        "",
-        "Overlays (this window)",
-        "  j / k or ↑ / ↓     scroll",
-        "  q or Esc           close",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
 }
 
 /// Parse `/dm @username` or `/dm username` from the composer text.
