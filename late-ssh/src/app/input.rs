@@ -408,13 +408,14 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
-    if app.show_welcome {
-        welcome_modal::input::handle_input(app, event);
+    // Help is the topmost modal: when both are open it owns input.
+    if app.show_help {
+        help_modal::input::handle_input(app, event);
         return;
     }
 
-    if app.show_help {
-        help_modal::input::handle_input(app, event);
+    if app.show_welcome {
+        welcome_modal::input::handle_input(app, event);
         return;
     }
 
@@ -633,12 +634,12 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
 }
 
 fn dispatch_escape(app: &mut App) {
-    if app.show_welcome {
-        welcome_modal::input::handle_escape(app);
-        return;
-    }
     if app.show_help {
         help_modal::input::handle_escape(app);
+        return;
+    }
+    if app.show_welcome {
+        welcome_modal::input::handle_escape(app);
         return;
     }
     if app.icon_picker_open {

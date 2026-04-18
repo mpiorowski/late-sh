@@ -21,6 +21,7 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
 
     match event {
         ParsedInput::Byte(0x1B) => app.show_welcome = false,
+        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'j' | b'J') | ParsedInput::Arrow(b'B') => {
             app.welcome_modal_state.move_row(1)
         }
@@ -33,6 +34,14 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Char('e') | ParsedInput::Char('E') => activate_selected_row(app),
         _ => {}
     }
+}
+
+fn open_help(app: &mut App) {
+    app.help_modal_state.open(
+        crate::app::help_modal::data::HelpTopic::Overview,
+        app.size.0.saturating_sub(8),
+    );
+    app.show_help = true;
 }
 
 pub fn handle_escape(app: &mut App) {
