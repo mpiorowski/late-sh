@@ -153,7 +153,19 @@ pub(super) async fn forward_resize_events(handle: ResizeHandle) {
 
     #[cfg(not(unix))]
     {
-        let _ = handle;
+        let mut last_size = terminal_size_or_default();
+        let mut interval = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            interval.tick().await;
+            let current = terminal_size_or_default();
+            if current != last_size {
+                last_size = current;
+                if let Err(err) = apply_resize(&handle).await {
+                    debug!(error = ?err, "failed to forward local terminal resize");
+                    break;
+                }
+            }
+        }
     }
 }
 
