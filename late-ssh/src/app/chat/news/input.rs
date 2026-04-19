@@ -9,6 +9,14 @@ pub fn handle_composer_input(app: &mut App, byte: u8) {
             // Ctrl-U: clear composer
             app.chat.news.composer_clear();
         }
+        0x19 => {
+            // Ctrl-Y: yank from kill-ring
+            app.chat.news.composer_paste();
+        }
+        0x1F => {
+            // Ctrl-/ (same byte as Ctrl-_): undo
+            app.chat.news.composer_undo();
+        }
         0x7F | 0x08 => app.chat.news.composer_pop(),
         b if (32..127).contains(&b) => {
             app.chat.news.composer_push(b as char);

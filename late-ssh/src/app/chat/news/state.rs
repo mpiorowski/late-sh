@@ -1,3 +1,5 @@
+use ratatui::style::{Modifier, Style};
+use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -16,7 +18,7 @@ pub struct State {
     event_rx: broadcast::Receiver<ArticleEvent>,
     unread_count: i64,
     composing: bool,
-    composer: String,
+    composer: TextArea<'static>,
     processing: bool,
     current_task: Option<tokio::task::AbortHandle>,
 }
@@ -36,7 +38,7 @@ impl State {
             event_rx,
             unread_count: 0,
             composing: false,
-            composer: String::new(),
+            composer: new_news_textarea(),
             processing: false,
             current_task: None,
         }
@@ -73,7 +75,7 @@ impl State {
         self.composing
     }
 
-    pub fn composer(&self) -> &str {
+    pub fn composer(&self) -> &TextArea<'static> {
         &self.composer
     }
 
@@ -84,6 +86,7 @@ impl State {
     pub fn start_composing(&mut self) {
         self.composing = true;
         self.processing = false;
+        set_news_cursor_visible(&mut self.composer, true);
     }
 
     pub fn stop_composing(&mut self) {
@@ -91,7 +94,7 @@ impl State {
             task.abort();
         }
         self.composing = false;
-        self.composer.clear();
+        self.composer = new_news_textarea();
         self.processing = false;
     }
 
@@ -102,18 +105,77 @@ impl State {
 
     pub fn composer_push(&mut self, ch: char) {
         if !self.processing {
-            self.composer.push(ch);
+            self.composer.insert_char(ch);
         }
     }
 
     pub fn composer_clear(&mut self) {
         if !self.processing {
-            self.composer.clear();
+            self.composer = new_news_textarea();
+            set_news_cursor_visible(&mut self.composer, self.composing);
         }
     }
     pub fn composer_pop(&mut self) {
         if !self.processing {
-            self.composer.pop();
+            self.composer.delete_char();
+        }
+    }
+
+    pub fn composer_paste(&mut self) {
+        if !self.processing {
+            self.composer.paste();
+        }
+    }
+
+    pub fn composer_undo(&mut self) {
+        if !self.processing {
+            self.composer.undo();
+        }
+    }
+
+    pub fn composer_delete_right(&mut self) {
+        if !self.processing {
+            self.composer.delete_next_char();
+        }
+    }
+
+    pub fn composer_delete_word_left(&mut self) {
+        if !self.processing {
+            self.composer.delete_word();
+        }
+    }
+
+    pub fn composer_delete_word_right(&mut self) {
+        if !self.processing {
+            self.composer.delete_next_word();
+        }
+    }
+
+    pub fn composer_cursor_left(&mut self) {
+        if !self.processing {
+            self.composer
+                .move_cursor(ratatui_textarea::CursorMove::Back);
+        }
+    }
+
+    pub fn composer_cursor_right(&mut self) {
+        if !self.processing {
+            self.composer
+                .move_cursor(ratatui_textarea::CursorMove::Forward);
+        }
+    }
+
+    pub fn composer_cursor_word_left(&mut self) {
+        if !self.processing {
+            self.composer
+                .move_cursor(ratatui_textarea::CursorMove::WordBack);
+        }
+    }
+
+    pub fn composer_cursor_word_right(&mut self) {
+        if !self.processing {
+            self.composer
+                .move_cursor(ratatui_textarea::CursorMove::WordForward);
         }
     }
 
@@ -129,14 +191,13 @@ impl State {
     }
 
     pub fn submit_composer(&mut self) {
-        if self.processing || self.composer.trim().is_empty() {
+        let url = self.composer.lines().join("");
+        if self.processing || url.trim().is_empty() {
             return;
         }
         self.processing = true;
-        self.current_task = Some(
-            self.article_service
-                .process_url(self.user_id, self.composer.trim()),
-        );
+        set_news_cursor_visible(&mut self.composer, false);
+        self.current_task = Some(self.article_service.process_url(self.user_id, url.trim()));
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
@@ -161,12 +222,13 @@ impl State {
                         self.current_task = None;
                         self.composing = false;
                         self.processing = false;
-                        self.composer.clear();
+                        self.composer = new_news_textarea();
                         banner = Some(Banner::success("Article shared!"));
                     }
                     ArticleEvent::Failed { user_id, error } if self.user_id == user_id => {
                         self.current_task = None;
                         self.processing = false;
+                        set_news_cursor_visible(&mut self.composer, self.composing);
                         banner = Some(Banner::error(&format!("Failed: {}", error)));
                     }
                     ArticleEvent::Deleted { user_id } if self.user_id == user_id => {
@@ -218,6 +280,23 @@ fn move_index(current: usize, delta: isize, len: usize) -> usize {
     }
 
     (current as isize + delta).clamp(0, len as isize - 1) as usize
+}
+
+fn new_news_textarea() -> TextArea<'static> {
+    let mut ta = TextArea::default();
+    ta.set_cursor_line_style(Style::default());
+    ta.set_cursor_style(Style::default());
+    ta.set_wrap_mode(WrapMode::Glyph);
+    ta
+}
+
+fn set_news_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
+    let style = if visible {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    };
+    ta.set_cursor_style(style);
 }
 
 #[cfg(test)]

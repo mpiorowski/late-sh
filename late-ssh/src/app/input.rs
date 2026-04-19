@@ -522,12 +522,18 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.chat.composer_delete_right();
             app.chat.update_autocomplete();
         }
+        ParsedInput::Delete if ctx.screen == Screen::Chat && ctx.news_composing => {
+            app.chat.news.composer_delete_right();
+        }
         ParsedInput::CtrlBackspace
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
                 && ctx.chat_composing =>
         {
             app.chat.composer_delete_word_left();
             app.chat.update_autocomplete();
+        }
+        ParsedInput::CtrlBackspace if ctx.screen == Screen::Chat && ctx.news_composing => {
+            app.chat.news.composer_delete_word_left();
         }
         // Many terminals encode Ctrl+Backspace as raw BS (^H / 0x08) rather
         // than a distinct escape sequence. Treat that as delete-word-left in
@@ -539,12 +545,18 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.chat.composer_delete_word_left();
             app.chat.update_autocomplete();
         }
+        ParsedInput::Byte(0x08) if ctx.screen == Screen::Chat && ctx.news_composing => {
+            app.chat.news.composer_delete_word_left();
+        }
         ParsedInput::CtrlDelete
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
                 && ctx.chat_composing =>
         {
             app.chat.composer_delete_word_right();
             app.chat.update_autocomplete();
+        }
+        ParsedInput::CtrlDelete if ctx.screen == Screen::Chat && ctx.news_composing => {
+            app.chat.news.composer_delete_word_right();
         }
         ParsedInput::CtrlArrow(key)
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
@@ -555,6 +567,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 app.chat.composer_cursor_word_right();
             } else {
                 app.chat.composer_cursor_word_left();
+            }
+        }
+        ParsedInput::CtrlArrow(key) if ctx.screen == Screen::Chat && ctx.news_composing => {
+            if key == b'C' {
+                app.chat.news.composer_cursor_word_right();
+            } else if key == b'D' {
+                app.chat.news.composer_cursor_word_left();
             }
         }
         ParsedInput::Delete
@@ -576,6 +595,14 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                     b'D' => app.chat.composer_cursor_left(),
                     b'A' => app.chat.composer_cursor_up(),
                     b'B' => app.chat.composer_cursor_down(),
+                    _ => {}
+                }
+                return;
+            }
+            if ctx.screen == Screen::Chat && ctx.news_composing {
+                match key {
+                    b'C' => app.chat.news.composer_cursor_right(),
+                    b'D' => app.chat.news.composer_cursor_left(),
                     _ => {}
                 }
                 return;

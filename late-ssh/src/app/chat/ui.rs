@@ -15,7 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use crate::app::common::{
-    composer::{build_composer_lines, composer_line_count},
+    composer::composer_line_count,
     overlay::{Overlay, draw_overlay},
     theme,
 };
@@ -649,7 +649,7 @@ pub struct ChatRenderInput<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
-    pub news_composer: &'a str,
+    pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
     pub notifications_selected: bool,
@@ -699,7 +699,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let total_composer_lines = if view.notifications_selected {
         1
     } else if news_selected {
-        composer_line_count(view.news_composer, composer_text_width)
+        chat_composer_lines_for_height(view.news_composer, composer_text_width)
     } else {
         chat_composer_lines_for_height(composer, composer_text_width)
     };
@@ -1068,15 +1068,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .title(title.as_str())
                 .borders(Borders::ALL)
                 .border_style(border_style);
-            let news_composer_lines = build_composer_lines(
-                view.news_composer,
-                view.news_composer.len(),
-                true,
-                view.cursor_visible && !view.news_processing,
-                composer_text_width,
-            );
-            let news_paragraph = Paragraph::new(news_composer_lines).block(news_block);
-            frame.render_widget(news_paragraph, composer_area);
+            let news_inner = news_block.inner(composer_area);
+            frame.render_widget(news_block, composer_area);
+            let text_area = horizontal_inset(news_inner, 1);
+            frame.render_widget(view.news_composer, text_area);
         } else {
             let hint_block = Block::default()
                 .title(" Share URL ")
