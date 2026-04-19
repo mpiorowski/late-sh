@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use rand_core::OsRng;
+use russh::keys::{self, PrivateKey};
 use std::{
     env, fs,
     io::IsTerminal,
@@ -23,12 +25,43 @@ pub(super) fn ensure_client_identity() -> Result<PathBuf> {
 }
 
 fn ssh_dir() -> Result<PathBuf> {
-    let home = env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".ssh"))
+    let home = home_dir().context("could not determine home directory")?;
+    Ok(home.join(".ssh"))
 }
 
 fn dedicated_identity_path() -> Result<PathBuf> {
     Ok(ssh_dir()?.join("id_late_sh_ed25519"))
+}
+
+fn home_dir() -> Option<PathBuf> {
+    home_dir_from_env(
+        env::var_os("HOME"),
+        env::var_os("USERPROFILE"),
+        env::var_os("HOMEDRIVE"),
+        env::var_os("HOMEPATH"),
+    )
+}
+
+fn home_dir_from_env(
+    home: Option<std::ffi::OsString>,
+    userprofile: Option<std::ffi::OsString>,
+    homedrive: Option<std::ffi::OsString>,
+    homepath: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    if let Some(path) = home.filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+    if let Some(path) = userprofile.filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+    match (homedrive, homepath) {
+        (Some(drive), Some(path)) if !drive.is_empty() && !path.is_empty() => {
+            let mut combined = drive;
+            combined.push(path);
+            Some(PathBuf::from(combined))
+        }
+        _ => None,
+    }
 }
 
 fn prompt_generate_identity(path: &Path) -> Result<()> {
@@ -71,20 +104,18 @@ fn generate_identity(path: &Path) -> Result<()> {
         let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
     }
 
-    let status = std::process::Command::new("ssh-keygen")
-        .arg("-t")
-        .arg("ed25519")
-        .arg("-f")
-        .arg(path)
-        .arg("-N")
-        .arg("")
-        .arg("-C")
-        .arg("late.sh cli")
-        .status()
-        .context("failed to run ssh-keygen")?;
+    let key = PrivateKey::random(&mut OsRng, keys::Algorithm::Ed25519)
+        .context("failed to generate Ed25519 key")?;
+    let encoded = key
+        .to_openssh(keys::ssh_key::LineEnding::LF)
+        .context("failed to encode OpenSSH private key")?;
+    fs::write(path, encoded.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
 
-    if !status.success() {
-        anyhow::bail!("ssh-keygen exited with status {status}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
 
     Ok(())
@@ -101,5 +132,27 @@ mod tests {
         assert!(is_affirmative("yes"));
         assert!(!is_affirmative("n"));
         assert!(!is_affirmative(""));
+    }
+
+    #[test]
+    fn home_dir_prefers_home_then_windows_fallbacks() {
+        assert_eq!(
+            home_dir_from_env(
+                Some("/tmp/home".into()),
+                Some("C:\\Users\\mat".into()),
+                Some("C:".into()),
+                Some("\\Users\\mat".into()),
+            )
+            .unwrap(),
+            PathBuf::from("/tmp/home")
+        );
+        assert_eq!(
+            home_dir_from_env(None, Some("C:\\Users\\mat".into()), None, None).unwrap(),
+            PathBuf::from("C:\\Users\\mat")
+        );
+        assert_eq!(
+            home_dir_from_env(None, None, Some("C:".into()), Some("\\Users\\mat".into())).unwrap(),
+            PathBuf::from("C:\\Users\\mat")
+        );
     }
 }

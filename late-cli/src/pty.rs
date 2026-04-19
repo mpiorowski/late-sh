@@ -1,15 +1,19 @@
 use anyhow::{Context, Result};
+#[cfg(unix)]
 use nix::{libc, pty::Winsize};
+#[cfg(unix)]
 use std::{fs, io, os::fd::AsRawFd, sync::Arc};
 use tracing::debug;
 
+#[cfg(unix)]
 #[derive(Clone)]
 pub(super) struct PtyResizeHandle {
     pub(super) master: Arc<fs::File>,
 }
 
+#[cfg(unix)]
 impl PtyResizeHandle {
-    fn resize_to_current(&self) -> Result<()> {
+    pub(super) fn resize_to_current(&self) -> Result<()> {
         let (cols, rows) = terminal_size_or_default();
         resize_pty(&self.master, cols, rows)
     }
@@ -19,6 +23,7 @@ pub(super) fn terminal_size_or_default() -> (u16, u16) {
     crossterm::terminal::size().unwrap_or((80, 24))
 }
 
+#[cfg(unix)]
 pub(super) fn pty_winsize(cols: u16, rows: u16) -> Winsize {
     Winsize {
         ws_row: rows,
@@ -28,6 +33,7 @@ pub(super) fn pty_winsize(cols: u16, rows: u16) -> Winsize {
     }
 }
 
+#[cfg(unix)]
 fn resize_pty(master: &fs::File, cols: u16, rows: u16) -> Result<()> {
     let winsize = pty_winsize(cols, rows);
     let rc = unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &winsize) };
@@ -36,20 +42,6 @@ fn resize_pty(master: &fs::File, cols: u16, rows: u16) -> Result<()> {
     }
     debug!(cols, rows, "resized local ssh pty");
     Ok(())
-}
-
-pub(super) async fn forward_resize_events(handle: PtyResizeHandle) {
-    let Ok(mut sigwinch) =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
-    else {
-        return;
-    };
-
-    while sigwinch.recv().await.is_some() {
-        if let Err(err) = handle.resize_to_current() {
-            debug!(error = ?err, "failed to forward local terminal resize");
-        }
-    }
 }
 
 #[cfg(test)]
@@ -63,6 +55,7 @@ mod tests {
         assert!(rows > 0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn pty_winsize_maps_rows_and_cols() {
         let winsize = pty_winsize(120, 40);
