@@ -201,8 +201,8 @@ async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
     app.handle_input(b"\x7f");
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("one"),
-        "expected split Alt+Backspace to keep the preceding word; frame={frame:?}"
+        frame.contains("│one │"),
+        "expected split Alt+Backspace to leave the composer in the explicit intermediate state `one `; frame={frame:?}"
     );
     assert!(
         !frame.contains("two"),
@@ -213,8 +213,8 @@ async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
     app.handle_input(b"\x7f!");
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("on!"),
-        "expected composer to keep accepting backspace and text after Alt+Backspace split; frame={frame:?}"
+        frame.contains("one!"),
+        "expected composer to keep accepting backspace and text after Alt+Backspace split from the intermediate `one ` state; frame={frame:?}"
     );
     assert!(
         !frame.contains("two"),
