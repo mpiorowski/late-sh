@@ -47,9 +47,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("q", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" / ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[1]);

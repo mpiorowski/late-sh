@@ -34,12 +34,17 @@ late
 ```
 
 That's it. On first run it will generate a dedicated SSH key at `~/.ssh/id_late_sh_ed25519`.
+If you want to use a different key, pass `--key /path/to/key`.
 
 ### Options
 
 ```
 --ssh-target <host>        SSH target (default: late.sh)
---ssh-bin <command>        SSH client command (default: ssh)
+--ssh-port <port>          SSH port override
+--ssh-user <user>          SSH username override
+--key <path>               SSH identity file override
+--ssh-mode <mode>          SSH transport: native (default) or old
+--ssh-bin <command>        SSH client command (subprocess mode only, default: ssh)
 --audio-base-url <url>     Audio stream URL
 --api-base-url <url>       API URL for WebSocket pairing
 -v, --verbose              Debug logging to stderr
@@ -48,9 +53,14 @@ That's it. On first run it will generate a dedicated SSH key at `~/.ssh/id_late_
 ## Requirements
 
 - Linux or macOS (WSL works too)
-- `ssh` client
 - Working audio output device
 - Rust toolchain (if building from source)
+
+`--ssh-mode old` keeps the old behavior and still depends on a system `ssh` binary.
+`--ssh-mode native` uses an embedded `russh` client, records host keys in `~/.ssh/known_hosts`
+with accept-new semantics, fetches the pairing token over a dedicated SSH exec handshake, and
+does not require OpenSSH on `$PATH`. Native mode intentionally does not fall back to the legacy
+`LATE_SESSION_TOKEN=` banner protocol, so it will fail fast against an older server.
 
 If your audio device does not support the stream's native `44.1 kHz` output rate, the CLI now falls back to a supported device rate such as `48 kHz` and resamples locally. Native `44.1 kHz` playback is still preferred when available.
 
@@ -64,11 +74,8 @@ If you'd rather not use your real key:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway
-late --ssh-bin "ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway"
+late --key ~/.ssh/late_throwaway
 ```
-
-`IdentitiesOnly=yes` stops ssh-agent from offering other keys first — without it
-you may land on a different account depending on what's loaded in your agent.
 
 ## License
 

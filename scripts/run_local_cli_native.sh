@@ -34,16 +34,19 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v script >/dev/null 2>&1; then
-  echo "'script' is required" >&2
-  exit 1
-fi
-
 cd "${ROOT_DIR}"
 
-exec cargo run -p late-cli --bin late -- \
-  --ssh-mode old \
-  --ssh-target "${SSH_TARGET}" \
-  --ssh-bin "ssh -p ${SSH_PORT}" \
-  --api-base-url "${API_BASE_URL}" \
+cmd=(
+  cargo run -p late-cli --bin late --
+  --ssh-mode native
+  --ssh-target "${SSH_TARGET}"
+  --ssh-port "${SSH_PORT}"
+  --api-base-url "${API_BASE_URL}"
   --audio-base-url "${AUDIO_BASE_URL}"
+)
+
+if [[ -n "${LATE_LOCAL_SSH_USER:-}" ]]; then
+  cmd+=(--ssh-user "${LATE_LOCAL_SSH_USER}")
+fi
+
+exec "${cmd[@]}" "$@"
