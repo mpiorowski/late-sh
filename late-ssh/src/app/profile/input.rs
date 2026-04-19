@@ -28,5 +28,3 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
         _ => false,
     }
 }
-
-pub fn handle_composer_input(_app: &mut App, _byte: u8) {}

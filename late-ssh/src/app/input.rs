@@ -13,7 +13,6 @@ struct InputContext {
     chat_composing: bool,
     chat_ac_active: bool,
     news_composing: bool,
-    profile_composing: bool,
 }
 
 impl InputContext {
@@ -23,7 +22,6 @@ impl InputContext {
             chat_composing: app.chat.is_composing(),
             chat_ac_active: app.chat.is_autocomplete_active(),
             news_composing: app.chat.news.composing(),
-            profile_composing: app.profile_state.editing_username(),
         }
     }
 
@@ -34,9 +32,7 @@ impl InputContext {
         if chat_screen && self.chat_ac_active {
             return false;
         }
-        chat_screen
-            || (self.screen == Screen::Chat && self.news_composing)
-            || (self.screen == Screen::Profile && self.profile_composing)
+        chat_screen || (self.screen == Screen::Chat && self.news_composing)
     }
 }
 
@@ -475,9 +471,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             if ctx.screen == Screen::Chat && ctx.news_composing {
                 return;
             }
-            if ctx.screen == Screen::Profile && ctx.profile_composing {
-                return;
-            }
             if ctx.screen == Screen::Games && app.is_playing_game {
                 return;
             }
@@ -816,23 +809,17 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return true;
     }
 
-    if ctx.screen == Screen::Profile && ctx.profile_composing {
-        profile::input::handle_composer_input(app, byte);
-        return true;
-    }
-
     false
 }
 
 fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.news.stop_composing();
-    app.profile_state.cancel_username_edit();
 }
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     // ? opens help unless composing text
-    if byte == b'?' && !ctx.chat_composing && !ctx.news_composing && !ctx.profile_composing {
+    if byte == b'?' && !ctx.chat_composing && !ctx.news_composing {
         app.help_modal_state
             .open(crate::app::help_modal::data::HelpTopic::Overview);
         app.show_help = true;
@@ -908,7 +895,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'x' | b'X' if !ctx.chat_composing && !ctx.news_composing && !ctx.profile_composing => {
+        b'x' | b'X' if !ctx.chat_composing && !ctx.news_composing => {
             if app.bonsai_state.cut() {
                 app.banner = Some(crate::app::common::primitives::Banner::success(
                     "Bonsai pruned!",
@@ -924,7 +911,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'w' | b'W' if !ctx.chat_composing && !ctx.news_composing && !ctx.profile_composing => {
+        b'w' | b'W' if !ctx.chat_composing && !ctx.news_composing => {
             if !app.bonsai_state.is_alive {
                 app.bonsai_state.respawn();
                 app.banner = Some(crate::app::common::primitives::Banner::success(
@@ -941,7 +928,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b's' | b'S' if !ctx.chat_composing && !ctx.news_composing && !ctx.profile_composing => {
+        b's' | b'S' if !ctx.chat_composing && !ctx.news_composing => {
             let snippet = app.bonsai_state.share_snippet();
             app.pending_clipboard = Some(snippet);
             app.banner = Some(crate::app::common::primitives::Banner::success(
@@ -1044,35 +1031,22 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'\r') => apply_icon_selection(app, false),
         ParsedInput::AltEnter => apply_icon_selection(app, true),
-        ParsedInput::Byte(0x7f) if app.icon_picker_state.search_cursor > 0 => {
-            let byte_pos = app
-                .icon_picker_state
-                .search_query
-                .char_indices()
-                .nth(app.icon_picker_state.search_cursor - 1)
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            app.icon_picker_state.search_query.remove(byte_pos);
-            app.icon_picker_state.search_cursor -= 1;
-            app.icon_picker_state.selected_index = 0;
-            app.icon_picker_state.scroll_offset = 0;
+        ParsedInput::Byte(0x7f) => app.icon_picker_state.search_delete_char(),
+        ParsedInput::Delete => app.icon_picker_state.search_delete_next_char(),
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
+            app.icon_picker_state.search_delete_word_left()
         }
+        ParsedInput::CtrlDelete => app.icon_picker_state.search_delete_word_right(),
         ParsedInput::Arrow(b'A') => picker_move_selection(app, -1),
         ParsedInput::Arrow(b'B') => picker_move_selection(app, 1),
         // Ctrl+K / Ctrl+J mirror vim-style up/down without stealing plain j/k from the search box.
         ParsedInput::Byte(0x0B) => picker_move_selection(app, -1),
         ParsedInput::Byte(0x0A) => picker_move_selection(app, 1),
         ParsedInput::Scroll(delta) => picker_move_selection(app, -delta * 3),
-        ParsedInput::Arrow(b'C') => {
-            let len = app.icon_picker_state.search_query.chars().count();
-            if app.icon_picker_state.search_cursor < len {
-                app.icon_picker_state.search_cursor += 1;
-            }
-        }
-        ParsedInput::Arrow(b'D') => {
-            app.icon_picker_state.search_cursor =
-                app.icon_picker_state.search_cursor.saturating_sub(1);
-        }
+        ParsedInput::Arrow(b'C') => app.icon_picker_state.search_cursor_right(),
+        ParsedInput::Arrow(b'D') => app.icon_picker_state.search_cursor_left(),
+        ParsedInput::CtrlArrow(b'C') => app.icon_picker_state.search_cursor_word_right(),
+        ParsedInput::CtrlArrow(b'D') => app.icon_picker_state.search_cursor_word_left(),
         ParsedInput::PageUp => {
             let page = app.icon_picker_state.visible_height.get().max(1) as isize;
             picker_move_selection(app, -page);
@@ -1090,19 +1064,13 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
             let half = (app.icon_picker_state.visible_height.get() / 2).max(1) as isize;
             picker_move_selection(app, half);
         }
+        ParsedInput::Byte(0x01) => app.icon_picker_state.search_cursor_home(),
+        ParsedInput::Byte(0x05) => app.icon_picker_state.search_cursor_end(),
+        ParsedInput::Byte(0x19) => app.icon_picker_state.search_paste(),
+        ParsedInput::Byte(0x1F) => app.icon_picker_state.search_undo(),
         ParsedInput::MousePress { x, y } => handle_icon_picker_click(app, x, y),
         ParsedInput::Char(ch) if !ch.is_control() => {
-            let state = &mut app.icon_picker_state;
-            let byte_pos = state
-                .search_query
-                .char_indices()
-                .nth(state.search_cursor)
-                .map(|(i, _)| i)
-                .unwrap_or(state.search_query.len());
-            state.search_query.insert(byte_pos, ch);
-            state.search_cursor += 1;
-            state.selected_index = 0;
-            state.scroll_offset = 0;
+            app.icon_picker_state.search_insert_char(ch)
         }
         _ => {}
     }
@@ -1115,7 +1083,7 @@ fn picker_move_selection(app: &mut App, delta: isize) {
     let Some(catalog) = app.icon_catalog.as_ref() else {
         return;
     };
-    let sections = catalog.filtered(&app.icon_picker_state.search_query);
+    let sections = catalog.filtered(&app.icon_picker_state.search_str());
     let max = icon_picker::picker::selectable_count(&sections);
     if max == 0 {
         return;
@@ -1152,7 +1120,7 @@ fn handle_icon_picker_click(app: &mut App, x: u16, y: u16) {
     let Some(catalog) = app.icon_catalog.as_ref() else {
         return;
     };
-    let sections = catalog.filtered(&app.icon_picker_state.search_query);
+    let sections = catalog.filtered(&app.icon_picker_state.search_str());
 
     let Some(selectable_idx) = icon_picker::picker::flat_to_selectable(&sections, flat_idx) else {
         return;
@@ -1194,7 +1162,7 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
             app.icon_picker_open = false;
             return;
         };
-        let sections = catalog.filtered(&app.icon_picker_state.search_query);
+        let sections = catalog.filtered(&app.icon_picker_state.search_str());
         match icon_picker::picker::entry_at_selectable(&sections, selected) {
             Some(entry) => entry.icon.clone(),
             None => {
@@ -1234,7 +1202,6 @@ mod tests {
             chat_composing: true,
             chat_ac_active: false,
             news_composing: false,
-            profile_composing: false,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -1246,7 +1213,6 @@ mod tests {
             chat_composing: true,
             chat_ac_active: false,
             news_composing: false,
-            profile_composing: false,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -1258,7 +1224,6 @@ mod tests {
             chat_composing: false,
             chat_ac_active: false,
             news_composing: false,
-            profile_composing: false,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -1347,7 +1312,6 @@ mod tests {
             chat_composing: true,
             chat_ac_active: false,
             news_composing: true,
-            profile_composing: false,
         };
         assert_eq!(paste_target(ctx), PasteTarget::ChatComposer);
     }
@@ -1359,7 +1323,6 @@ mod tests {
             chat_composing: false,
             chat_ac_active: false,
             news_composing: true,
-            profile_composing: false,
         };
         assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
     }
@@ -1528,7 +1491,6 @@ mod tests {
             chat_composing: true,
             chat_ac_active: true,
             news_composing: false,
-            profile_composing: false,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -1540,7 +1502,6 @@ mod tests {
             chat_composing: true,
             chat_ac_active: false,
             news_composing: false,
-            profile_composing: false,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
