@@ -1,3 +1,4 @@
+use crate::app::common::primitives::Banner;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::state::App;
 use uuid::Uuid;
@@ -130,6 +131,14 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             if let Some((user_id, username)) = app.chat.selected_message_author_in_room(room_id) {
                 app.profile_modal_state.open(user_id, username);
                 app.show_profile_modal = true;
+                return true;
+            }
+        }
+        b'c' => {
+            if let Some(body) = app.chat.selected_message_body_in_room(room_id) {
+                app.pending_clipboard = Some(body);
+                app.banner = Some(Banner::success("Message copied to clipboard!"));
+                app.chat.clear_message_selection();
                 return true;
             }
         }

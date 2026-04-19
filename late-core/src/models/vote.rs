@@ -13,17 +13,24 @@ crate::model! {
 }
 
 impl Vote {
-    /// Upsert vote - insert or update if user already voted
-    pub async fn upsert(client: &Client, user_id: Uuid, genre: &str) -> Result<Self> {
+    /// Upsert vote - insert or update if user already voted.
+    /// Returns the vote and whether the genre changed (true if new vote or different genre).
+    pub async fn upsert(client: &Client, user_id: Uuid, genre: &str) -> Result<(Self, bool)> {
         let row = client
             .query_one(
-                "INSERT INTO votes (user_id, genre) VALUES ($1, $2)
+                "WITH old AS (
+                     SELECT genre FROM votes WHERE user_id = $1
+                 )
+                 INSERT INTO votes (user_id, genre) VALUES ($1, $2)
                  ON CONFLICT (user_id) DO UPDATE SET genre = $2, updated = current_timestamp
-                 RETURNING *",
+                 RETURNING *, (SELECT genre FROM old) AS old_genre",
                 &[&user_id, &genre],
             )
             .await?;
-        Ok(Self::from(row))
+        let old_genre: Option<String> = row.get("old_genre");
+        let vote = Self::from(row);
+        let changed = old_genre.as_deref() != Some(genre);
+        Ok((vote, changed))
     }
 
     /// Get user's current vote

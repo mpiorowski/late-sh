@@ -116,3 +116,68 @@ async fn emits_error_event_when_cast_vote_called_for_unknown_user() {
         _ => panic!("expected error event"),
     }
 }
+
+#[tokio::test]
+async fn does_not_emit_activity_when_revoting_same_genre() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "revote-user").await;
+    let user_id = user.id;
+
+    let (activity_tx, mut activity_rx) = broadcast::channel::<ActivityEvent>(64);
+    let mut active_users = HashMap::new();
+    active_users.insert(
+        user_id,
+        late_ssh::state::ActiveUser {
+            username: user.username.clone(),
+            connection_count: 1,
+            last_login_at: std::time::Instant::now(),
+        },
+    );
+
+    let service = VoteService::new(
+        test_db.db.clone(),
+        "127.0.0.1:0".to_string(),
+        Duration::from_secs(30 * 60),
+        Arc::new(Mutex::new(active_users)),
+        activity_tx,
+    );
+
+    // First vote - should emit activity
+    service
+        .cast_vote(user_id, Genre::Ambient)
+        .await
+        .expect("first vote");
+
+    let activity = timeout(Duration::from_millis(100), activity_rx.recv())
+        .await
+        .expect("activity timeout")
+        .expect("activity event");
+    assert_eq!(activity.username, user.username);
+    assert!(activity.action.contains("ambient"));
+
+    // Revote same genre - should NOT emit activity
+    service
+        .cast_vote(user_id, Genre::Ambient)
+        .await
+        .expect("revote same");
+
+    // Try to receive activity - should timeout since none was sent
+    let no_activity = timeout(Duration::from_millis(100), activity_rx.recv()).await;
+    assert!(
+        no_activity.is_err(),
+        "expected no activity event for revoting same genre"
+    );
+
+    // Vote different genre - should emit activity again
+    service
+        .cast_vote(user_id, Genre::Jazz)
+        .await
+        .expect("vote different");
+
+    let activity = timeout(Duration::from_millis(100), activity_rx.recv())
+        .await
+        .expect("activity timeout")
+        .expect("activity event");
+    assert_eq!(activity.username, user.username);
+    assert!(activity.action.contains("jazz"));
+}
