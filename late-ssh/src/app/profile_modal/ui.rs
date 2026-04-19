@@ -1,7 +1,7 @@
 use chrono::Utc;
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -30,8 +30,12 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    let content_area = inner.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
 
-    let layout = Layout::vertical([Constraint::Min(8), Constraint::Length(1)]).split(inner);
+    let layout = Layout::vertical([Constraint::Min(8), Constraint::Length(1)]).split(content_area);
 
     let lines = build_lines(state);
     frame.render_widget(
@@ -42,7 +46,6 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     );
 
     let footer = Line::from(vec![
-        Span::raw("  "),
         Span::styled("j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
@@ -75,15 +78,15 @@ fn build_lines(state: &ProfileModalState) -> Vec<Line<'static>> {
         Line::from(""),
         section_heading("Profile"),
         Line::from(vec![
-            Span::styled("  Username: ", dim),
+            Span::styled("Username: ", dim),
             Span::styled(username.to_string(), text),
         ]),
         Line::from(vec![
-            Span::styled("  Country:  ", dim),
+            Span::styled("Country:  ", dim),
             Span::styled(country_label(profile.country.as_deref()), text),
         ]),
         Line::from(vec![
-            Span::styled("  Timezone: ", dim),
+            Span::styled("Timezone: ", dim),
             Span::styled(
                 profile.timezone.as_deref().unwrap_or("Not set").to_string(),
                 text,
@@ -93,7 +96,7 @@ fn build_lines(state: &ProfileModalState) -> Vec<Line<'static>> {
 
     if let Some(current_time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
         lines.push(Line::from(vec![
-            Span::styled("  Current time: ", dim),
+            Span::styled("Current time: ", dim),
             Span::styled(current_time, text),
         ]));
     }
@@ -101,10 +104,10 @@ fn build_lines(state: &ProfileModalState) -> Vec<Line<'static>> {
     lines.extend([Line::from(""), section_heading("Bio")]);
 
     if profile.bio.trim().is_empty() {
-        lines.push(Line::from(Span::styled("  Not set", dim)));
+        lines.push(Line::from(Span::styled("Not set", dim)));
     } else {
         for line in profile.bio.lines() {
-            lines.push(Line::from(Span::styled(format!("  {line}"), text)));
+            lines.push(Line::from(Span::styled(line.to_string(), text)));
         }
     }
 
@@ -117,7 +120,7 @@ fn section_heading(title: &str) -> Line<'static> {
         .fg(theme::AMBER())
         .add_modifier(Modifier::BOLD);
     Line::from(vec![
-        Span::styled("  ── ", dim),
+        Span::styled("── ", dim),
         Span::styled(title.to_string(), accent),
         Span::styled(" ──", dim),
     ])
