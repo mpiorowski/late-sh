@@ -1,5 +1,5 @@
 use late_core::models::profile::{Profile, ProfileParams};
-use late_core::models::user::sanitize_username_input;
+use late_core::models::user::sanitize_input;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -218,6 +218,9 @@ impl ProfileState {
                 bio: self.profile.bio.clone(),
                 country: self.profile.country.clone(),
                 timezone: self.profile.timezone.clone(),
+                distro: self.profile.distro.clone(),
+                terminal: self.profile.terminal.clone(),
+                editor: self.profile.editor.clone(),
                 notify_kinds: self.profile.notify_kinds.clone(),
                 notify_bell: self.profile.notify_bell,
                 notify_cooldown_mins: self.profile.notify_cooldown_mins,
@@ -290,7 +293,7 @@ fn normalize_username_submission(composer: &str, current: &str) -> Option<String
     if trimmed.is_empty() {
         None
     } else {
-        let normalized = sanitize_username_input(trimmed);
+        let normalized = sanitize_input(trimmed);
         if normalized == current {
             None
         } else {

@@ -156,6 +156,9 @@ fn draw_settings_column(frame: &mut Frame, area: Rect, state: &WelcomeModalState
         Constraint::Length(1), // Game events
         Constraint::Length(1), // Bell
         Constraint::Length(1), // Cooldown
+        Constraint::Length(1), // Distro
+        Constraint::Length(1), // Terminal
+        Constraint::Length(1), // Editor
     ])
     .split(area);
 
@@ -307,6 +310,69 @@ fn draw_settings_column(frame: &mut Frame, area: Rect, state: &WelcomeModalState
             },
         )),
         sections[17],
+    );
+
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Distro,
+            width,
+            "Distro",
+            if state.editing_distro() {
+                if state.distro_input().is_empty() {
+                    value_span("typing…", theme::AMBER())
+                } else {
+                    value_span(format!("{}█", state.distro_input()), theme::AMBER())
+                }
+            } else if state.draft().distro.is_none() {
+                value_span("not set", theme::TEXT_FAINT())
+            } else {
+                value_span(state.draft().distro.clone(), theme::TEXT_BRIGHT())
+            },
+        )),
+        sections[16],
+    );
+
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Terminal,
+            width,
+            "terminal",
+            if state.editing_terminal() {
+                if state.terminal_input().is_empty() {
+                    value_span("typing…", theme::AMBER())
+                } else {
+                    value_span(format!("{}█", state.terminal_input()), theme::AMBER())
+                }
+            } else if state.draft().terminal.is_none() {
+                value_span("not set", theme::TEXT_FAINT())
+            } else {
+                value_span(state.draft().terminal.clone(), theme::TEXT_BRIGHT())
+            },
+        )),
+        sections[17],
+    );
+
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Editor,
+            width,
+            "editor",
+            if state.editing_editor() {
+                if state.editor_input().is_empty() {
+                    value_span("typing…", theme::AMBER())
+                } else {
+                    value_span(format!("{}█", state.editor_input()), theme::AMBER())
+                }
+            } else if state.draft().editor.is_none() {
+                value_span("not set", theme::TEXT_FAINT())
+            } else {
+                value_span(state.draft().editor.clone(), theme::TEXT_BRIGHT())
+            },
+        )),
+        sections[18],
     );
 }
 

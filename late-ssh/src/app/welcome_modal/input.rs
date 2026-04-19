@@ -50,6 +50,9 @@ fn activate_selected_row(app: &mut App) {
     match app.welcome_modal_state.selected_row() {
         Row::Username => app.welcome_modal_state.start_username_edit(),
         Row::Bio => app.welcome_modal_state.start_bio_edit(),
+        Row::Distro => app.welcome_modal_state.start_distro_edit(),
+        Row::Terminal => app.welcome_modal_state.start_terminal_edit(),
+        Row::Editor => app.welcome_modal_state.start_editor_edit(),
         Row::Theme
         | Row::BackgroundColor
         | Row::DirectMessages

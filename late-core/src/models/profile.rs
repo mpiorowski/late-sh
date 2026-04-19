@@ -2,6 +2,8 @@ use anyhow::Result;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use crate::models::user::{extract_distro, extract_editor, extract_terminal};
+
 use super::user::{
     User, extract_bio, extract_country, extract_enable_background_color, extract_notify_bell,
     extract_notify_cooldown_mins, extract_notify_kinds, extract_theme_id, extract_timezone,
@@ -13,6 +15,9 @@ pub struct Profile {
     pub bio: String,
     pub country: Option<String>,
     pub timezone: Option<String>,
+    pub distro: Option<String>,
+    pub terminal: Option<String>,
+    pub editor: Option<String>,
     pub notify_kinds: Vec<String>,
     pub notify_bell: bool,
     pub notify_cooldown_mins: i32,
@@ -26,6 +31,9 @@ pub struct ProfileParams {
     pub bio: String,
     pub country: Option<String>,
     pub timezone: Option<String>,
+    pub distro: Option<String>,
+    pub terminal: Option<String>,
+    pub editor: Option<String>,
     pub notify_kinds: Vec<String>,
     pub notify_bell: bool,
     pub notify_cooldown_mins: i32,
@@ -42,7 +50,7 @@ impl Profile {
     }
 
     /// Atomic partial update — merges
-    /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
+    /// bio/country/timezone/distro/terminal/editor/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
     /// enable_background_color into settings via `settings || jsonb_build_object(...)`, so
     /// concurrent writes to unrelated keys (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
@@ -57,6 +65,24 @@ impl Profile {
             .map(|value| value.to_ascii_uppercase());
         let timezone = params
             .timezone
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let distro = params
+            .distro
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let terminal = params
+            .terminal
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let editor = params
+            .editor
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -81,11 +107,14 @@ impl Profile {
                          'bio', $2::text,
                          'country', $3::text,
                          'timezone', $4::text,
-                         'notify_kinds', $5::jsonb,
-                         'notify_bell', $6::bool,
-                         'notify_cooldown_mins', $7::int,
-                         'theme_id', $8::text,
-                         'enable_background_color', $9::bool
+                         'distro', $5::text,
+                         'terminal', $6::text,
+                         'editor', $7::text,
+                         'notify_kinds', $8::jsonb,
+                         'notify_bell', $9::bool,
+                         'notify_cooldown_mins', $10::int,
+                         'theme_id', $11::text,
+                         'enable_background_color', $12::bool
                      ),
                      updated = current_timestamp
                  WHERE id = $10
@@ -95,6 +124,9 @@ impl Profile {
                     &bio,
                     &country,
                     &timezone,
+                    &distro,
+                    &terminal,
+                    &editor,
                     &kinds_json,
                     &params.notify_bell,
                     &cooldown,
@@ -114,6 +146,9 @@ impl Profile {
             bio: extract_bio(&user.settings),
             country: extract_country(&user.settings),
             timezone: extract_timezone(&user.settings),
+            distro: extract_distro(&user.settings),
+            terminal: extract_terminal(&user.settings),
+            editor: extract_editor(&user.settings),
             notify_kinds: extract_notify_kinds(&user.settings),
             notify_bell: extract_notify_bell(&user.settings),
             notify_cooldown_mins: extract_notify_cooldown_mins(&user.settings),
