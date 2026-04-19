@@ -29,6 +29,10 @@ is_wsl() {
   [[ -r /proc/sys/kernel/osrelease ]] && grep -qi microsoft /proc/sys/kernel/osrelease
 }
 
+is_termux() {
+  [[ -n "${TERMUX_VERSION:-}" ]] || [[ "${PREFIX:-}" == "/data/data/com.termux/files/usr" ]]
+}
+
 detect_target() {
   local os arch
 
@@ -49,7 +53,11 @@ detect_target() {
 
   case "$os" in
     Linux)
-      printf '%s\n' "${arch}-unknown-linux-gnu"
+      if is_termux; then
+        printf '%s\n' "${arch}-linux-android"
+      else
+        printf '%s\n' "${arch}-unknown-linux-gnu"
+      fi
       ;;
     Darwin)
       printf '%s\n' "${arch}-apple-darwin"
@@ -167,6 +175,8 @@ main() {
 
   if is_wsl; then
     log "detected WSL; installing the Linux build"
+  elif is_termux; then
+    log "detected Termux; installing the Android build"
   fi
 
   case "$version" in
