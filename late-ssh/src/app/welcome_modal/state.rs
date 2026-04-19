@@ -11,6 +11,7 @@ use super::data::{CountryOption, filter_countries, filter_timezones};
 use super::ui::bio_text_width;
 
 const USERNAME_MAX_LEN: usize = 12;
+const SHORT_FIELD_MAX_LEN: usize = 20;
 pub const BIO_MAX_LEN: usize = 500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,11 +33,14 @@ pub enum Row {
     GameEvents,
     Bell,
     Cooldown,
+    Distro,
+    Terminal,
+    Editor,
     Save,
 }
 
 impl Row {
-    pub const ALL: [Row; 12] = [
+    pub const ALL: [Row; 15] = [
         Row::Username,
         Row::Bio,
         Row::Theme,
@@ -48,6 +52,9 @@ impl Row {
         Row::GameEvents,
         Row::Bell,
         Row::Cooldown,
+        Row::Distro,
+        Row::Terminal,
+        Row::Editor,
         Row::Save,
     ];
 }
@@ -69,7 +76,13 @@ pub struct WelcomeModalState {
     editing_username: bool,
     username_input: String,
     editing_bio: bool,
+    editing_distro: bool,
+    editing_terminal: bool,
+    editing_editor: bool,
     bio_input: ComposerState,
+    distro_input: String,
+    terminal_input: String,
+    editor_input: String,
     picker: PickerState,
 }
 
@@ -83,7 +96,13 @@ impl WelcomeModalState {
             editing_username: false,
             username_input: String::new(),
             editing_bio: false,
+            editing_distro: false,
+            editing_terminal: false,
+            editing_editor: false,
             bio_input: ComposerState::new(48),
+            distro_input: String::new(),
+            terminal_input: String::new(),
+            editor_input: String::new(),
             picker: PickerState::default(),
         }
     }
@@ -94,8 +113,14 @@ impl WelcomeModalState {
         self.editing_username = false;
         self.username_input.clear();
         self.editing_bio = false;
+        self.editing_distro = false;
+        self.editing_terminal = false;
+        self.editing_editor = false;
         self.bio_input = ComposerState::new(bio_text_width(modal_width));
         self.bio_input.set_text(self.draft.bio.clone());
+        self.distro_input.clear();
+        self.terminal_input.clear();
+        self.editor_input.clear();
         self.picker = PickerState::default();
     }
 
@@ -123,6 +148,18 @@ impl WelcomeModalState {
 
     pub fn editing_bio(&self) -> bool {
         self.editing_bio
+    }
+
+    pub fn editing_distro(&self) -> bool {
+        self.editing_distro
+    }
+
+    pub fn editing_terminal(&self) -> bool {
+        self.editing_terminal
+    }
+
+    pub fn editing_editor(&self) -> bool {
+        self.editing_editor
     }
 
     pub fn username_input(&self) -> &str {
@@ -268,6 +305,96 @@ impl WelcomeModalState {
         }
     }
 
+    pub fn start_distro_edit(&mut self) {
+        self.editing_distro = true;
+        self.distro_input = self.draft.distro.unwrap_or_default();
+    }
+
+    pub fn cancel_distro_edit(&mut self) {
+        self.editing_distro = false;
+        self.distro_input.clear();
+    }
+
+    pub fn submit_distro(&mut self) {
+        self.editing_distro = false;
+        self.distro_input.clear();
+        self.draft.distro = Some(self.distro_input.trim().into());
+    }
+
+    pub fn distro_push(&mut self, ch: char) {
+        if self.distro_input.chars().count() < SHORT_FIELD_MAX_LEN {
+            self.distro_input.push(ch);
+        }
+    }
+
+    pub fn distro_backspace(&mut self) {
+        self.distro_input.pop();
+    }
+
+    pub fn clear_distro(&mut self) {
+        self.distro_input.clear();
+    }
+
+    pub fn start_terminal_edit(&mut self) {
+        self.editing_terminal = true;
+        self.terminal_input = self.draft.terminal.unwrap_or_default();
+    }
+
+    pub fn cancel_terminal_edit(&mut self) {
+        self.editing_terminal = false;
+        self.terminal_input.clear();
+    }
+
+    pub fn submit_terminal(&mut self) {
+        self.editing_terminal = false;
+        self.terminal_input.clear();
+        self.draft.terminal = Some(self.terminal_input.trim().into());
+    }
+
+    pub fn terminal_push(&mut self, ch: char) {
+        if self.terminal_input.chars().count() < SHORT_FIELD_MAX_LEN {
+            self.terminal_input.push(ch);
+        }
+    }
+
+    pub fn terminal_backspace(&mut self) {
+        self.terminal_input.pop();
+    }
+
+    pub fn clear_terminal(&mut self) {
+        self.terminal_input.clear();
+    }
+
+    pub fn start_editor_edit(&mut self) {
+        self.editing_editor = true;
+        self.editor_input = self.draft.editor.unwrap_or_default();
+    }
+
+    pub fn cancel_editor_edit(&mut self) {
+        self.editing_editor = false;
+        self.editor_input.clear();
+    }
+
+    pub fn submit_editor(&mut self) {
+        self.editing_editor = false;
+        self.editor_input.clear();
+        self.draft.editor = Some(self.editor_input.trim().into());
+    }
+
+    pub fn editor_push(&mut self, ch: char) {
+        if self.editor_input.chars().count() < SHORT_FIELD_MAX_LEN {
+            self.editor_input.push(ch);
+        }
+    }
+
+    pub fn editor_backspace(&mut self) {
+        self.editor_input.pop();
+    }
+
+    pub fn clear_editor(&mut self) {
+        self.editor_input.clear();
+    }
+
     pub fn cycle_setting(&mut self, forward: bool) {
         match self.selected_row() {
             Row::Theme => {
@@ -301,6 +428,9 @@ impl WelcomeModalState {
                 bio: self.draft.bio.clone(),
                 country: self.draft.country.clone(),
                 timezone: self.draft.timezone.clone(),
+                distro: self.draft.distro.clone(),
+                terminal: self.draft.terminal.clone(),
+                editor: self.draft.editor.clone(),
                 notify_kinds: self.draft.notify_kinds.clone(),
                 notify_bell: self.draft.notify_bell,
                 notify_cooldown_mins: self.draft.notify_cooldown_mins,

@@ -91,6 +91,27 @@ fn build_lines(state: &ProfileModalState) -> Vec<Line<'static>> {
                 text,
             ),
         ]),
+        Line::from(vec![
+            Span::styled("  Distro: ", dim),
+            Span::styled(
+                profile.distro.as_deref().unwrap_or("Not set").to_string(),
+                text,
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Terminal: ", dim),
+            Span::styled(
+                profile.terminal.as_deref().unwrap_or("Not set").to_string(),
+                text,
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Editor: ", dim),
+            Span::styled(
+                profile.editor.as_deref().unwrap_or("Not set").to_string(),
+                text,
+            ),
+        ]),
     ];
 
     if let Some(current_time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {

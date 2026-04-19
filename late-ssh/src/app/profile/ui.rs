@@ -56,6 +56,27 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>) -> Vec<Line<'a>> {
         ),
     ]));
     lines.push(Line::from(vec![
+        Span::styled("  Distro:  ", dim),
+        Span::styled(
+            country_label(view.profile.distro.as_deref()),
+            Style::default().fg(theme::TEXT()),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Terminal:  ", dim),
+        Span::styled(
+            country_label(view.profile.terminal.as_deref()),
+            Style::default().fg(theme::TEXT()),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Editor:  ", dim),
+        Span::styled(
+            country_label(view.profile.editor.as_deref()),
+            Style::default().fg(theme::TEXT()),
+        ),
+    ]));
+    lines.push(Line::from(vec![
         Span::styled("  Timezone: ", dim),
         Span::styled(
             view.profile.timezone.as_deref().unwrap_or("Not set"),

@@ -20,7 +20,7 @@ async fn profile_page_opens_and_closes_welcome_modal() {
 }
 
 #[tokio::test]
-async fn profile_page_renders_saved_country_timezone_and_bio() {
+async fn profile_page_renders_saved_profile_infos() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "profile-summary-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -33,6 +33,9 @@ async fn profile_page_renders_saved_country_timezone_and_bio() {
             bio: "hello from late\nsecond line".to_string(),
             country: Some("PL".to_string()),
             timezone: Some("Europe/Warsaw".to_string()),
+            distro: Some("Arch Linux").to_string(),
+            terminal: Some("ghostty").to_string(),
+            editor: Some("neovim").to_string(),
             notify_kinds: vec!["dms".to_string()],
             notify_bell: true,
             notify_cooldown_mins: 5,
@@ -59,5 +62,17 @@ async fn profile_page_renders_saved_country_timezone_and_bio() {
     assert!(
         plain.contains("Press Enter or e to edit profile settings"),
         "profile page should expose edit action:\n{plain}"
+    );
+    assert!(
+        plain.contains("Arch Linux"),
+        "profile page should show distro:\n{plain}"
+    );
+    assert!(
+        plain.contains("ghostty"),
+        "profile page should show terminal:\n{plain}"
+    );
+    assert!(
+        plain.contains("editor"),
+        "profile page should show editor:\n{plain}"
     );
 }

@@ -31,6 +31,9 @@ const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
 const TIMEZONE_KEY: &str = "timezone";
+const DISTRO_KEY: &str = "distro";
+const TERMINAL_KEY: &str = "terminal";
+const EDITOR_KEY: &str = "editor";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -351,6 +354,33 @@ pub fn extract_timezone(settings: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
+pub fn extract_distro(settings: &Value) -> Option<String> {
+    settings
+        .get(DISTRO_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_uppercase())
+}
+
+pub fn extract_terminal(settings: &Value) -> Option<String> {
+    settings
+        .get(TERMINAL_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_uppercase())
+}
+
+pub fn extract_editor(settings: &Value) -> Option<String> {
+    settings
+        .get(EDITOR_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_uppercase())
+}
+
 pub fn sanitize_username_input(username: &str) -> String {
     let trimmed = username.trim();
     if trimmed.is_empty() {
@@ -426,6 +456,24 @@ mod tests {
             extract_timezone(&settings).as_deref(),
             Some("Europe/Warsaw")
         );
+    }
+
+    #[test]
+    fn extract_distro_reads_trimmed_value() {
+        let settings = json!({ "distro": " Arch Linux " });
+        assert_eq!(extract_distro(&settings).as_deref(), Some("Arch Linux"));
+    }
+
+    #[test]
+    fn extract_terminal_reads_trimmed_value() {
+        let settings = json!({ "terminal": " ghostty " });
+        assert_eq!(extract_terminal(&settings).as_deref(), Some("ghostty"));
+    }
+
+    #[test]
+    fn extract_editor_reads_trimmed_value() {
+        let settings = json!({ "editor": " neovim " });
+        assert_eq!(extract_editor(&settings).as_deref(), Some("neovim"));
     }
 
     #[test]
