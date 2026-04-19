@@ -56,9 +56,9 @@ fn home_dir_from_env(
     }
     match (homedrive, homepath) {
         (Some(drive), Some(path)) if !drive.is_empty() && !path.is_empty() => {
-            let mut combined = PathBuf::from(drive);
+            let mut combined = drive;
             combined.push(path);
-            Some(combined)
+            Some(PathBuf::from(combined))
         }
         _ => None,
     }
@@ -152,7 +152,7 @@ mod tests {
         );
         assert_eq!(
             home_dir_from_env(None, None, Some("C:".into()), Some("\\Users\\mat".into())).unwrap(),
-            PathBuf::from("C:").join("\\Users\\mat")
+            PathBuf::from("C:\\Users\\mat")
         );
     }
 }
