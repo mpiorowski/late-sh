@@ -6,10 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::common::{
-    composer::{build_composer_lines_from_rows, composer_cursor_scroll_for_rows},
-    theme,
-};
+use crate::app::common::theme;
 
 use super::{
     data::country_label,
@@ -145,10 +142,11 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
             width,
             "Username",
             if state.editing_username() {
-                if state.username_input().is_empty() {
+                let typed = state.username_input().lines().join("");
+                if typed.is_empty() {
                     value_span("typing…", theme::AMBER())
                 } else {
-                    value_span(format!("{}█", state.username_input()), theme::AMBER())
+                    value_span(format!("{}█", typed), theme::AMBER())
                 }
             } else if state.draft().username.is_empty() {
                 value_span("not set", theme::TEXT_FAINT())
@@ -344,7 +342,7 @@ fn draw_bio_editor(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     frame.render_widget(block, area);
 
     let composer = state.bio_input();
-    if !editing && composer.text().is_empty() {
+    if !editing && composer.is_empty() {
         let placeholder = Line::from(Span::styled(
             " e.g. https://yourname.dev · github.com/you · @handle",
             Style::default().fg(theme::TEXT_FAINT()),
@@ -356,16 +354,8 @@ fn draw_bio_editor(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
         return;
     }
 
-    let lines = build_composer_lines_from_rows(
-        composer.text(),
-        composer.rows(),
-        composer.cursor(),
-        editing,
-        editing,
-    );
-    let scroll =
-        composer_cursor_scroll_for_rows(composer.rows(), composer.cursor(), inner.height as usize);
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
+    let padded = inner.inner(Margin::new(1, 0));
+    frame.render_widget(composer, padded);
 }
 
 fn draw_save_cta(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {

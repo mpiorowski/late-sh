@@ -67,54 +67,68 @@ fn activate_selected_row(app: &mut App) {
 }
 
 fn handle_username_input(app: &mut App, event: ParsedInput) {
+    let state = &mut app.welcome_modal_state;
     match event {
-        ParsedInput::Byte(0x1B) => app.welcome_modal_state.cancel_username_edit(),
-        ParsedInput::Byte(b'\r') => app.welcome_modal_state.submit_username(),
-        ParsedInput::Byte(0x15) => app.welcome_modal_state.clear_username(),
-        ParsedInput::Byte(0x7F) => app.welcome_modal_state.username_backspace(),
+        ParsedInput::Byte(0x1B) => state.cancel_username_edit(),
+        ParsedInput::Byte(b'\r') => state.submit_username(),
+        ParsedInput::Byte(0x15) => state.clear_username(),
+        ParsedInput::Byte(0x01) => state.username_cursor_home(),
+        ParsedInput::Byte(0x05) => state.username_cursor_end(),
+        ParsedInput::Byte(0x19) => state.username_paste(),
+        ParsedInput::Byte(0x1F) => state.username_undo(),
+        ParsedInput::Byte(0x7F) => state.username_backspace(),
+        ParsedInput::Delete => state.username_delete_right(),
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => state.username_delete_word_left(),
+        ParsedInput::CtrlDelete => state.username_delete_word_right(),
+        ParsedInput::Arrow(b'C') => state.username_cursor_right(),
+        ParsedInput::Arrow(b'D') => state.username_cursor_left(),
+        ParsedInput::CtrlArrow(b'C') => state.username_cursor_word_right(),
+        ParsedInput::CtrlArrow(b'D') => state.username_cursor_word_left(),
         ParsedInput::Paste(pasted) => {
             let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
             for ch in cleaned.chars() {
                 if !ch.is_control() && ch != '\n' && ch != '\r' {
-                    app.welcome_modal_state.username_push(ch);
+                    state.username_push(ch);
                 }
             }
         }
-        ParsedInput::Char(ch) if !ch.is_control() => app.welcome_modal_state.username_push(ch),
+        ParsedInput::Char(ch) if !ch.is_control() => state.username_push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
-            app.welcome_modal_state.username_push(byte as char)
+            state.username_push(byte as char)
         }
         _ => {}
     }
 }
 
 fn handle_bio_input(app: &mut App, event: ParsedInput) {
-    let composer = app.welcome_modal_state.bio_input_mut();
+    let state = &mut app.welcome_modal_state;
     match event {
-        ParsedInput::Byte(0x1B) => app.welcome_modal_state.stop_bio_edit(),
-        ParsedInput::Byte(b'\r') => app.welcome_modal_state.stop_bio_edit(),
-        ParsedInput::AltEnter | ParsedInput::Byte(b'\n') => app.welcome_modal_state.bio_push('\n'),
-        ParsedInput::Byte(0x15) => composer.clear(),
-        ParsedInput::Byte(0x7F) => composer.backspace(),
-        ParsedInput::Delete => composer.delete_right(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => composer.delete_word_left(),
-        ParsedInput::CtrlDelete => composer.delete_word_right(),
-        ParsedInput::Arrow(b'A') => composer.cursor_up(),
-        ParsedInput::Arrow(b'B') => composer.cursor_down(),
-        ParsedInput::Arrow(b'C') => composer.cursor_right(),
-        ParsedInput::Arrow(b'D') => composer.cursor_left(),
-        ParsedInput::CtrlArrow(b'C') => composer.cursor_word_right(),
-        ParsedInput::CtrlArrow(b'D') => composer.cursor_word_left(),
+        ParsedInput::Byte(0x1B) => state.stop_bio_edit(),
+        ParsedInput::Byte(b'\r') => state.stop_bio_edit(),
+        ParsedInput::AltEnter | ParsedInput::Byte(b'\n') => state.bio_push('\n'),
+        ParsedInput::Byte(0x15) => state.bio_clear(),
+        ParsedInput::Byte(0x19) => state.bio_paste(),
+        ParsedInput::Byte(0x1F) => state.bio_undo(),
+        ParsedInput::Byte(0x7F) => state.bio_backspace(),
+        ParsedInput::Delete => state.bio_delete_right(),
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => state.bio_delete_word_left(),
+        ParsedInput::CtrlDelete => state.bio_delete_word_right(),
+        ParsedInput::Arrow(b'A') => state.bio_cursor_up(),
+        ParsedInput::Arrow(b'B') => state.bio_cursor_down(),
+        ParsedInput::Arrow(b'C') => state.bio_cursor_right(),
+        ParsedInput::Arrow(b'D') => state.bio_cursor_left(),
+        ParsedInput::CtrlArrow(b'C') => state.bio_cursor_word_right(),
+        ParsedInput::CtrlArrow(b'D') => state.bio_cursor_word_left(),
         ParsedInput::Paste(pasted) => {
             let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
             let normalized = cleaned.replace("\r\n", "\n").replace('\r', "\n");
             for ch in normalized.chars() {
                 if ch == '\n' || (!ch.is_control() && ch != '\u{7f}') {
-                    app.welcome_modal_state.bio_push(ch);
+                    state.bio_push(ch);
                 }
             }
         }
-        ParsedInput::Char(ch) if !ch.is_control() => app.welcome_modal_state.bio_push(ch),
+        ParsedInput::Char(ch) if !ch.is_control() => state.bio_push(ch),
         _ => {}
     }
 }

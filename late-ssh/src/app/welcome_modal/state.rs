@@ -2,13 +2,14 @@ use std::cell::Cell;
 
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::user::sanitize_username_input;
+use ratatui::style::{Modifier, Style};
+use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use uuid::Uuid;
 
-use crate::app::common::{composer::ComposerState, theme};
+use crate::app::common::theme;
 use crate::app::profile::svc::ProfileService;
 
 use super::data::{CountryOption, filter_countries, filter_timezones};
-use super::ui::bio_text_width;
 
 const USERNAME_MAX_LEN: usize = 12;
 const BIO_MAX_LEN: usize = 280;
@@ -67,9 +68,9 @@ pub struct WelcomeModalState {
     draft: Profile,
     row_index: usize,
     editing_username: bool,
-    username_input: String,
+    username_input: TextArea<'static>,
     editing_bio: bool,
-    bio_input: ComposerState,
+    bio_input: TextArea<'static>,
     picker: PickerState,
 }
 
@@ -81,27 +82,26 @@ impl WelcomeModalState {
             draft: Profile::default(),
             row_index: 0,
             editing_username: false,
-            username_input: String::new(),
+            username_input: new_username_textarea(false),
             editing_bio: false,
-            bio_input: ComposerState::new(48),
+            bio_input: new_bio_textarea(false),
             picker: PickerState::default(),
         }
     }
 
-    pub fn open_from_profile(&mut self, profile: &Profile, modal_width: u16) {
+    pub fn open_from_profile(&mut self, profile: &Profile, _modal_width: u16) {
         self.draft = profile.clone();
         self.row_index = 0;
         self.editing_username = false;
-        self.username_input.clear();
+        self.username_input = new_username_textarea(false);
         self.editing_bio = false;
-        self.bio_input = ComposerState::new(bio_text_width(modal_width));
-        self.bio_input.set_text(self.draft.bio.clone());
+        self.bio_input = new_bio_textarea(false);
+        self.bio_input.insert_str(&self.draft.bio);
         self.picker = PickerState::default();
     }
 
-    pub fn set_modal_width(&mut self, modal_width: u16) {
-        self.bio_input.set_text_width(bio_text_width(modal_width));
-        self.bio_input.sync_layout();
+    pub fn set_modal_width(&mut self, _modal_width: u16) {
+        // TextArea wraps internally at render time; nothing to sync here.
     }
 
     pub fn draft(&self) -> &Profile {
@@ -125,16 +125,37 @@ impl WelcomeModalState {
         self.editing_bio
     }
 
-    pub fn username_input(&self) -> &str {
+    pub fn username_input(&self) -> &TextArea<'static> {
         &self.username_input
     }
 
-    pub fn bio_input(&self) -> &ComposerState {
+    fn username_text(&self) -> String {
+        self.username_input.lines().join("")
+    }
+
+    fn username_char_count(&self) -> usize {
+        self.username_input
+            .lines()
+            .iter()
+            .map(|l| l.chars().count())
+            .sum()
+    }
+
+    pub fn bio_input(&self) -> &TextArea<'static> {
         &self.bio_input
     }
 
-    pub fn bio_input_mut(&mut self) -> &mut ComposerState {
-        &mut self.bio_input
+    fn bio_text(&self) -> String {
+        self.bio_input.lines().join("\n")
+    }
+
+    fn bio_char_count(&self) -> usize {
+        self.bio_input
+            .lines()
+            .iter()
+            .map(|l| l.chars().count())
+            .sum::<usize>()
+            + self.bio_input.lines().len().saturating_sub(1) // count newlines between lines
     }
 
     pub fn picker(&self) -> &PickerState {
@@ -222,50 +243,148 @@ impl WelcomeModalState {
 
     pub fn start_username_edit(&mut self) {
         self.editing_username = true;
-        self.username_input = self.draft.username.clone();
+        self.username_input = new_username_textarea(true);
+        self.username_input.insert_str(&self.draft.username);
     }
 
     pub fn cancel_username_edit(&mut self) {
         self.editing_username = false;
-        self.username_input.clear();
+        self.username_input = new_username_textarea(false);
     }
 
     pub fn submit_username(&mut self) {
         self.editing_username = false;
-        let normalized = sanitize_username_input(self.username_input.trim());
-        self.username_input.clear();
+        let normalized = sanitize_username_input(self.username_text().trim());
+        self.username_input = new_username_textarea(false);
         self.draft.username = normalized;
     }
 
     pub fn username_push(&mut self, ch: char) {
-        if self.username_input.chars().count() < USERNAME_MAX_LEN {
-            self.username_input.push(ch);
+        if self.username_char_count() < USERNAME_MAX_LEN {
+            self.username_input.insert_char(ch);
         }
     }
 
     pub fn username_backspace(&mut self) {
-        self.username_input.pop();
+        self.username_input.delete_char();
+    }
+
+    pub fn username_delete_right(&mut self) {
+        self.username_input.delete_next_char();
+    }
+
+    pub fn username_delete_word_left(&mut self) {
+        self.username_input.delete_word();
+    }
+
+    pub fn username_delete_word_right(&mut self) {
+        self.username_input.delete_next_word();
+    }
+
+    pub fn username_cursor_left(&mut self) {
+        self.username_input.move_cursor(CursorMove::Back);
+    }
+
+    pub fn username_cursor_right(&mut self) {
+        self.username_input.move_cursor(CursorMove::Forward);
+    }
+
+    pub fn username_cursor_word_left(&mut self) {
+        self.username_input.move_cursor(CursorMove::WordBack);
+    }
+
+    pub fn username_cursor_word_right(&mut self) {
+        self.username_input.move_cursor(CursorMove::WordForward);
+    }
+
+    pub fn username_cursor_home(&mut self) {
+        self.username_input.move_cursor(CursorMove::Head);
+    }
+
+    pub fn username_cursor_end(&mut self) {
+        self.username_input.move_cursor(CursorMove::End);
+    }
+
+    pub fn username_paste(&mut self) {
+        self.username_input.paste();
+    }
+
+    pub fn username_undo(&mut self) {
+        self.username_input.undo();
     }
 
     pub fn clear_username(&mut self) {
-        self.username_input.clear();
+        let editing = self.editing_username;
+        self.username_input = new_username_textarea(editing);
     }
 
     pub fn start_bio_edit(&mut self) {
         self.editing_bio = true;
-        self.bio_input.sync_layout();
+        set_bio_cursor_visible(&mut self.bio_input, true);
     }
 
     pub fn stop_bio_edit(&mut self) {
         self.editing_bio = false;
-        self.bio_input.sync_layout();
-        self.draft.bio = self.bio_input.text().trim_end().to_string();
+        set_bio_cursor_visible(&mut self.bio_input, false);
+        self.draft.bio = self.bio_text().trim_end().to_string();
     }
 
     pub fn bio_push(&mut self, ch: char) {
-        if self.bio_input.text().chars().count() < BIO_MAX_LEN {
-            self.bio_input.push(ch);
+        if self.bio_char_count() < BIO_MAX_LEN {
+            self.bio_input.insert_char(ch);
         }
+    }
+
+    pub fn bio_backspace(&mut self) {
+        self.bio_input.delete_char();
+    }
+
+    pub fn bio_delete_right(&mut self) {
+        self.bio_input.delete_next_char();
+    }
+
+    pub fn bio_delete_word_left(&mut self) {
+        self.bio_input.delete_word();
+    }
+
+    pub fn bio_delete_word_right(&mut self) {
+        self.bio_input.delete_next_word();
+    }
+
+    pub fn bio_cursor_left(&mut self) {
+        self.bio_input.move_cursor(CursorMove::Back);
+    }
+
+    pub fn bio_cursor_right(&mut self) {
+        self.bio_input.move_cursor(CursorMove::Forward);
+    }
+
+    pub fn bio_cursor_up(&mut self) {
+        self.bio_input.move_cursor(CursorMove::Up);
+    }
+
+    pub fn bio_cursor_down(&mut self) {
+        self.bio_input.move_cursor(CursorMove::Down);
+    }
+
+    pub fn bio_cursor_word_left(&mut self) {
+        self.bio_input.move_cursor(CursorMove::WordBack);
+    }
+
+    pub fn bio_cursor_word_right(&mut self) {
+        self.bio_input.move_cursor(CursorMove::WordForward);
+    }
+
+    pub fn bio_clear(&mut self) {
+        self.bio_input = new_bio_textarea(self.editing_bio);
+    }
+
+    pub fn bio_paste(&mut self) {
+        self.bio_input.paste();
+    }
+
+    pub fn bio_undo(&mut self) {
+        self.bio_input.undo();
     }
 
     pub fn cycle_setting(&mut self, forward: bool) {
@@ -336,4 +455,34 @@ fn cycle_cooldown_value(current: i32, forward: bool) -> i32 {
         (idx + OPTIONS.len() - 1) % OPTIONS.len()
     };
     OPTIONS[next]
+}
+
+fn new_bio_textarea(editing: bool) -> TextArea<'static> {
+    let mut ta = TextArea::default();
+    ta.set_cursor_line_style(Style::default());
+    ta.set_wrap_mode(WrapMode::Word);
+    set_bio_cursor_visible(&mut ta, editing);
+    ta
+}
+
+fn set_bio_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
+    let style = if visible {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    };
+    ta.set_cursor_style(style);
+}
+
+fn new_username_textarea(editing: bool) -> TextArea<'static> {
+    let mut ta = TextArea::default();
+    ta.set_cursor_line_style(Style::default());
+    ta.set_wrap_mode(WrapMode::None);
+    let style = if editing {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    };
+    ta.set_cursor_style(style);
+    ta
 }

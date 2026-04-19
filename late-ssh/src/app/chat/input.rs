@@ -40,6 +40,16 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             app.chat.composer_clear();
             app.chat.update_autocomplete();
         }
+        0x19 => {
+            // Ctrl-Y: yank from kill-ring (filled by Alt-D / Ctrl-W word deletes)
+            app.chat.composer_paste();
+            app.chat.update_autocomplete();
+        }
+        0x1F => {
+            // Ctrl-/ (same byte as Ctrl-_): undo
+            app.chat.composer_undo();
+            app.chat.update_autocomplete();
+        }
         0x7F => {
             app.chat.composer_backspace();
             app.chat.update_autocomplete();

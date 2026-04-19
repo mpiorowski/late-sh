@@ -1,12 +1,9 @@
 use late_core::models::profile::{Profile, ProfileParams};
-use late_core::models::user::sanitize_username_input;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use super::svc::{ProfileEvent, ProfileService, ProfileSnapshot};
 use crate::app::common::{primitives::Banner, theme};
-
-const USERNAME_MAX_LEN: usize = 12;
 
 pub struct ProfileState {
     profile_service: ProfileService,
@@ -14,8 +11,6 @@ pub struct ProfileState {
     pub(crate) profile: Profile,
     snapshot_rx: watch::Receiver<ProfileSnapshot>,
     event_rx: broadcast::Receiver<ProfileEvent>,
-    pub(crate) editing_username: bool,
-    pub(crate) username_composer: String,
 
     /// Which settings row is selected. Rows 0..NOTIFY_KINDS.len() are the
     /// kind checkboxes; the last row is the cooldown selector.
@@ -56,8 +51,6 @@ impl ProfileState {
             profile,
             snapshot_rx,
             event_rx,
-            editing_username: false,
-            username_composer: String::new(),
             settings_row: 0,
             ai_model,
             scroll_offset: 0,
@@ -67,18 +60,6 @@ impl ProfileState {
 
     pub fn profile(&self) -> &Profile {
         &self.profile
-    }
-
-    pub fn editing_username(&self) -> bool {
-        self.editing_username
-    }
-
-    pub fn cursor_visible(&self) -> bool {
-        self.editing_username
-    }
-
-    pub fn username_composer(&self) -> &str {
-        &self.username_composer
     }
 
     pub fn ai_model(&self) -> &str {
@@ -115,41 +96,6 @@ impl ProfileState {
         } else if field_line >= self.scroll_offset + h {
             self.scroll_offset = field_line - h + 1;
         }
-    }
-
-    // Username editing
-    pub fn start_username_edit(&mut self) {
-        self.editing_username = true;
-        self.username_composer = self.profile.username.clone();
-    }
-
-    pub fn cancel_username_edit(&mut self) {
-        self.editing_username = false;
-        self.username_composer.clear();
-    }
-
-    pub fn submit_username(&mut self) {
-        self.editing_username = false;
-        let normalized =
-            normalize_username_submission(&self.username_composer, &self.profile.username);
-        self.username_composer.clear();
-        if let Some(next) = normalized {
-            self.profile.username = next;
-            self.save_profile();
-        }
-    }
-
-    pub fn composer_push(&mut self, ch: char) {
-        if self.username_composer.len() < USERNAME_MAX_LEN {
-            self.username_composer.push(ch);
-        }
-    }
-
-    pub fn composer_clear(&mut self) {
-        self.username_composer.clear();
-    }
-    pub fn composer_backspace(&mut self) {
-        self.username_composer.pop();
     }
 
     /// Notification kinds the user can toggle on the profile screen, in display order.
@@ -283,22 +229,6 @@ impl ProfileState {
 /// `0` is rendered as "Off".
 const COOLDOWN_OPTIONS: &[i32] = &[0, 1, 2, 5, 10, 15, 30, 60, 120, 240];
 
-/// Returns the new username to persist, or `None` if the submission is empty
-/// after trimming or unchanged from the current value.
-fn normalize_username_submission(composer: &str, current: &str) -> Option<String> {
-    let trimmed = composer.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        let normalized = sanitize_username_input(trimmed);
-        if normalized == current {
-            None
-        } else {
-            Some(normalized)
-        }
-    }
-}
-
 /// Toggle `kind` in `kinds`: remove it if present, otherwise append it.
 fn toggle_notify_kind(kinds: &mut Vec<String>, kind: &str) {
     if let Some(idx) = kinds.iter().position(|k| k == kind) {
@@ -330,41 +260,6 @@ fn clamp_settings_row(row: isize, last: isize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn username_max_len_constant_is_12() {
-        assert_eq!(USERNAME_MAX_LEN, 12);
-    }
-
-    #[test]
-    fn normalize_username_submission_trims_whitespace() {
-        assert_eq!(
-            normalize_username_submission("  alice  ", "old"),
-            Some("alice".to_string())
-        );
-    }
-
-    #[test]
-    fn normalize_username_submission_replaces_spaces_and_invalid_chars() {
-        assert_eq!(
-            normalize_username_submission("  late night!!!  ", "old"),
-            Some("late_night".to_string())
-        );
-    }
-
-    #[test]
-    fn normalize_username_submission_skips_when_empty_after_trim() {
-        assert_eq!(normalize_username_submission("", "old"), None);
-        assert_eq!(normalize_username_submission("   ", "old"), None);
-    }
-
-    #[test]
-    fn normalize_username_submission_skips_when_unchanged() {
-        assert_eq!(normalize_username_submission("alice", "alice"), None);
-        // Trim then compare — whitespace-padded copy of current still skips.
-        assert_eq!(normalize_username_submission("  alice ", "alice"), None);
-        assert_eq!(normalize_username_submission("alice!!!", "alice"), None);
-    }
 
     #[test]
     fn toggle_notify_kind_adds_when_absent() {
