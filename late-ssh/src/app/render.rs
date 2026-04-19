@@ -20,7 +20,7 @@ use super::{
         theme,
     },
     dashboard, help_modal, icon_picker, profile, profile_modal,
-    state::App,
+    state::{App, NotificationMode},
     visualizer::Visualizer,
     welcome_modal,
 };
@@ -37,16 +37,27 @@ fn sanitize_notification_field(input: &str) -> String {
         .collect()
 }
 
-fn desktop_notification_bytes(title: &str, body: &str, bell: bool) -> Vec<u8> {
+fn desktop_notification_bytes(
+    title: &str,
+    body: &str,
+    mode: NotificationMode,
+    bell: bool,
+) -> Vec<u8> {
     // OSC 777 carries (title, body) separately — kitty, Ghostty, rxvt-unicode,
-    // foot, wezterm, konsole. OSC 9 is iTerm2's single-string variant and acts
-    // as a fallback for terminals that don't parse 777. Terminals that don't
-    // recognize either sequence silently drop it.
+    // foot, wezterm, konsole. OSC 9 is iTerm2's single-string variant.
+    // `Both` is the startup default; an XTVERSION reply narrows it so we
+    // don't send duplicate notifications on terminals (kitty) that accept
+    // both sequences.
     let title = sanitize_notification_field(title);
     let body = sanitize_notification_field(body);
-
+    let osc777 = format!("\x1b]777;notify;{title};{body}\x1b\\");
+    let osc9 = format!("\x1b]9;{title}: {body}\x1b\\");
     let bell = if bell { "\x07" } else { "" };
-    format!("\x1b]777;notify;{title};{body}\x1b\\\x1b]9;{title}: {body}\x1b\\{bell}").into_bytes()
+    match mode {
+        NotificationMode::Both => format!("{osc777}{osc9}{bell}").into_bytes(),
+        NotificationMode::Osc777 => format!("{osc777}{bell}").into_bytes(),
+        NotificationMode::Osc9 => format!("{osc9}{bell}").into_bytes(),
+    }
 }
 
 struct DrawContext<'a> {
@@ -319,8 +330,12 @@ impl App {
                     body = notif.body,
                     "emitting desktop notification"
                 );
-                let payload =
-                    desktop_notification_bytes(&notif.title, &notif.body, profile.notify_bell);
+                let payload = desktop_notification_bytes(
+                    &notif.title,
+                    &notif.body,
+                    self.notification_mode,
+                    profile.notify_bell,
+                );
                 self.pending_terminal_commands.push(payload);
                 self.last_notify_at = Some(std::time::Instant::now());
             } else {
@@ -535,12 +550,17 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::desktop_notification_bytes;
+    use super::{NotificationMode, desktop_notification_bytes};
 
     #[test]
-    fn desktop_notification_bytes_emits_osc_777_and_osc_9_with_st_terminators() {
-        let got = String::from_utf8(desktop_notification_bytes("DM title", "hello", true))
-            .expect("valid utf8");
+    fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
+        let got = String::from_utf8(desktop_notification_bytes(
+            "DM title",
+            "hello",
+            NotificationMode::Both,
+            true,
+        ))
+        .expect("valid utf8");
         assert_eq!(
             got,
             "\x1b]777;notify;DM title;hello\x1b\\\x1b]9;DM title: hello\x1b\\\x07"
@@ -548,9 +568,38 @@ mod tests {
     }
 
     #[test]
+    fn desktop_notification_bytes_osc777_mode_emits_only_osc_777() {
+        let got = String::from_utf8(desktop_notification_bytes(
+            "DM title",
+            "hello",
+            NotificationMode::Osc777,
+            false,
+        ))
+        .expect("valid utf8");
+        assert_eq!(got, "\x1b]777;notify;DM title;hello\x1b\\");
+    }
+
+    #[test]
+    fn desktop_notification_bytes_osc9_mode_emits_only_osc_9() {
+        let got = String::from_utf8(desktop_notification_bytes(
+            "DM title",
+            "hello",
+            NotificationMode::Osc9,
+            false,
+        ))
+        .expect("valid utf8");
+        assert_eq!(got, "\x1b]9;DM title: hello\x1b\\");
+    }
+
+    #[test]
     fn desktop_notification_bytes_sanitize_control_bytes_and_separators() {
-        let got = String::from_utf8(desktop_notification_bytes("hey;\x07", "a\nb\x1bc", false))
-            .expect("valid utf8");
+        let got = String::from_utf8(desktop_notification_bytes(
+            "hey;\x07",
+            "a\nb\x1bc",
+            NotificationMode::Both,
+            false,
+        ))
+        .expect("valid utf8");
         assert_eq!(
             got,
             "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\"
