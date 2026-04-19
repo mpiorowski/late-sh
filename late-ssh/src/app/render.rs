@@ -103,12 +103,6 @@ impl App {
         };
         theme::set_current_by_id(&active_theme_id);
 
-        // Keep composer text width in sync for cursor up/down navigation.
-        // outer border(2) + sidebar(24) + chat-block border(2) + composer padding(3) = 31
-        self.chat
-            .set_composer_text_width(self.size.0.saturating_sub(31).max(1) as usize);
-        self.chat.sync_composer_layout();
-
         // Synchronize terminal background color with theme bg_canvas if enabled
         let enabled = if self.show_welcome {
             self.welcome_modal_state.draft().enable_background_color
@@ -166,11 +160,8 @@ impl App {
                 badges: &chat_badges,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
-                composer: self.chat.composer_text(),
-                composer_rows: self.chat.composer_rows(),
-                composer_cursor: self.chat.composer_cursor(),
+                composer: self.chat.composer(),
                 composing: self.chat.composing,
-                cursor_visible: self.chat.cursor_visible(),
                 mention_matches: &self.chat.mention_ac.matches,
                 mention_selected: self.chat.mention_ac.selected,
                 mention_active: self.chat.mention_ac.active,
@@ -202,9 +193,7 @@ impl App {
             room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
             highlighted_message_id: self.chat.highlighted_message_id,
-            composer: self.chat.composer_text(),
-            composer_rows: self.chat.composer_rows(),
-            composer_cursor: self.chat.composer_cursor(),
+            composer: self.chat.composer(),
             composing: self.chat.composing,
             current_user_id: self.user_id,
             cursor_visible: self.chat.cursor_visible(),

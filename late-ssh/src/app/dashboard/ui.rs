@@ -152,6 +152,7 @@ mod tests {
         let countries: HashMap<Uuid, String> = HashMap::new();
         let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let composer = ratatui_textarea::TextArea::default();
 
         terminal
             .draw(|frame| {
@@ -174,11 +175,8 @@ mod tests {
                             badges: &badges,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
-                            composer: "",
-                            composer_rows: &[],
-                            composer_cursor: 0,
+                            composer: &composer,
                             composing: false,
-                            cursor_visible: false,
                             mention_matches: &[],
                             mention_selected: 0,
                             mention_active: false,
