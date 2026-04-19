@@ -150,7 +150,11 @@ impl WelcomeModalState {
     }
 
     fn bio_char_count(&self) -> usize {
-        self.bio_input.lines().iter().map(|l| l.chars().count()).sum::<usize>()
+        self.bio_input
+            .lines()
+            .iter()
+            .map(|l| l.chars().count())
+            .sum::<usize>()
             + self.bio_input.lines().len().saturating_sub(1) // count newlines between lines
     }
 

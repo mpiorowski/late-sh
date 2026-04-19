@@ -106,8 +106,7 @@ fn render_search(f: &mut Frame, area: Rect, state: &IconPickerState) {
         Span::styled("  search ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("› ", Style::default().fg(theme::AMBER_DIM())),
     ]));
-    let split =
-        Layout::horizontal([Constraint::Length(11), Constraint::Fill(1)]).split(area);
+    let split = Layout::horizontal([Constraint::Length(11), Constraint::Fill(1)]).split(area);
     f.render_widget(prompt, split[0]);
     f.render_widget(&state.search_query, split[1]);
 }

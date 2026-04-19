@@ -1069,9 +1069,7 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x19) => app.icon_picker_state.search_paste(),
         ParsedInput::Byte(0x1F) => app.icon_picker_state.search_undo(),
         ParsedInput::MousePress { x, y } => handle_icon_picker_click(app, x, y),
-        ParsedInput::Char(ch) if !ch.is_control() => {
-            app.icon_picker_state.search_insert_char(ch)
-        }
+        ParsedInput::Char(ch) if !ch.is_control() => app.icon_picker_state.search_insert_char(ch),
         _ => {}
     }
 }
