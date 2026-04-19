@@ -195,7 +195,7 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
 
     if !view.composing && view.composer.is_empty() && !view.mention_active {
         let placeholder_text = if view.selected_message {
-            " r reply · e edit · d delete · p profile · i compose"
+            " c copy · r reply · e edit · d delete · p profile · i compose"
         } else {
             " Type a message · j/k select · /help"
         };
