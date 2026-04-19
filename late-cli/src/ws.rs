@@ -12,6 +12,18 @@ use tracing::{debug, info};
 
 use super::audio::VizSample;
 
+pub(super) struct PairClientInfo {
+    pub(super) ssh_mode: &'static str,
+    pub(super) platform: &'static str,
+}
+
+pub(super) struct PlaybackState<'a> {
+    pub(super) played_samples: &'a AtomicU64,
+    pub(super) sample_rate: u32,
+    pub(super) muted: &'a AtomicBool,
+    pub(super) volume_percent: &'a AtomicU8,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 enum PairControlMessage {
@@ -23,11 +35,9 @@ enum PairControlMessage {
 pub(super) async fn run_viz_ws(
     api_base_url: &str,
     token: &str,
+    client: &PairClientInfo,
     frames: &mut broadcast::Receiver<VizSample>,
-    played_samples: &AtomicU64,
-    sample_rate: u32,
-    muted: &AtomicBool,
-    volume_percent: &AtomicU8,
+    playback: &PlaybackState<'_>,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!(%ws_url, "connecting pair websocket");
@@ -37,7 +47,7 @@ pub(super) async fn run_viz_ws(
         .with_context(|| format!("failed to connect to pair websocket at {ws_url}"))?;
     info!("pair websocket established");
     let mut heartbeat = interval(Duration::from_secs(1));
-    send_client_state(&mut ws, muted, volume_percent).await?;
+    send_client_state(&mut ws, client, playback).await?;
 
     loop {
         tokio::select! {
@@ -47,7 +57,8 @@ pub(super) async fn run_viz_ws(
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
-                let position_ms = playback_position_ms(played_samples, sample_rate);
+                let position_ms =
+                    playback_position_ms(playback.played_samples, playback.sample_rate);
                 let payload = json!({
                     "event": "viz",
                     "position_ms": position_ms,
@@ -59,7 +70,7 @@ pub(super) async fn run_viz_ws(
             _ = heartbeat.tick() => {
                 let payload = json!({
                     "event": "heartbeat",
-                    "position_ms": playback_position_ms(played_samples, sample_rate),
+                    "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
                 });
                 ws.send(Message::Text(payload.to_string().into())).await?;
             }
@@ -68,8 +79,10 @@ pub(super) async fn run_viz_ws(
                     break;
                 };
                 match msg? {
-                    Message::Text(text) if apply_pair_control(&text, muted, volume_percent)? => {
-                        send_client_state(&mut ws, muted, volume_percent).await?;
+                    Message::Text(text)
+                        if apply_pair_control(&text, playback.muted, playback.volume_percent)? =>
+                    {
+                        send_client_state(&mut ws, client, playback).await?;
                     }
                     Message::Close(_) => break,
                     _ => {}
@@ -85,14 +98,16 @@ async fn send_client_state(
     ws: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
-    muted: &AtomicBool,
-    volume_percent: &AtomicU8,
+    client: &PairClientInfo,
+    playback: &PlaybackState<'_>,
 ) -> Result<()> {
     let payload = json!({
         "event": "client_state",
         "client_kind": "cli",
-        "muted": muted.load(Ordering::Relaxed),
-        "volume_percent": volume_percent.load(Ordering::Relaxed),
+        "ssh_mode": client.ssh_mode,
+        "platform": client.platform,
+        "muted": playback.muted.load(Ordering::Relaxed),
+        "volume_percent": playback.volume_percent.load(Ordering::Relaxed),
     });
     ws.send(Message::Text(payload.to_string().into())).await?;
     Ok(())
@@ -127,6 +142,25 @@ fn bump_volume(volume_percent: &AtomicU8, delta: i16) -> u8 {
 
 fn playback_position_ms(played_samples: &AtomicU64, sample_rate: u32) -> u64 {
     played_samples.load(Ordering::Relaxed) * 1000 / sample_rate as u64
+}
+
+pub(super) const fn client_platform_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        "unknown"
+    }
 }
 
 fn pair_ws_url(api_base_url: &str, token: &str) -> Result<String> {

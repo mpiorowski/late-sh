@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use shlex::Shlex;
-use std::env;
+use std::{env, path::PathBuf};
 use tracing_subscriber::EnvFilter;
 
 pub(super) const DEFAULT_SSH_TARGET: &str = "late.sh";
@@ -18,6 +18,7 @@ pub(super) struct Config {
     pub(super) ssh_target: String,
     pub(super) ssh_port: Option<u16>,
     pub(super) ssh_user: Option<String>,
+    pub(super) key_file: Option<PathBuf>,
     pub(super) ssh_mode: SshMode,
     pub(super) ssh_bin: Vec<String>,
     pub(super) audio_base_url: String,
@@ -38,11 +39,14 @@ impl Config {
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        let mut key_file = env::var_os("LATE_KEY_FILE")
+            .or_else(|| env::var_os("LATE_IDENTITY_FILE"))
+            .map(PathBuf::from);
         let mut ssh_mode = env::var("LATE_SSH_MODE")
             .ok()
             .map(|value| SshMode::parse(&value))
             .transpose()?
-            .unwrap_or(SshMode::Subprocess);
+            .unwrap_or(SshMode::Native);
         let mut ssh_bin =
             parse_ssh_bin_spec(&env::var("LATE_SSH_BIN").unwrap_or_else(|_| "ssh".to_string()))?;
         let mut audio_base_url =
@@ -69,6 +73,13 @@ impl Config {
                     }
                     ssh_user = Some(value);
                 }
+                "--key" | "--identity-file" => {
+                    let value = next_value(&mut args, "--key")?;
+                    if value.trim().is_empty() {
+                        anyhow::bail!("--key cannot be blank");
+                    }
+                    key_file = Some(PathBuf::from(value));
+                }
                 "--ssh-mode" => {
                     ssh_mode = SshMode::parse(&next_value(&mut args, "--ssh-mode")?)?;
                 }
@@ -88,6 +99,7 @@ impl Config {
             ssh_target,
             ssh_port,
             ssh_user,
+            key_file,
             ssh_mode,
             ssh_bin,
             audio_base_url,
@@ -128,7 +140,8 @@ fn print_help() {
            --ssh-target <host>        SSH target (default: late.sh)\n\
            --ssh-port <port>          SSH port override\n\
            --ssh-user <user>          SSH username override\n\
-           --ssh-mode <mode>          SSH transport: subprocess or native\n\
+           --key <path>               SSH identity file override\n\
+           --ssh-mode <mode>          SSH transport: native (default) or old\n\
            --ssh-bin <command>        SSH client command, including optional args (default: ssh)\n\
            --audio-base-url <url>     Audio base URL, without or with /stream\n\
            --api-base-url <url>       API base URL used for /api/ws/pair\n\
@@ -150,9 +163,16 @@ fn parse_ssh_bin_spec(spec: &str) -> Result<Vec<String>> {
 impl SshMode {
     fn parse(value: &str) -> Result<Self> {
         match value {
-            "subprocess" => Ok(Self::Subprocess),
+            "old" | "subprocess" => Ok(Self::Subprocess),
             "native" => Ok(Self::Native),
-            other => anyhow::bail!("invalid ssh mode '{other}'; expected 'subprocess' or 'native'"),
+            other => anyhow::bail!("invalid ssh mode '{other}'; expected 'native' or 'old'"),
+        }
+    }
+
+    pub(super) fn client_state_label(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Subprocess => "old",
         }
     }
 }
@@ -160,6 +180,12 @@ impl SshMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_args_accepts_identity_file_override() {
+        let config = Config::from_args(["--key".to_string(), "/tmp/late-key".to_string()]).unwrap();
+        assert_eq!(config.key_file, Some(PathBuf::from("/tmp/late-key")));
+    }
 
     #[test]
     fn parse_ssh_bin_spec_splits_command_and_args() {
@@ -171,7 +197,14 @@ mod tests {
 
     #[test]
     fn ssh_mode_parser_accepts_supported_values() {
+        assert_eq!(SshMode::parse("old").unwrap(), SshMode::Subprocess);
         assert_eq!(SshMode::parse("subprocess").unwrap(), SshMode::Subprocess);
         assert_eq!(SshMode::parse("native").unwrap(), SshMode::Native);
+    }
+
+    #[test]
+    fn config_defaults_to_native_ssh_mode() {
+        let config = Config::from_args(Vec::<String>::new()).unwrap();
+        assert_eq!(config.ssh_mode, SshMode::Native);
     }
 }

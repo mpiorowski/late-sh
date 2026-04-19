@@ -45,6 +45,10 @@ enum WsPayload {
     #[serde(rename = "client_state")]
     ClientState {
         client_kind: crate::session::ClientKind,
+        #[serde(default)]
+        ssh_mode: crate::session::ClientSshMode,
+        #[serde(default)]
+        platform: crate::session::ClientPlatform,
         muted: bool,
         volume_percent: u8,
     },
@@ -261,6 +265,8 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                             }),
                             WsPayload::ClientState {
                                 client_kind,
+                                ssh_mode,
+                                platform,
                                 muted,
                                 volume_percent,
                             } => {
@@ -269,6 +275,8 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                     registration_id,
                                     ClientAudioState {
                                         client_kind,
+                                        ssh_mode,
+                                        platform,
                                         muted,
                                         volume_percent,
                                     },
@@ -403,6 +411,8 @@ mod tests {
         let json = r#"{
             "event": "client_state",
             "client_kind": "cli",
+            "ssh_mode": "native",
+            "platform": "macos",
             "muted": true,
             "volume_percent": 35
         }"#;
@@ -410,10 +420,14 @@ mod tests {
         match payload {
             WsPayload::ClientState {
                 client_kind,
+                ssh_mode,
+                platform,
                 muted,
                 volume_percent,
             } => {
                 assert_eq!(client_kind, crate::session::ClientKind::Cli);
+                assert_eq!(ssh_mode, crate::session::ClientSshMode::Native);
+                assert_eq!(platform, crate::session::ClientPlatform::Macos);
                 assert!(muted);
                 assert_eq!(volume_percent, 35);
             }

@@ -7,21 +7,24 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) fn ensure_client_identity() -> Result<PathBuf> {
-    let dedicated_key = dedicated_identity_path()?;
-    if dedicated_key.exists() {
-        return Ok(dedicated_key);
+pub(super) fn ensure_client_identity_at(explicit_path: Option<&Path>) -> Result<PathBuf> {
+    let identity_path = match explicit_path {
+        Some(path) => path.to_path_buf(),
+        None => dedicated_identity_path()?,
+    };
+    if identity_path.exists() {
+        return Ok(identity_path);
     }
 
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         anyhow::bail!(
             "no SSH identity found; generate {} manually or rerun in an interactive terminal",
-            dedicated_key.display()
+            identity_path.display()
         );
     }
 
-    prompt_generate_identity(&dedicated_key)?;
-    Ok(dedicated_key)
+    prompt_generate_identity(&identity_path)?;
+    Ok(identity_path)
 }
 
 fn ssh_dir() -> Result<PathBuf> {

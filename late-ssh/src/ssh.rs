@@ -797,6 +797,10 @@ impl russh::server::Handler for ClientHandler {
                 .context("failed to encode cli token exec response")?;
 
             if let Some(chan) = self.channel.take() {
+                // `channel_open_session` populates `self.channel` immediately before this
+                // `exec_request`, so for the token handshake this slot should hold the exec
+                // channel we are replying on. The fallback below writes via `Session` if that
+                // invariant ever stops holding.
                 chan.data(payload.as_slice()).await?;
                 let _ = chan.exit_status(0).await;
                 let _ = chan.eof().await;

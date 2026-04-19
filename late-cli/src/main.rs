@@ -18,17 +18,17 @@ mod ws;
 
 use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
-use identity::ensure_client_identity;
+use identity::ensure_client_identity_at;
 use raw_mode::RawModeGuard;
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
-use ws::run_viz_ws;
+use ws::{PairClientInfo, PlaybackState, client_platform_label, run_viz_ws};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = Config::from_args(env::args().skip(1))?;
     init_logging(config.verbose)?;
     debug!(?config, "resolved cli config");
-    let ssh_identity = ensure_client_identity()?;
+    let ssh_identity = ensure_client_identity_at(config.key_file.as_deref())?;
     let _raw_mode = RawModeGuard::enable_if_tty();
 
     info!("starting audio runtime");
@@ -61,26 +61,27 @@ async fn main() -> Result<()> {
     info!("received session token and starting websocket pairing");
 
     let api_base_url = config.api_base_url.clone();
+    let client = PairClientInfo {
+        ssh_mode: config.ssh_mode.client_state_label(),
+        platform: client_platform_label(),
+    };
     let played_samples = Arc::clone(&audio.played_samples);
-    let sample_rate = audio.sample_rate;
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
     let mut frames = audio.analyzer_tx.subscribe();
 
     let ws_task = tokio::spawn(async move {
+        let playback = PlaybackState {
+            played_samples: &played_samples,
+            sample_rate: audio.sample_rate,
+            muted: &muted,
+            volume_percent: &volume_percent,
+        };
         let mut retries = 0;
         const MAX_RETRIES: usize = 10;
         loop {
-            if let Err(err) = run_viz_ws(
-                &api_base_url,
-                &token,
-                &mut frames,
-                &played_samples,
-                sample_rate,
-                &muted,
-                &volume_percent,
-            )
-            .await
+            if let Err(err) =
+                run_viz_ws(&api_base_url, &token, &client, &mut frames, &playback).await
             {
                 retries += 1;
                 if retries > MAX_RETRIES {

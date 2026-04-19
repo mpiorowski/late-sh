@@ -599,7 +599,7 @@ async fn drive_native_output(read_half: &mut ChannelReadHalf) -> Result<SshExit>
                 error_message,
                 ..
             } => {
-                exit_signal = Some((format!("{signal_name:?}"), error_message));
+                exit_signal = Some((render_signal_name(&signal_name), error_message));
             }
             ChannelMsg::Close => break,
             ChannelMsg::Eof => {}
@@ -617,6 +617,24 @@ async fn drive_native_output(read_half: &mut ChannelReadHalf) -> Result<SshExit>
     }
 
     Ok(SshExit::RemoteStatus { code: exit_code })
+}
+
+fn render_signal_name(signal_name: &russh::Sig) -> String {
+    match signal_name {
+        russh::Sig::ABRT => "ABRT".to_string(),
+        russh::Sig::ALRM => "ALRM".to_string(),
+        russh::Sig::FPE => "FPE".to_string(),
+        russh::Sig::HUP => "HUP".to_string(),
+        russh::Sig::ILL => "ILL".to_string(),
+        russh::Sig::INT => "INT".to_string(),
+        russh::Sig::KILL => "KILL".to_string(),
+        russh::Sig::PIPE => "PIPE".to_string(),
+        russh::Sig::QUIT => "QUIT".to_string(),
+        russh::Sig::SEGV => "SEGV".to_string(),
+        russh::Sig::TERM => "TERM".to_string(),
+        russh::Sig::USR1 => "USR1".to_string(),
+        russh::Sig::Custom(name) => name.clone(),
+    }
 }
 
 async fn drive_native_writer(

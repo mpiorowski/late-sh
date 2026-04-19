@@ -42,6 +42,7 @@ fi
 cd "${ROOT_DIR}"
 
 exec cargo run -p late-cli --bin late -- \
+  --ssh-mode old \
   --ssh-target "${SSH_TARGET}" \
   --ssh-bin "ssh -p ${SSH_PORT}" \
   --api-base-url "${API_BASE_URL}" \
