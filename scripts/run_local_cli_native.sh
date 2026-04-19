@@ -24,7 +24,7 @@ env_or_default() {
 
 SSH_PORT="${LATE_LOCAL_SSH_PORT:-$(env_or_default LATE_SSH_PORT 2222)}"
 API_PORT="$(env_or_default LATE_API_PORT 4000)"
-WEB_PORT="$(env_or_default LATE_WEB_PORT 3001)"
+WEB_PORT="$(env_or_default LATE_WEB_PORT 3000)"
 API_BASE_URL="${LATE_LOCAL_API_BASE_URL:-http://localhost:${API_PORT}}"
 AUDIO_BASE_URL="${LATE_LOCAL_AUDIO_BASE_URL:-http://localhost:${WEB_PORT}/stream}"
 SSH_TARGET="${LATE_LOCAL_SSH_TARGET:-localhost}"

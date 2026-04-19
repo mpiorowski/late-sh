@@ -1,14 +1,15 @@
 {
   "id": null,
   "uid": "observability",
-  "title": "Errors & Traces",
+  "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 4,
+  "version": 8,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
-    "errors",
-    "observability"
+    "observability",
+    "runtime",
+    "diagnostics"
   ],
   "editable": true,
   "refresh": "30s",
@@ -252,9 +253,183 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Log Volume",
+      "description": "Total log hits over time for the selected services.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service.name=~\"$service\"}",
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Error Volume",
+      "description": "Total ERROR log hits over time for the selected services.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service.name=~\"$service\"} severity:ERROR",
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Log Mix by Service + Severity",
+      "description": "Current distribution of logs by service and severity in the selected time range.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service.name=~\"$service\"} | stats by (\"service.name\", severity) count() logs_total | sort by (logs_total desc) | limit 12",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Top Error Messages",
+      "description": "Highest-count raw ERROR messages in the selected time range. Useful for seeing repeated noise before filtering it.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service.name=~\"$service\"} severity:ERROR | stats by (\"service.name\", _msg) count() error_logs_total | sort by (error_logs_total desc) | limit 10",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      }
+    },
+    {
       "type": "logs",
-      "title": "All Logs",
-      "description": "All application logs with formatted output",
+      "title": "Service Logs",
+      "description": "Selected service logs for first-pass investigation.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -280,7 +455,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 56
       }
     },
     {
@@ -440,9 +615,77 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "CLI Pair Starts",
+      "description": "Pair session starts by SSH mode and client platform",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (ssh_mode, platform) (rate(late_ssh_cli_pair_usage_total[$__rate_interval]))",
+          "legendFormat": "{{ssh_mode}} / {{platform}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CLI Pair Active",
+      "description": "Current active pair sessions by SSH mode and client platform",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (ssh_mode, platform) (late_ssh_cli_pair_active)",
+          "legendFormat": "{{ssh_mode}} / {{platform}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      }
+    },
+    {
       "type": "logs",
       "title": "Error Logs: late-web",
-      "description": "Recent error logs for late-web",
+      "description": "Severity ERROR logs for late-web.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -468,13 +711,13 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 44
+        "y": 68
       }
     },
     {
       "type": "logs",
       "title": "Error Logs: late-ssh",
-      "description": "Recent error logs for late-ssh",
+      "description": "Severity ERROR logs for late-ssh.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -500,13 +743,13 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 44
+        "y": 68
       }
     },
     {
       "type": "table",
       "title": "Recent Traces",
-      "description": "Latest traces from VictoriaTraces. Click a Trace ID to open the full trace view.",
+      "description": "Latest traces from VictoriaTraces. Use this for drill-down after the metrics and logs above identify the suspect service or route.",
       "datasource": {
         "uid": "victoriatraces",
         "type": "jaeger"
@@ -573,7 +816,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 56
+        "y": 80
       }
     },
     {
@@ -646,7 +889,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 68
+        "y": 92
       }
     },
     {
@@ -719,7 +962,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 68
+        "y": 92
       }
     }
   ]

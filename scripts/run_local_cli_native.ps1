@@ -28,7 +28,7 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 
 $sshPort = if ($env:LATE_LOCAL_SSH_PORT) { $env:LATE_LOCAL_SSH_PORT } else { Get-EnvOrDefault "LATE_SSH_PORT" "2222" }
 $apiPort = Get-EnvOrDefault "LATE_API_PORT" "4000"
-$webPort = Get-EnvOrDefault "LATE_WEB_PORT" "3001"
+$webPort = Get-EnvOrDefault "LATE_WEB_PORT" "3000"
 $apiBaseUrl = if ($env:LATE_LOCAL_API_BASE_URL) { $env:LATE_LOCAL_API_BASE_URL } else { "http://localhost:$apiPort" }
 $audioBaseUrl = if ($env:LATE_LOCAL_AUDIO_BASE_URL) { $env:LATE_LOCAL_AUDIO_BASE_URL } else { "http://localhost:$webPort/stream" }
 $sshTarget = if ($env:LATE_LOCAL_SSH_TARGET) { $env:LATE_LOCAL_SSH_TARGET } else { "localhost" }

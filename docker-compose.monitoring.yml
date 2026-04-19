@@ -74,7 +74,7 @@ services:
     restart: always
 
   grafana:
-    container_name: gofast-grafana
+    container_name: late-grafana
     image: grafana/grafana-enterprise:12.4.0
     ports:
       - 3001:3000
