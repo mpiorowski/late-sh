@@ -20,7 +20,7 @@ fn test_state(ssh_internal_url: String) -> AppState {
     let config = Config {
         port: 0,
         ssh_internal_url,
-        ssh_public_url: "localhost:3001".to_string(),
+        ssh_public_url: "localhost:3000".to_string(),
         audio_base_url: "http://localhost:8000".to_string(),
     };
     AppState {

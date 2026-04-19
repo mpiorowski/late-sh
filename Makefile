@@ -37,8 +37,8 @@ LATE_ICECAST_URL ?= http://icecast:8000                     # Icecast streaming 
 LATE_LIQUIDSOAP_ADDR ?= liquidsoap:1234                     # Liquidsoap telnet address for vibe switching
 
 # --- Web ---
-LATE_WEB_PORT ?= 3001                                       # Web server listen port
-LATE_WEB_URL ?= http://localhost:3001                       # Public web URL (used by SSH server)
+LATE_WEB_PORT ?= 3000                                       # Web server listen port
+LATE_WEB_URL ?= http://localhost:3000                       # Public web URL (used by SSH server)
 LATE_SSH_INTERNAL_URL ?= http://service-ssh:4000            # Internal SSH API URL (used by web server)
 LATE_SSH_PUBLIC_URL ?= localhost:4000                       # Public SSH API URL (used by browser for WS)
 LATE_AUDIO_URL ?= http://icecast:8000                       # Upstream audio URL used by late-web /stream proxy

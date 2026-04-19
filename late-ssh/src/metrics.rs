@@ -53,6 +53,28 @@ mod inner {
         })
     }
 
+    fn cli_pair_usage_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_cli_pair_usage_total")
+                .with_description("Total CLI pair sessions by SSH mode and client platform")
+                .build()
+        })
+    }
+
+    fn cli_pair_active() -> &'static UpDownCounter<i64> {
+        static METRIC: OnceLock<UpDownCounter<i64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .i64_up_down_counter("late_ssh_cli_pair_active")
+                .with_description(
+                    "Current active CLI pair sessions by SSH mode and client platform",
+                )
+                .build()
+        })
+    }
+
     fn render_frame_drops_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -109,6 +131,26 @@ mod inner {
         ws_pair_rejected_unknown_token_total().add(1, &[]);
     }
 
+    pub fn record_cli_pair_usage(ssh_mode: &str, platform: &str) {
+        cli_pair_usage_total().add(
+            1,
+            &[
+                KeyValue::new("ssh_mode", ssh_mode.to_string()),
+                KeyValue::new("platform", platform.to_string()),
+            ],
+        );
+    }
+
+    pub fn add_cli_pair_active(delta: i64, ssh_mode: &str, platform: &str) {
+        cli_pair_active().add(
+            delta,
+            &[
+                KeyValue::new("ssh_mode", ssh_mode.to_string()),
+                KeyValue::new("platform", platform.to_string()),
+            ],
+        );
+    }
+
     pub fn record_render_frame_drop() {
         render_frame_drops_total().add(1, &[]);
     }
@@ -132,6 +174,8 @@ mod inner {
     pub fn add_ssh_session(_delta: i64) {}
     pub fn record_ws_pair_success() {}
     pub fn record_ws_pair_rejected_unknown_token() {}
+    pub fn record_cli_pair_usage(_ssh_mode: &str, _platform: &str) {}
+    pub fn add_cli_pair_active(_delta: i64, _ssh_mode: &str, _platform: &str) {}
     pub fn record_render_frame_drop() {}
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}

@@ -432,51 +432,21 @@ fn draw_bio_content(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
 
 fn bio_placeholder_lines(editing: bool) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
-    let faint = Style::default().fg(theme::TEXT_FAINT());
 
     if editing {
-        return vec![
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
-                Span::styled(" Start with a role, link, or one-line intro.", dim),
-            ]),
-            Line::from(Span::styled("  Try any mix of:", faint)),
-            Line::from(Span::styled("    your work or current project", faint)),
-            Line::from(Span::styled("    a website, GitHub, or socials", faint)),
-            Line::from(Span::styled("    what kind of people should DM you", faint)),
-            Line::from(Span::styled(
-                "    your timezone or when you're around",
-                faint,
-            )),
-        ];
+        return vec![Line::from(vec![
+            Span::raw(" "),
+            Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
+            Span::styled(" Start with a role, link, or one-line intro.", dim),
+        ])];
     }
 
-    vec![
-        Line::from(vec![Span::styled(
-            " Build a bio people can skim in five seconds.",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(Span::styled("  Good options:", dim)),
-        Line::from(Span::styled(
-            "    what you do or what you're building now",
-            faint,
-        )),
-        Line::from(Span::styled(
-            "    website, GitHub, Discord, X, or anywhere else",
-            faint,
-        )),
-        Line::from(Span::styled(
-            "    timezone, availability, or collaboration notes",
-            faint,
-        )),
-        Line::from(Span::styled(
-            "  Press Enter to start writing or paste something in.",
-            dim,
-        )),
-    ]
+    vec![Line::from(vec![Span::styled(
+        " Build a bio people can skim in five seconds.",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    )])]
 }
 
 fn bio_summary_value(state: &WelcomeModalState) -> ValueSpan {
@@ -548,7 +518,7 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         Span::styled(" cycle  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" edit/apply  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), area);

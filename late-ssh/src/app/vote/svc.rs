@@ -199,19 +199,25 @@ impl VoteService {
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, genre = %genre))]
     pub async fn cast_vote(&self, user_id: Uuid, genre: Genre) -> Result<VoteSnapshot> {
-        {
+        let vote_changed = {
             let client = self.db.get().await?;
-            if let Err(e) = Vote::upsert(&client, user_id, genre.as_str()).await {
-                self.publish_event(VoteEvent::Error {
-                    user_id,
-                    message: "Vote failed. Please try again.".to_string(),
-                });
-                return Err(e);
+            match Vote::upsert(&client, user_id, genre.as_str()).await {
+                Ok((_, changed)) => changed,
+                Err(e) => {
+                    self.publish_event(VoteEvent::Error {
+                        user_id,
+                        message: "Vote failed. Please try again.".to_string(),
+                    });
+                    return Err(e);
+                }
             }
-        }
+        };
         self.publish_event(VoteEvent::Success { user_id, genre });
         metrics::record_vote_cast(genre.as_str());
-        self.publish_activity(user_id, genre);
+
+        if vote_changed {
+            self.publish_activity(user_id, genre);
+        }
 
         let counts = self.load_counts().await?;
         Ok(self.publish_status(counts).await)

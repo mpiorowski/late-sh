@@ -21,9 +21,13 @@ tracing-subscriber = { workspace = true }
 cpal.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
-nix = { workspace = true, features = ["term", "process", "signal", "fs"] }
+rand_core.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
+russh.workspace = true
 rustfft.workspace = true
 shlex.workspace = true
 symphonia = { workspace = true, features = ["mp3"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["term", "process", "signal", "fs"] }

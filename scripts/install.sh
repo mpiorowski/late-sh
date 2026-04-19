@@ -74,14 +74,28 @@ checksum_cmd() {
   printf '%s\n' ""
 }
 
+binary_name_for_target() {
+  local target="$1"
+
+  case "$target" in
+    *-windows-*)
+      printf '%s\n' "late.exe"
+      ;;
+    *)
+      printf '%s\n' "${LATE_BIN_NAME}"
+      ;;
+  esac
+}
+
 verify_checksum() {
   local checksum_file="$1"
   local target="$2"
   local downloaded_file="$3"
+  local binary_name="$4"
   local expected actual cmd
 
-  expected="$(awk -v path="${target}/${LATE_BIN_NAME}" '$2 == path { print $1 }' "$checksum_file")"
-  [[ -n "$expected" ]] || fail "missing checksum for ${target}/${LATE_BIN_NAME}"
+  expected="$(awk -v path="${target}/${binary_name}" '$2 == path { print $1 }' "$checksum_file")"
+  [[ -n "$expected" ]] || fail "missing checksum for ${target}/${binary_name}"
 
   cmd="$(checksum_cmd)"
   if [[ -z "$cmd" ]]; then
@@ -139,7 +153,7 @@ EOF
 }
 
 main() {
-  local base_url version prefix target tmp_dir binary_url checksum_url target_dir dest_path
+  local base_url version prefix target tmp_dir binary_url checksum_url target_dir dest_path binary_name
 
   parse_args "$@"
   need_cmd curl
@@ -149,6 +163,7 @@ main() {
   base_url="${LATE_INSTALL_BASE_URL:-$LATE_DEFAULT_BASE_URL}"
   version="${LATE_INSTALL_VERSION:-latest}"
   target="$(detect_target)"
+  binary_name="$(binary_name_for_target "$target")"
 
   if is_wsl; then
     log "detected WSL; installing the Linux build"
@@ -166,7 +181,7 @@ main() {
   tmp_dir="$(mktemp -d)"
   trap "rm -rf '$tmp_dir'" EXIT
 
-  binary_url="${base_url%/}/${prefix}/${target}/${LATE_BIN_NAME}"
+  binary_url="${base_url%/}/${prefix}/${target}/${binary_name}"
   checksum_url="${base_url%/}/${prefix}/sha256sums.txt"
 
   log_verbose "base_url=${base_url}"
@@ -175,11 +190,11 @@ main() {
   log_verbose "binary_url=${binary_url}"
   log_verbose "checksum_url=${checksum_url}"
   log "downloading ${target} from ${binary_url}"
-  curl -fsSL "$binary_url" -o "${tmp_dir}/${LATE_BIN_NAME}"
-  chmod 755 "${tmp_dir}/${LATE_BIN_NAME}"
+  curl -fsSL "$binary_url" -o "${tmp_dir}/${binary_name}"
+  chmod 755 "${tmp_dir}/${binary_name}"
 
   if curl -fsSL "$checksum_url" -o "${tmp_dir}/sha256sums.txt"; then
-    verify_checksum "${tmp_dir}/sha256sums.txt" "$target" "${tmp_dir}/${LATE_BIN_NAME}"
+    verify_checksum "${tmp_dir}/sha256sums.txt" "$target" "${tmp_dir}/${binary_name}" "${binary_name}"
   else
     log "warning: checksum file unavailable at ${checksum_url}; continuing without verification"
   fi
@@ -191,7 +206,7 @@ main() {
   fi
 
   log_verbose "target_dir=${target_dir}"
-  dest_path="$(install_binary "${tmp_dir}/${LATE_BIN_NAME}" "$target_dir")"
+  dest_path="$(install_binary "${tmp_dir}/${binary_name}" "$target_dir")"
   log "installed ${LATE_BIN_NAME} to ${dest_path}"
 
   case ":${PATH}:" in
@@ -201,14 +216,6 @@ main() {
       log "warning: ${target_dir} is not currently on PATH"
       ;;
   esac
-
-  if ! command -v ssh >/dev/null 2>&1; then
-    log "warning: 'ssh' is required at runtime but was not found"
-  fi
-
-  if ! command -v script >/dev/null 2>&1; then
-    log "warning: 'script' is required at runtime but was not found"
-  fi
 
   log "run 'late --help' to verify the install"
 }

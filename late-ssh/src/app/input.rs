@@ -57,7 +57,10 @@ pub(crate) enum ParsedInput {
     CtrlBackspace,
     CtrlDelete,
     Scroll(isize),
-    MousePress { x: u16, y: u16 },
+    MousePress {
+        x: u16,
+        y: u16,
+    },
     BackTab,
     // Alt+Enter inserts a newline. `ESC`-prefixed control chords that would
     // otherwise wedge vte are pre-scanned before the parser sees them.
@@ -72,6 +75,9 @@ pub(crate) enum ParsedInput {
     End,
     FocusGained,
     FocusLost,
+    /// Payload of an XTVERSION (`CSI > q`) DCS reply — the bytes between
+    /// `ESC P > |` and `ESC \`, e.g. `kitty(0.31.0)`.
+    TerminalVersion(String),
 }
 
 /// vte keeps pending escape state when `ESC` is followed by control bytes
@@ -147,6 +153,9 @@ struct VtCollector {
     events: Vec<ParsedInput>,
     paste: Option<Vec<u8>>,
     ss3_pending: bool,
+    /// Buffer for an in-flight XTVERSION DCS reply. `Some` between
+    /// `hook()` (when we see the `|` final byte) and `unhook()`.
+    xtversion_buf: Option<Vec<u8>>,
 }
 
 impl VtCollector {
@@ -202,11 +211,32 @@ impl Perform for VtCollector {
         self.push_byte(byte);
     }
 
-    fn hook(&mut self, _: &Params, _: &[u8], _: bool, _: char) {}
+    fn hook(&mut self, _: &Params, _: &[u8], _: bool, action: char) {
+        // XTVERSION reply: `ESC P > | <name>(<version>) ESC \`. The final
+        // byte is `|` (0x7C). We key off that rather than the `>` private
+        // marker because different vte versions surface the marker via
+        // params vs intermediates. Buffer up to 256 bytes of payload to
+        // guard against a runaway DCS.
+        if action == '|' {
+            self.xtversion_buf = Some(Vec::new());
+        }
+    }
 
-    fn put(&mut self, _: u8) {}
+    fn put(&mut self, byte: u8) {
+        if let Some(buf) = &mut self.xtversion_buf
+            && buf.len() < 256
+        {
+            buf.push(byte);
+        }
+    }
 
-    fn unhook(&mut self) {}
+    fn unhook(&mut self) {
+        if let Some(buf) = self.xtversion_buf.take()
+            && let Ok(payload) = String::from_utf8(buf)
+        {
+            self.events.push(ParsedInput::TerminalVersion(payload));
+        }
+    }
 
     fn osc_dispatch(&mut self, _: &[&[u8]], _: bool) {}
 
@@ -335,7 +365,77 @@ pub fn flush_pending_escape(app: &mut App) {
     dispatch_escape(app);
 }
 
+/// Splice complete XTVERSION DCS replies out of `data`, returning the
+/// remaining bytes and the extracted payloads. Only matches the specific
+/// `ESC P > | ... ST` shape so other DCS traffic passes through untouched.
+/// An incomplete reply (no terminator found) is left in place for the main
+/// vt parser to buffer across subsequent reads.
+fn extract_xtversion_replies(data: &[u8]) -> (std::borrow::Cow<'_, [u8]>, Vec<String>) {
+    let mut out: Vec<u8> = Vec::new();
+    let mut payloads: Vec<String> = Vec::new();
+    let mut seg_start = 0usize;
+    let mut i = 0usize;
+    let mut any_stripped = false;
+
+    while i < data.len() {
+        let is_xtver_start = data[i] == 0x1B
+            && i + 3 < data.len()
+            && data[i + 1] == b'P'
+            && data[i + 2] == b'>'
+            && data[i + 3] == b'|';
+        if !is_xtver_start {
+            i += 1;
+            continue;
+        }
+
+        // Locate the String Terminator: BEL (0x07) or ESC `\`.
+        let payload_start = i + 4;
+        let mut j = payload_start;
+        let mut term_len = 0usize;
+        while j < data.len() {
+            if data[j] == 0x07 {
+                term_len = 1;
+                break;
+            }
+            if data[j] == 0x1B && j + 1 < data.len() && data[j + 1] == b'\\' {
+                term_len = 2;
+                break;
+            }
+            j += 1;
+        }
+        if term_len == 0 {
+            // Incomplete; leave the remainder untouched.
+            break;
+        }
+
+        out.extend_from_slice(&data[seg_start..i]);
+        if let Ok(s) = std::str::from_utf8(&data[payload_start..j]) {
+            payloads.push(s.to_string());
+        }
+        i = j + term_len;
+        seg_start = i;
+        any_stripped = true;
+    }
+
+    if !any_stripped {
+        return (std::borrow::Cow::Borrowed(data), payloads);
+    }
+    out.extend_from_slice(&data[seg_start..]);
+    (std::borrow::Cow::Owned(out), payloads)
+}
+
 pub fn handle(app: &mut App, data: &[u8]) {
+    // Pull any complete XTVERSION DCS replies out of the raw byte stream
+    // before the splash/welcome short-circuits below, which otherwise see
+    // the leading ESC byte and drop the reply on the floor (and dismiss
+    // the splash prematurely). The reply also passes through vt_input in
+    // the normal path after splash; `set_terminal_version` is idempotent.
+    let (stripped, xtversion_payloads) = extract_xtversion_replies(data);
+    for payload in xtversion_payloads {
+        app.set_terminal_version(&payload);
+    }
+    let data: &[u8] = &stripped;
+
     if app.show_splash {
         // Do not process input while splash screen is showing
         // Escape skips the rest of the intro animation
@@ -449,6 +549,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     match event {
         ParsedInput::FocusGained | ParsedInput::FocusLost => {}
+        ParsedInput::TerminalVersion(payload) => app.set_terminal_version(&payload),
         ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
         ParsedInput::AltEnter => {
             if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
@@ -1276,6 +1377,70 @@ mod tests {
         assert_eq!(
             parser.feed(b"\x1b[<65;10;5m"),
             vec![ParsedInput::Scroll(-1)]
+        );
+    }
+
+    #[test]
+    fn extract_xtversion_strips_and_returns_payload() {
+        // Single, standalone reply.
+        let (rest, payloads) = extract_xtversion_replies(b"\x1bP>|kitty(0.31.0)\x1b\\");
+        assert_eq!(rest.as_ref(), b"");
+        assert_eq!(payloads, vec!["kitty(0.31.0)".to_string()]);
+    }
+
+    #[test]
+    fn extract_xtversion_strips_mixed_with_other_bytes() {
+        // Reply surrounded by other keystrokes — rest should keep those.
+        let (rest, payloads) = extract_xtversion_replies(b"abc\x1bP>|foo(1)\x1b\\def");
+        assert_eq!(rest.as_ref(), b"abcdef");
+        assert_eq!(payloads, vec!["foo(1)".to_string()]);
+    }
+
+    #[test]
+    fn extract_xtversion_incomplete_left_in_place() {
+        // No terminator → leave it; main vt parser will buffer across reads.
+        let (rest, payloads) = extract_xtversion_replies(b"\x1bP>|kitty");
+        assert_eq!(rest.as_ref(), b"\x1bP>|kitty");
+        assert!(payloads.is_empty());
+    }
+
+    #[test]
+    fn extract_xtversion_ignores_non_xtversion_dcs() {
+        // Different DCS final byte (`q`, e.g. Sixel) — leave it alone.
+        let (rest, payloads) = extract_xtversion_replies(b"\x1bPq...\x1b\\");
+        assert_eq!(rest.as_ref(), b"\x1bPq...\x1b\\");
+        assert!(payloads.is_empty());
+    }
+
+    #[test]
+    fn extract_xtversion_handles_bel_terminator() {
+        let (rest, payloads) = extract_xtversion_replies(b"\x1bP>|foo(1)\x07tail");
+        assert_eq!(rest.as_ref(), b"tail");
+        assert_eq!(payloads, vec!["foo(1)".to_string()]);
+    }
+
+    #[test]
+    fn vt_parser_reads_xtversion_dcs_reply() {
+        let mut parser = VtInputParser::default();
+        // `ESC P > | kitty(0.31.0) ESC \` — the reply shape we care about.
+        let events = parser.feed(b"\x1bP>|kitty(0.31.0)\x1b\\");
+        assert_eq!(
+            events,
+            vec![ParsedInput::TerminalVersion("kitty(0.31.0)".into())]
+        );
+    }
+
+    #[test]
+    fn vt_parser_reads_xtversion_dcs_reply_split_across_writes() {
+        // The DCS reply can arrive in multiple read() chunks over the wire;
+        // vte's state machine must hold state across feed calls.
+        let mut parser = VtInputParser::default();
+        let mut events = parser.feed(b"\x1bP>|WezTer");
+        events.extend(parser.feed(b"m(20240127)"));
+        events.extend(parser.feed(b"\x1b\\"));
+        assert_eq!(
+            events,
+            vec![ParsedInput::TerminalVersion("WezTerm(20240127)".into())]
         );
     }
 

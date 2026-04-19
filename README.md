@@ -68,8 +68,16 @@ That's it. Postgres, Icecast, and Liquidsoap all come up automatically.
 
 Install the companion CLI for local audio playback and synced visualizer:
 
+macOS / Linux:
+
 ```bash
 curl -fsSL https://cli.late.sh/install.sh | bash
+```
+
+Windows PowerShell (x64):
+
+```powershell
+irm https://cli.late.sh/install.ps1 | iex
 ```
 
 Or build it from source:
