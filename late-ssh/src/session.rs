@@ -11,6 +11,8 @@ use std::{
 use tokio::sync::{RwLock, mpsc::Sender, mpsc::UnboundedSender};
 use uuid::Uuid;
 
+use crate::metrics;
+
 // WebSocket → SSH session routing for browser-sent visualization data.
 //
 // Flow:
@@ -52,9 +54,53 @@ impl ClientKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientSshMode {
+    Native,
+    Old,
+    #[default]
+    Unknown,
+}
+
+impl ClientSshMode {
+    fn metric_label(self) -> Option<&'static str> {
+        match self {
+            Self::Native => Some("native"),
+            Self::Old => Some("old"),
+            Self::Unknown => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientPlatform {
+    Linux,
+    Macos,
+    Windows,
+    #[default]
+    Unknown,
+}
+
+impl ClientPlatform {
+    fn metric_label(self) -> Option<&'static str> {
+        match self {
+            Self::Linux => Some("linux"),
+            Self::Macos => Some("macos"),
+            Self::Windows => Some("windows"),
+            Self::Unknown => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientAudioState {
     pub client_kind: ClientKind,
+    #[serde(default)]
+    pub ssh_mode: ClientSshMode,
+    #[serde(default)]
+    pub platform: ClientPlatform,
     pub muted: bool,
     pub volume_percent: u8,
 }
@@ -63,9 +109,21 @@ impl Default for ClientAudioState {
     fn default() -> Self {
         Self {
             client_kind: ClientKind::Unknown,
+            ssh_mode: ClientSshMode::Unknown,
+            platform: ClientPlatform::Unknown,
             muted: false,
             volume_percent: 30,
         }
+    }
+}
+
+impl ClientAudioState {
+    fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {
+        if self.client_kind != ClientKind::Cli {
+            return None;
+        }
+
+        Some((self.ssh_mode.metric_label()?, self.platform.metric_label()?))
     }
 }
 
@@ -93,6 +151,7 @@ struct PairControlEntry {
     registration_id: u64,
     tx: UnboundedSender<PairControlMessage>,
     state: ClientAudioState,
+    usage_total_recorded: bool,
 }
 
 pub fn new_session_token() -> String {
@@ -160,6 +219,9 @@ impl PairedClientRegistry {
         let registration_id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let mut clients = self.clients.lock_recover();
         if let Some(previous) = clients.get(&token) {
+            if let Some((ssh_mode, platform)) = previous.state.cli_usage_labels() {
+                metrics::add_cli_pair_active(-1, ssh_mode, platform);
+            }
             // Legitimate reconnects hit this path; a surprise overwrite with an
             // unknown peer would indicate token takeover, so surface it loudly.
             tracing::warn!(
@@ -181,6 +243,7 @@ impl PairedClientRegistry {
                 registration_id,
                 tx,
                 state: ClientAudioState::default(),
+                usage_total_recorded: false,
             },
         );
         registration_id
@@ -193,6 +256,11 @@ impl PairedClientRegistry {
             .map(|entry| entry.registration_id == registration_id)
             .unwrap_or(false);
         if should_remove {
+            if let Some(entry) = clients.get(token)
+                && let Some((ssh_mode, platform)) = entry.state.cli_usage_labels()
+            {
+                metrics::add_cli_pair_active(-1, ssh_mode, platform);
+            }
             tracing::info!(
                 token_hint = %token_hint(token),
                 registration_id,
@@ -234,6 +302,25 @@ impl PairedClientRegistry {
         if let Some(entry) = clients.get_mut(token)
             && entry.registration_id == registration_id
         {
+            let previous_labels = entry.state.cli_usage_labels();
+            let new_labels = state.cli_usage_labels();
+
+            if previous_labels != new_labels {
+                if let Some((ssh_mode, platform)) = previous_labels {
+                    metrics::add_cli_pair_active(-1, ssh_mode, platform);
+                }
+                if let Some((ssh_mode, platform)) = new_labels {
+                    metrics::add_cli_pair_active(1, ssh_mode, platform);
+                }
+            }
+
+            if !entry.usage_total_recorded
+                && let Some((ssh_mode, platform)) = new_labels
+            {
+                metrics::record_cli_pair_usage(ssh_mode, platform);
+                entry.usage_total_recorded = true;
+            }
+
             entry.state = state;
         }
     }
@@ -413,6 +500,8 @@ mod tests {
             registration_id,
             ClientAudioState {
                 client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Macos,
                 muted: true,
                 volume_percent: 35,
             },
@@ -420,6 +509,8 @@ mod tests {
 
         let snapshot = registry.snapshot("tok1").unwrap();
         assert_eq!(snapshot.client_kind, ClientKind::Cli);
+        assert_eq!(snapshot.ssh_mode, ClientSshMode::Native);
+        assert_eq!(snapshot.platform, ClientPlatform::Macos);
         assert!(snapshot.muted);
         assert_eq!(snapshot.volume_percent, 35);
     }

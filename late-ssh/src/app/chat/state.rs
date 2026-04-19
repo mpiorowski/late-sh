@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use late_core::{
     MutexRecover,
-    models::{chat_message::ChatMessage, chat_room::ChatRoom},
+    models::{article::NEWS_MARKER, chat_message::ChatMessage, chat_room::ChatRoom},
 };
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -285,10 +285,8 @@ impl ChatState {
         self.selected_message_id = None;
     }
 
-    pub fn begin_reply_to_selected_in_room(&mut self, room_id: Uuid) -> bool {
-        let Some(message) = self.selected_message_in_room(room_id) else {
-            return false;
-        };
+    pub fn begin_reply_to_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+        let message = self.selected_message_in_room(room_id)?;
         let message_user_id = message.user_id;
         let message_body = message.body.clone();
         let author = self
@@ -306,7 +304,7 @@ impl ChatState {
         self.composer_room_id = Some(room_id);
         self.edited_message_id = None;
         set_composer_cursor_visible(&mut self.composer, true);
-        true
+        None
     }
 
     pub fn begin_edit_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
@@ -1500,6 +1498,10 @@ fn adjacent_message_id(msgs: &[ChatMessage], current: Uuid) -> Option<Uuid> {
 }
 
 fn reply_preview_text(body: &str) -> String {
+    if let Some(title) = news_reply_preview_text(body) {
+        return title;
+    }
+
     let body_without_reply_quote = match body.split_once('\n') {
         Some((first_line, rest))
             if first_line.trim().starts_with("> ") && !rest.trim().is_empty() =>
@@ -1547,6 +1549,27 @@ fn set_composer_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
     ta.set_cursor_style(style);
 }
 
+fn news_reply_preview_text(body: &str) -> Option<String> {
+    let trimmed = body.trim_start();
+    if !trimmed.starts_with(NEWS_MARKER) {
+        return None;
+    }
+
+    let raw = trimmed[NEWS_MARKER.len()..].trim_start();
+    let title = raw
+        .split(" || ")
+        .next()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .unwrap_or("news update");
+
+    let preview: String = title.chars().take(48).collect();
+    Some(if preview.chars().count() == 48 {
+        format!("{}...", preview.trim_end())
+    } else {
+        preview
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1660,6 +1683,20 @@ mod tests {
     fn reply_preview_text_uses_message_body_for_nested_replies() {
         let preview = reply_preview_text("> @mat: original message preview\nyou like tetris?");
         assert_eq!(preview, "you like tetris?");
+    }
+
+    #[test]
+    fn reply_preview_text_uses_news_title_for_news_messages() {
+        let preview = reply_preview_text(
+            "---NEWS--- Rust 1.95 Released || summary || https://example.com || ascii",
+        );
+        assert_eq!(preview, "Rust 1.95 Released");
+    }
+
+    #[test]
+    fn news_marker_detection_matches_announcement_messages() {
+        assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
+        assert!(news_reply_preview_text("regular chat message").is_none());
     }
 
     // --- parse_dm_command ---

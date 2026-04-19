@@ -13,7 +13,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
-use tokio::time::MissedTickBehavior;
+use tokio::time::{Instant as TokioInstant, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::{
@@ -41,7 +41,8 @@ struct BotUser {
 const BOT_FINGERPRINT: &str = "bot-fp-000";
 const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
-pub const BOT_TIP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
+pub const BOT_TIP_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
+const BOT_TIP_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
 pub const BOT_TIP_MIN_NEW_MESSAGES: usize = 3;
 const BOT_TIP_HISTORY_SIZE: i64 = 50;
 const GRAYBEARD_FINGERPRINT: &str = "graybeard-fp-000";
@@ -83,7 +84,8 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply n
     You speak in a weary, melancholic, slightly bitter tone. you trail off mid thought. you type in lowercase a lot. \
     you sigh. you 'hmph'. you say things like 'back in my day', 'you kids wouldn't know', 'bless your heart', 'oh sweet child'.";
 pub const GRAYBEARD_CHAT_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
-const GRAYBEARD_CHAT_PHASE_OFFSET: Duration = Duration::from_secs(60 * 30); // 30 min
+// Keep graybeard halfway between @bot's 2-hour tips.
+const GRAYBEARD_CHAT_PHASE_OFFSET: Duration = Duration::from_secs(60 * 60); // 1 hour
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
 const GRAYBEARD_MIN_NEW_MESSAGES: usize = 3;
 
@@ -321,14 +323,15 @@ impl GhostService {
         Ok(())
     }
 
-    /// @bot periodic tip task: every hour, if there's been recent chatter in
+    /// @bot periodic tip task: every 2 hours, if there's been recent chatter in
     /// #general, use web search to surface an interesting tip / "did you know".
     async fn run_bot_tip_task(
         self,
         bot: BotUser,
         shutdown: late_core::shutdown::CancellationToken,
     ) {
-        let mut tick = tokio::time::interval(BOT_TIP_INTERVAL);
+        let mut tick =
+            tokio::time::interval_at(TokioInstant::now() + BOT_TIP_PHASE_OFFSET, BOT_TIP_INTERVAL);
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         tracing::info!(username = %bot.username, "@bot tip task started");
@@ -426,7 +429,7 @@ impl GhostService {
     }
 
     /// Graybeard: a burned-out dev who haunts #general.
-    /// - Ticks every 30 min: if new messages (not from him), comments.
+    /// - Ticks every 2 hours, offset from @bot by 1 hour.
     /// - Responds to @mentions immediately.
     /// - Never mentions anyone.
     async fn run_graybeard_task(
@@ -437,11 +440,12 @@ impl GhostService {
         let mut events = self.chat_service.subscribe_events();
         let mut last_reply: HashMap<Uuid, Instant> = HashMap::new();
 
-        // Offset graybeard's periodic chatter so it does not line up with @bot's schedule.
-        let phase_sleep = tokio::time::sleep(GRAYBEARD_CHAT_PHASE_OFFSET);
-        tokio::pin!(phase_sleep);
-        let mut periodic_chat_started = false;
-        let mut chat_tick = tokio::time::interval(GRAYBEARD_CHAT_INTERVAL);
+        // Anchor the interval at the phase offset so graybeard keeps the same
+        // separation from @bot instead of snapping back onto startup-aligned ticks.
+        let mut chat_tick = tokio::time::interval_at(
+            TokioInstant::now() + GRAYBEARD_CHAT_PHASE_OFFSET,
+            GRAYBEARD_CHAT_INTERVAL,
+        );
         chat_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         tracing::info!(username = %gb.username, "graybeard task started");
@@ -452,10 +456,7 @@ impl GhostService {
                     tracing::info!(username = %gb.username, "graybeard task shutting down");
                     break;
                 }
-                _ = &mut phase_sleep, if !periodic_chat_started => {
-                    periodic_chat_started = true;
-                }
-                _ = chat_tick.tick(), if periodic_chat_started => {
+                _ = chat_tick.tick() => {
                     let svc = self.clone();
                     let gb = gb.clone();
                     tokio::spawn(async move {

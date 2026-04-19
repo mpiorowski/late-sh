@@ -10,18 +10,25 @@ use crate::app::common::theme;
 
 use super::{
     data::country_label,
-    state::{PickerKind, Row, WelcomeModalState},
+    state::{BIO_MAX_LEN, PickerKind, Row, WelcomeModalState},
 };
 
 pub const MODAL_WIDTH: u16 = 96;
 pub const MODAL_HEIGHT: u16 = 34;
+const SETTINGS_COLUMN_WIDTH: u16 = 38;
+const BODY_COLUMN_GAP: u16 = 1;
 
 /// Width the bio composer should wrap at, given the modal's rendered width.
-/// The bio editor is full-width inside the modal body: modal inner (−2
-/// borders) minus editor block borders (−2) minus the composer's leading
-/// space (−1).
+/// The bio editor lives in the right-hand pane:
+/// modal inner (-2 borders) - settings column - gutter - bio block borders (-2)
+/// - composer's leading space (-1).
 pub fn bio_text_width(modal_width: u16) -> usize {
-    modal_width.saturating_sub(5).max(20) as usize
+    modal_width
+        .saturating_sub(2)
+        .saturating_sub(SETTINGS_COLUMN_WIDTH)
+        .saturating_sub(BODY_COLUMN_GAP)
+        .saturating_sub(3)
+        .max(24) as usize
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
@@ -112,23 +119,37 @@ fn draw_help_callout(frame: &mut Frame, area: Rect) {
 }
 
 fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+    let columns = Layout::horizontal([
+        Constraint::Length(SETTINGS_COLUMN_WIDTH),
+        Constraint::Length(BODY_COLUMN_GAP),
+        Constraint::Min(24),
+    ])
+    .split(area);
+
+    draw_settings_column(frame, columns[0], state);
+    draw_bio_pane(frame, columns[2], state);
+}
+
+fn draw_settings_column(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     let sections = Layout::vertical([
         Constraint::Length(1), // Identity heading
         Constraint::Length(1), // Username row
-        Constraint::Length(1), // Bio header line
-        Constraint::Length(6), // Bio editor (2 borders + 4 content rows)
+        Constraint::Length(1), // Bio row
+        Constraint::Length(1), // breathing room
         Constraint::Length(1), // Appearance heading
         Constraint::Length(1), // Theme
         Constraint::Length(1), // Background
+        Constraint::Length(1), // breathing room
+        Constraint::Length(1), // Location heading
+        Constraint::Length(1), // Country
+        Constraint::Length(1), // Timezone
+        Constraint::Length(1), // breathing room
         Constraint::Length(1), // Notifications heading
         Constraint::Length(1), // DMs
         Constraint::Length(1), // Mentions
         Constraint::Length(1), // Game events
         Constraint::Length(1), // Bell
         Constraint::Length(1), // Cooldown
-        Constraint::Length(1), // Location heading
-        Constraint::Length(1), // Country
-        Constraint::Length(1), // Timezone
     ])
     .split(area);
 
@@ -156,9 +177,16 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
         )),
         sections[1],
     );
-
-    draw_bio_header(frame, sections[2], state);
-    draw_bio_editor(frame, sections[3], state);
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Bio,
+            width,
+            "Bio",
+            bio_summary_value(state),
+        )),
+        sections[2],
+    );
 
     frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[4]);
     frame.render_widget(
@@ -186,9 +214,37 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
         sections[6],
     );
 
+    frame.render_widget(Paragraph::new(section_heading("Location")), sections[8]);
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Country,
+            width,
+            "Country",
+            value_with_picker_hint(country_label(state.draft().country.as_deref())),
+        )),
+        sections[9],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Timezone,
+            width,
+            "Timezone",
+            value_with_picker_hint(
+                state
+                    .draft()
+                    .timezone
+                    .clone()
+                    .unwrap_or_else(|| "not set".to_string()),
+            ),
+        )),
+        sections[10],
+    );
+
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[7],
+        sections[12],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -198,7 +254,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[8],
+        sections[13],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -208,7 +264,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[9],
+        sections[14],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -218,7 +274,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[10],
+        sections[15],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -228,7 +284,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[11],
+        sections[16],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -245,80 +301,20 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
                 )
             },
         )),
-        sections[12],
-    );
-
-    frame.render_widget(Paragraph::new(section_heading("Location")), sections[13]);
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Country,
-            width,
-            "Country",
-            value_with_picker_hint(country_label(state.draft().country.as_deref())),
-        )),
-        sections[14],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Timezone,
-            width,
-            "Timezone",
-            value_with_picker_hint(
-                state
-                    .draft()
-                    .timezone
-                    .clone()
-                    .unwrap_or_else(|| "not set".to_string()),
-            ),
-        )),
-        sections[15],
+        sections[17],
     );
 }
 
-fn draw_bio_header(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
-    let selected =
-        state.selected_row() == Row::Bio && !state.editing_username() && !state.editing_bio();
-
-    let (marker, marker_style) = if selected {
-        (
-            "›",
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        (" ", Style::default().fg(theme::TEXT_FAINT()))
-    };
-
-    let line = Line::from(vec![
-        Span::styled(format!(" {marker} "), marker_style),
-        Span::styled(
-            "Bio",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "   share your work — site, GitHub, socials, anything",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
-}
-
-fn draw_bio_editor(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+fn draw_bio_pane(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     let editing = state.editing_bio();
-    let selected =
-        state.selected_row() == Row::Bio && !state.editing_username() && !state.editing_bio();
+    let selected = state.selected_row() == Row::Bio && !state.editing_username();
 
     let title = if editing {
-        " editing · Esc/Enter finish · Alt+Enter newline "
+        " Bio · Esc/Enter save · Alt+Enter newline "
     } else if state.draft().bio.is_empty() {
-        " paste a link, drop a tagline — Enter to edit "
+        " Bio · Enter to write "
     } else {
-        " Enter to edit "
+        " Bio · Enter to edit "
     };
 
     let (border_color, title_color) = if editing {
@@ -341,21 +337,124 @@ fn draw_bio_editor(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let sections = Layout::vertical([Constraint::Length(3), Constraint::Min(6)]).split(inner);
+    draw_bio_intro(frame, sections[0], state);
+    draw_bio_content(frame, sections[1], state);
+}
+
+fn draw_bio_intro(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+    let bio = state.bio_input();
+    let text = bio.lines().join("\n");
+    let char_count = text.chars().count();
+    let line_count = bio.lines().len().max(1);
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+
+    let lead = if state.editing_bio() {
+        Line::from(vec![
+            Span::styled(" Move with arrows. ", Style::default().fg(theme::AMBER())),
+            Span::styled("Keep it readable.", Style::default().fg(theme::TEXT_DIM())),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(
+                " Keep it skimmable. ",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Lead with the useful bits.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])
+    };
+    frame.render_widget(Paragraph::new(lead), rows[0]);
+
+    let subline = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            "Role, GitHub, projects, links.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(subline), rows[1]);
+
+    let stats = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            format!("{char_count}/{BIO_MAX_LEN} chars"),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("{line_count} lines"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(stats), rows[2]);
+}
+
+fn draw_bio_content(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+    let editing = state.editing_bio();
+
     let composer = state.bio_input();
-    if !editing && composer.is_empty() {
-        let placeholder = Line::from(Span::styled(
-            " e.g. https://yourname.dev · github.com/you · @handle",
-            Style::default().fg(theme::TEXT_FAINT()),
-        ));
+    let padded = area.inner(Margin::new(1, 0));
+    if composer.is_empty() {
         frame.render_widget(
-            Paragraph::new(placeholder).wrap(Wrap { trim: false }),
-            inner,
+            Paragraph::new(bio_placeholder_lines(editing)).wrap(Wrap { trim: false }),
+            padded,
         );
         return;
     }
 
-    let padded = inner.inner(Margin::new(1, 0));
     frame.render_widget(composer, padded);
+}
+
+fn bio_placeholder_lines(editing: bool) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+
+    if editing {
+        return vec![Line::from(vec![
+            Span::raw(" "),
+            Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
+            Span::styled(" Start with a role, link, or one-line intro.", dim),
+        ])];
+    }
+
+    vec![Line::from(vec![Span::styled(
+        " Build a bio people can skim in five seconds.",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    )])]
+}
+
+fn bio_summary_value(state: &WelcomeModalState) -> ValueSpan {
+    let bio = state.bio_input();
+    let text = bio.lines().join("\n");
+    let char_count = text.chars().count();
+    let line_count = bio.lines().len().max(1);
+
+    if state.editing_bio() {
+        return value_span(
+            format!("editing {char_count}/{BIO_MAX_LEN}"),
+            theme::AMBER(),
+        );
+    }
+
+    if bio.is_empty() {
+        return value_span("empty - press Enter", theme::TEXT_FAINT());
+    }
+
+    value_span(
+        format!("{line_count} lines - {char_count}/{BIO_MAX_LEN}"),
+        theme::TEXT_BRIGHT(),
+    )
 }
 
 fn draw_save_cta(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
@@ -405,7 +504,7 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         Span::styled(" cycle  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" edit/apply  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), area);

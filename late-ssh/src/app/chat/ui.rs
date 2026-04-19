@@ -178,7 +178,7 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
         let placeholder_text = if view.selected_message {
             "r reply · e edit · d delete · p profile · i compose"
         } else {
-            "Type a message or /help"
+            "Type a message · j/k select · /help"
         };
         let placeholder = Paragraph::new(Line::from(Span::styled(
             placeholder_text,

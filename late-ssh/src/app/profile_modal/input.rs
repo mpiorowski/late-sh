@@ -1,8 +1,12 @@
 use crate::app::{input::ParsedInput, state::App};
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
+    if is_close_event(&event) {
+        close(app);
+        return;
+    }
+
     match event {
-        ParsedInput::Byte(b'q' | b'Q') | ParsedInput::Byte(0x1B) => close(app),
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
         | ParsedInput::Arrow(b'B') => {
@@ -30,7 +34,29 @@ pub fn handle_escape(app: &mut App) {
     close(app);
 }
 
+fn is_close_event(event: &ParsedInput) -> bool {
+    matches!(
+        event,
+        ParsedInput::Byte(b'q' | b'Q' | 0x1B) | ParsedInput::Char('q' | 'Q')
+    )
+}
+
 fn close(app: &mut App) {
     app.show_profile_modal = false;
     app.profile_modal_state.close();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_keys_include_printable_q_variants() {
+        assert!(is_close_event(&ParsedInput::Char('q')));
+        assert!(is_close_event(&ParsedInput::Char('Q')));
+        assert!(is_close_event(&ParsedInput::Byte(b'q')));
+        assert!(is_close_event(&ParsedInput::Byte(b'Q')));
+        assert!(is_close_event(&ParsedInput::Byte(0x1B)));
+        assert!(!is_close_event(&ParsedInput::Char('j')));
+    }
 }
