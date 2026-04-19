@@ -7,9 +7,18 @@ pub(super) const DEFAULT_SSH_TARGET: &str = "late.sh";
 pub(super) const DEFAULT_AUDIO_BASE_URL: &str = "https://audio.late.sh";
 pub(super) const DEFAULT_API_BASE_URL: &str = "https://api.late.sh";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SshMode {
+    Subprocess,
+    Native,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct Config {
     pub(super) ssh_target: String,
+    pub(super) ssh_port: Option<u16>,
+    pub(super) ssh_user: Option<String>,
+    pub(super) ssh_mode: SshMode,
     pub(super) ssh_bin: Vec<String>,
     pub(super) audio_base_url: String,
     pub(super) api_base_url: String,
@@ -20,6 +29,20 @@ impl Config {
     pub(super) fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self> {
         let mut ssh_target =
             env::var("LATE_SSH_TARGET").unwrap_or_else(|_| DEFAULT_SSH_TARGET.to_string());
+        let mut ssh_port = env::var("LATE_SSH_PORT")
+            .ok()
+            .map(|value| value.parse())
+            .transpose()
+            .context("invalid LATE_SSH_PORT")?;
+        let mut ssh_user = env::var("LATE_SSH_USER")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let mut ssh_mode = env::var("LATE_SSH_MODE")
+            .ok()
+            .map(|value| SshMode::parse(&value))
+            .transpose()?
+            .unwrap_or(SshMode::Subprocess);
         let mut ssh_bin =
             parse_ssh_bin_spec(&env::var("LATE_SSH_BIN").unwrap_or_else(|_| "ssh".to_string()))?;
         let mut audio_base_url =
@@ -32,6 +55,23 @@ impl Config {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--ssh-target" => ssh_target = next_value(&mut args, "--ssh-target")?,
+                "--ssh-port" => {
+                    ssh_port = Some(
+                        next_value(&mut args, "--ssh-port")?
+                            .parse()
+                            .context("invalid value for --ssh-port")?,
+                    )
+                }
+                "--ssh-user" => {
+                    let value = next_value(&mut args, "--ssh-user")?;
+                    if value.trim().is_empty() {
+                        anyhow::bail!("--ssh-user cannot be blank");
+                    }
+                    ssh_user = Some(value);
+                }
+                "--ssh-mode" => {
+                    ssh_mode = SshMode::parse(&next_value(&mut args, "--ssh-mode")?)?;
+                }
                 "--ssh-bin" => ssh_bin = parse_ssh_bin_spec(&next_value(&mut args, "--ssh-bin")?)?,
                 "--audio-base-url" => audio_base_url = next_value(&mut args, "--audio-base-url")?,
                 "--api-base-url" => api_base_url = next_value(&mut args, "--api-base-url")?,
@@ -46,6 +86,9 @@ impl Config {
 
         Ok(Self {
             ssh_target,
+            ssh_port,
+            ssh_user,
+            ssh_mode,
             ssh_bin,
             audio_base_url,
             api_base_url,
@@ -83,6 +126,9 @@ fn print_help() {
          \n\
          Options:\n\
            --ssh-target <host>        SSH target (default: late.sh)\n\
+           --ssh-port <port>          SSH port override\n\
+           --ssh-user <user>          SSH username override\n\
+           --ssh-mode <mode>          SSH transport: subprocess or native\n\
            --ssh-bin <command>        SSH client command, including optional args (default: ssh)\n\
            --audio-base-url <url>     Audio base URL, without or with /stream\n\
            --api-base-url <url>       API base URL used for /api/ws/pair\n\
@@ -101,6 +147,16 @@ fn parse_ssh_bin_spec(spec: &str) -> Result<Vec<String>> {
     Ok(parts)
 }
 
+impl SshMode {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "subprocess" => Ok(Self::Subprocess),
+            "native" => Ok(Self::Native),
+            other => anyhow::bail!("invalid ssh mode '{other}'; expected 'subprocess' or 'native'"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +167,11 @@ mod tests {
             parse_ssh_bin_spec("ssh -p 2222").unwrap(),
             vec!["ssh".to_string(), "-p".to_string(), "2222".to_string()]
         );
+    }
+
+    #[test]
+    fn ssh_mode_parser_accepts_supported_values() {
+        assert_eq!(SshMode::parse("subprocess").unwrap(), SshMode::Subprocess);
+        assert_eq!(SshMode::parse("native").unwrap(), SshMode::Native);
     }
 }

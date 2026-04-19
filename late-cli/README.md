@@ -39,7 +39,10 @@ That's it. On first run it will generate a dedicated SSH key at `~/.ssh/id_late_
 
 ```
 --ssh-target <host>        SSH target (default: late.sh)
---ssh-bin <command>        SSH client command (default: ssh)
+--ssh-port <port>          SSH port override
+--ssh-user <user>          SSH username override
+--ssh-mode <mode>          SSH transport: subprocess or native
+--ssh-bin <command>        SSH client command (subprocess mode only, default: ssh)
 --audio-base-url <url>     Audio stream URL
 --api-base-url <url>       API URL for WebSocket pairing
 -v, --verbose              Debug logging to stderr
@@ -48,9 +51,12 @@ That's it. On first run it will generate a dedicated SSH key at `~/.ssh/id_late_
 ## Requirements
 
 - Linux or macOS (WSL works too)
-- `ssh` client
 - Working audio output device
 - Rust toolchain (if building from source)
+
+`--ssh-mode subprocess` keeps the old behavior and still depends on a system `ssh` binary.
+`--ssh-mode native` uses an embedded `russh` client, records host keys in `~/.ssh/known_hosts`
+with accept-new semantics, and does not require OpenSSH on `$PATH`.
 
 If your audio device does not support the stream's native `44.1 kHz` output rate, the CLI now falls back to a supported device rate such as `48 kHz` and resamples locally. Native `44.1 kHz` playback is still preferred when available.
 

@@ -19,9 +19,8 @@ mod ws;
 use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
 use identity::ensure_client_identity;
-use pty::forward_resize_events;
 use raw_mode::RawModeGuard;
-use ssh::{SshExit, SshProcess, flush_stdin_input_queue, spawn_ssh};
+use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
 use ws::run_viz_ws;
 
 #[tokio::main]
@@ -43,8 +42,7 @@ async fn main() -> Result<()> {
     info!("starting ssh session");
     let (token_tx, token_rx) = oneshot::channel();
     let SshProcess {
-        mut child,
-        mut output_task,
+        completion_task,
         input_task,
         resize_handle,
         input_gate,
@@ -98,56 +96,17 @@ async fn main() -> Result<()> {
         }
     });
 
-    let mut stdout_result = None;
-    let mut stdout_task_consumed = false;
-    let status = match tokio::select! {
-        status = child.wait() => {
-            let status = status.context("ssh process failed to exit cleanly")?;
-            SshExit::Process(status)
-        }
-        stdout = &mut output_task => {
-            stdout_task_consumed = true;
-            match stdout {
-                Ok(Ok(())) => {
-                    info!("ssh stdout closed; treating session as ended");
-                    stdout_result = Some(Ok(Ok(())));
-                }
-                Ok(Err(err)) => return Err(err.context("ssh stdout forwarding failed")),
-                Err(err) => return Err(anyhow::anyhow!("ssh stdout task join failed: {err}")),
-            }
-            SshExit::StdoutClosed
-        }
-    } {
-        SshExit::Process(status) => {
-            info!(%status, "ssh session exited");
-            Some(status)
-        }
-        SshExit::StdoutClosed => {
-            if let Err(err) = child.start_kill() {
-                debug!(error = ?err, "failed to kill lingering ssh wrapper after stdout closed");
-            }
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
-            None
-        }
+    let ssh_exit = match completion_task.await {
+        Ok(result) => result?,
+        Err(err) => return Err(anyhow::anyhow!("ssh session task join failed: {err}")),
     };
 
     audio.stop.store(true, Ordering::Relaxed);
     resize_task.abort();
     input_task.abort();
     ws_task.abort();
-    if !stdout_task_consumed && output_task.is_finished() {
-        stdout_result = Some(output_task.await);
-    } else if !stdout_task_consumed {
-        output_task.abort();
-        let _ = output_task.await;
-    }
-
-    if let Some(status) = status {
-        let stdout_closed_cleanly = matches!(stdout_result, Some(Ok(Ok(()))));
-        if !(status.success() || status.code() == Some(255) && stdout_closed_cleanly) {
-            anyhow::bail!("ssh exited with status {status}");
-        }
-    }
+    debug!(?ssh_exit, "ssh session ended");
+    ssh_exit.ensure_success()?;
 
     Ok(())
 }
