@@ -52,7 +52,12 @@ const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 ))]
 #[cfg(unix)]
 const TIOCSCTTY_IOCTL_REQUEST: libc::c_ulong = libc::TIOCSCTTY as libc::c_ulong;
+#[cfg(any(target_os = "android", target_env = "musl"))]
+#[cfg(unix)]
+const TIOCSCTTY_IOCTL_REQUEST: libc::c_int = libc::TIOCSCTTY;
 #[cfg(not(any(
+    target_os = "android",
+    target_env = "musl",
     target_os = "macos",
     target_os = "ios",
     target_os = "freebsd",
