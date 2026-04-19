@@ -3,7 +3,8 @@
 mod helpers;
 
 use helpers::{
-    make_app, make_app_with_chat_service, new_test_db, wait_for_render_contains, wait_until,
+    chat_compose_app, make_app, make_app_with_chat_service, new_test_db, render_plain,
+    wait_for_render_contains, wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -12,6 +13,7 @@ use late_core::models::{
     user::User,
 };
 use late_core::test_utils::create_test_user;
+use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;
 
@@ -39,7 +41,7 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
     app.handle_input(b"i");
     wait_for_render_contains(
         &mut app,
-        "Compose (Enter send, Alt+Enter newline, Esc cancel)",
+        "Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel)",
     )
     .await;
 
@@ -68,6 +70,32 @@ async fn screen_number_keys_switch_between_dashboard_games_and_chat() {
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"1");
+    wait_for_render_contains(&mut app, " Dashboard ").await;
+}
+
+#[tokio::test]
+async fn shift_tab_cycles_screens_backwards() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "screen-backtab-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Profile ").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " The Arcade ").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+
+    app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Dashboard ").await;
 }
 
@@ -133,7 +161,7 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     wait_for_render_contains(&mut app, "2hey").await;
     wait_for_render_contains(
         &mut app,
-        "Compose (Enter send, Alt+Enter newline, Esc cancel)",
+        "Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel)",
     )
     .await;
 
@@ -142,6 +170,56 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     // end up composing "2hey\n" instead of submitting.
     app.handle_input(b"\r");
     wait_for_render_contains(&mut app, "Compose (press i)").await;
+}
+
+#[rstest]
+#[case::cyrillic("cyrillic", "тест")]
+#[case::han("han", "漢字")]
+#[case::latin_diacritic("accented", "café")]
+#[case::greek("greek", "αβγ")]
+#[tokio::test]
+async fn chat_compose_accepts_non_ascii_typing(#[case] label: &str, #[case] input: &str) {
+    let (_db, mut app) = chat_compose_app(&format!("utf8-{label}")).await;
+    app.handle_input(input.as_bytes());
+    wait_for_render_contains(&mut app, input).await;
+}
+
+#[tokio::test]
+async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
+    let (_db, mut app) = chat_compose_app("alt-backspace-split").await;
+
+    app.handle_input(b"one two");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("one") && frame.contains("two"),
+        "expected compose render to show the initial text; frame={frame:?}"
+    );
+
+    // Simulate a terminal splitting Alt+Backspace across reads: lone ESC
+    // first, then DEL on the next input chunk.
+    app.handle_input(b"\x1b");
+    app.handle_input(b"\x7f");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("one"),
+        "expected split Alt+Backspace to keep the preceding word; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("two"),
+        "expected split Alt+Backspace to delete the previous word; frame={frame:?}"
+    );
+
+    // Plain Backspace must still work after the word-delete chord.
+    app.handle_input(b"\x7f!");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("on!"),
+        "expected composer to keep accepting backspace and text after Alt+Backspace split; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("two"),
+        "expected Alt+Backspace split read to delete the previous word; frame={frame:?}"
+    );
 }
 
 #[tokio::test]
@@ -185,7 +263,8 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     wait_for_render_contains(&mut app, " Rooms (h/l)").await;
 
     app.handle_input(b"i/help\r");
-    wait_for_render_contains(&mut app, "Chat Help").await;
+    wait_for_render_contains(&mut app, " Guide ").await;
+    wait_for_render_contains(&mut app, " Chat ").await;
     wait_for_render_contains(&mut app, "/ignore [@user]").await;
 
     let messages = ChatMessage::list_recent(&client, general.id, 20)

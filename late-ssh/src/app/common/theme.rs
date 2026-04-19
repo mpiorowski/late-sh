@@ -18,6 +18,7 @@ pub struct ThemeOption {
 
 #[derive(Clone, Copy)]
 struct Palette {
+    bg_canvas: Color,
     bg_selection: Color,
     bg_highlight: Color,
     border_dim: Color,
@@ -65,6 +66,7 @@ pub const OPTIONS: &[ThemeOption] = &[
 ];
 
 const PALETTE_LATE: Palette = Palette {
+    bg_canvas: Color::Rgb(0, 0, 0),
     bg_selection: Color::Rgb(30, 25, 22),
     bg_highlight: Color::Rgb(40, 33, 28),
     border_dim: Color::Rgb(50, 42, 36),
@@ -94,6 +96,7 @@ const PALETTE_LATE: Palette = Palette {
 };
 
 const PALETTE_CONTRAST: Palette = Palette {
+    bg_canvas: Color::Rgb(42, 44, 52),
     bg_selection: Color::Rgb(26, 30, 38),
     bg_highlight: Color::Rgb(34, 40, 50),
     border_dim: Color::Rgb(74, 84, 98),
@@ -123,6 +126,7 @@ const PALETTE_CONTRAST: Palette = Palette {
 };
 
 const PALETTE_PURPLE: Palette = Palette {
+    bg_canvas: Color::Rgb(55, 57, 76),
     bg_selection: Color::Rgb(44, 26, 66),
     bg_highlight: Color::Rgb(58, 35, 84),
     border_dim: Color::Rgb(92, 72, 122),
@@ -203,6 +207,23 @@ fn current_palette() -> &'static Palette {
         ThemeKind::Purple => &PALETTE_PURPLE,
         ThemeKind::Late => &PALETTE_LATE,
     })
+}
+
+#[allow(non_snake_case)]
+pub fn BG_CANVAS() -> Color {
+    current_palette().bg_canvas
+}
+
+pub fn color_to_hex(color: Color) -> String {
+    match color {
+        Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
+        Color::Black => "#000000".to_string(),
+        Color::DarkGray => "#545454".to_string(),
+        Color::Gray => "#a8a8a8".to_string(),
+        Color::White => "#ffffff".to_string(),
+        // Fallback for others; dynamic themes primarily use Rgb
+        _ => "#000000".to_string(),
+    }
 }
 
 #[allow(non_snake_case)]

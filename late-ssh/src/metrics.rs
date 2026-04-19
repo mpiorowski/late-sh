@@ -41,6 +41,18 @@ mod inner {
         })
     }
 
+    fn ws_pair_rejected_unknown_token_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_ws_pair_rejected_unknown_token_total")
+                .with_description(
+                    "Websocket pair attempts rejected because no live session owned the token",
+                )
+                .build()
+        })
+    }
+
     fn render_frame_drops_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -93,6 +105,10 @@ mod inner {
         ws_pair_success_total().add(1, &[]);
     }
 
+    pub fn record_ws_pair_rejected_unknown_token() {
+        ws_pair_rejected_unknown_token_total().add(1, &[]);
+    }
+
     pub fn record_render_frame_drop() {
         render_frame_drops_total().add(1, &[]);
     }
@@ -115,6 +131,7 @@ mod inner {
     pub fn record_ssh_connection() {}
     pub fn add_ssh_session(_delta: i64) {}
     pub fn record_ws_pair_success() {}
+    pub fn record_ws_pair_rejected_unknown_token() {}
     pub fn record_render_frame_drop() {}
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}

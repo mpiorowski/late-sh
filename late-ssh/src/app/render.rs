@@ -19,9 +19,10 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar},
         theme,
     },
-    dashboard, icon_picker, profile,
+    dashboard, help_modal, icon_picker, profile, profile_modal,
     state::App,
     visualizer::Visualizer,
+    welcome_modal,
 };
 use crate::session::ClientAudioState;
 
@@ -36,14 +37,16 @@ fn sanitize_notification_field(input: &str) -> String {
         .collect()
 }
 
-fn desktop_notification_bytes(title: &str, body: &str) -> Vec<u8> {
+fn desktop_notification_bytes(title: &str, body: &str, bell: bool) -> Vec<u8> {
     // OSC 777 carries (title, body) separately — kitty, Ghostty, rxvt-unicode,
     // foot, wezterm, konsole. OSC 9 is iTerm2's single-string variant and acts
     // as a fallback for terminals that don't parse 777. Terminals that don't
     // recognize either sequence silently drop it.
     let title = sanitize_notification_field(title);
     let body = sanitize_notification_field(body);
-    format!("\x1b]777;notify;{title};{body}\x1b\\\x1b]9;{title}: {body}\x1b\\").into_bytes()
+
+    let bell = if bell { "\x07" } else { "" };
+    format!("\x1b]777;notify;{title};{body}\x1b\\\x1b]9;{title}: {body}\x1b\\{bell}").into_bytes()
 }
 
 struct DrawContext<'a> {
@@ -68,11 +71,13 @@ struct DrawContext<'a> {
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     activity: &'a std::collections::VecDeque<crate::state::ActivityEvent>,
     banner: Option<&'a Banner>,
-    username: &'a str,
     is_admin: bool,
     show_welcome: bool,
+    welcome_modal_state: &'a welcome_modal::state::WelcomeModalState,
+    show_profile_modal: bool,
+    profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_help: bool,
-    help_scroll: u16,
+    help_modal_state: &'a help_modal::state::HelpModalState,
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
@@ -86,15 +91,49 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Init theme and layout sync — preview welcome-modal draft live while open.
+        let active_theme_id = if self.show_welcome {
+            self.welcome_modal_state
+                .draft()
+                .theme_id
+                .clone()
+                .unwrap_or_else(|| self.profile_state.theme_id().to_string())
+        } else {
+            self.profile_state.theme_id().to_string()
+        };
+        theme::set_current_by_id(&active_theme_id);
+
         // Keep composer text width in sync for cursor up/down navigation.
         // outer border(2) + sidebar(24) + chat-block border(2) + composer padding(3) = 31
         self.chat
             .set_composer_text_width(self.size.0.saturating_sub(31).max(1) as usize);
         self.chat.sync_composer_layout();
 
+        // Synchronize terminal background color with theme bg_canvas if enabled
+        let enabled = if self.show_welcome {
+            self.welcome_modal_state.draft().enable_background_color
+        } else {
+            self.profile_state.profile().enable_background_color
+        };
+        let current_bg = if enabled {
+            Some(theme::BG_CANVAS())
+        } else {
+            None
+        };
+
+        if current_bg != self.last_terminal_bg {
+            let cmd = if let Some(color) = current_bg {
+                let hex = theme::color_to_hex(color);
+                format!("\x1b]11;{}\x1b\\", hex).into_bytes()
+            } else {
+                b"\x1b]111\x1b\\".to_vec()
+            };
+            self.pending_terminal_commands.push(cmd);
+            self.last_terminal_bg = current_bg;
+        }
+
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let screen = self.screen;
-        theme::set_current_by_id(self.profile_state.theme_id());
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
             .as_mut()
@@ -109,6 +148,7 @@ impl App {
         let visualizer = &self.visualizer;
         let paired_client_state = self.paired_client_state();
         let chat_usernames = self.chat.usernames();
+        let chat_countries = self.chat.countries();
         let chat_badges = self.leaderboard.badges();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let dashboard_view = dashboard::ui::DashboardRenderInput {
@@ -122,12 +162,13 @@ impl App {
                 overlay: self.chat.overlay(),
                 rows_cache: &mut self.dashboard_chat_rows_cache,
                 usernames: chat_usernames,
+                countries: chat_countries,
                 badges: &chat_badges,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
-                composer: self.chat.composer.as_str(),
+                composer: self.chat.composer_text(),
                 composer_rows: self.chat.composer_rows(),
-                composer_cursor: self.chat.composer_cursor,
+                composer_cursor: self.chat.composer_cursor(),
                 composing: self.chat.composing,
                 cursor_visible: self.chat.cursor_visible(),
                 mention_matches: &self.chat.mention_ac.matches,
@@ -154,14 +195,16 @@ impl App {
             chat_rooms: self.chat.rooms.as_slice(),
             overlay: self.chat.overlay(),
             usernames: chat_usernames,
+            countries: chat_countries,
             badges: &chat_badges,
             unread_counts: &self.chat.unread_counts,
             selected_room_id: self.chat.selected_room_id,
+            room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
             highlighted_message_id: self.chat.highlighted_message_id,
-            composer: self.chat.composer.as_str(),
+            composer: self.chat.composer_text(),
             composer_rows: self.chat.composer_rows(),
-            composer_cursor: self.chat.composer_cursor,
+            composer_cursor: self.chat.composer_cursor(),
             composing: self.chat.composing,
             current_user_id: self.user_id,
             cursor_visible: self.chat.cursor_visible(),
@@ -189,20 +232,15 @@ impl App {
             .unwrap_or(0);
         let profile_view = profile::ui::ProfileRenderInput {
             profile: self.profile_state.profile(),
-            editing_username: self.profile_state.editing_username(),
-            username_composer: self.profile_state.username_composer(),
             ai_model: self.profile_state.ai_model(),
-            theme_id: self.profile_state.theme_id(),
             scroll_offset: self.profile_state.scroll_offset(),
             current_streak: user_streak,
             chip_balance: self.chip_balance,
             tetris_best: self.tetris_state.best_score,
             twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
-            cursor_visible: self.profile_state.cursor_visible(),
-            notify_kinds: &self.profile_state.profile().notify_kinds,
-            notify_cooldown_mins: self.profile_state.profile().notify_cooldown_mins,
-            settings_row: self.profile_state.settings_row,
         };
+        self.welcome_modal_state
+            .set_modal_width(welcome_modal::ui::MODAL_WIDTH);
         let online_count = self
             .active_users
             .as_ref()
@@ -238,11 +276,13 @@ impl App {
                         bonsai: &self.bonsai_state,
                         activity: &self.activity,
                         banner: banner.as_ref(),
-                        username: &self.profile_state.profile().username,
                         is_admin: self.is_admin,
                         show_welcome: self.show_welcome,
+                        welcome_modal_state: &self.welcome_modal_state,
+                        show_profile_modal: self.show_profile_modal,
+                        profile_modal_state: &self.profile_modal_state,
                         show_help: self.show_help,
-                        help_scroll: self.help_scroll,
+                        help_modal_state: &self.help_modal_state,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
@@ -267,7 +307,7 @@ impl App {
         }
 
         // Emit OSC 777/OSC 9 desktop notifications for pending chat events.
-        // Kind strings ("dms", "mentions", …) must match profiles.notify_kinds.
+        // Kind strings ("dms", "mentions", …) must match users.settings.notify_kinds.
         if !self.chat.pending_notifications.is_empty() {
             let profile = self.profile_state.profile();
             let enabled_kinds = profile.notify_kinds.clone();
@@ -290,7 +330,8 @@ impl App {
                     body = notif.body,
                     "emitting desktop notification"
                 );
-                let payload = desktop_notification_bytes(&notif.title, &notif.body);
+                let payload =
+                    desktop_notification_bytes(&notif.title, &notif.body, profile.notify_bell);
                 self.pending_terminal_commands.push(payload);
                 self.last_notify_at = Some(std::time::Instant::now());
             } else {
@@ -473,18 +514,15 @@ impl App {
         }
 
         if ctx.show_welcome {
-            draw_welcome_overlay(frame, inner, ctx.username);
+            welcome_modal::ui::draw(frame, inner, ctx.welcome_modal_state);
+        }
+
+        if ctx.show_profile_modal {
+            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
         }
 
         if ctx.show_help {
-            draw_help_overlay(
-                frame,
-                inner,
-                screen,
-                ctx.game_selection,
-                ctx.is_playing_game,
-                ctx.help_scroll,
-            );
+            help_modal::ui::draw(frame, inner, ctx.help_modal_state);
         }
 
         if ctx.show_web_chat_qr
@@ -506,365 +544,23 @@ impl App {
     }
 }
 
-fn draw_help_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    _screen: Screen,
-    _game_selection: usize,
-    _is_playing_game: bool,
-    help_scroll: u16,
-) {
-    use ratatui::style::Modifier;
-    use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Clear, Paragraph};
-
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let faint = Style::default().fg(theme::TEXT_FAINT());
-    let muted = Style::default().fg(theme::TEXT_MUTED());
-    let bold_amber = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-    let key_s = Style::default().fg(theme::AMBER_DIM());
-    let desc_s = Style::default().fg(theme::TEXT());
-
-    let col_w: u16 = 34;
-
-    let key = |k: &str, d: &str| -> Line<'static> {
-        Line::from(vec![
-            Span::styled(format!("  {:<10}", k), key_s),
-            Span::styled(d.to_string(), desc_s),
-        ])
-    };
-
-    let section = |label: &str| -> Line<'static> {
-        Line::from(vec![
-            Span::styled("  ", faint),
-            Span::styled(label.to_string(), bold_amber),
-        ])
-    };
-
-    let divider = |w: u16| -> Line<'static> {
-        Line::from(Span::styled(
-            format!("  {}", "─".repeat((w as usize).saturating_sub(4))),
-            faint,
-        ))
-    };
-
-    let hint =
-        |text: &str| -> Line<'static> { Line::from(Span::styled(format!("  {text}"), muted)) };
-
-    // ── Left column ──
-    let left = vec![
-        Line::from(""),
-        section("Global"),
-        divider(col_w),
-        key("Tab", "next screen"),
-        key("1-4", "jump to screen"),
-        key("m", "mute paired"),
-        key("+ / -", "volume"),
-        key("p", "pair audio (QR)"),
-        key("?", "this help"),
-        key("q", "quit"),
-        Line::from(""),
-        section("Dashboard"),
-        divider(col_w),
-        key("i", "compose chat"),
-        key("Enter", "copy CLI cmd"),
-        Line::from(""),
-        section("Chat"),
-        divider(col_w),
-        key("h / l", "switch room"),
-        key("i", "compose"),
-        key("/help", "commands"),
-        key("/music", "music setup"),
-        key("/active", "active users"),
-        key("/list", "private room users"),
-        Line::from(""),
-        section("Profile"),
-        divider(col_w),
-        key("j / k", "navigate"),
-        key("i", "edit username"),
-        key("Space", "toggle"),
-    ];
-
-    // ── Right column ──
-    let right = vec![
-        Line::from(""),
-        section("Bonsai"),
-        divider(col_w),
-        key("w", "water / replant"),
-        key("x", "prune (reshape)"),
-        key("s", "copy to clipboard"),
-        Line::from(""),
-        hint("Water daily to grow."),
-        hint("Grows while connected."),
-        hint("7 days dry = dies."),
-        hint("Prune costs 20% growth"),
-        hint("but changes tree shape."),
-        Line::from(""),
-        section("News"),
-        divider(col_w),
-        key("j / k", "navigate"),
-        key("i", "paste / share URL"),
-        key("Enter", "submit / copy URL"),
-        key("Esc", "cancel URL entry"),
-        key("d", "delete (own)"),
-        Line::from(""),
-        section("The Arcade"),
-        divider(col_w),
-        key("j / k", "browse"),
-        key("Enter", "play"),
-        key("Esc", "exit game"),
-        hint("Game keys in info panel."),
-    ];
-
-    let row_count = left.len().max(right.len());
-    let total_w = (col_w * 2 + 1).min(area.width.saturating_sub(4));
-    let total_h = ((row_count + 4) as u16).min(area.height.saturating_sub(2));
-    let x = area.x + (area.width.saturating_sub(total_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(total_h)) / 2;
-    let popup_area = Rect::new(x, y, total_w, total_h);
-
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .title(Span::styled(
-            " Keybindings ",
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    // Content area: leave 1 row at bottom for footer
-    let content_area = Rect::new(
-        inner.x,
-        inner.y,
-        inner.width,
-        inner.height.saturating_sub(1),
-    );
-
-    // Two columns with a thin separator
-    let cols = Layout::horizontal([
-        Constraint::Length(col_w),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-    ])
-    .split(content_area);
-
-    // Vertical separator
-    let sep_lines: Vec<Line<'static>> = (0..cols[1].height)
-        .map(|_| Line::from(Span::styled("│", faint)))
-        .collect();
-    frame.render_widget(Paragraph::new(sep_lines), cols[1]);
-
-    let content_h = left.len().max(right.len()) as u16;
-    let visible_h = cols[0].height;
-    let max_scroll = content_h.saturating_sub(visible_h);
-    let scroll = help_scroll.min(max_scroll);
-
-    frame.render_widget(Paragraph::new(left).scroll((scroll, 0)), cols[0]);
-    frame.render_widget(Paragraph::new(right).scroll((scroll, 0)), cols[2]);
-
-    // Footer
-    let footer_area = Rect::new(
-        inner.x,
-        inner.y + inner.height.saturating_sub(1),
-        inner.width,
-        1,
-    );
-    let can_scroll = max_scroll > 0;
-    let mut footer = vec![
-        Span::styled("  press ", dim),
-        Span::styled("? ", Style::default().fg(theme::TEXT_MUTED())),
-        Span::styled("to close", dim),
-    ];
-    if can_scroll {
-        footer.push(Span::styled(
-            "  j/k ",
-            Style::default().fg(theme::TEXT_MUTED()),
-        ));
-        footer.push(Span::styled("scroll", dim));
-    }
-    frame.render_widget(Paragraph::new(Line::from(footer)).centered(), footer_area);
-}
-
-fn draw_welcome_overlay(frame: &mut Frame, area: Rect, username: &str) {
-    use ratatui::style::Modifier;
-    use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Clear, Paragraph, Wrap};
-
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let bold_cyan = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-    let white = Style::default().fg(theme::TEXT_BRIGHT());
-    let green = Style::default().fg(theme::SUCCESS());
-
-    let greeting = format!("Welcome back, @{username}.");
-
-    let lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  ", dim),
-            Span::styled(
-                greeting,
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(Span::styled(
-            "  A cozy terminal clubhouse for developers.",
-            white,
-        )),
-        Line::from(""),
-        // ── Music ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("Music", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    Lofi, ambient, classical & jazz streams.",
-            white,
-        )),
-        Line::from(vec![
-            Span::styled("    Listen via ", dim),
-            Span::styled("CLI", green),
-            Span::styled(" (recommended) or the ", dim),
-            Span::styled("web player", green),
-            Span::styled(".", dim),
-        ]),
-        Line::from(""),
-        // ── Chat ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("Chat", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    Hang out in rooms with other devs.",
-            white,
-        )),
-        Line::from(Span::styled(
-            "    Tied to your SSH key, same chats anywhere.",
-            dim,
-        )),
-        Line::from(""),
-        // ── Arcade ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("Arcade", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    2048, Tetris & daily puzzles with leaderboards.",
-            white,
-        )),
-        Line::from(Span::styled("    Multiplayer coming soon.", dim)),
-        Line::from(""),
-        // ── News ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("News", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    Share links and watch the community feed.",
-            white,
-        )),
-        Line::from(Span::styled(
-            "    Auto-generated summaries keep you in the loop.",
-            dim,
-        )),
-        Line::from(""),
-        // ── Your Identity ──
-        Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("Your Identity", bold_cyan),
-            Span::styled(" ──", dim),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    No passwords. No OAuth. No accounts.",
-            white,
-        )),
-        Line::from(Span::styled("    Your SSH key is your identity.", white)),
-        Line::from(""),
-        Line::from(Span::styled(
-            "    Chats, scores, leaderboards, badges, your bonsai,",
-            dim,
-        )),
-        Line::from(Span::styled(
-            "    all tied to your public key fingerprint.",
-            dim,
-        )),
-        Line::from(Span::styled("    Same key, same data anywhere.", dim)),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("    Back up ", dim),
-            Span::styled("~/.ssh/id_*", green),
-            Span::styled(" to keep your account.", dim),
-        ]),
-        Line::from(Span::styled(
-            "    Grab headphones, pick a vibe, build something.",
-            white,
-        )),
-        Line::from(""),
-        Line::from(Span::styled("    Want your music on late.sh?", white)),
-        Line::from(vec![
-            Span::styled("    Write to ", dim),
-            Span::styled("admin@dwarfforge.io", green),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Press any key to start.", dim)),
-        Line::from(""),
-    ];
-
-    let w = 64u16.min(area.width.saturating_sub(4));
-    let content_h = lines.len() as u16;
-    let h = (content_h + 2).min(area.height.saturating_sub(4));
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let popup_area = Rect::new(x, y, w, h);
-
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .title(" late.sh ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-}
-
 #[cfg(test)]
 mod tests {
     use super::desktop_notification_bytes;
 
     #[test]
     fn desktop_notification_bytes_emits_osc_777_and_osc_9_with_st_terminators() {
-        let got =
-            String::from_utf8(desktop_notification_bytes("DM title", "hello")).expect("valid utf8");
+        let got = String::from_utf8(desktop_notification_bytes("DM title", "hello", true))
+            .expect("valid utf8");
         assert_eq!(
             got,
-            "\x1b]777;notify;DM title;hello\x1b\\\x1b]9;DM title: hello\x1b\\"
+            "\x1b]777;notify;DM title;hello\x1b\\\x1b]9;DM title: hello\x1b\\\x07"
         );
     }
 
     #[test]
     fn desktop_notification_bytes_sanitize_control_bytes_and_separators() {
-        let got = String::from_utf8(desktop_notification_bytes("hey;\x07", "a\nb\x1bc"))
+        let got = String::from_utf8(desktop_notification_bytes("hey;\x07", "a\nb\x1bc", false))
             .expect("valid utf8");
         assert_eq!(
             got,

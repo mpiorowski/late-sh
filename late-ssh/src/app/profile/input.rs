@@ -2,69 +2,31 @@ use crate::app::state::App;
 
 pub fn handle_byte(app: &mut App, byte: u8) {
     match byte {
-        b'i' => app.profile_state.start_username_edit(),
-        b' ' | b'\r' => app.profile_state.cycle_setting(true),
+        b'e' | b'E' | b' ' | b'\r' => {
+            app.welcome_modal_state.open_from_profile(
+                app.profile_state.profile(),
+                crate::app::welcome_modal::ui::MODAL_WIDTH,
+            );
+            app.show_welcome = true;
+        }
+        b'j' | b'J' => app.profile_state.scroll_by(1),
+        b'k' | b'K' => app.profile_state.scroll_by(-1),
         _ => {}
     }
 }
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     match key {
-        // Left/Right = cycle the selected setting value
-        b'C' | b'D' => {
-            app.profile_state.cycle_setting(key == b'C');
-            true
-        }
-        // Up/Down = move between settings rows
         b'A' => {
-            app.profile_state.move_settings_row(-1);
+            app.profile_state.scroll_by(-1);
             true
         }
         b'B' => {
-            app.profile_state.move_settings_row(1);
+            app.profile_state.scroll_by(1);
             true
         }
         _ => false,
     }
 }
 
-pub fn handle_composer_input(app: &mut App, byte: u8) {
-    match byte {
-        b'\r' => app.profile_state.submit_username(),
-        0x1B => app.profile_state.cancel_username_edit(),
-        0x15 => app.profile_state.composer_clear(),
-        0x7F => app.profile_state.composer_backspace(),
-        b => {
-            if let Some(ch) = composer_char_from_byte(b) {
-                app.profile_state.composer_push(ch);
-            }
-        }
-    }
-}
-
-fn composer_char_from_byte(byte: u8) -> Option<char> {
-    if byte.is_ascii_graphic() || byte == b' ' {
-        Some(byte as char)
-    } else {
-        None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn composer_char_from_byte_accepts_graphics_and_space() {
-        assert_eq!(composer_char_from_byte(b'a'), Some('a'));
-        assert_eq!(composer_char_from_byte(b'9'), Some('9'));
-        assert_eq!(composer_char_from_byte(b' '), Some(' '));
-    }
-
-    #[test]
-    fn composer_char_from_byte_rejects_control_bytes() {
-        assert_eq!(composer_char_from_byte(0x00), None);
-        assert_eq!(composer_char_from_byte(0x1B), None);
-        assert_eq!(composer_char_from_byte(b'\n'), None);
-    }
-}
+pub fn handle_composer_input(_app: &mut App, _byte: u8) {}

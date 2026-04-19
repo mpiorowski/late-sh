@@ -4,7 +4,7 @@ use std::env;
 use tracing_subscriber::EnvFilter;
 
 pub(super) const DEFAULT_SSH_TARGET: &str = "late.sh";
-pub(super) const DEFAULT_AUDIO_BASE_URL: &str = "http://audio.late.sh";
+pub(super) const DEFAULT_AUDIO_BASE_URL: &str = "https://audio.late.sh";
 pub(super) const DEFAULT_API_BASE_URL: &str = "https://api.late.sh";
 
 #[derive(Debug, Clone)]

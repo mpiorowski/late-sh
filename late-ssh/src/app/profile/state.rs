@@ -1,4 +1,5 @@
 use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::user::sanitize_username_input;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -15,7 +16,6 @@ pub struct ProfileState {
     event_rx: broadcast::Receiver<ProfileEvent>,
     pub(crate) editing_username: bool,
     pub(crate) username_composer: String,
-    bg_task: tokio::task::AbortHandle,
 
     /// Which settings row is selected. Rows 0..NOTIFY_KINDS.len() are the
     /// kind checkboxes; the last row is the cooldown selector.
@@ -23,7 +23,6 @@ pub struct ProfileState {
 
     // Display config (informational)
     pub(crate) ai_model: String,
-    pub(crate) theme_id: String,
 
     // Scroll
     pub(crate) scroll_offset: u16,
@@ -32,7 +31,6 @@ pub struct ProfileState {
 
 impl Drop for ProfileState {
     fn drop(&mut self) {
-        self.bg_task.abort();
         self.profile_service
             .prune_user_snapshot_channel(self.user_id);
     }
@@ -47,19 +45,21 @@ impl ProfileState {
     ) -> Self {
         let snapshot_rx = profile_service.subscribe_snapshot(user_id);
         let event_rx = profile_service.subscribe_events();
-        let bg_task = profile_service.start_user_refresh_task(user_id);
+        profile_service.find_profile(user_id);
+        let profile = Profile {
+            theme_id: Some(theme::normalize_id(&initial_theme_id).to_string()),
+            ..Profile::default()
+        };
         Self {
             profile_service,
             user_id,
-            profile: Profile::default(),
+            profile,
             snapshot_rx,
             event_rx,
             editing_username: false,
             username_composer: String::new(),
-            bg_task,
-            settings_row: Self::notify_row_index(0),
+            settings_row: 0,
             ai_model,
-            theme_id: theme::normalize_id(&initial_theme_id).to_string(),
             scroll_offset: 0,
             viewport_height: 0,
         }
@@ -86,7 +86,10 @@ impl ProfileState {
     }
 
     pub fn theme_id(&self) -> &str {
-        &self.theme_id
+        self.profile
+            .theme_id
+            .as_deref()
+            .unwrap_or_else(|| theme::normalize_id(""))
     }
 
     pub fn scroll_offset(&self) -> u16 {
@@ -95,6 +98,11 @@ impl ProfileState {
 
     pub fn set_viewport_height(&mut self, h: u16) {
         self.viewport_height = h;
+    }
+
+    pub fn scroll_by(&mut self, delta: i16) {
+        let next = self.scroll_offset as i32 + delta as i32;
+        self.scroll_offset = next.clamp(0, u16::MAX as i32) as u16;
     }
 
     pub fn ensure_field_visible(&mut self, field_line: u16) {
@@ -151,12 +159,19 @@ impl ProfileState {
         0
     }
 
+    const BACKGROUND_COLOR_ROW: usize = 1;
+    const NOTIFY_START_ROW: usize = 2;
+
     fn notify_row_index(kind_idx: usize) -> usize {
-        Self::theme_row_index() + 1 + kind_idx
+        Self::NOTIFY_START_ROW + kind_idx
+    }
+
+    fn bell_row_index() -> usize {
+        Self::notify_row_index(Self::NOTIFY_KINDS.len())
     }
 
     fn cooldown_row_index() -> usize {
-        Self::notify_row_index(Self::NOTIFY_KINDS.len())
+        Self::bell_row_index() + 1
     }
 
     pub fn move_settings_row(&mut self, delta: isize) {
@@ -167,16 +182,27 @@ impl ProfileState {
     /// Cycle the currently selected setting and save immediately.
     pub fn cycle_setting(&mut self, forward: bool) {
         if self.settings_row == Self::theme_row_index() {
-            self.theme_id = theme::cycle_id(&self.theme_id, forward).to_string();
-            self.profile_service
-                .set_theme_id(self.user_id, self.theme_id.clone());
+            let current = self
+                .profile
+                .theme_id
+                .as_deref()
+                .unwrap_or_else(|| theme::normalize_id(""));
+            let next = theme::cycle_id(current, forward).to_string();
+            self.profile.theme_id = Some(next.clone());
+            self.profile_service.set_theme_id(self.user_id, next);
+        } else if self.settings_row == Self::BACKGROUND_COLOR_ROW {
+            self.profile.enable_background_color = !self.profile.enable_background_color;
+            self.save_profile();
         } else if self.settings_row == Self::cooldown_row_index() {
             self.profile.notify_cooldown_mins =
                 cycle_cooldown_value(self.profile.notify_cooldown_mins, forward);
             self.save_profile();
+        } else if self.settings_row == Self::bell_row_index() {
+            self.profile.notify_bell ^= true;
+            self.save_profile();
         } else if let Some(kind) = self
             .settings_row
-            .checked_sub(Self::theme_row_index() + 1)
+            .checked_sub(Self::NOTIFY_START_ROW)
             .and_then(|idx| Self::NOTIFY_KINDS.get(idx))
         {
             toggle_notify_kind(&mut self.profile.notify_kinds, kind);
@@ -187,13 +213,16 @@ impl ProfileState {
     fn save_profile(&self) {
         self.profile_service.edit_profile(
             self.user_id,
-            self.profile.id,
             ProfileParams {
-                user_id: self.user_id,
                 username: self.profile.username.clone(),
-                enable_ghost: self.profile.enable_ghost,
+                bio: self.profile.bio.clone(),
+                country: self.profile.country.clone(),
+                timezone: self.profile.timezone.clone(),
                 notify_kinds: self.profile.notify_kinds.clone(),
+                notify_bell: self.profile.notify_bell,
                 notify_cooldown_mins: self.profile.notify_cooldown_mins,
+                theme_id: Some(self.theme_id().to_string()),
+                enable_background_color: self.profile.enable_background_color,
             },
         );
     }
@@ -212,13 +241,11 @@ impl ProfileState {
                     return;
                 }
                 let profile = snapshot.profile.clone();
-                let theme_id = snapshot.theme_id.clone();
                 drop(snapshot);
-                if let Some(profile) = profile {
+                if let Some(mut profile) = profile {
+                    let normalized = theme::normalize_id(profile.theme_id.as_deref().unwrap_or(""));
+                    profile.theme_id = Some(normalized.to_string());
                     self.profile = profile;
-                }
-                if let Some(theme_id) = theme_id {
-                    self.theme_id = theme::normalize_id(&theme_id).to_string();
                 }
             }
             Ok(false) => (),
@@ -260,10 +287,15 @@ const COOLDOWN_OPTIONS: &[i32] = &[0, 1, 2, 5, 10, 15, 30, 60, 120, 240];
 /// after trimming or unchanged from the current value.
 fn normalize_username_submission(composer: &str, current: &str) -> Option<String> {
     let trimmed = composer.trim();
-    if trimmed.is_empty() || trimmed == current {
+    if trimmed.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        let normalized = sanitize_username_input(trimmed);
+        if normalized == current {
+            None
+        } else {
+            Some(normalized)
+        }
     }
 }
 
@@ -313,6 +345,14 @@ mod tests {
     }
 
     #[test]
+    fn normalize_username_submission_replaces_spaces_and_invalid_chars() {
+        assert_eq!(
+            normalize_username_submission("  late night!!!  ", "old"),
+            Some("late_night".to_string())
+        );
+    }
+
+    #[test]
     fn normalize_username_submission_skips_when_empty_after_trim() {
         assert_eq!(normalize_username_submission("", "old"), None);
         assert_eq!(normalize_username_submission("   ", "old"), None);
@@ -323,6 +363,7 @@ mod tests {
         assert_eq!(normalize_username_submission("alice", "alice"), None);
         // Trim then compare — whitespace-padded copy of current still skips.
         assert_eq!(normalize_username_submission("  alice ", "alice"), None);
+        assert_eq!(normalize_username_submission("alice!!!", "alice"), None);
     }
 
     #[test]
@@ -400,17 +441,17 @@ mod tests {
     }
 
     #[test]
-    fn theme_row_index_is_after_cooldown() {
+    fn theme_row_index_is_zero() {
         assert_eq!(ProfileState::theme_row_index(), 0);
     }
 
     #[test]
-    fn first_notify_row_follows_theme_row() {
-        assert_eq!(ProfileState::notify_row_index(0), 1);
+    fn first_notify_row_follows_background_color_row() {
+        assert_eq!(ProfileState::notify_row_index(0), 2);
     }
 
     #[test]
     fn cooldown_row_is_last_selectable_row() {
-        assert_eq!(ProfileState::cooldown_row_index(), 4);
+        assert_eq!(ProfileState::cooldown_row_index(), 6);
     }
 }

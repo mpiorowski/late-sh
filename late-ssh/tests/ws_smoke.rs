@@ -15,6 +15,17 @@ async fn ws_pair_endpoint_rate_limits_repeated_attempts_from_same_ip() {
     config.ws_pair_max_attempts_per_ip = 1;
     let state = test_app_state(test_db.db.clone(), config);
 
+    let (session_tx_one, _rx_one) = tokio::sync::mpsc::channel(1);
+    state
+        .session_registry
+        .register("tok-one".to_string(), session_tx_one)
+        .await;
+    let (session_tx_two, _rx_two) = tokio::sync::mpsc::channel(1);
+    state
+        .session_registry
+        .register("tok-two".to_string(), session_tx_two)
+        .await;
+
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind listener");
@@ -32,6 +43,28 @@ async fn ws_pair_endpoint_rate_limits_repeated_attempts_from_same_ip() {
         .await
         .expect("second ws upgrade");
     assert_eq!(second_status, 429);
+
+    api_task.abort();
+}
+
+#[tokio::test]
+async fn ws_pair_endpoint_rejects_unknown_token() {
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let api_task = tokio::spawn(async move {
+        let _ = run_api_server_with_listener(listener, state, None).await;
+    });
+
+    let status = ws_upgrade_status_with_retry(addr, "never-registered", 10)
+        .await
+        .expect("ws upgrade");
+    assert_eq!(status, 404);
 
     api_task.abort();
 }

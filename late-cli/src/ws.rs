@@ -68,10 +68,8 @@ pub(super) async fn run_viz_ws(
                     break;
                 };
                 match msg? {
-                    Message::Text(text) => {
-                        if apply_pair_control(&text, muted, volume_percent)? {
-                            send_client_state(&mut ws, muted, volume_percent).await?;
-                        }
+                    Message::Text(text) if apply_pair_control(&text, muted, volume_percent)? => {
+                        send_client_state(&mut ws, muted, volume_percent).await?;
                     }
                     Message::Close(_) => break,
                     _ => {}

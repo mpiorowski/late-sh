@@ -15,6 +15,7 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::profile::Profile;
 
 use crate::{
     app::{
@@ -23,11 +24,13 @@ use crate::{
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
         common::primitives::{Banner, Screen},
-        profile,
+        help_modal, profile,
         profile::svc::ProfileService,
+        profile_modal,
         visualizer::Visualizer,
         vote,
         vote::svc::{Genre, VoteService},
+        welcome_modal,
     },
     session::{
         ClientAudioState, PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry,
@@ -136,7 +139,8 @@ pub struct App {
     pub(crate) splash_ticks: usize,
     pub(crate) splash_hint: String,
     pub(crate) show_help: bool,
-    pub(crate) help_scroll: u16,
+    pub(crate) show_profile_modal: bool,
+    pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
     pub(crate) vt_input: crate::app::input::VtInputParser,
@@ -174,6 +178,8 @@ pub struct App {
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
+    pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
+    pub(crate) welcome_modal_state: welcome_modal::state::WelcomeModalState,
 
     /// Leaderboard
     pub(super) leaderboard_rx: Option<watch::Receiver<Arc<LeaderboardData>>>,
@@ -204,6 +210,9 @@ pub struct App {
 
     /// Last time a desktop notification was emitted (shared cooldown).
     pub(crate) last_notify_at: Option<Instant>,
+
+    /// Last background color sent to the terminal via OSC 11 (if any).
+    pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -347,6 +356,15 @@ impl App {
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        let initial_profile = Profile {
+            theme_id: Some(config.initial_theme_id.clone()),
+            ..Profile::default()
+        };
+        let mut welcome_modal_state = welcome_modal::state::WelcomeModalState::new(
+            config.profile_service.clone(),
+            config.user_id,
+        );
+        welcome_modal_state.open_from_profile(&initial_profile, welcome_modal::ui::MODAL_WIDTH);
 
         Ok(Self {
             running: true,
@@ -358,7 +376,8 @@ impl App {
             splash_ticks: 0,
             splash_hint,
             show_help: false,
-            help_scroll: 0,
+            show_profile_modal: false,
+            help_modal_state: help_modal::state::HelpModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
             vt_input: crate::app::input::VtInputParser::default(),
@@ -393,11 +412,15 @@ impl App {
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             profile_state: profile::state::ProfileState::new(
-                config.profile_service,
+                config.profile_service.clone(),
                 config.user_id,
                 config.ai_model,
                 config.initial_theme_id,
             ),
+            profile_modal_state: profile_modal::state::ProfileModalState::new(
+                config.profile_service.clone(),
+            ),
+            welcome_modal_state,
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
@@ -418,6 +441,7 @@ impl App {
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
+            last_terminal_bg: None,
         })
     }
 
@@ -478,13 +502,18 @@ impl App {
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
         // 1006h = SGR extended encoding (ESC[< sequences instead of legacy X11)
         // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~)
+        // OSC 11 = set background to black
         buf.extend_from_slice(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h");
         buf
     }
 
     pub fn leave_alt_screen() -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1000l");
+        // 2004l = disable bracketed paste
+        // 1006l = disable SGR mouse tracking
+        // 1000l = disable basic mouse tracking
+        // OSC 111 = reset terminal background color
+        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b]111\x1b\\");
         crossterm::execute!(buf, cursor::Show, terminal::LeaveAlternateScreen)
             .expect("failed to leave alt screen");
         buf

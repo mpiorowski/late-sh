@@ -37,6 +37,7 @@ pub struct ChatSnapshot {
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
     pub general_room_id: Option<Uuid>,
     pub usernames: HashMap<Uuid, String>,
+    pub countries: HashMap<Uuid, String>,
     pub unread_counts: HashMap<Uuid, i64>,
     pub all_usernames: Vec<String>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
@@ -207,6 +208,7 @@ impl ChatService {
         // the chat page has another room selected. Other non-selected rooms
         // ride on broadcasts + a backfill on first open per session.
         let usernames = User::list_all_username_map(client).await?;
+        let countries = User::list_all_country_map(client).await?;
         let mut all_usernames: Vec<String> = usernames.values().cloned().collect();
         all_usernames.sort();
         let ignored_user_ids = User::ignored_user_ids(client, user_id).await?;
@@ -242,6 +244,7 @@ impl ChatService {
             chat_rooms: rooms,
             general_room_id,
             usernames,
+            countries,
             unread_counts,
             all_usernames,
             bonsai_glyphs,

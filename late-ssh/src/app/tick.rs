@@ -39,6 +39,18 @@ impl App {
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
         }
+        if self.show_profile_modal {
+            self.profile_modal_state.tick();
+        }
+        if self.show_welcome
+            && self.welcome_modal_state.draft().username.is_empty()
+            && !self.profile_state.profile().username.is_empty()
+        {
+            self.welcome_modal_state.open_from_profile(
+                self.profile_state.profile(),
+                crate::app::welcome_modal::ui::MODAL_WIDTH,
+            );
+        }
 
         let mut updated = false;
         for msg in messages {

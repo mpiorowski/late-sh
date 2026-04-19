@@ -16,6 +16,6 @@ exec env \
   cargo run -p late-tools --bin late -- \
     --ssh-target "${LATE_PROD_SSH_TARGET:-late.sh}" \
     --api-base-url "${LATE_PROD_API_BASE_URL:-https://api.late.sh}" \
-    --audio-base-url "${LATE_PROD_AUDIO_BASE_URL:-http://audio.late.sh}" \
+    --audio-base-url "${LATE_PROD_AUDIO_BASE_URL:-https://audio.late.sh}" \
     --verbose \
     "$@"

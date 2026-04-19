@@ -1,3 +1,4 @@
+use crate::app::help_modal::data::HelpTopic;
 use crate::app::state::App;
 use uuid::Uuid;
 
@@ -20,17 +21,18 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
                 app.chat.ac_confirm();
                 return;
             }
-            _ => {} // fall through to normal handling
+            _ => {}
         }
     }
 
     match byte {
-        0x1B => {
-            app.chat.reset_composer();
-        }
+        0x1B => app.chat.reset_composer(),
         b'\r' | b'\n' => {
-            if let Some(b) = app.chat.submit_composer() {
+            if let Some(b) = app.chat.submit_composer(false) {
                 app.banner = Some(b);
+            }
+            if let Some(topic) = app.chat.take_requested_help_topic() {
+                open_help_modal(app, topic);
             }
         }
         0x15 => {
@@ -42,12 +44,18 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             app.chat.composer_backspace();
             app.chat.update_autocomplete();
         }
-        b if (32..127).contains(&b) => {
-            app.chat.composer_push(b as char);
-            app.chat.update_autocomplete();
-        }
         _ => {}
     }
+}
+
+fn open_help_modal(app: &mut App, topic: HelpTopic) {
+    app.help_modal_state.open(topic);
+    app.show_help = true;
+}
+
+pub fn handle_compose_char(app: &mut App, ch: char) {
+    app.chat.composer_push(ch);
+    app.chat.update_autocomplete();
 }
 
 pub fn handle_autocomplete_arrow(app: &mut App, key: u8) {
@@ -78,7 +86,7 @@ fn switch_room(app: &mut App, delta: isize) {
 }
 
 /// Shared message-list navigation and actions. Consumed by both the chat page
-/// and the dashboard card so that d/r/e/j/k/etc. behave identically on both
+/// and the dashboard card so that d/r/e/p/j/k/etc. behave identically on both
 /// screens and new message actions only need to be wired here.
 ///
 /// Returns true if the key was handled.
@@ -94,6 +102,7 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     // reap a run of your own messages with repeated presses.
     // `r` enters reply mode and drops the selection.
     // `e` enters edit mode and drops the selection.
+    // `p` opens a read-only profile modal for the selected author.
     match byte {
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message_in_room(room_id) {
@@ -102,8 +111,11 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         b'r' | b'R' => {
-            app.chat.begin_reply_to_selected_in_room(room_id);
-            app.chat.clear_message_selection();
+            if let Some(b) = app.chat.begin_reply_to_selected_in_room(room_id) {
+                app.banner = Some(b);
+            } else {
+                app.chat.clear_message_selection();
+            }
             return true;
         }
         b'e' | b'E' => {
@@ -113,6 +125,13 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 app.chat.clear_message_selection();
             }
             return true;
+        }
+        b'p' => {
+            if let Some((user_id, username)) = app.chat.selected_message_author_in_room(room_id) {
+                app.profile_modal_state.open(user_id, username);
+                app.show_profile_modal = true;
+                return true;
+            }
         }
         _ => {}
     }
@@ -179,6 +198,10 @@ pub fn handle_message_arrow_in_room(app: &mut App, room_id: Uuid, key: u8) -> bo
 }
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
+    if app.chat.room_jump_active {
+        app.chat.cancel_room_jump();
+        return true;
+    }
     if app.chat.notifications_selected {
         return super::notifications::input::handle_arrow(app, key);
     }
@@ -189,6 +212,29 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
+    if app.chat.room_jump_active {
+        match byte {
+            b' ' => {
+                app.chat.cancel_room_jump();
+                return true;
+            }
+            _ => {
+                let changed = app.chat.handle_room_jump_key(byte);
+                if changed {
+                    app.chat.reset_composer();
+                    app.chat.mark_selected_room_read();
+                    app.chat.request_list();
+                }
+                return true;
+            }
+        }
+    }
+
+    if byte == b' ' {
+        app.chat.activate_room_jump();
+        return true;
+    }
+
     if app.chat.notifications_selected {
         if is_next_room_key(byte) {
             switch_room(app, 1);

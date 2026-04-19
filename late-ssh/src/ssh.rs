@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
 use late_core::MutexRecover;
-use late_core::models::{
-    profile::Profile,
-    user::{User, UserParams},
-};
+use late_core::models::user::{User, UserParams, extract_theme_id};
 use russh::keys::PrivateKey;
 use russh::server::{Auth, Msg, Session};
 use russh::*;
@@ -14,11 +11,11 @@ use std::net::{IpAddr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{self, Duration};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{self, Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit};
+use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
@@ -32,6 +29,34 @@ const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
+
+/// World tick advances animations, game clocks, splash timer, visualizer
+/// decay, etc. Keeps the rate users see animations at before this commit.
+const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
+/// Minimum wall-clock gap between any two consecutive renders. Bounds the
+/// per-session render rate so that keystroke floods or other signal sources
+/// can't drive renders faster than this.
+const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
+
+/// Paired "there is unrendered input" flag + wakeup. `Notify` is just the
+/// alarm clock; `dirty` is the source of truth. `dirty` is written under the
+/// app mutex so any render that subsequently grabs the same mutex either
+/// already covered the input or will see `dirty = true` and know to render.
+/// Using `Notify` alone leaves a stored permit after a batched render,
+/// causing one spurious identical frame per typing burst.
+struct RenderSignal {
+    dirty: AtomicBool,
+    notify: Notify,
+}
+
+impl RenderSignal {
+    fn new() -> Self {
+        Self {
+            dirty: AtomicBool::new(false),
+            notify: Notify::new(),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Server {
@@ -59,6 +84,9 @@ struct ClientHandler {
     /// Session bindings
     channel: Option<Channel<Msg>>,
     app: Option<Arc<TokioMutex<crate::app::state::App>>>,
+    /// Signaled by input/resize paths to request an immediate (world-stateless)
+    /// render, so typed characters echo without waiting for the next world tick.
+    render_signal: Option<Arc<RenderSignal>>,
     cli_mode: bool,
     session_token: Option<String>,
 }
@@ -255,6 +283,7 @@ impl Server {
             over_limit,
             channel: None,
             app: None,
+            render_signal: None,
             cli_mode: false,
             session_token: None,
         }
@@ -720,6 +749,28 @@ impl russh::server::Handler for ClientHandler {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, data, session), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr, len = data.len()))]
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let command = String::from_utf8_lossy(data);
+        let preview: String = command.chars().take(128).collect();
+        tracing::info!(
+            command = %preview,
+            "rejecting exec request; only interactive shell is supported"
+        );
+        if let Err(e) = session.channel_failure(channel) {
+            tracing::error!(error = ?e, "exec channel_failure failed");
+        }
+        if let Err(e) = session.close(channel) {
+            tracing::error!(error = ?e, "exec channel close failed");
+        }
+        Ok(())
+    }
+
     #[tracing::instrument(skip(self, session), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
     async fn shell_request(
         &mut self,
@@ -741,27 +792,48 @@ impl russh::server::Handler for ClientHandler {
                 let banner = format!("{CLI_TOKEN_PREFIX}{token}\r\n");
                 let _ = timeout(
                     Duration::from_millis(50),
-                    handle.data(channel_id, CryptoVec::from(banner.into_bytes())),
+                    handle.data(channel_id, banner.into_bytes()),
                 )
                 .await;
             }
 
             let init = App::enter_alt_screen();
-            let _ = timeout(
-                Duration::from_millis(50),
-                handle.data(channel_id, CryptoVec::from(init)),
-            )
-            .await;
+            let _ = timeout(Duration::from_millis(50), handle.data(channel_id, init)).await;
 
             let app = Arc::clone(app);
             let frame_drop_log_every = self.state.config.frame_drop_log_every;
+            let signal = Arc::new(RenderSignal::new());
+            self.render_signal = Some(Arc::clone(&signal));
             tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(66));
-                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
+                world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                let mut previous_render: Option<Instant> = None;
+                let mut input_pending = false;
                 loop {
-                    interval.tick().await;
-                    match render_once(&app, &handle, channel_id, frame_drop_log_every).await {
+                    let advance_world = match next_render_action(
+                        &mut world_tick,
+                        &signal,
+                        &mut input_pending,
+                        previous_render,
+                    )
+                    .await
+                    {
+                        RenderAction::AdvanceWorld => true,
+                        RenderAction::Render => false,
+                        RenderAction::Skip => continue,
+                    };
+                    match render_once(
+                        &app,
+                        &handle,
+                        channel_id,
+                        frame_drop_log_every,
+                        advance_world,
+                        &signal,
+                    )
+                    .await
+                    {
                         Ok(should_quit) => {
+                            previous_render = Some(Instant::now());
                             if should_quit {
                                 tracing::debug!("app requested quit, closing connection");
                                 clean_disconnect(&handle, channel_id).await;
@@ -800,6 +872,12 @@ impl russh::server::Handler for ClientHandler {
                 clean_disconnect(&session.handle(), channel).await;
                 return Ok(());
             }
+            if let Some(signal) = self.render_signal.as_ref() {
+                signal.dirty.store(true, Ordering::Release);
+            }
+        }
+        if let Some(signal) = self.render_signal.as_ref() {
+            signal.notify.notify_one();
         }
         Ok(())
     }
@@ -851,8 +929,68 @@ impl russh::server::Handler for ClientHandler {
             if let Err(e) = app.resize(col_width as u16, row_height as u16) {
                 tracing::error!(error = ?e, "error resizing app");
             }
+            if let Some(signal) = self.render_signal.as_ref() {
+                signal.dirty.store(true, Ordering::Release);
+            }
+        }
+        if let Some(signal) = self.render_signal.as_ref() {
+            signal.notify.notify_one();
         }
         Ok(())
+    }
+}
+
+/// What the render loop should do next.
+#[derive(Debug, PartialEq, Eq)]
+enum RenderAction {
+    /// World tick fired — advance animations and render.
+    AdvanceWorld,
+    /// Input throttle elapsed — render without advancing world time.
+    Render,
+    /// No render this iteration; loop back to waiting.
+    Skip,
+}
+
+/// Picks the next action for the render loop. Three wake sources are polled
+/// `biased` so world tick wins on ties (avoids starving animations under a
+/// keystroke flood):
+///
+/// - `world_tick`: fires every [`WORLD_TICK_INTERVAL`]; advance animations +
+///   render + ship frame.
+/// - `sleep_until(prev + MIN_RENDER_GAP)`: the throttle window for a
+///   previously-noticed input has elapsed; render without advancing world
+///   time. Only armed when `input_pending` is true.
+/// - `signal.notify.notified()`: input/resize happened. Arm the throttle iff
+///   `dirty` is actually set — a stored permit from input already covered by
+///   an earlier render has `dirty == false` and is silently eaten here.
+async fn next_render_action(
+    world_tick: &mut tokio::time::Interval,
+    signal: &RenderSignal,
+    input_pending: &mut bool,
+    previous_render: Option<Instant>,
+) -> RenderAction {
+    tokio::select! {
+        biased;
+        _ = world_tick.tick() => {
+            // A world-tick render also satisfies any pending input render.
+            *input_pending = false;
+            RenderAction::AdvanceWorld
+        }
+        _ = tokio::time::sleep_until(
+            previous_render
+                .map(|t| t + MIN_RENDER_GAP)
+                .unwrap_or_else(Instant::now)
+                .into(),
+        ), if *input_pending => {
+            *input_pending = false;
+            RenderAction::Render
+        }
+        _ = signal.notify.notified(), if !*input_pending => {
+            if signal.dirty.load(Ordering::Acquire) {
+                *input_pending = true;
+            }
+            RenderAction::Skip
+        }
     }
 }
 
@@ -861,24 +999,27 @@ async fn render_once(
     handle: &russh::server::Handle,
     channel_id: ChannelId,
     frame_drop_log_every: u64,
+    advance_world: bool,
+    signal: &RenderSignal,
 ) -> anyhow::Result<bool> {
     let (frame, terminal_commands) = {
         let mut app = app.lock().await;
         if !app.running {
             return Ok(true);
         }
-        app.tick();
+        // Clear `dirty` under the same lock that gates input mutations.
+        // Any input arriving after we release the lock will re-set `dirty`
+        // and be picked up by a subsequent loop iteration.
+        signal.dirty.store(false, Ordering::Release);
+        if advance_world {
+            app.tick();
+        }
         let frame = app.render().context("rendering frame")?;
         let terminal_commands = std::mem::take(&mut app.pending_terminal_commands);
         (frame, terminal_commands)
     };
 
-    match timeout(
-        Duration::from_millis(50),
-        handle.data(channel_id, CryptoVec::from(frame)),
-    )
-    .await
-    {
+    match timeout(Duration::from_millis(50), handle.data(channel_id, frame)).await {
         Ok(Ok(())) => {}
         Ok(Err(err)) => {
             return Err(anyhow::anyhow!(
@@ -896,12 +1037,7 @@ async fn render_once(
     }
 
     for command in terminal_commands {
-        match timeout(
-            Duration::from_millis(50),
-            handle.data(channel_id, CryptoVec::from(command)),
-        )
-        .await
-        {
+        match timeout(Duration::from_millis(50), handle.data(channel_id, command)).await {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
                 return Err(anyhow::anyhow!(
@@ -924,14 +1060,10 @@ async fn render_once(
 
 async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId) {
     let exit = App::leave_alt_screen();
+    let _ = timeout(Duration::from_millis(50), handle.data(channel_id, exit)).await;
     let _ = timeout(
         Duration::from_millis(50),
-        handle.data(channel_id, CryptoVec::from(exit)),
-    )
-    .await;
-    let _ = timeout(
-        Duration::from_millis(50),
-        handle.data(channel_id, CryptoVec::from(EXIT_MESSAGE.as_bytes())),
+        handle.data(channel_id, EXIT_MESSAGE.as_bytes().to_vec()),
     )
     .await;
     let _ = handle.eof(channel_id).await;
@@ -952,11 +1084,12 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
             (row, false)
         }
         None => {
+            let username = User::next_available_username(&client, username).await?;
             let user = User::create(
                 &client,
                 UserParams {
                     fingerprint: fingerprint.to_string(),
-                    username: username.to_string(),
+                    username,
                     settings: json!({}),
                 },
             )
@@ -965,20 +1098,11 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
         }
     };
 
-    let profile = Profile::find_or_create_by_user(&client, user.id).await?;
-    let mut user = user;
-    user.username = profile.username;
     Ok((user, is_new_user))
 }
 
 fn late_ssh_theme_id(settings: &Value) -> String {
-    settings
-        .get("theme_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("late")
-        .to_string()
+    extract_theme_id(settings).unwrap_or_else(|| "late".to_string())
 }
 
 fn reject_publickey_only() -> Auth {
@@ -1033,5 +1157,162 @@ mod tests {
     fn parse_proxy_v1_rejects_malformed_header() {
         let line = b"PROXY TCP4 203.0.113.10 10.42.0.76 only-one-port\r\n";
         assert!(parse_proxy_v1_addr(line).is_err());
+    }
+
+    #[test]
+    fn render_signal_starts_clean() {
+        let signal = RenderSignal::new();
+        assert!(!signal.dirty.load(Ordering::Acquire));
+    }
+
+    /// Core regression test for the stored-permit bug: after a render has
+    /// cleared `dirty`, a leftover `Notify` permit must NOT re-arm the
+    /// throttle. Otherwise every typing burst ends with a spurious render of
+    /// an unchanged frame.
+    #[tokio::test]
+    async fn stale_permit_does_not_arm_throttle() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+        world_tick.tick().await; // consume immediate first tick
+
+        // A prior input rang the bell and was batched into a render; the
+        // render cleared `dirty` but the permit is still sitting here.
+        signal.notify.notify_one();
+        assert!(!signal.dirty.load(Ordering::Acquire));
+
+        let mut input_pending = false;
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            Some(Instant::now()),
+        )
+        .await;
+
+        assert_eq!(action, RenderAction::Skip);
+        assert!(!input_pending, "stale permit must not arm the throttle");
+    }
+
+    #[tokio::test]
+    async fn dirty_permit_arms_throttle() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+        world_tick.tick().await;
+
+        signal.dirty.store(true, Ordering::Release);
+        signal.notify.notify_one();
+
+        let mut input_pending = false;
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            Some(Instant::now()),
+        )
+        .await;
+
+        assert_eq!(action, RenderAction::Skip);
+        assert!(input_pending, "dirty permit must arm the throttle");
+    }
+
+    #[tokio::test]
+    async fn throttle_fires_immediately_when_gap_elapsed() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+        world_tick.tick().await;
+
+        let mut input_pending = true;
+        // Pretend the last render was a long time ago — the throttle is
+        // already satisfied and should resolve without any wait.
+        let previous_render = Some(Instant::now() - Duration::from_secs(1));
+
+        let start = Instant::now();
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            previous_render,
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(action, RenderAction::Render);
+        assert!(!input_pending);
+        assert!(
+            elapsed < Duration::from_millis(5),
+            "should fire immediately, actually waited {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn throttle_waits_for_min_render_gap() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+        world_tick.tick().await;
+
+        let mut input_pending = true;
+        let previous_render = Some(Instant::now());
+
+        let start = Instant::now();
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            previous_render,
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(action, RenderAction::Render);
+        // Generous lower bound — timers can fire a tick or two early.
+        assert!(
+            elapsed >= Duration::from_millis(10),
+            "throttle should wait ~{}ms, waited {:?}",
+            MIN_RENDER_GAP.as_millis(),
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn world_tick_fires_when_idle() {
+        let signal = RenderSignal::new();
+        // Interval's first tick is immediate, so this resolves right away.
+        let mut world_tick = tokio::time::interval(Duration::from_secs(100));
+
+        let mut input_pending = false;
+        let action = next_render_action(&mut world_tick, &signal, &mut input_pending, None).await;
+
+        assert_eq!(action, RenderAction::AdvanceWorld);
+    }
+
+    /// When both the throttle timer and a world tick are ready at the same
+    /// instant, `biased` ensures world tick wins so animations aren't
+    /// starved under a keystroke flood.
+    #[tokio::test]
+    async fn world_tick_wins_tie_with_throttle() {
+        let signal = RenderSignal::new();
+        let mut world_tick = tokio::time::interval(Duration::from_millis(1));
+        world_tick.tick().await; // consume immediate first tick
+        // Let the next world tick come due.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        let mut input_pending = true;
+        // Throttle is already satisfied too (previous render long ago).
+        let previous_render = Some(Instant::now() - Duration::from_secs(1));
+
+        let action = next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            previous_render,
+        )
+        .await;
+
+        assert_eq!(
+            action,
+            RenderAction::AdvanceWorld,
+            "world tick must beat the throttle branch under `biased` select"
+        );
+        assert!(!input_pending);
     }
 }

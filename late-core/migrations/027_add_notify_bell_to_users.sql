@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN notify_bell BOOLEAN NOT NULL DEFAULT false;

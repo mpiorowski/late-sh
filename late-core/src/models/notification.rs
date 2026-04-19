@@ -77,11 +77,11 @@ impl Notification {
         let rows = client
             .query(
                 "SELECT n.id, n.created, n.user_id, n.actor_id, n.message_id, n.room_id, n.read_at,
-                        COALESCE(p.username, '') AS actor_username,
+                        COALESCE(u.username, '') AS actor_username,
                         r.slug AS room_slug,
                         LEFT(m.body, 120) AS message_preview
                  FROM notifications n
-                 JOIN profiles p ON p.user_id = n.actor_id
+                 JOIN users u ON u.id = n.actor_id
                  JOIN chat_rooms r ON r.id = n.room_id
                  JOIN chat_messages m ON m.id = n.message_id
                  WHERE n.user_id = $1
@@ -149,16 +149,16 @@ impl Notification {
         let lower: Vec<String> = usernames.iter().map(|u| u.to_ascii_lowercase()).collect();
         let rows = client
             .query(
-                "SELECT p.user_id \
-                 FROM profiles p \
+                "SELECT u.id \
+                 FROM users u \
                  JOIN chat_rooms r ON r.id = $3 \
-                 WHERE LOWER(p.username) = ANY($1) \
-                   AND p.user_id <> $2 \
-                   AND (r.kind <> 'dm' OR p.user_id IN (r.dm_user_a, r.dm_user_b))",
+                 WHERE LOWER(u.username) = ANY($1) \
+                   AND u.id <> $2 \
+                   AND (r.kind <> 'dm' OR u.id IN (r.dm_user_a, r.dm_user_b))",
                 &[&lower, &exclude_user_id, &room_id],
             )
             .await?;
 
-        Ok(rows.iter().map(|r| r.get("user_id")).collect())
+        Ok(rows.iter().map(|r| r.get("id")).collect())
     }
 }

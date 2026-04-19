@@ -80,6 +80,8 @@ resource "kubernetes_ingress_v1" "icecast" {
     name = "icecast-ingress"
     annotations = {
       "kubernetes.io/ingress.class"                    = "nginx"
+      "cert-manager.io/cluster-issuer"                 = "letsencrypt-prod"
+      "acme.cert-manager.io/http01-edit-in-place"      = "true"
       "nginx.ingress.kubernetes.io/proxy-buffering"    = "off"
       "nginx.ingress.kubernetes.io/proxy-read-timeout" = "3600"
       "nginx.ingress.kubernetes.io/proxy-send-timeout" = "3600"
@@ -87,6 +89,11 @@ resource "kubernetes_ingress_v1" "icecast" {
   }
 
   spec {
+    tls {
+      hosts       = ["audio.${var.DOMAIN}"]
+      secret_name = "icecast-tls"
+    }
+
     rule {
       host = "audio.${var.DOMAIN}"
       http {
