@@ -3,6 +3,7 @@ use russh::{
     ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect, client,
     keys::{self, PrivateKeyWithHashAlg, known_hosts},
 };
+use serde::Deserialize;
 use std::{
     env, fs, io,
     io::{IsTerminal, Read, Write},
@@ -39,6 +40,7 @@ use tokio::process::{Child, Command};
 
 pub(super) const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
+const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 
 #[cfg(any(
     target_os = "macos",
@@ -344,6 +346,11 @@ async fn spawn_native_ssh(
         );
     }
 
+    let token = fetch_native_session_token(&session)
+        .await
+        .context("failed to fetch session token over native ssh handshake")?;
+    let _ = token_tx.send(token);
+
     let channel = session
         .channel_open_session()
         .await
@@ -354,10 +361,6 @@ async fn spawn_native_ssh(
         .request_pty(true, &term, cols as u32, rows as u32, 0, 0, &[])
         .await
         .context("failed to request ssh pty")?;
-    channel
-        .set_env(true, CLI_MODE_ENV, "1")
-        .await
-        .context("failed to set cli mode env var over ssh")?;
     channel
         .request_shell(true)
         .await
@@ -375,7 +378,7 @@ async fn spawn_native_ssh(
         forward_stdin_to_native(writer_tx, input_gate_for_task)
     });
     let completion_task = tokio::spawn(async move {
-        let exit = drive_native_output(&mut read_half, token_tx).await;
+        let exit = drive_native_output(&mut read_half).await;
         let _ = writer_tx_for_completion.send(WriterCommand::Close);
         let _ = writer_task.await;
         let _ = session
@@ -390,6 +393,60 @@ async fn spawn_native_ssh(
         resize_handle: ResizeHandle::Native(writer_tx_for_resize),
         input_gate,
     })
+}
+
+#[derive(Deserialize)]
+struct SessionTokenResponse {
+    session_token: String,
+}
+
+async fn fetch_native_session_token(
+    session: &client::Handle<NativeClientHandler>,
+) -> Result<String> {
+    let mut channel = session
+        .channel_open_session()
+        .await
+        .context("failed to open native ssh token channel")?;
+    channel
+        .exec(true, CLI_TOKEN_REQUEST)
+        .await
+        .context("failed to request native ssh token handshake")?;
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut exit_code = None;
+
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            ChannelMsg::Data { data } => stdout.extend_from_slice(data.as_ref()),
+            ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(data.as_ref()),
+            ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status),
+            ChannelMsg::Failure => anyhow::bail!("server rejected the native ssh token handshake"),
+            ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+
+    if let Some(code) = exit_code
+        && code != 0
+    {
+        let stderr = String::from_utf8_lossy(&stderr);
+        anyhow::bail!("native ssh token handshake exited with status {code}: {stderr}");
+    }
+
+    if !stderr.is_empty() {
+        debug!(
+            stderr = %String::from_utf8_lossy(&stderr),
+            "native ssh token handshake wrote stderr"
+        );
+    }
+
+    let response: SessionTokenResponse = serde_json::from_slice(&stdout)
+        .context("native ssh token handshake returned invalid JSON")?;
+    if response.session_token.trim().is_empty() {
+        anyhow::bail!("native ssh token handshake returned an empty session token");
+    }
+    Ok(response.session_token)
 }
 
 #[cfg(unix)]
@@ -518,29 +575,17 @@ fn forward_ssh_output(mut pty: fs::File, token_tx: oneshot::Sender<String>) -> R
     Ok(())
 }
 
-async fn drive_native_output(
-    read_half: &mut ChannelReadHalf,
-    token_tx: oneshot::Sender<String>,
-) -> Result<SshExit> {
-    let mut pending = Vec::new();
+async fn drive_native_output(read_half: &mut ChannelReadHalf) -> Result<SshExit> {
     let mut stdout = tokio::io::stdout();
     let mut stderr = tokio::io::stderr();
-    let mut token_sent = false;
-    let mut token_tx = Some(token_tx);
     let mut exit_code = None;
     let mut exit_signal = None;
 
     while let Some(msg) = read_half.wait().await {
         match msg {
             ChannelMsg::Data { data } => {
-                forward_native_output_chunk(
-                    data.as_ref(),
-                    &mut stdout,
-                    &mut pending,
-                    &mut token_sent,
-                    &mut token_tx,
-                )
-                .await?;
+                stdout.write_all(data.as_ref()).await?;
+                stdout.flush().await?;
             }
             ChannelMsg::ExtendedData { data, .. } => {
                 stderr.write_all(data.as_ref()).await?;
@@ -564,11 +609,6 @@ async fn drive_native_output(
         }
     }
 
-    if !pending.is_empty() {
-        stdout.write_all(&pending).await?;
-        stdout.flush().await?;
-    }
-
     if let Some((signal_name, message)) = exit_signal {
         return Ok(SshExit::RemoteSignal {
             signal_name,
@@ -577,47 +617,6 @@ async fn drive_native_output(
     }
 
     Ok(SshExit::RemoteStatus { code: exit_code })
-}
-
-async fn forward_native_output_chunk(
-    chunk: &[u8],
-    stdout: &mut tokio::io::Stdout,
-    pending: &mut Vec<u8>,
-    token_sent: &mut bool,
-    token_tx: &mut Option<oneshot::Sender<String>>,
-) -> Result<()> {
-    if *token_sent {
-        stdout.write_all(chunk).await?;
-        stdout.flush().await?;
-        return Ok(());
-    }
-
-    pending.extend_from_slice(chunk);
-
-    while !pending.is_empty() && !*token_sent {
-        match parse_cli_banner(pending) {
-            BannerState::NeedMore => break,
-            BannerState::Token { token, consumed } => {
-                if let Some(token_tx) = token_tx.take() {
-                    let _ = token_tx.send(token);
-                }
-                debug!("captured cli session token banner");
-                if consumed < pending.len() {
-                    stdout.write_all(&pending[consumed..]).await?;
-                    stdout.flush().await?;
-                }
-                pending.clear();
-                *token_sent = true;
-            }
-            BannerState::Passthrough { consumed } => {
-                stdout.write_all(&pending[..consumed]).await?;
-                stdout.flush().await?;
-                pending.drain(..consumed);
-            }
-        }
-    }
-
-    Ok(())
 }
 
 async fn drive_native_writer(

@@ -56,7 +56,9 @@ That's it. On first run it will generate a dedicated SSH key at `~/.ssh/id_late_
 
 `--ssh-mode subprocess` keeps the old behavior and still depends on a system `ssh` binary.
 `--ssh-mode native` uses an embedded `russh` client, records host keys in `~/.ssh/known_hosts`
-with accept-new semantics, and does not require OpenSSH on `$PATH`.
+with accept-new semantics, fetches the pairing token over a dedicated SSH exec handshake, and
+does not require OpenSSH on `$PATH`. Native mode intentionally does not fall back to the legacy
+`LATE_SESSION_TOKEN=` banner protocol, so it will fail fast against an older server.
 
 If your audio device does not support the stream's native `44.1 kHz` output rate, the CLI now falls back to a supported device rate such as `48 kHz` and resamples locally. Native `44.1 kHz` playback is still preferred when available.
 

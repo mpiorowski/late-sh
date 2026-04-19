@@ -28,6 +28,7 @@ const PROXY_V1_MAX_LEN: usize = 108;
 const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
+const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
 
 /// World tick advances animations, game clocks, splash timer, visualizer
@@ -89,6 +90,7 @@ struct ClientHandler {
     render_signal: Option<Arc<RenderSignal>>,
     cli_mode: bool,
     session_token: Option<String>,
+    session_rx: Option<tokio::sync::mpsc::Receiver<crate::session::SessionMessage>>,
 }
 
 pub fn load_or_generate_key(state: &State) -> anyhow::Result<PrivateKey> {
@@ -286,6 +288,7 @@ impl Server {
             render_signal: None,
             cli_mode: false,
             session_token: None,
+            session_rx: None,
         }
     }
 }
@@ -379,6 +382,15 @@ fn parse_proxy_v1_addr(line: &[u8]) -> Result<Option<SocketAddr>> {
 
 impl Drop for ClientHandler {
     fn drop(&mut self) {
+        if self.app.is_none()
+            && let Some(token) = self.session_token.clone()
+        {
+            let registry = self.state.session_registry.clone();
+            tokio::spawn(async move {
+                registry.unregister(&token).await;
+            });
+        }
+
         if self.active_user_incremented
             && let Some(user) = self.user.as_ref()
         {
@@ -408,6 +420,24 @@ impl Drop for ClientHandler {
                 *count -= 1;
             }
         }
+    }
+}
+
+impl ClientHandler {
+    async fn ensure_cli_session(&mut self) -> Result<String> {
+        if let Some(token) = self.session_token.clone() {
+            return Ok(token);
+        }
+
+        let session_token = crate::session::new_session_token();
+        let (session_tx, session_rx) = tokio::sync::mpsc::channel(64);
+        self.state
+            .session_registry
+            .register(session_token.clone(), session_tx)
+            .await;
+        self.session_token = Some(session_token.clone());
+        self.session_rx = Some(session_rx);
+        Ok(session_token)
     }
 }
 
@@ -526,14 +556,11 @@ impl russh::server::Handler for ClientHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(term, col_width, row_height, "pty requested");
-        let session_token = crate::session::new_session_token();
-        let (session_tx, session_rx) = tokio::sync::mpsc::channel(64);
-        self.session_token = Some(session_token.clone());
-
-        self.state
-            .session_registry
-            .register(session_token.clone(), session_tx)
-            .await;
+        let session_token = self.ensure_cli_session().await?;
+        let session_rx = self
+            .session_rx
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("cli session receiver missing during pty request"))?;
 
         let article_service = self.state.article_service.clone();
         let vote_service = self.state.vote_service.clone();
@@ -758,6 +785,36 @@ impl russh::server::Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         let command = String::from_utf8_lossy(data);
         let preview: String = command.chars().take(128).collect();
+        if command.trim() == CLI_TOKEN_REQUEST {
+            tracing::info!("serving cli token exec request");
+            match session.channel_success(channel) {
+                Ok(()) => tracing::debug!("exec token channel_success sent"),
+                Err(e) => tracing::error!(error = ?e, "exec token channel_success failed"),
+            }
+
+            let token = self.ensure_cli_session().await?;
+            let payload = serde_json::to_vec(&json!({ "session_token": token }))
+                .context("failed to encode cli token exec response")?;
+
+            if let Some(chan) = self.channel.take() {
+                chan.data(payload.as_slice()).await?;
+                let _ = chan.exit_status(0).await;
+                let _ = chan.eof().await;
+                let _ = chan.close().await;
+            } else {
+                session
+                    .data(channel, payload)
+                    .context("failed to send cli token exec response")?;
+                if let Err(e) = session.eof(channel) {
+                    tracing::error!(error = ?e, "exec token eof failed");
+                }
+                if let Err(e) = session.close(channel) {
+                    tracing::error!(error = ?e, "exec token close failed");
+                }
+            }
+            return Ok(());
+        }
+
         tracing::info!(
             command = %preview,
             "rejecting exec request; only interactive shell is supported"
