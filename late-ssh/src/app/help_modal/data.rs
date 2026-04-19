@@ -116,6 +116,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  r                  reply to selected message",
         "  e                  edit selected message",
         "  d                  delete selected message",
+        "  c                  copy selected message to clipboard",
         "",
         "Rooms",
         "  h / l              previous / next room",
