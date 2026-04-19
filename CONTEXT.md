@@ -1,9 +1,10 @@
 # late.sh Context
 
 ## Metadata
+
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-19 (welcome/profile modal redesigned with sectioned layout — Identity / Appearance / Notifications / Location plus a button-style Save CTA — and a prominent bordered amber `?` callout pointing to the help modal; selected row gets a `BG_SELECTION` highlight bar, toggles render `● on` / `○ off`, country/timezone show a trailing `…` picker hint; row order in `Row::ALL` reordered so Bio sits at index 1 right after Username (matches visual order); title is `late.sh` with tagline `Tune your identity, vibes, and pings.`; render.rs now reads theme + `enable_background_color` from welcome-modal draft when `show_welcome` is open so cycling Theme / toggling Background previews live and reverts on Esc; pressing `?` inside the welcome modal opens help on top — input dispatch reordered so `show_help` is checked before `show_welcome`, matching the visual stack (help renders above welcome). Help modal cleaned up to **arrows + hjkl only**: `h`/`l`/`←`/`→` switch slides, `j`/`k`/`↑`/`↓` scroll, `Esc`/`?`/`q` close — removed `Ctrl+U`/`Ctrl+D`, `PageUp`/`PageDn`, and mouse wheel handlers, plus the `page_scroll` method and `visible_height` helper; scroll cap removed — `scroll()` only floors at 0, no ceiling, so users can scroll past content end (blank space at bottom signals "you've reached it"); deleted brittle width-tracking machinery (`set_modal_width`, `body_width`, `max_scroll_for`, `wrapped_row_count`, `modal_width` field, second arg to `open()`); help slide copy now follows the rule **prose at column 0, short bullets/code keep `  ` padding** so ratatui's `Wrap { trim: false }` doesn't strand wrapped continuation lines at column 0 while the original line was indented — Music slide rewritten, Arcade "Why it exists", Architecture "Important characteristics", Profile "Why country matters" all unindented their long-prose lines; guide tab order is now Overview / Chat / Music / News / Arcade / Bonsai / Profile / Architecture; chat author labels render as plain usernames with no leading `@` and no appended country badge; selected-message `p` opens a read-only profile modal, `P` stays the browser-pairing QR shortcut; the read-only profile surfaces now show `Current time` when the saved timezone parses; both the welcome/profile modal and read-only profile modal accept `j/k` as real `Char` input, not just arrow keys)
+- Last updated: 2026-04-19 (copy selected message: pressing `c` in chat history with a message selected now copies the message body to clipboard via OSC 52 and shows a "Copied message to clipboard!" banner, then clears selection; `c` with nothing selected still copies the web-chat link as before — `selected_message_body_in_room` added to `ChatState`, handler wired into `handle_message_action_in_room` in `chat/input.rs`, help text updated under Messages section; welcome/profile modal redesigned with sectioned layout — Identity / Appearance / Notifications / Location plus a button-style Save CTA — and a prominent bordered amber `?` callout pointing to the help modal; selected row gets a `BG_SELECTION` highlight bar, toggles render `● on` / `○ off`, country/timezone show a trailing `…` picker hint; row order in `Row::ALL` reordered so Bio sits at index 1 right after Username (matches visual order); title is `late.sh` with tagline `Tune your identity, vibes, and pings.`; render.rs now reads theme + `enable_background_color` from welcome-modal draft when `show_welcome` is open so cycling Theme / toggling Background previews live and reverts on Esc; pressing `?` inside the welcome modal opens help on top — input dispatch reordered so `show_help` is checked before `show_welcome`, matching the visual stack (help renders above welcome). Help modal cleaned up to **arrows + hjkl only**: `h`/`l`/`←`/`→` switch slides, `j`/`k`/`↑`/`↓` scroll, `Esc`/`?`/`q` close — removed `Ctrl+U`/`Ctrl+D`, `PageUp`/`PageDn`, and mouse wheel handlers, plus the `page_scroll` method and `visible_height` helper; scroll cap removed — `scroll()` only floors at 0, no ceiling, so users can scroll past content end (blank space at bottom signals "you've reached it"); deleted brittle width-tracking machinery (`set_modal_width`, `body_width`, `max_scroll_for`, `wrapped_row_count`, `modal_width` field, second arg to `open()`); help slide copy now follows the rule **prose at column 0, short bullets/code keep `  ` padding** so ratatui's `Wrap { trim: false }` doesn't strand wrapped continuation lines at column 0 while the original line was indented — Music slide rewritten, Arcade "Why it exists", Architecture "Important characteristics", Profile "Why country matters" all unindented their long-prose lines; guide tab order is now Overview / Chat / Music / News / Arcade / Bonsai / Profile / Architecture; chat author labels render as plain usernames with no leading `@` and no appended country badge; selected-message `p` opens a read-only profile modal, `P` stays the browser-pairing QR shortcut; the read-only profile surfaces now show `Current time` when the saved timezone parses; both the welcome/profile modal and read-only profile modal accept `j/k` as real `Char` input, not just arrow keys)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -18,6 +19,7 @@ This file is the primary working context for the entire late.sh project.
 - Temporary or branch-specific behavior should be documented here with clear cleanup notes.
 
 ### Quick update checklist
+
 - Refresh `Last updated` date
 - Review `Current Work` and `Future Work`
 - Validate `Critical Invariants`
@@ -25,6 +27,7 @@ This file is the primary working context for the entire late.sh project.
 - Remove obsolete notes
 
 ### Freshness target
+
 - Re-review this file regularly (every 2 weeks) to prevent context drift.
 
 ---
@@ -54,6 +57,7 @@ The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-
 ### Strict test boundary rules (required)
 
 **Unit tests (`#[cfg(test)] mod tests` inside `src/` files):**
+
 - MUST be pure logic only: no database, no services, no network, no async runtime required.
 - Test input/output transformations, state transitions, parsing, formatting, validation math.
 - If you need a `Db`, `Service`, `State`, or any I/O — it is NOT a unit test. Move it to `tests/`.
@@ -62,6 +66,7 @@ The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-
 - Keep pure unit tests inline in those source files. Do NOT create `src/.../<domain>/tests/` folders just to split unit tests.
 
 **Integration tests (`late-ssh/tests/`, `late-web/tests/`, `late-core/tests/`):**
+
 - MUST use testcontainers for database access — always go through `late_core::test_utils::test_db()` (or the `helpers::new_test_db()` wrapper in `late-ssh`).
 - NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings in integration tests.
 - `late-core::test_utils` owns shared test infrastructure: `test_db()`, `create_test_user()`. Use these everywhere instead of rolling per-test user creation — except in `late-core` model tests that are testing `User::create` itself.
@@ -70,6 +75,7 @@ The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-
 - Preferred integration layout is domain-oriented under crate `tests/`, mirroring the source structure: `tests/<domain>/main.rs` with sibling `svc.rs`, `state.rs`, etc. as needed. `late-core` tests are named after their domain (`user.rs`, `vote.rs`, `chat/`).
 
 **LLM enforcement:**
+
 - On every code change, check: does this need a test? If yes, classify it strictly as unit or integration per the rules above.
 - LLM agents must NOT run `cargo test`, `cargo nextest`, or `cargo clippy` in this repo. The human owner runs verification manually because those commands are too blocking in normal agent workflows.
 - Do NOT put integration-flavored tests (DB calls, service interactions, spawning tasks) inside `#[cfg(test)]` module blocks in `src/` files.
@@ -246,9 +252,9 @@ flowchart LR
 To maintain a buttery-smooth 15-60 FPS over SSH, the architecture strictly separates synchronous UI rendering from asynchronous business logic:
 
 1. **The Setup (`ssh.rs` / `main.rs`)**
-   When a new SSH client connects, a `SessionConfig` is built containing global *Services* (like `VoteService`, `ArticleService`, which hold DB pools and API keys).
+   When a new SSH client connects, a `SessionConfig` is built containing global _Services_ (like `VoteService`, `ArticleService`, which hold DB pools and API keys).
 2. **The Initialization (`app/state.rs`)**
-   Inside `App::new()`, these services are used to create the *UI States* (e.g., `ChatState` which owns the `news::State` and `notifications::State`). Each UI State stores its `user_id`, subscribes to service channels, and spawns a per-user background refresh task (aborted on `Drop`).
+   Inside `App::new()`, these services are used to create the _UI States_ (e.g., `ChatState` which owns the `news::State` and `notifications::State`). Each UI State stores its `user_id`, subscribes to service channels, and spawns a per-user background refresh task (aborted on `Drop`).
 3. **The Sync Loop (`app/tick.rs`)**
    Every 66ms, `App::tick()` runs. It calls `tick()` on all UI states. This:
    - Drains the channels to instantly update local memory state (e.g., `Vec<Article>`). User-targeted events are filtered by `self.user_id`.
@@ -262,7 +268,7 @@ To maintain a buttery-smooth 15-60 FPS over SSH, the architecture strictly separ
 Each SSH session spawns **one render task** (`late-ssh/src/ssh.rs`) with two independent trigger sources:
 
 - **World tick** — fires every `WORLD_TICK_INTERVAL` (66ms). Advances animations (`app.tick()`), renders, ships the frame. Floor cadence ≈ 15 FPS regardless of input.
-- **Input-driven render** — fires within `MIN_RENDER_GAP` (15ms) of any keystroke or terminal resize. Renders *without* advancing world time, so typed characters echo at near-native latency instead of waiting up to 66ms for the next world tick.
+- **Input-driven render** — fires within `MIN_RENDER_GAP` (15ms) of any keystroke or terminal resize. Renders _without_ advancing world time, so typed characters echo at near-native latency instead of waiting up to 66ms for the next world tick.
 
 The select loop picks which branch to act on:
 
@@ -337,6 +343,7 @@ The audio stack is local-playlist-only. Liquidsoap reads curated local `.m3u` pl
 Genres now use `mksafe(local_playlist)` only. Each playlist uses `mode="randomize"` + `loop=true` to shuffle all tracks and play through before re-shuffling, with `check_next` guards against back-to-back repeats at loop boundaries.
 
 **Migration status (April 2026):**
+
 - Lofi: **DONE** — 50 tracks, all CC0/CC-BY
 - Ambient: **DONE** — 20 curated CC-BY 4.0 tracks
 - Classical: **DONE** — 40 curated public-domain Musopen tracks
@@ -364,13 +371,15 @@ Playlist generation uses curated manifests in `scripts/fetch_cc_music.py`, prese
 #### Future music sources [VOLATILE]
 
 **High-potential (verified CC0/CC-BY, not yet downloaded):**
-- HoliznaCC0: 571 total tracks across ~50+ albums, all CC0. Full discography: https://freemusicarchive.org/music/holiznacc0/discography
-- Ketsa: large catalog (lofi, jazz, soul, ambient, downtempo), CC-BY. Album "CC BY: FREE TO USE FOR ANYTHING" has 70 tracks: https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything
+
+- HoliznaCC0: 571 total tracks across ~50+ albums, all CC0. Full discography: <https://freemusicarchive.org/music/holiznacc0/discography>
+- Ketsa: large catalog (lofi, jazz, soul, ambient, downtempo), CC-BY. Album "CC BY: FREE TO USE FOR ANYTHING" has 70 tracks: <https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything>
 - John Bartmann: "Public Domain Soundtrack Music: Album One" (CC0) on Bandcamp
-- Kevin MacLeod: 359 tracks (CC-BY): https://kevinmacleod.bandcamp.com/album/complete-collection-creative-commons
-- FMA public domain search (9,000+ tracks): https://freemusicarchive.org/search?adv=1&music-filter-public-domain=1
+- Kevin MacLeod: 359 tracks (CC-BY): <https://kevinmacleod.bandcamp.com/album/complete-collection-creative-commons>
+- FMA public domain search (9,000+ tracks): <https://freemusicarchive.org/search?adv=1&music-filter-public-domain=1>
 
 **Not selected for the local library:**
+
 - **Pixabay:** custom license, not ideal for a standalone music stream
 - **Chad Crouch:** CC BY-NC + commercial licensing split
 - **Blue Dot Sessions:** CC BY-NC only
@@ -412,6 +421,7 @@ Nonograms intentionally use an offline generation pipeline instead of generating
    `late-ssh` also records a binary daily completion fact per user, size, and UTC date in `nonogram_daily_wins`. This is intentionally separate from board state and does not track score or time.
 
 Current invariant:
+
 - `late-ssh` is runtime-only for nonograms: read JSON assets, select a puzzle, render/play it, and persist per-user progress. Generation belongs in `late-core/src/bin/gen_nonograms.rs`, not in the SSH hot path.
 
 ### 2.9 Local CLI MVP
@@ -425,6 +435,7 @@ Current invariant:
 5. **Distribution + platform notes** — The landing page advertises both `curl -fsSL https://cli.late.sh/install.sh | bash` and a source build path. CLI releases go through `deploy_cli`. The launcher is currently Unix-first (`ssh` + `cpal`), supports Linux/macOS/likely WSL, and surfaces targeted WSL audio hints by checking `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER` when startup fails.
 
 Current invariants:
+
 - The installer defaults to `https://cli.late.sh`, and the CLI supports `-v` / `--verbose` for stderr debug logging.
 - Browser and CLI share the same paired-client protocol, so the TUI can show target kind plus live mute/volume state in the sidebar.
 - The CLI currently requires a working local audio output device to fully start; native Windows support would require replacing the external `ssh` launch path.
@@ -488,22 +499,26 @@ late-sh/
 ### 4.1 Public/API contracts
 
 **SSH API (late-ssh, port 4000):**
+
 - `GET /api/health` - DB health check
 - `GET /api/now-playing` → `NowPlayingResponse { current_track, listeners_count, started_at_ts }`
 - `GET /api/status` → `StatusResponse { online, message, version }`
 - `GET /api/ws/pair?token={token}` - WebSocket upgrade for paired browser/CLI control + viz
 
 **WS payloads (client → server):**
+
 - `{ "event": "heartbeat" }`
 - `{ "event": "viz", "position_ms": u64, "bands": [f32; 8], "rms": f32 }`
 - `{ "event": "client_state", "client_kind": "browser" | "cli", "muted": bool, "volume_percent": u8 }`
 
 **WS payloads (server → client):**
+
 - `{ "event": "toggle_mute" }`
 - `{ "event": "volume_up" }`
 - `{ "event": "volume_down" }`
 
 **Web routes (late-web, port 3000):**
+
 - `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA (click-to-copy), feature list, now-playing/listeners via htmx
 - `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume control, Web Audio analyzer for TUI visualizer, now-playing via htmx
 - `GET /status?pairing={bool}` - htmx fragment: now-playing track + listener count (fetched from SSH API internally). `pairing=false` for landing footer, `pairing=true` for pairing detail view. Polled every 5s.
@@ -512,6 +527,7 @@ late-sh/
 - All other routes → redirect to `/`
 
 **Service stream contracts (internal):**
+
 - `VoteService::subscribe_state()` (in `app::vote::svc`), `ChatService::subscribe_state()` (in `app::chat::svc`), `ArticleService::subscribe_snapshot()` (in `app::chat::news::svc`), `NotificationService::subscribe_snapshot()` (in `app::chat::notification_svc`) → shared `watch::Receiver<...Snapshot>` (durable latest state)
 - `ProfileService::subscribe_snapshot(user_id)` → per-user `watch::Receiver<...Snapshot>` (durable latest state)
 - `ProfileService::prune_user_snapshot_channel(user_id)` → explicit cleanup hook called from UI state `Drop`; removes idle per-user snapshot senders
@@ -531,27 +547,28 @@ late-sh/
 
 **Entities (all use UUID v7 PKs, `id`/`created`/`updated` built into `model!` macro, lists default to `ORDER BY created DESC`):**
 
-| Entity | Table | Key constraints |
-|--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
-| Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
-| ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
-| ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
-| ChatMessage | `chat_messages` | `body` 1-2000 chars |
-| Article | `articles` | `url` UNIQUE, `user_id` FK |
-| ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
-| Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
-| SudokuDailyWin | `sudoku_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, score tracked |
-| NonogramDailyWin | `nonogram_daily_wins` | `UNIQUE(user_id, size_key, puzzle_date)`, binary completion |
-| MinesweeperGame | `minesweeper_games` | `UNIQUE(user_id, difficulty_key, mode)`, stores seeded mine_map + player_grid + lives (3-life system) |
-| MinesweeperDailyWin | `minesweeper_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, best score (lives remaining) retained |
-| SolitaireGame | `solitaire_games` | `UNIQUE(user_id, difficulty_key, mode)`, stores seeded stock/waste/foundations/tableau |
-| SolitaireDailyWin | `solitaire_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, best score retained |
-| BonsaiTree | `bonsai_trees` | `user_id` UNIQUE, growth_points, last_watered DATE, seed BIGINT, is_alive BOOLEAN |
-| BonsaiGrave | `bonsai_graveyard` | `user_id` FK (not unique — multiple deaths), survived_days, died_at |
-| UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (floor=100), `last_stipend_date` DATE |
+| Entity              | Table                    | Key constraints                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| User                | `users`                  | `fingerprint` UNIQUE; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
+| Vote                | `votes`                  | `user_id` UNIQUE (one vote per user per round)                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ChatRoom            | `chat_rooms`             | `kind` IN (general, language, dm, topic), complex constraints                                                                                                                                                                                                                                                                                                                                                                                                |
+| ChatRoomMember      | `chat_room_members`      | PK `(room_id, user_id)`, `last_read_at`                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ChatMessage         | `chat_messages`          | `body` 1-2000 chars                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Article             | `articles`               | `url` UNIQUE, `user_id` FK                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ArticleFeedRead     | `article_feed_reads`     | `user_id` PK/FK, per-user news read checkpoint                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Notification        | `notifications`          | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id)                                                                                                                                                                                                                                                                                                                 |
+| SudokuDailyWin      | `sudoku_daily_wins`      | `UNIQUE(user_id, difficulty_key, puzzle_date)`, score tracked                                                                                                                                                                                                                                                                                                                                                                                                |
+| NonogramDailyWin    | `nonogram_daily_wins`    | `UNIQUE(user_id, size_key, puzzle_date)`, binary completion                                                                                                                                                                                                                                                                                                                                                                                                  |
+| MinesweeperGame     | `minesweeper_games`      | `UNIQUE(user_id, difficulty_key, mode)`, stores seeded mine_map + player_grid + lives (3-life system)                                                                                                                                                                                                                                                                                                                                                        |
+| MinesweeperDailyWin | `minesweeper_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, best score (lives remaining) retained                                                                                                                                                                                                                                                                                                                                                                        |
+| SolitaireGame       | `solitaire_games`        | `UNIQUE(user_id, difficulty_key, mode)`, stores seeded stock/waste/foundations/tableau                                                                                                                                                                                                                                                                                                                                                                       |
+| SolitaireDailyWin   | `solitaire_daily_wins`   | `UNIQUE(user_id, difficulty_key, puzzle_date)`, best score retained                                                                                                                                                                                                                                                                                                                                                                                          |
+| BonsaiTree          | `bonsai_trees`           | `user_id` UNIQUE, growth_points, last_watered DATE, seed BIGINT, is_alive BOOLEAN                                                                                                                                                                                                                                                                                                                                                                            |
+| BonsaiGrave         | `bonsai_graveyard`       | `user_id` FK (not unique — multiple deaths), survived_days, died_at                                                                                                                                                                                                                                                                                                                                                                                          |
+| UserChips           | `user_chips`             | `user_id` PK/FK, `balance` BIGINT (floor=100), `last_stipend_date` DATE                                                                                                                                                                                                                                                                                                                                                                                      |
 
 **Key enums:**
+
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
 - `Screen`: `Dashboard`, `Chat`, `Games`, `Profile` (cycle: `Dashboard -> Chat -> Games -> Profile -> Dashboard`; News and Mentions are synthetic room-like entries within Chat, not separate screens, each with their own persisted unread state)
 - `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair)
@@ -588,12 +605,15 @@ late-sh/
 ## 6. Current Work [VOLATILE]
 
 In progress:
+
 - Blackjack now uses service-owned shared state with `watch` snapshots and `broadcast` events, but it is still a single shared table with one active player at a time.
 - Blackjack remains admin-gated in the arcade until multi-seat/table semantics land.
 - See PLAN.md for the concrete multiplayer follow-up roadmap.
 
 Future:
+
 - **Nonograms (v2)**: Replace random generation with pixel-art-to-nonogram pipeline or bulk-curate from webpbn.com.
+
 ---
 
 ## 7. Future Work & Roadmap [VOLATILE]
@@ -601,6 +621,7 @@ Future:
 1. Chat upgrades: DMs/private rooms, invites/moderation, better backlog pagination
 
 Known gaps/risks:
+
 - Online/listener metrics are app-level presence (`active_users`, includes @bot and @graybeard), not true Icecast listener analytics
 - Time remaining is approximate (up to 5s polling delay on track change)
 - No external metrics or alerting system
@@ -608,6 +629,7 @@ Known gaps/risks:
 - **Stateful VT parsing in `late-ssh/src/app/input.rs`:** SSH input now runs through a persistent `vte::Parser`, so CSI/SS3 sequences and bracketed paste survive split russh reads instead of assuming the whole escape sequence lands in one chunk. That removes the old split-paste failure where `[200~` / `[201~` residue or embedded newlines could leak through as live keystrokes. The app still keeps two pragmatic layers on top: `is_likely_paste` heuristically treats large printable unmarked chunks as paste for terminals without bracketed paste, and `sanitize_paste_markers`/`strip_paste_markers` still scrub stored residue defensively when copying URLs from older polluted state. Standalone `Esc` is resolved on a short tick delay so split escape sequences are not mistaken for cancel keys.
 
 Roadmap ideas:
+
 1. Nail one addictive loop: join -> listen -> chat -> vote -> return tomorrow.
 2. Pick a clear ICP first: solo devs at night vs remote teams during work hours.
 3. ~~Add one "reason to come back" mechanic~~ ✓ Daily streaks + badge tiers + leaderboard. Next: daily room rituals, timed events.
@@ -617,41 +639,50 @@ Roadmap ideas:
 ### The Arcade Pipeline [VOLATILE]
 
 **Shipped:**
+
 - ~~Tetris (Ascii Drop)~~ ✓ Endless falling-block arcade, 15fps gravity, persisted runs, per-user high scores.
 - ~~Minesweeper~~ ✓ Classic logic puzzle with daily seeded boards and personal infinite play.
 - ~~2048~~ ✓ ~~Sudoku~~ ✓ ~~Nonograms~~ ✓ ~~Solitaire~~ ✓
 
 **Table Games (active buildout):**
+
 - **Blackjack:** Shared-table implementation is live behind admin gate. Service owns truth; clients subscribe to snapshots/events. Still missing seats, turn rotation, table identity, and room wiring.
 - **Texas Hold'em Poker (PvP):** The ultimate late-night clubhouse game. Table-scoped chat, robust turn state.
 
 **Async 1v1:**
+
 - **Chess:** Correspondence style — make moves at your own pace over hours/days.
 - **Battleship:** Fire a shot and check back tomorrow.
 
 **Real-time Multiplayer:**
+
 - **Tron (Lightbikes):** 15fps grid-based survival arena.
 
 **Card Games:**
+
 - **Cribbage / Bridge / Thousand (Tysiąc):** Cozy trick-taking games, deep strategy.
 
 ### Monthly chip leaderboard resets
+
 - Archive monthly chip leaders (top 3 get a permanent badge?)
 - Reset balances to baseline at month end
 - "Hall of Fame" display somewhere
 
 ### Strategy multiplayer (Chess, Battleship)
+
 - No chips needed — W/L record + rating
 - Async: make a move, come back later
 - Game completion counts toward daily streaks
 - `/challenge @user chess` in chat for matchmaking
 
 ### More casino games (Poker)
+
 - Texas Hold'em: PvP, uses chip betting
 - Needs turn management, pot logic, hand evaluation
 - Higher complexity — build after Blackjack validates the chip system
 
 ### Chat-based matchmaking
+
 - Activity feed broadcast when someone sits at an empty table
 - `/play <game>` and `/challenge @user <game>` commands
 - Accept/decline prompts
@@ -660,12 +691,12 @@ Roadmap ideas:
 
 ## Game category model (unified view)
 
-| Category | Games | Win condition | Leaderboard section | Streaks | Chips |
-|----------|-------|--------------|-------------------|---------|-------|
-| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | Solve the daily | Today's Champions | Yes | +50 bonus per completion |
-| High-score | Tetris, 2048 | Personal best | All-Time High Scores | No | No |
-| Casino | Blackjack, Poker (future) | Grow your chip balance | Chip Leaders | Optional | Bet and win/lose |
-| Strategy | Chess, Battleship (future) | Beat opponent | W/L + Rating | Yes (game completed) | No |
+| Category      | Games                                     | Win condition          | Leaderboard section  | Streaks              | Chips                    |
+| ------------- | ----------------------------------------- | ---------------------- | -------------------- | -------------------- | ------------------------ |
+| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | Solve the daily        | Today's Champions    | Yes                  | +50 bonus per completion |
+| High-score    | Tetris, 2048                              | Personal best          | All-Time High Scores | No                   | No                       |
+| Casino        | Blackjack, Poker (future)                 | Grow your chip balance | Chip Leaders         | Optional             | Bet and win/lose         |
+| Strategy      | Chess, Battleship (future)                | Beat opponent          | W/L + Rating         | Yes (game completed) | No                       |
 
 ### Persistent Multiplayer World (Big Bet) [VOLATILE]
 
@@ -674,6 +705,7 @@ An always-running game where every connected SSH session is automatically a part
 **Direction:** 4X / trading / economy game. Think simplified space traders or terminal-scale Civilization — explore, expand, exploit, trade. Every connected user is a player in the same persistent world.
 
 **Why it fits late.sh:**
+
 - Always-on matches the clubhouse vibe — the world is alive when you SSH in
 - Scales naturally with player count (more players = richer economy/politics)
 - Gives a strong "check back tomorrow" retention loop
@@ -681,20 +713,24 @@ An always-running game where every connected SSH session is automatically a part
 - Chat becomes strategic (alliances, trade negotiation, trash talk)
 
 **Open design questions:**
+
 - Turn-based (ticks every N minutes) vs real-time with rate-limited actions?
 - How much can happen while you're offline? (auto-trade, passive income, vulnerability to raids?)
 - Map topology: shared grid, star map, abstract network?
 - Win conditions or endless sandbox?
 
 ### Bonsai Tree Enhancements
+
 - Seasonal color shifts (real-world date), profile display for visitors, graveyard rendering on profile.
-- Fancier renderer — possibly port/adapt `cbonsai` (https://github.com/mhzawadi/homebrew-cbonsai) for richer growth animation and branching.
+- Fancier renderer — possibly port/adapt `cbonsai` (<https://github.com/mhzawadi/homebrew-cbonsai>) for richer growth animation and branching.
 
 ### GitHub Notifications Widget
+
 - Read-only dashboard widget showing PR reviews, mentions, issue updates via PAT.
 - Gives solo devs a productivity reason to keep the terminal open.
 
 ### Other Ideas
+
 - Daily/weekly rituals (lo-fi standup, shipped rollup, weekend recap)
 - Ambient presence (quiet hours, listening since, typing indicator)
 - Micro-collab tools (shared scratchpad, snippet paste, pairing ping)
@@ -715,14 +751,14 @@ Not urgent at today's user count — the per-user refresh remains load-bearing f
 
 Currently the SSH app assumes a single process. These in-memory structures would need to be externalized (Redis / Postgres) for multiple replicas:
 
-| Structure | Location | Current | To externalize |
-|-----------|----------|---------|----------------|
-| `current_genre` / `round_id` | `VoteService::ServiceState` | In-memory, resets to Lofi on restart | Persist to DB; only one replica runs the switch timer (leader election or DB lock). During pod drain today, the old pod cancels the vote loop immediately so only the new pod keeps mutating rounds/Liquidsoap. |
-| `active_users` / `conn_counts` | `State` | In-memory counters | Shared store (Redis or DB) |
-| `SessionRegistry` | `session.rs` | In-memory `token → mpsc` | Stays local — sticky sessions route SSH + WS to same replica |
-| Vote/Chat/Article events + snapshots, Profile per-user snapshots | `broadcast` / `watch` channels | In-process only | Postgres `LISTEN/NOTIFY` or Redis pub/sub for cross-replica fan-out |
-| @bot + @graybeard chat | `GhostService` | Always-on presence + AI chat tasks; both are dedicated DB users with fixed fingerprints | Single-leader to avoid duplicate chat responses. During pod drain today, the old pod cancels bot tasks immediately. |
-| Leaderboard data | `LeaderboardService` | DB-backed `watch` channel, 30s refresh | Already DB-backed; each replica runs its own refresh loop — duplicate work but no write conflict |
+| Structure                                                        | Location                       | Current                                                                                 | To externalize                                                                                                                                                                                                  |
+| ---------------------------------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `current_genre` / `round_id`                                     | `VoteService::ServiceState`    | In-memory, resets to Lofi on restart                                                    | Persist to DB; only one replica runs the switch timer (leader election or DB lock). During pod drain today, the old pod cancels the vote loop immediately so only the new pod keeps mutating rounds/Liquidsoap. |
+| `active_users` / `conn_counts`                                   | `State`                        | In-memory counters                                                                      | Shared store (Redis or DB)                                                                                                                                                                                      |
+| `SessionRegistry`                                                | `session.rs`                   | In-memory `token → mpsc`                                                                | Stays local — sticky sessions route SSH + WS to same replica                                                                                                                                                    |
+| Vote/Chat/Article events + snapshots, Profile per-user snapshots | `broadcast` / `watch` channels | In-process only                                                                         | Postgres `LISTEN/NOTIFY` or Redis pub/sub for cross-replica fan-out                                                                                                                                             |
+| @bot + @graybeard chat                                           | `GhostService`                 | Always-on presence + AI chat tasks; both are dedicated DB users with fixed fingerprints | Single-leader to avoid duplicate chat responses. During pod drain today, the old pod cancels bot tasks immediately.                                                                                             |
+| Leaderboard data                                                 | `LeaderboardService`           | DB-backed `watch` channel, 30s refresh                                                  | Already DB-backed; each replica runs its own refresh loop — duplicate work but no write conflict                                                                                                                |
 
 **Approach:** Sticky sessions (LB routes by source IP) so each SSH connection lives on one replica. Shared data via DB/Redis. Not needed yet — single replica handles thousands of concurrent SSH sessions.
 
@@ -753,13 +789,15 @@ Currently the SSH app assumes a single process. These in-memory structures would
 ### 8.3 High-risk end-to-end flows
 
 **Paired client control + visualizer:**
+
 1. Trigger: SSH PTY request creates a session token plus the inbound `SessionRegistry` route.
 2. Processing: Browser or CLI connects `GET /api/ws/pair?token=...`; API registers an outbound paired-client sender/state slot in `PairedClientRegistry`.
 3. Side effects: Paired client sends viz frames (66ms-ish) plus `client_state`; viz frames route through `SessionRegistry` to `App.tick()`, while `client_state` updates paired kind/mute/volume metadata in `PairedClientRegistry`.
 4. Side effects: TUI `m`, `+`, and `-` send `toggle_mute`, `volume_up`, and `volume_down` back over the same WS to only the paired client for that token.
-5. Failure: If the paired client disconnects, visualizer decays (rms * 0.96 per tick) and paired state disappears. If SSH disconnects, the session token unregisters on drop.
+5. Failure: If the paired client disconnects, visualizer decays (rms \* 0.96 per tick) and paired state disappears. If SSH disconnects, the session token unregisters on drop.
 
 **Chat send flow:**
+
 1. Trigger: User presses Enter in composer with non-empty text (supports multiline via Alt+Enter). If `edited_message_id` is set, the same submit path fires `edit_message_task` instead of `send_message_task`, so edit rides on the composer exactly like a fresh send.
 2. Processing: `ChatService::send_message_task` spawned with `request_id` → DB insert → `MessageCreated` broadcast → `SendSucceeded` targeted to sender. Edits emit `MessageEdited` (full `ChatMessage` payload + real `target_user_ids`) plus a per-sender `EditSucceeded`/`EditFailed` ack.
 3. Side effects: All sessions receive `MessageCreated`/`MessageEdited` and apply the delta to their local `rooms[room_id]` vec (no DB refetch). Messages containing `@username` show a golden `│` gutter on the left for the mentioned user.
@@ -767,6 +805,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 5. News articles post their "new article" announcement into #general by resolving the general room id inline in `ArticleService` and calling `send_message_task` like any other composer submit — there is no general-specific send wrapper.
 
 **Chat ignore flow:**
+
 1. Trigger: User submits `/ignore @user` or `/unignore @user` in the composer
 2. Processing: `ChatService::ignore_user_task` / `unignore_user_task` resolves the username via `User::find_by_username`, then calls `User::add_ignored_user_id` / `remove_ignored_user_id` (settings JSONB write keyed on `target.id`, not the username string)
 3. Side effects: Service emits `ChatEvent::IgnoreListUpdated { user_id, ignored_user_ids, message }`. `ChatState` updates its local `HashSet<Uuid>`, calls `refilter_local_messages()` to drop already-stored messages from any newly-ignored author across every non-DM room in place (no DB refetch), and shows a success banner.
@@ -775,6 +814,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 6. Failure: `IgnoreFailed { user_id, message }` for self-target, unknown username, already-ignored, or not-currently-ignored — surfaced as a red banner.
 
 **Chat roster/help overlay flow:**
+
 1. Trigger: User submits `/help`, `/active`, or `/list` in the composer
 2. Processing: `ChatState::submit_composer()` intercepts these before any message send. `/help` opens a static overlay, `/active` snapshots the shared in-memory `active_users` registry, and `/list` spawns `ChatService::list_room_members_task` for the selected non-auto-join room.
 3. Side effects: `/active` renders usernames in an overlay immediately and annotates repeated SSH sessions as `(<n> sessions)`. `/list` resolves `chat_room_members` to `users.username` and opens a room-member overlay when the async event arrives.
@@ -782,18 +822,21 @@ Currently the SSH app assumes a single process. These in-memory structures would
 5. Failure: `/list` on the wrong room shows a red banner; DB/service errors surface via `RoomMembersListFailed`.
 
 **Chat reply flow:**
+
 1. Trigger: User selects a message (`j`/`k`) and presses `r`
 2. Processing: `ChatState::begin_reply_to_selected_in_room(room_id)` captures the target author plus a short preview, enters compose mode, and shows a reply-specific composer title. Callers resolve the target room themselves (chat screen passes `selected_room_id`, dashboard passes `general_room_id()`); there is no implicit-room wrapper.
 3. Side effects: Submit prepends a quoted first line (`> @user: preview`) to the stored message body; rendering peels that first line back out and draws it as faint reply context above the new body
 4. Failure: No selected message → `r` is a no-op
 
 **Chat @mention autocomplete:**
+
 1. Trigger: User types `@` in composer (at start or after space)
 2. Processing: `ChatState::update_autocomplete()` filters `all_usernames` (loaded from `users` via `ChatSnapshot`) case-insensitively by the query after `@`
-3. Interaction: Arrow keys navigate matches, Tab/Enter confirms (inserts `@username `), Esc dismisses popup without leaving compose mode
+3. Interaction: Arrow keys navigate matches, Tab/Enter confirms (inserts `@username`), Esc dismisses popup without leaving compose mode
 4. Rendering: `draw_mention_autocomplete()` renders a popup above the composer with up to 8 filtered matches; confirm must also move `composer_cursor` to the end of the inserted mention including the trailing space
 
 **Vote round switch:**
+
 1. Trigger: VoteService background tick (5s) detects switch interval (default 60 min) elapsed since last switch
 2. Processing: `switch_to_winner()` → pick genre with most votes (or keep current) → clear all votes → increment `round_id` → send `vibe.set <genre>` to Liquidsoap
 3. Side effects: All clients detect `round_id` change → clear `my_vote`. Liquidsoap switches playlist.
@@ -803,7 +846,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 - **Ignore is keyed by user id, not username:** `users.settings.ignored_user_ids` stores UUIDs, so a `/ignore @alice` survives @alice renaming herself to @alice2. Storing usernames there would silently break on rename and could re-attach a stale ignore to a different person if usernames are ever reused.
 - **Ignore re-filter is local-only:** `ChatEvent::IgnoreListUpdated` triggers an in-place retain across every non-DM room — no `request_list()` refetch. Side effect: `unignore` does **not** retroactively re-fetch already-dropped messages; they reappear on the next natural snapshot/refresh.
-- **Dashboard shares one chat store with the chat page:** #general lives inside `ChatState.rooms` like every other room; the dashboard card just looks it up by `general_room_id`. There is no parallel `general_messages` vec. Every member-room stays warm from broadcasts regardless of selection — `push_message` only gates the "mark-as-read" side effect on whether the user is actually viewing the room. **Message operations on `ChatState` are room-explicit**: the canonical methods are `select_message_in_room`, `begin_reply_to_selected_in_room`, `begin_edit_selected_in_room`, `delete_selected_message_in_room`, `start_composing_in_room`, all taking a concrete `Uuid`. There are no implicit-room variants — callers resolve the target room at the boundary. Wire new message actions *once* in three places and they work on both dashboard and chat page automatically: (a) `chat::input::handle_message_action_in_room(app, room_id, byte)` for the keybinding, (b) the room-explicit `ChatState` helpers (`find_message_in_room`, `replace_message`, `remove_message`, etc.) for state mutation, (c) `chat::ui::draw_composer_block` / `ComposerBlockView` for any new composer state label (reply, edit, …). Chat-screen entry points (`handle_message_action`, `handle_message_arrow`, `handle_scroll`) are thin wrappers that resolve `selected_room_id` at the top and delegate to the `_in_room` variant; dashboard input passes `general_room_id()` directly. The composer also pins its own `composer_room_id` in `start_composing_in_room` so submit never falls back to `selected_room_id` — switching rooms mid-compose can't redirect an in-flight message.
+- **Dashboard shares one chat store with the chat page:** #general lives inside `ChatState.rooms` like every other room; the dashboard card just looks it up by `general_room_id`. There is no parallel `general_messages` vec. Every member-room stays warm from broadcasts regardless of selection — `push_message` only gates the "mark-as-read" side effect on whether the user is actually viewing the room. **Message operations on `ChatState` are room-explicit**: the canonical methods are `select_message_in_room`, `begin_reply_to_selected_in_room`, `begin_edit_selected_in_room`, `delete_selected_message_in_room`, `start_composing_in_room`, all taking a concrete `Uuid`. There are no implicit-room variants — callers resolve the target room at the boundary. Wire new message actions _once_ in three places and they work on both dashboard and chat page automatically: (a) `chat::input::handle_message_action_in_room(app, room_id, byte)` for the keybinding, (b) the room-explicit `ChatState` helpers (`find_message_in_room`, `replace_message`, `remove_message`, etc.) for state mutation, (c) `chat::ui::draw_composer_block` / `ComposerBlockView` for any new composer state label (reply, edit, …). Chat-screen entry points (`handle_message_action`, `handle_message_arrow`, `handle_scroll`) are thin wrappers that resolve `selected_room_id` at the top and delegate to the `_in_room` variant; dashboard input passes `general_room_id()` directly. The composer also pins its own `composer_room_id` in `start_composing_in_room` so submit never falls back to `selected_room_id` — switching rooms mid-compose can't redirect an in-flight message.
 - **Snapshot merge for empty rooms:** `ChatState::merge_rooms` preserves cached messages when snapshot arrives with empty message list for a room - prevents flash-clear on out-of-order snapshots
 - **Unread count merge:** `merge_unread_counts` tracks `pending_read_rooms` to suppress stale unread counts after marking read (avoids flicker)
 - **Render loop missed ticks:** 66ms interval with `MissedTickBehavior::Skip` - if a frame takes too long, next ticks are skipped rather than queued (prevents snowball lag)
@@ -851,6 +894,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI (chat composer, screen switches). Findings from two independent code reads, grouped and deduplicated below. Ordered by likely impact. None of these have been fixed yet — keep this list current as work lands.
 
 ### A. Render lock blocks input (partially addressed)
+
 - The SSH `data` handler and the render task both take the same `TokioMutex<App>` (see `late-ssh/src/ssh.rs`).
 - `render_once` holds the lock across the whole synchronous `app.tick()` + `app.render()` (full ratatui draw + diff). The lock is only released before `handle.data(...)` is awaited, so any single expensive frame stalls every keystroke that arrives during it.
 - With 60 sessions × 15 FPS = ~900 frame builds/sec sharing tokio worker threads, even modestly expensive frames push input latency into the felt range.
@@ -858,11 +902,13 @@ Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI
 - **Still open — lock contention:** `data()` still awaits the app mutex. A slow render on another task will block input. Further fix (not yet done): `data()` pushes raw bytes into a per-session `mpsc::UnboundedSender<Vec<u8>>`; the render task drains it at the top of each tick. Input never blocks on the render lock again.
 
 ### B. Chat row cache is expensive even on hits
+
 - `ensure_chat_rows_cache` (`late-ssh/src/app/chat/ui.rs:324`) calls `chat_rows_fingerprint` (`late-ssh/src/app/chat/ui.rs:297`) every render. The fingerprint hashes message id, user_id, created, **body string**, plus username/badge/glyph lookups for every visible message.
 - With `HISTORY_LIMIT = 1000` (`late-ssh/src/app/chat/svc.rs:22`), the active room's full transcript can be re-hashed up to 15 times/sec per session — a steady CPU floor even when nothing changed.
 - **Direction:** cap visible messages much lower (200 is plenty for a TUI viewport), and/or maintain the fingerprint incrementally (`(last_msg_id, last_msg_updated_at, len, badge_version, glyph_version)`) instead of full re-hash.
 
 ### C. `ChatSnapshot` is a single global watch channel + per-user payload → quadratic clone storm
+
 - `ChatService` holds **one** `watch::Sender<ChatSnapshot>` (`late-ssh/src/app/chat/svc.rs:155`). Every session's refresh task publishes its own per-user snapshot into it (`late-ssh/src/app/chat/svc.rs:240`), ~6 publishes/sec at 60 users.
 - `drain_snapshot` (`late-ssh/src/app/chat/state.rs:1128`) clones the **entire** snapshot first, then discards it if `snapshot.user_id != self.user_id`. 59/60 of those clones are pure waste.
 - The cloned payload is huge: rooms `Vec<(ChatRoom, Vec<ChatMessage>)>` (general up to 1000 msgs + selected room up to 1000), `usernames` HashMap, `bonsai_glyphs` HashMap, `all_usernames` Vec.
@@ -871,6 +917,7 @@ Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI
 - **Real fix:** the `ChatGlobalsService` split already proposed in §7 — global maps in their own `watch<Arc<…>>`, per-user state in per-user channels (mirror `ProfileService`'s per-user-keyed senders).
 
 ### D. Per-user 10s refresh does heavy work for everyone, every cycle
+
 - `list_chat_rooms` (`late-ssh/src/app/chat/svc.rs:179`) runs every 10s per session and unconditionally fetches:
   - room membership + unread counts (`svc.rs:181`, `svc.rs:182`)
   - up to 1000 messages for the active room (`svc.rs:191`)
@@ -879,18 +926,21 @@ Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI
   - all bonsai trees (`svc.rs:213`) — global, identical for everyone
   - per-user ignored list
 - At 60 users that's ~120 list_recent calls / 10s shipping ~12k+ rows/sec from PG just for the warm-tail refresh.
-- **Direction:** drop `HISTORY_LIMIT` to ~200 (no human reads back 1000), let general's tail be cached once in `ChatService` (broadcasts already keep it warm), only fetch the *selected* non-general room per-user.
+- **Direction:** drop `HISTORY_LIMIT` to ~200 (no human reads back 1000), let general's tail be cached once in `ChatService` (broadcasts already keep it warm), only fetch the _selected_ non-general room per-user.
 - Refresh task itself stays — it's load-bearing for dropped-broadcast recovery (lagged `MessageCreated`/`MessageEdited`); only the global queries and the volume move out.
 
 ### E. Unread-count query may get painful as message volume grows
+
 - `ChatRoomMember::unread_counts_for_user` (`late-core/src/models/chat_room_member.rs:99`) LEFT-JOINs `chat_messages` and counts every row newer than `last_read_at` for every membership row. Index `idx_chat_messages_room_created` on `(room_id, created DESC, id DESC)` exists, so plans should use it, but the query still scans all unread rows per room.
 - Not the primary suspect at 60 users today, but worth `EXPLAIN ANALYZE` once message volume grows. Could also be replaced by a maintained counter if it shows up in profiles.
 
 ### F. Snapshot merge clones inactive rooms' history vectors
+
 - `merge_rooms` (`late-ssh/src/app/chat/state.rs:1394`) preserves cached messages on snapshots that arrive with empty per-room vecs by **cloning the previous Vec<ChatMessage>** for each such room. Prevents the flash-clear race, but means every refresh copies large per-room message vecs around instead of doing a lightweight metadata update.
 - **Direction:** carry per-room metadata (id, name, kind, member info, unread count) separately from the message tail, and only swap the message tail when the snapshot actually carries one for that room.
 
 ### Suggested order
+
 1. **A** (input/render lock split) and **B** (cache fingerprint cap/incremental) — pure local changes, immediate user-felt latency win.
 2. **C-cheap** (peek user_id before clone) — one-line patch, biggest CPU cut of the bunch.
 3. **D** (drop HISTORY_LIMIT, stop refetching general per-user) — small change, kills the bulk of PG churn.
@@ -898,6 +948,7 @@ Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI
 5. **E** if it shows up in PG profiles after the above.
 
 ### Out of scope of this investigation
+
 - Paired-client viz WS path is local per-token (`mpsc::channel(64)`) and not the suspect. The visualizer-driven full ratatui redrawing is part of A's per-tick cost, not a separate bottleneck.
 
 ---
@@ -1011,12 +1062,12 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 
 ### Screen overview
 
-| Screen | Key | Status | Description |
-|--------|-----|--------|-------------|
-| **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/help`) with grouped room sections and a synthetic `news` entry in the room list |
-| **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Profile** | 4 | Active | Read-only public identity card: username, country, timezone, optional `Current time` (derived from timezone when parseable), bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. Bio is wrapped at the same width the modal editor uses (`welcome_modal::ui::bio_text_width(MODAL_WIDTH)`) via `build_composer_rows`, so pasted URLs fold instead of running off-screen. All editing happens in the **welcome/profile modal** (auto-opens on first login, reopen via Profile's edit action) — sectioned into Identity / Appearance / Notifications / Location, with a Save CTA and a `?` callout that opens the help modal on top. Bio is an inline full-width bordered editor under the Identity heading (encouraging people to share site / GitHub / socials); it accepts bracketed-paste so URLs drop in whole. Theme + background color preview live from the draft while the modal is open. Selecting a chat message and pressing `p` opens a separate read-only **profile modal** for that author; it shows the same public identity summary, supports `j/k` or arrows for scroll, and is slightly wider than the first revision. |
+| Screen        | Key | Status | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------- | --- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dashboard** | 1   | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **Chat**      | 2   | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/help`) with grouped room sections and a synthetic `news` entry in the room list                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Games**     | 3   | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Profile**   | 4   | Active | Read-only public identity card: username, country, timezone, optional `Current time` (derived from timezone when parseable), bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. Bio is wrapped at the same width the modal editor uses (`welcome_modal::ui::bio_text_width(MODAL_WIDTH)`) via `build_composer_rows`, so pasted URLs fold instead of running off-screen. All editing happens in the **welcome/profile modal** (auto-opens on first login, reopen via Profile's edit action) — sectioned into Identity / Appearance / Notifications / Location, with a Save CTA and a `?` callout that opens the help modal on top. Bio is an inline full-width bordered editor under the Identity heading (encouraging people to share site / GitHub / socials); it accepts bracketed-paste so URLs drop in whole. Theme + background color preview live from the draft while the modal is open. Selecting a chat message and pressing `p` opens a separate read-only **profile modal** for that author; it shows the same public identity summary, supports `j/k` or arrows for scroll, and is slightly wider than the first revision. |
 
 ### Layout
 
@@ -1051,94 +1102,94 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 
 ### Keyboard shortcuts
 
-| Key | Context | Action |
-|-----|---------|--------|
-| `q` / `Q` / `Ctrl+C` | Global | Quit |
-| `?` | Global (not composing) | Open help modal (multi-slide guide). Also works inside the welcome/profile modal, which renders help on top while keeping the draft intact. |
-| `h` / `l` / `←` / `→` | Help modal | Switch slides (Overview / Chat / Music / News / Arcade / Bonsai / Profile / Architecture) |
-| `j` / `k` / `↑` / `↓` | Help modal | Scroll current slide (uncapped — past the last line is blank space) |
-| `?` / `q` / `Esc` | Help modal | Close (returns to underlying screen, including welcome modal if it was open) |
-| `Tab` | Global | Cycle screens |
-| `1` | Global | Jump to Dashboard |
-| `2` | Global | Jump to Chat |
-| `3` | Global | Jump to Games |
-| `4` | Global | Jump to Profile |
-| `m` | Global | Toggle mute on paired client |
-| `+` / `=` | Global | Volume up on paired client |
-| `-` / `_` | Global | Volume down on paired client |
-| `w` | Global (not composing, games override) | Water bonsai / replant dead tree |
-| `x` | Global (not composing, games override) | Prune bonsai (reshape, costs 20% growth) |
-| `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
-| `s` | Dashboard | Copy bonsai ASCII snippet to clipboard |
-| `j` / `k` / arrows | Dashboard | Scroll chat |
-| `p` | Dashboard chat selection | Open selected user's read-only profile modal |
-| `r` | Dashboard chat selection | Reply to selected general chat message |
-| `e` | Dashboard / Chat (own message selected) | Edit selected message — same composer, different title |
-| `d` | Dashboard / Chat (own message selected) | Delete selected message |
-| `Enter` | Games lobby | Launch selected game |
-| `Esc` | Active game | Exit back to Arcade lobby |
-| `h` / `j` / `k` / `l` / arrows | 2048 | Move tiles |
-| `r` | 2048 game over | Start a fresh 2048 board |
-| `h` / `l` / arrows | Tetris | Move active piece left / right |
-| `j` / down arrow | Tetris | Soft drop |
-| `k` / up arrow | Tetris | Rotate clockwise |
-| `Space` | Tetris | Hard drop |
-| `p` | Tetris | Pause / resume |
-| `r` | Tetris | Start a fresh run |
-| `r` | Sudoku (unsolved) | Reset board (clears non-fixed cells) |
-| `r` | Nonograms (unsolved) | Reset board (clears all cells) |
-| `h` / `j` / `k` / `l` / arrows | Sudoku | Move cursor |
-| `1`-`9` | Sudoku | Fill selected cell |
-| `0` / `Backspace` | Sudoku | Clear selected cell |
-| `d` | Sudoku | Restore today's daily board |
-| `p` | Sudoku | Open saved personal board |
-| `n` | Sudoku | Generate a fresh personal board |
-| `[` / `]` | Sudoku | Switch difficulty (easy / medium / hard) |
-| `h` / `j` / `k` / `l` / arrows | Nonograms | Move cursor |
-| `Space` / `x` | Nonograms | Toggle selected cell |
-| `0` / `Backspace` / `c` | Nonograms | Clear selected cell |
-| `d` | Nonograms | Restore today's daily puzzle for the current size |
-| `p` | Nonograms | Open saved personal puzzle for the current size |
-| `n` | Nonograms | Generate a fresh personal puzzle for the current size |
-| `[` / `]` | Nonograms | Switch puzzle size pack |
-| `Esc` | Nonograms | Exit back to Arcade lobby |
-| `h` / `l` | Chat | Switch room selection, including the synthetic `news` entry. Aliases: `Ctrl+N` next room, `Ctrl+P` previous room; room switching wraps around. |
-| `j` / `k` / arrows | Chat (`news` selected) | Navigate news list |
-| `i` | Chat (`news` selected) | Start composing/pasting URL |
-| `Enter` | Chat (`news` selected) | Copy selected link / submit URL |
-| `d` | Chat (`news` selected) | Delete own article |
-| `Esc` | Chat (`news` composing) | Cancel URL compose |
-| `i` / `Enter` | Dashboard | Start composing chat |
-| `j` / `k` | Chat | Move message selection newer/older |
-| `p` | Chat | Open selected user's read-only profile modal |
-| `r` | Chat | Reply to selected message |
-| `P` | Global | Show browser-pairing QR (copies pairing URL) |
-| `/help` | Chat composer | Open scrollable chat help overlay (commands + all chat keys) |
-| `/active` | Chat composer | List active SSH users from the in-memory session registry |
-| `/list` | Chat composer | List users in the selected non-auto-join ("private") room |
-| `/music` | Chat composer | Open music setup instructions in the same scrollable overlay flow as `/help` |
-| `/ignore [@user]` | Chat composer | Mute a user, or list muted users when no arg |
-| `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
-| `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
-| `q` / `Esc` | Chat overlay (`/help`, ignore list) | Close overlay |
-| `Enter` | Profile screen | Open the welcome/profile modal to edit |
-| `↑` / `↓` / `j` / `k` | Welcome/profile modal | Move between rows (Username, Bio, Theme, Background, DMs, @mentions, Game events, Bell, Cooldown, Country, Timezone, Save) |
-| `←` / `→` | Welcome/profile modal | Cycle the current row's setting (theme, toggles, cooldown) |
-| `Space` / `Enter` / `e` | Welcome/profile modal | Activate row — edit username/bio, cycle a setting, open country/timezone picker, or fire Save |
-| `Alt+Enter` | Welcome/profile modal (bio editing) | Insert newline |
-| `?` | Welcome/profile modal | Open help modal on top |
-| `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |
-| `q` / `Esc` | Read-only profile modal | Close |
-| `Esc` | Any modal | Close/cancel |
-| `c` | Chat (not composing) | Open web chat QR (copies URL + shows it as fallback) |
-| `Ctrl+]` | Dashboard / Chat | Open icon picker (emoji + nerd font). Auto-starts the composer if not already composing. Inserts into the chat composer only. |
-| `↑` / `↓` / `j` / `k` | Icon picker | Move selection |
-| `Ctrl+U` / `Ctrl+D` | Icon picker | Half-page up / down |
-| `PageUp` / `PageDown` | Icon picker | Full-page jump |
-| `Enter` | Icon picker | Insert selected icon and close |
-| `Alt+Enter` | Icon picker | Insert selected icon and keep picker open |
-| click / wheel / dbl-click | Icon picker | Select row / scroll / insert + keep open |
-| `Esc` | Icon picker | Close without inserting |
+| Key                            | Context                                 | Action                                                                                                                                         |
+| ------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `q` / `Q` / `Ctrl+C`           | Global                                  | Quit                                                                                                                                           |
+| `?`                            | Global (not composing)                  | Open help modal (multi-slide guide). Also works inside the welcome/profile modal, which renders help on top while keeping the draft intact.    |
+| `h` / `l` / `←` / `→`          | Help modal                              | Switch slides (Overview / Chat / Music / News / Arcade / Bonsai / Profile / Architecture)                                                      |
+| `j` / `k` / `↑` / `↓`          | Help modal                              | Scroll current slide (uncapped — past the last line is blank space)                                                                            |
+| `?` / `q` / `Esc`              | Help modal                              | Close (returns to underlying screen, including welcome modal if it was open)                                                                   |
+| `Tab`                          | Global                                  | Cycle screens                                                                                                                                  |
+| `1`                            | Global                                  | Jump to Dashboard                                                                                                                              |
+| `2`                            | Global                                  | Jump to Chat                                                                                                                                   |
+| `3`                            | Global                                  | Jump to Games                                                                                                                                  |
+| `4`                            | Global                                  | Jump to Profile                                                                                                                                |
+| `m`                            | Global                                  | Toggle mute on paired client                                                                                                                   |
+| `+` / `=`                      | Global                                  | Volume up on paired client                                                                                                                     |
+| `-` / `_`                      | Global                                  | Volume down on paired client                                                                                                                   |
+| `w`                            | Global (not composing, games override)  | Water bonsai / replant dead tree                                                                                                               |
+| `x`                            | Global (not composing, games override)  | Prune bonsai (reshape, costs 20% growth)                                                                                                       |
+| `L` / `C` / `A` / `Z`          | Dashboard                               | Vote genre                                                                                                                                     |
+| `s`                            | Dashboard                               | Copy bonsai ASCII snippet to clipboard                                                                                                         |
+| `j` / `k` / arrows             | Dashboard                               | Scroll chat                                                                                                                                    |
+| `p`                            | Dashboard chat selection                | Open selected user's read-only profile modal                                                                                                   |
+| `r`                            | Dashboard chat selection                | Reply to selected general chat message                                                                                                         |
+| `e`                            | Dashboard / Chat (own message selected) | Edit selected message — same composer, different title                                                                                         |
+| `d`                            | Dashboard / Chat (own message selected) | Delete selected message                                                                                                                        |
+| `Enter`                        | Games lobby                             | Launch selected game                                                                                                                           |
+| `Esc`                          | Active game                             | Exit back to Arcade lobby                                                                                                                      |
+| `h` / `j` / `k` / `l` / arrows | 2048                                    | Move tiles                                                                                                                                     |
+| `r`                            | 2048 game over                          | Start a fresh 2048 board                                                                                                                       |
+| `h` / `l` / arrows             | Tetris                                  | Move active piece left / right                                                                                                                 |
+| `j` / down arrow               | Tetris                                  | Soft drop                                                                                                                                      |
+| `k` / up arrow                 | Tetris                                  | Rotate clockwise                                                                                                                               |
+| `Space`                        | Tetris                                  | Hard drop                                                                                                                                      |
+| `p`                            | Tetris                                  | Pause / resume                                                                                                                                 |
+| `r`                            | Tetris                                  | Start a fresh run                                                                                                                              |
+| `r`                            | Sudoku (unsolved)                       | Reset board (clears non-fixed cells)                                                                                                           |
+| `r`                            | Nonograms (unsolved)                    | Reset board (clears all cells)                                                                                                                 |
+| `h` / `j` / `k` / `l` / arrows | Sudoku                                  | Move cursor                                                                                                                                    |
+| `1`-`9`                        | Sudoku                                  | Fill selected cell                                                                                                                             |
+| `0` / `Backspace`              | Sudoku                                  | Clear selected cell                                                                                                                            |
+| `d`                            | Sudoku                                  | Restore today's daily board                                                                                                                    |
+| `p`                            | Sudoku                                  | Open saved personal board                                                                                                                      |
+| `n`                            | Sudoku                                  | Generate a fresh personal board                                                                                                                |
+| `[` / `]`                      | Sudoku                                  | Switch difficulty (easy / medium / hard)                                                                                                       |
+| `h` / `j` / `k` / `l` / arrows | Nonograms                               | Move cursor                                                                                                                                    |
+| `Space` / `x`                  | Nonograms                               | Toggle selected cell                                                                                                                           |
+| `0` / `Backspace` / `c`        | Nonograms                               | Clear selected cell                                                                                                                            |
+| `d`                            | Nonograms                               | Restore today's daily puzzle for the current size                                                                                              |
+| `p`                            | Nonograms                               | Open saved personal puzzle for the current size                                                                                                |
+| `n`                            | Nonograms                               | Generate a fresh personal puzzle for the current size                                                                                          |
+| `[` / `]`                      | Nonograms                               | Switch puzzle size pack                                                                                                                        |
+| `Esc`                          | Nonograms                               | Exit back to Arcade lobby                                                                                                                      |
+| `h` / `l`                      | Chat                                    | Switch room selection, including the synthetic `news` entry. Aliases: `Ctrl+N` next room, `Ctrl+P` previous room; room switching wraps around. |
+| `j` / `k` / arrows             | Chat (`news` selected)                  | Navigate news list                                                                                                                             |
+| `i`                            | Chat (`news` selected)                  | Start composing/pasting URL                                                                                                                    |
+| `Enter`                        | Chat (`news` selected)                  | Copy selected link / submit URL                                                                                                                |
+| `d`                            | Chat (`news` selected)                  | Delete own article                                                                                                                             |
+| `Esc`                          | Chat (`news` composing)                 | Cancel URL compose                                                                                                                             |
+| `i` / `Enter`                  | Dashboard                               | Start composing chat                                                                                                                           |
+| `j` / `k`                      | Chat                                    | Move message selection newer/older                                                                                                             |
+| `p`                            | Chat                                    | Open selected user's read-only profile modal                                                                                                   |
+| `r`                            | Chat                                    | Reply to selected message                                                                                                                      |
+| `P`                            | Global                                  | Show browser-pairing QR (copies pairing URL)                                                                                                   |
+| `/help`                        | Chat composer                           | Open scrollable chat help overlay (commands + all chat keys)                                                                                   |
+| `/active`                      | Chat composer                           | List active SSH users from the in-memory session registry                                                                                      |
+| `/list`                        | Chat composer                           | List users in the selected non-auto-join ("private") room                                                                                      |
+| `/music`                       | Chat composer                           | Open music setup instructions in the same scrollable overlay flow as `/help`                                                                   |
+| `/ignore [@user]`              | Chat composer                           | Mute a user, or list muted users when no arg                                                                                                   |
+| `/unignore [@user]`            | Chat composer                           | Remove a user from your ignore list                                                                                                            |
+| `j` / `k` / arrows             | Chat overlay (`/help`, ignore list)     | Scroll overlay                                                                                                                                 |
+| `q` / `Esc`                    | Chat overlay (`/help`, ignore list)     | Close overlay                                                                                                                                  |
+| `Enter`                        | Profile screen                          | Open the welcome/profile modal to edit                                                                                                         |
+| `↑` / `↓` / `j` / `k`          | Welcome/profile modal                   | Move between rows (Username, Bio, Theme, Background, DMs, @mentions, Game events, Bell, Cooldown, Country, Timezone, Save)                     |
+| `←` / `→`                      | Welcome/profile modal                   | Cycle the current row's setting (theme, toggles, cooldown)                                                                                     |
+| `Space` / `Enter` / `e`        | Welcome/profile modal                   | Activate row — edit username/bio, cycle a setting, open country/timezone picker, or fire Save                                                  |
+| `Alt+Enter`                    | Welcome/profile modal (bio editing)     | Insert newline                                                                                                                                 |
+| `?`                            | Welcome/profile modal                   | Open help modal on top                                                                                                                         |
+| `j` / `k` / `↑` / `↓`          | Read-only profile modal                 | Scroll                                                                                                                                         |
+| `q` / `Esc`                    | Read-only profile modal                 | Close                                                                                                                                          |
+| `Esc`                          | Any modal                               | Close/cancel                                                                                                                                   |
+| `c`                            | Chat (not composing)                    | Open web chat QR (copies URL + shows it as fallback)                                                                                           |
+| `Ctrl+]`                       | Dashboard / Chat                        | Open icon picker (emoji + nerd font). Auto-starts the composer if not already composing. Inserts into the chat composer only.                  |
+| `↑` / `↓` / `j` / `k`          | Icon picker                             | Move selection                                                                                                                                 |
+| `Ctrl+U` / `Ctrl+D`            | Icon picker                             | Half-page up / down                                                                                                                            |
+| `PageUp` / `PageDown`          | Icon picker                             | Full-page jump                                                                                                                                 |
+| `Enter`                        | Icon picker                             | Insert selected icon and close                                                                                                                 |
+| `Alt+Enter`                    | Icon picker                             | Insert selected icon and keep picker open                                                                                                      |
+| click / wheel / dbl-click      | Icon picker                             | Select row / scroll / insert + keep open                                                                                                       |
+| `Esc`                          | Icon picker                             | Close without inserting                                                                                                                        |
 
 ### Keybinding change checklist
 
@@ -1158,9 +1209,9 @@ When modifying any keybinding, update **all** of the following:
 
 ## References
 
-- russh: https://github.com/Eugeny/russh
-- ratatui: https://ratatui.rs/
-- Icecast: https://icecast.org/
-- Alpine.js: https://alpinejs.dev/
-- HTMX: https://htmx.org/
-- Liquidsoap: https://www.liquidsoap.info/
+- russh: <https://github.com/Eugeny/russh>
+- ratatui: <https://ratatui.rs/>
+- Icecast: <https://icecast.org/>
+- Alpine.js: <https://alpinejs.dev/>
+- HTMX: <https://htmx.org/>
+- Liquidsoap: <https://www.liquidsoap.info/>

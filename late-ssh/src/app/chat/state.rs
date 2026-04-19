@@ -381,6 +381,11 @@ impl ChatState {
         self.find_message_in_room(room_id, selected_id)
     }
 
+    pub fn selected_message_body_in_room(&self, room_id: Uuid) -> Option<String> {
+        self.selected_message_in_room(room_id)
+            .map(|m| m.body.clone())
+    }
+
     pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
         let message = self.selected_message_in_room(room_id)?;
         let user_id = message.user_id;
