@@ -30,12 +30,19 @@ jobs:
         include:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            binary_name: late
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            binary_name: late
           - runner: macos-15-intel
             target: x86_64-apple-darwin
+            binary_name: late
           - runner: macos-14
             target: aarch64-apple-darwin
+            binary_name: late
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: late.exe
     steps:
       - name: checkout
         uses: actions/checkout@v5
@@ -58,15 +65,16 @@ jobs:
         run: cargo build --locked --release -p late-cli --bin late --target ${{ matrix.target }}
 
       - name: stage_cli_artifact
+        shell: bash
         run: |
           mkdir -p dist/${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/late dist/${{ matrix.target }}/late
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/${{ matrix.target }}/${{ matrix.binary_name }}"
 
       - name: upload_cli_artifact
         uses: actions/upload-artifact@v6
         with:
           name: late-${{ matrix.target }}
-          path: dist/${{ matrix.target }}/late
+          path: dist/${{ matrix.target }}/${{ matrix.binary_name }}
           if-no-files-found: error
 
   publish_cli:
@@ -107,25 +115,35 @@ jobs:
 
           for artifact_dir in dist/late-*; do
             target="${artifact_dir#dist/late-}"
+            source_file="$(find "${artifact_dir}" -maxdepth 1 -type f \( -name 'late' -o -name 'late.exe' \) -print -quit)"
+            test -n "$source_file"
+            binary_name="$(basename "$source_file")"
             mkdir -p "publish/releases/${RELEASE_TAG}/${target}"
-            cp "${artifact_dir}/late" "publish/releases/${RELEASE_TAG}/${target}/late"
+            cp "$source_file" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}"
           done
 
           cp scripts/install.sh "publish/releases/${RELEASE_TAG}/install.sh"
+          cp scripts/install.ps1 "publish/releases/${RELEASE_TAG}/install.ps1"
           printf '%s\n' "${RELEASE_TAG}" > "publish/releases/${RELEASE_TAG}/VERSION"
           (
             cd "publish/releases/${RELEASE_TAG}"
-            sha256sum -- */late > sha256sums.txt
+            files=()
+            while IFS= read -r -d '' file; do
+              files+=("${file#./}")
+            done < <(find . -mindepth 2 -maxdepth 2 -type f \( -name 'late' -o -name 'late.exe' \) -print0 | LC_ALL=C sort -z)
+            sha256sum "${files[@]}" > sha256sums.txt
           )
 
           if [[ "${IS_PRERELEASE}" != "true" ]]; then
             mkdir -p publish/latest
-            cp -R "publish/releases/${RELEASE_TAG}/x86_64-unknown-linux-gnu" publish/latest/
-            cp -R "publish/releases/${RELEASE_TAG}/aarch64-unknown-linux-gnu" publish/latest/
-            cp -R "publish/releases/${RELEASE_TAG}/x86_64-apple-darwin" publish/latest/
-            cp -R "publish/releases/${RELEASE_TAG}/aarch64-apple-darwin" publish/latest/
+            for target_dir in "publish/releases/${RELEASE_TAG}"/*; do
+              [[ -d "$target_dir" ]] || continue
+              cp -R "$target_dir" publish/latest/
+            done
             cp scripts/install.sh publish/latest/install.sh
+            cp scripts/install.ps1 publish/latest/install.ps1
             cp scripts/install.sh publish/install.sh
+            cp scripts/install.ps1 publish/install.ps1
             cp scripts/install.sh publish/index.html
             printf '%s\n' "${RELEASE_TAG}" > publish/latest/VERSION
             printf '%s\n' "${RELEASE_TAG}" > publish/VERSION
@@ -154,6 +172,12 @@ jobs:
             "s3://${DIST_BUCKET}/install.sh" \
             --endpoint-url "${S3_ENDPOINT}" \
             --content-type "text/x-shellscript"
+
+          aws s3 cp \
+            publish/install.ps1 \
+            "s3://${DIST_BUCKET}/install.ps1" \
+            --endpoint-url "${S3_ENDPOINT}" \
+            --content-type "text/plain"
 
           aws s3 cp \
             publish/index.html \

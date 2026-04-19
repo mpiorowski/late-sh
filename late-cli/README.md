@@ -6,9 +6,19 @@ Connects to the SSH session and streams lofi audio locally with a live visualize
 
 ## Install
 
+macOS / Linux:
+
 ```bash
 curl -fsSL https://cli.late.sh/install.sh | bash
 ```
+
+Windows PowerShell (x64):
+
+```powershell
+irm https://cli.late.sh/install.ps1 | iex
+```
+
+The PowerShell installer places `late.exe` in `%LOCALAPPDATA%\Programs\late` and prints a PATH hint if that directory is not available in the current shell.
 
 ## Build from source
 
@@ -16,7 +26,7 @@ curl -fsSL https://cli.late.sh/install.sh | bash
 git clone https://github.com/mpiorowski/late-sh
 cd late-sh
 cargo build --release --bin late
-# binary at target/release/late
+# binary at target/release/late (late.exe on Windows)
 ```
 
 ## What it does
@@ -52,7 +62,7 @@ If you want to use a different key, pass `--key /path/to/key`.
 
 ## Requirements
 
-- Linux or macOS (WSL works too)
+- Linux, macOS, or Windows x64 (WSL works too)
 - Working audio output device
 - Rust toolchain (if building from source)
 
