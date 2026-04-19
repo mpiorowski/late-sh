@@ -3,8 +3,8 @@
 mod helpers;
 
 use helpers::{
-    chat_compose_app, make_app, make_app_with_chat_service, new_test_db, wait_for_render_contains,
-    wait_until,
+    chat_compose_app, make_app, make_app_with_chat_service, new_test_db, render_plain,
+    wait_for_render_contains, wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -182,6 +182,44 @@ async fn chat_compose_accepts_non_ascii_typing(#[case] label: &str, #[case] inpu
     let (_db, mut app) = chat_compose_app(&format!("utf8-{label}")).await;
     app.handle_input(input.as_bytes());
     wait_for_render_contains(&mut app, input).await;
+}
+
+#[tokio::test]
+async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
+    let (_db, mut app) = chat_compose_app("alt-backspace-split").await;
+
+    app.handle_input(b"one two");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("one") && frame.contains("two"),
+        "expected compose render to show the initial text; frame={frame:?}"
+    );
+
+    // Simulate a terminal splitting Alt+Backspace across reads: lone ESC
+    // first, then DEL on the next input chunk.
+    app.handle_input(b"\x1b");
+    app.handle_input(b"\x7f");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("one"),
+        "expected split Alt+Backspace to keep the preceding word; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("two"),
+        "expected split Alt+Backspace to delete the previous word; frame={frame:?}"
+    );
+
+    // Plain Backspace must still work after the word-delete chord.
+    app.handle_input(b"\x7f!");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("on!"),
+        "expected composer to keep accepting backspace and text after Alt+Backspace split; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("two"),
+        "expected Alt+Backspace split read to delete the previous word; frame={frame:?}"
+    );
 }
 
 #[tokio::test]

@@ -1,11 +1,12 @@
 use crate::app::{input::ParsedInput, state::App};
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
+    if is_close_event(&event) {
+        app.show_help = false;
+        return;
+    }
+
     match event {
-        ParsedInput::Byte(0x1B)
-        | ParsedInput::Char('?')
-        | ParsedInput::Char('q')
-        | ParsedInput::Char('Q') => app.show_help = false,
         ParsedInput::Char('h') | ParsedInput::Char('H') | ParsedInput::Arrow(b'D') => {
             app.help_modal_state.move_topic(-1)
         }
@@ -24,4 +25,25 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
 
 pub fn handle_escape(app: &mut App) {
     app.show_help = false;
+}
+
+fn is_close_event(event: &ParsedInput) -> bool {
+    matches!(
+        event,
+        ParsedInput::Byte(0x1B | b'?' | b'q' | b'Q') | ParsedInput::Char('?' | 'q' | 'Q')
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_keys_include_esc_q_and_hidden_question_mark() {
+        assert!(is_close_event(&ParsedInput::Byte(0x1B)));
+        assert!(is_close_event(&ParsedInput::Char('q')));
+        assert!(is_close_event(&ParsedInput::Char('Q')));
+        assert!(is_close_event(&ParsedInput::Char('?')));
+        assert!(!is_close_event(&ParsedInput::Char('j')));
+    }
 }

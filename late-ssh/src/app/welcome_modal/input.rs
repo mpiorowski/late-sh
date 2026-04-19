@@ -19,8 +19,12 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if is_close_event(&event) {
+        app.show_welcome = false;
+        return;
+    }
+
     match event {
-        ParsedInput::Byte(0x1B) => app.show_welcome = false,
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
@@ -44,6 +48,13 @@ fn open_help(app: &mut App) {
 
 pub fn handle_escape(app: &mut App) {
     handle_input(app, ParsedInput::Byte(0x1B));
+}
+
+fn is_close_event(event: &ParsedInput) -> bool {
+    matches!(
+        event,
+        ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q')
+    )
 }
 
 fn activate_selected_row(app: &mut App) {
@@ -95,6 +106,7 @@ fn handle_bio_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'\r') => app.welcome_modal_state.stop_bio_edit(),
         ParsedInput::AltEnter | ParsedInput::Byte(b'\n') => app.welcome_modal_state.bio_push('\n'),
         ParsedInput::Byte(0x15) => composer.clear(),
+        ParsedInput::Byte(0x17) => composer.delete_word_left(),
         ParsedInput::Byte(0x7F) => composer.backspace(),
         ParsedInput::Delete => composer.delete_right(),
         ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => composer.delete_word_left(),
@@ -144,5 +156,20 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
             app.welcome_modal_state.picker_push(byte as char)
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_keys_include_esc_and_q() {
+        assert!(is_close_event(&ParsedInput::Byte(0x1B)));
+        assert!(is_close_event(&ParsedInput::Char('q')));
+        assert!(is_close_event(&ParsedInput::Char('Q')));
+        assert!(is_close_event(&ParsedInput::Byte(b'q')));
+        assert!(is_close_event(&ParsedInput::Byte(b'Q')));
+        assert!(!is_close_event(&ParsedInput::Char('?')));
     }
 }

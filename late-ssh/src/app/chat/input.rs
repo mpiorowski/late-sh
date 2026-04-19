@@ -111,8 +111,11 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         b'r' | b'R' => {
-            app.chat.begin_reply_to_selected_in_room(room_id);
-            app.chat.clear_message_selection();
+            if let Some(b) = app.chat.begin_reply_to_selected_in_room(room_id) {
+                app.banner = Some(b);
+            } else {
+                app.chat.clear_message_selection();
+            }
             return true;
         }
         b'e' | b'E' => {

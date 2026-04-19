@@ -59,8 +59,8 @@ pub(crate) enum ParsedInput {
     Scroll(isize),
     MousePress { x: u16, y: u16 },
     BackTab,
-    // Alt+Enter inserts a newline. `ESC + CR/LF` is pre-scanned because vte
-    // routes C0 bytes through `execute`, not `esc_dispatch`.
+    // Alt+Enter inserts a newline. `ESC`-prefixed control chords that would
+    // otherwise wedge vte are pre-scanned before the parser sees them.
     AltEnter,
     // Alt+S submits without closing the composer. Picked over Ctrl+Enter
     // because tmux collapses Ctrl-modified Enter to bare `\r` unless the
@@ -74,28 +74,36 @@ pub(crate) enum ParsedInput {
     FocusLost,
 }
 
-/// Walk `data` and split it on inline `ESC` + `CR`/`LF` pairs (Alt+Enter).
-///
-/// vte routes C0 control bytes through `execute` while the parser is in
-/// escape state, which means `esc_dispatch` never sees `\r` or `\n` as the
-/// final byte of an `ESC <byte>` sequence. Without this pre-scan, Alt+Enter
-/// would be emitted as a plain Enter keypress and submit the composer.
+/// vte keeps pending escape state when `ESC` is followed by control bytes
+/// such as `CR`, `LF`, or `BS`, so pre-scan those chords before feeding the
+/// parser. This keeps Alt+Enter and Alt+Backspace from wedging subsequent
+/// input when the chord is split across reads.
 #[derive(Debug, Eq, PartialEq)]
-enum AltEnterChunk<'a> {
+enum EscapedInputChunk<'a> {
     Bytes(&'a [u8]),
-    AltEnter,
+    Event(ParsedInput),
 }
 
-fn split_alt_enter(data: &[u8]) -> Vec<AltEnterChunk<'_>> {
+fn escaped_input_event(byte: u8) -> Option<ParsedInput> {
+    match byte {
+        b'\r' | b'\n' => Some(ParsedInput::AltEnter),
+        0x08 | 0x7F => Some(ParsedInput::CtrlBackspace),
+        _ => None,
+    }
+}
+
+fn split_escaped_input(data: &[u8]) -> Vec<EscapedInputChunk<'_>> {
     let mut out = Vec::new();
     let mut seg_start = 0;
     let mut i = 0;
     while i + 1 < data.len() {
-        if data[i] == 0x1B && matches!(data[i + 1], b'\r' | b'\n') {
+        if data[i] == 0x1B
+            && let Some(event) = escaped_input_event(data[i + 1])
+        {
             if i > seg_start {
-                out.push(AltEnterChunk::Bytes(&data[seg_start..i]));
+                out.push(EscapedInputChunk::Bytes(&data[seg_start..i]));
             }
-            out.push(AltEnterChunk::AltEnter);
+            out.push(EscapedInputChunk::Event(event));
             i += 2;
             seg_start = i;
         } else {
@@ -103,7 +111,7 @@ fn split_alt_enter(data: &[u8]) -> Vec<AltEnterChunk<'_>> {
         }
     }
     if seg_start < data.len() {
-        out.push(AltEnterChunk::Bytes(&data[seg_start..]));
+        out.push(EscapedInputChunk::Bytes(&data[seg_start..]));
     }
     out
 }
@@ -344,16 +352,17 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-    // Split-across-reads Alt+Enter: previous read ended with a lone ESC and
-    // this one begins with CR/LF. vte would execute the CR/LF as a plain
-    // Enter while still sitting in escape state, submitting the composer
-    // instead of inserting a newline. Intercept here before anything else.
+    // Split-across-reads `ESC` chords: previous read ended with a lone ESC
+    // and this one begins with a control byte that should be treated as an
+    // Alt chord instead of feeding a wedged parser.
     let mut start = 0;
-    if app.pending_escape && matches!(data.first(), Some(b'\r') | Some(b'\n')) {
+    if app.pending_escape
+        && let Some(event) = data.first().and_then(|byte| escaped_input_event(*byte))
+    {
         app.pending_escape = false;
         app.pending_escape_started_at = None;
         app.vt_input.reset();
-        handle_parsed_input(app, ParsedInput::AltEnter);
+        handle_parsed_input(app, event);
         start = 1;
     }
 
@@ -367,14 +376,13 @@ pub fn handle(app: &mut App, data: &[u8]) {
         dispatch_escape(app);
     }
 
-    // Inline Alt+Enter: pre-scan and split on ESC+CR/LF pairs. Each segment
-    // is fed to vte independently and an AltEnter event is emitted at each
-    // split point. See `split_alt_enter` for why this can't live in the
-    // `Perform` impl.
-    for chunk in split_alt_enter(&data[start..]) {
+    // Inline `ESC` control chords: pre-scan and split on the sequences that
+    // would otherwise leave vte mid-escape. Each segment is fed to vte
+    // independently and recognized chords are emitted directly.
+    for chunk in split_escaped_input(&data[start..]) {
         match chunk {
-            AltEnterChunk::Bytes(bytes) => handle_vt_segment(app, bytes),
-            AltEnterChunk::AltEnter => handle_parsed_input(app, ParsedInput::AltEnter),
+            EscapedInputChunk::Bytes(bytes) => handle_vt_segment(app, bytes),
+            EscapedInputChunk::Event(event) => handle_parsed_input(app, event),
         }
     }
 
@@ -523,6 +531,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.chat.update_autocomplete();
         }
         ParsedInput::CtrlBackspace
+            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+                && ctx.chat_composing =>
+        {
+            app.chat.composer_delete_word_left();
+            app.chat.update_autocomplete();
+        }
+        ParsedInput::Byte(0x17)
             if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
                 && ctx.chat_composing =>
         {
@@ -1346,48 +1361,64 @@ mod tests {
 
     #[test]
     fn split_alt_enter_returns_plain_bytes_when_no_trigger() {
-        let chunks = split_alt_enter(b"hello");
-        assert_eq!(chunks, vec![AltEnterChunk::Bytes(b"hello")]);
+        let chunks = split_escaped_input(b"hello");
+        assert_eq!(chunks, vec![EscapedInputChunk::Bytes(b"hello")]);
     }
 
     #[test]
-    fn split_alt_enter_splits_on_inline_escape_cr() {
-        let chunks = split_alt_enter(b"ab\x1b\rcd");
+    fn split_escaped_input_splits_on_inline_escape_cr() {
+        let chunks = split_escaped_input(b"ab\x1b\rcd");
         assert_eq!(
             chunks,
             vec![
-                AltEnterChunk::Bytes(b"ab"),
-                AltEnterChunk::AltEnter,
-                AltEnterChunk::Bytes(b"cd"),
+                EscapedInputChunk::Bytes(b"ab"),
+                EscapedInputChunk::Event(ParsedInput::AltEnter),
+                EscapedInputChunk::Bytes(b"cd"),
             ]
         );
     }
 
     #[test]
-    fn split_alt_enter_handles_escape_lf_variant() {
-        let chunks = split_alt_enter(b"\x1b\n");
-        assert_eq!(chunks, vec![AltEnterChunk::AltEnter]);
+    fn split_escaped_input_handles_escape_lf_variant() {
+        let chunks = split_escaped_input(b"\x1b\n");
+        assert_eq!(
+            chunks,
+            vec![EscapedInputChunk::Event(ParsedInput::AltEnter)]
+        );
     }
 
     #[test]
-    fn split_alt_enter_handles_consecutive_triggers() {
-        let chunks = split_alt_enter(b"\x1b\r\x1b\nx");
+    fn split_escaped_input_handles_escape_backspace_variants() {
+        let chunks = split_escaped_input(b"\x1b\x08\x1b\x7fx");
         assert_eq!(
             chunks,
             vec![
-                AltEnterChunk::AltEnter,
-                AltEnterChunk::AltEnter,
-                AltEnterChunk::Bytes(b"x"),
+                EscapedInputChunk::Event(ParsedInput::CtrlBackspace),
+                EscapedInputChunk::Event(ParsedInput::CtrlBackspace),
+                EscapedInputChunk::Bytes(b"x"),
             ]
         );
     }
 
     #[test]
-    fn split_alt_enter_leaves_trailing_lone_escape_for_pending_logic() {
+    fn split_escaped_input_handles_consecutive_triggers() {
+        let chunks = split_escaped_input(b"\x1b\r\x1b\nx");
+        assert_eq!(
+            chunks,
+            vec![
+                EscapedInputChunk::Event(ParsedInput::AltEnter),
+                EscapedInputChunk::Event(ParsedInput::AltEnter),
+                EscapedInputChunk::Bytes(b"x"),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_escaped_input_leaves_trailing_lone_escape_for_pending_logic() {
         // A bare ESC at the end of the buffer is left in the byte stream so
         // handle()'s trailing-ESC bookkeeping can set pending_escape.
-        let chunks = split_alt_enter(b"ab\x1b");
-        assert_eq!(chunks, vec![AltEnterChunk::Bytes(b"ab\x1b")]);
+        let chunks = split_escaped_input(b"ab\x1b");
+        assert_eq!(chunks, vec![EscapedInputChunk::Bytes(b"ab\x1b")]);
     }
 
     #[test]

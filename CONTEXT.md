@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-18 (welcome/profile modal redesigned with sectioned layout — Identity / Appearance / Notifications / Location plus a button-style Save CTA — and a prominent bordered amber `?` callout pointing to the help modal; selected row gets a `BG_SELECTION` highlight bar, toggles render `● on` / `○ off`, country/timezone show a trailing `…` picker hint; row order in `Row::ALL` reordered so Bio sits at index 1 right after Username (matches visual order); title is `late.sh` with tagline `Tune your identity, vibes, and pings.`; country labels switched from flag emoji to `[PL] Poland` text badges since terminal flag rendering is unreliable across fonts/SSH stacks; `country_flag()` helper deleted; render.rs now reads theme + `enable_background_color` from welcome-modal draft when `show_welcome` is open so cycling Theme / toggling Background previews live and reverts on Esc; pressing `?` inside the welcome modal opens help on top — input dispatch reordered so `show_help` is checked before `show_welcome`, matching the visual stack (help renders above welcome). Help modal cleaned up to **arrows + hjkl only**: `h`/`l`/`←`/`→` switch slides, `j`/`k`/`↑`/`↓` scroll, `Esc`/`?`/`q` close — removed `Ctrl+U`/`Ctrl+D`, `PageUp`/`PageDn`, and mouse wheel handlers, plus the `page_scroll` method and `visible_height` helper; scroll cap removed — `scroll()` only floors at 0, no ceiling, so users can scroll past content end (blank space at bottom signals "you've reached it"); deleted brittle width-tracking machinery (`set_modal_width`, `body_width`, `max_scroll_for`, `wrapped_row_count`, `modal_width` field, second arg to `open()`); help slide copy now follows the rule **prose at column 0, short bullets/code keep `  ` padding** so ratatui's `Wrap { trim: false }` doesn't strand wrapped continuation lines at column 0 while the original line was indented — Music slide rewritten, Arcade "Why it exists", Architecture "Important characteristics", Profile "Why country matters" all unindented their long-prose lines)
+- Last updated: 2026-04-19 (welcome/profile modal redesigned with sectioned layout — Identity / Appearance / Notifications / Location plus a button-style Save CTA — and a prominent bordered amber `?` callout pointing to the help modal; selected row gets a `BG_SELECTION` highlight bar, toggles render `● on` / `○ off`, country/timezone show a trailing `…` picker hint; row order in `Row::ALL` reordered so Bio sits at index 1 right after Username (matches visual order); title is `late.sh` with tagline `Tune your identity, vibes, and pings.`; render.rs now reads theme + `enable_background_color` from welcome-modal draft when `show_welcome` is open so cycling Theme / toggling Background previews live and reverts on Esc; pressing `?` inside the welcome modal opens help on top — input dispatch reordered so `show_help` is checked before `show_welcome`, matching the visual stack (help renders above welcome). Help modal cleaned up to **arrows + hjkl only**: `h`/`l`/`←`/`→` switch slides, `j`/`k`/`↑`/`↓` scroll, `Esc`/`?`/`q` close — removed `Ctrl+U`/`Ctrl+D`, `PageUp`/`PageDn`, and mouse wheel handlers, plus the `page_scroll` method and `visible_height` helper; scroll cap removed — `scroll()` only floors at 0, no ceiling, so users can scroll past content end (blank space at bottom signals "you've reached it"); deleted brittle width-tracking machinery (`set_modal_width`, `body_width`, `max_scroll_for`, `wrapped_row_count`, `modal_width` field, second arg to `open()`); help slide copy now follows the rule **prose at column 0, short bullets/code keep `  ` padding** so ratatui's `Wrap { trim: false }` doesn't strand wrapped continuation lines at column 0 while the original line was indented — Music slide rewritten, Arcade "Why it exists", Architecture "Important characteristics", Profile "Why country matters" all unindented their long-prose lines; guide tab order is now Overview / Chat / Music / News / Arcade / Bonsai / Profile / Architecture; chat author labels render as plain usernames with no leading `@` and no appended country badge; selected-message `p` opens a read-only profile modal, `P` stays the browser-pairing QR shortcut; the read-only profile surfaces now show `Current time` when the saved timezone parses; both the welcome/profile modal and read-only profile modal accept `j/k` as real `Char` input, not just arrow keys)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -257,7 +257,65 @@ To maintain a buttery-smooth 15-60 FPS over SSH, the architecture strictly separ
 5. **The User Action (`app/input.rs`)**
    Input handlers modify the synchronous UI State (like moving cursors). When an action requires I/O (like hitting `Enter` to save), the input handler fires a fire-and-forget method on the Service. The Service spawns a Tokio task to do the DB/API work, pushes the result to the channel, and the UI catches it on the next 66ms tick.
 
-### 2.6 Audio infrastructure
+### 2.6 Render loop timing (world tick + input-driven)
+
+Each SSH session spawns **one render task** (`late-ssh/src/ssh.rs`) with two independent trigger sources:
+
+- **World tick** — fires every `WORLD_TICK_INTERVAL` (66ms). Advances animations (`app.tick()`), renders, ships the frame. Floor cadence ≈ 15 FPS regardless of input.
+- **Input-driven render** — fires within `MIN_RENDER_GAP` (15ms) of any keystroke or terminal resize. Renders *without* advancing world time, so typed characters echo at near-native latency instead of waiting up to 66ms for the next world tick.
+
+The select loop picks which branch to act on:
+
+```mermaid
+flowchart TD
+    INPUT["data() / window_change_request()<br/>(keystroke, resize)"] -->|"set dirty=true<br/>(under app mutex)"| SIGNAL
+    SIGNAL["RenderSignal<br/>dirty: AtomicBool<br/>notify: tokio::Notify"] -->|"notify_one()<br/>(after mutex released)"| LOOP
+    WT["world_tick.tick()<br/>every 66ms"] --> LOOP
+    LOOP{"biased select!"}
+    LOOP -->|"world tick fired"| ADVANCE["advance_world=true<br/>render"]
+    LOOP -->|"input_pending &&<br/>gap elapsed"| RENDER["advance_world=false<br/>render"]
+    LOOP -->|"notify && dirty"| ARM["input_pending=true<br/>loop"]
+    LOOP -->|"notify && !dirty"| DROP["eat stale permit<br/>loop"]
+    ADVANCE --> CLEAR["clear dirty under mutex,<br/>app.tick() + app.render()"]
+    RENDER --> CLEAR
+    CLEAR --> LOOP
+```
+
+`biased` ordering ensures the world tick wins on ties so animations aren't starved under a keystroke flood. `next_render_action` is extracted as a standalone async fn so the decision logic is unit-testable without a full session.
+
+#### Timing example — typing burst
+
+```
+t=0     world tick fires → render, previous_render=0, dirty=false
+t=3     keystroke → dirty=true, notify_one (permit stored)
+t=3+    select: notify branch → dirty=true → input_pending=true, continue
+t=3+    select: sleep_until(0+15ms) armed, notify disabled
+t=8     keystroke → dirty=true (already), notify_one (permit stored, branch disabled)
+t=15    sleep_until fires → render covers BOTH keystrokes, dirty cleared
+t=15+   select: notify branch eats leftover permit → dirty=false → nothing
+t=66    world tick → render, animations advance
+```
+
+Two keystrokes → one render at t=15. No spurious trailing frame.
+
+#### Why `dirty` is separate from `Notify`
+
+`tokio::sync::Notify::notify_one()` stores **one** permit when no waiter is active. If `Notify` alone gated renders, permits left over from input already batched into an earlier render would fire an identical repeat frame one throttle window later. Two primitives, two jobs:
+
+- `Notify` — alarm clock. Wakes the task.
+- `dirty` — sticky note. Source of truth for "there is unrendered state".
+
+Both `dirty` writes (input path) and `dirty` clears (render path) happen under the same `TokioMutex<App>` that guards state mutations. Invariant: a render that acquires the mutex after an input either already covered it, or observes `dirty=true` and will cover it on the next iteration.
+
+The stored-permit regression is locked down by `ssh::tests::stale_permit_does_not_arm_throttle`; the surrounding tests cover throttle timing, `biased` wins, and the idle/active paths.
+
+#### Scope and constraints
+
+- **Throttle is per-session** — one session's flood can't affect another's cadence.
+- **Ceiling: ~67 renders/sec per session** (`1000 / MIN_RENDER_GAP_MS`) — above smoothness threshold, below CPU-DoS territory.
+- **Does not address lock contention** — the app mutex is still shared between `data()` and the render task; see §8.5 A. This change only closes the input-to-frame cadence gap, not the lock-held-across-tick stall.
+
+### 2.7 Audio infrastructure
 
 ```mermaid
 flowchart LR
@@ -334,7 +392,7 @@ Music binaries live in Cloudflare R2, synced to the Liquidsoap PVC during infra 
 
 Local playlist files retain full annotated metadata including duration (when present in ID3 tags). The `rewrite_np_metadata` function in `radio.liq` formats "now playing" as `Artist - Title | Duration` for the sidebar. Internet streams provided ICY metadata with no duration; local files may or may not have duration depending on the source.
 
-### 2.7 Nonogram Generation and Runtime Split
+### 2.8 Nonogram Generation and Runtime Split
 
 Nonograms intentionally use an offline generation pipeline instead of generating puzzles during SSH sessions.
 
@@ -356,7 +414,7 @@ Nonograms intentionally use an offline generation pipeline instead of generating
 Current invariant:
 - `late-ssh` is runtime-only for nonograms: read JSON assets, select a puzzle, render/play it, and persist per-user progress. Generation belongs in `late-core/src/bin/gen_nonograms.rs`, not in the SSH hot path.
 
-### 2.8 Local CLI MVP
+### 2.9 Local CLI MVP
 
 `late-cli/src/main.rs` is the standalone local launcher (companion CLI).
 
@@ -410,7 +468,7 @@ late-sh/
 │   ├── assets/nonograms/       # Prebuilt puzzle packs
 │   └── tests/                  # Integration/smoke tests grouped by feature
 ├── late-cli/
-│   └── src/main.rs             # Standalone CLI: audio + analyzer + SSH + WS pairing
+│   └── src/                    # Standalone CLI: main + config, identity, raw_mode, pty, ssh, ws, audio/{decoder,resampler,output,decoder_thread,analyzer}
 ├── late-web/
 │   ├── src/
 │   │   ├── main.rs / lib.rs    # Web entrypoint + router
@@ -753,6 +811,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **SSH send failure is terminal for render task:** if `handle.data` returns `Err` (closed/broken channel), `render_once` now returns an error so the render loop stops and closes channel once, instead of logging warnings every 66ms forever
 - **Message ordering:** Full history is `ORDER BY created DESC, id DESC` (newest first), delta sync is `(created, id) > cursor ASC` - mixing these up breaks chat display. Chat rendering reverses messages to oldest-first for row-based display, with newest at the bottom.
 - **Chat message navigation is selection-first:** `selected_message_id` is the source of truth on both the dashboard general card and the chat screen (they share one storage). Mouse wheel, arrows, paging, and `j/k` all move selection; when no message is selected, the viewport falls back to newest-at-bottom.
+- **Chat display names are intentionally plain:** transcript author labels, DM labels, and member labels render the stored username without a leading `@` and without an appended country badge. `@` still exists in composer mentions, mention autocomplete, and command syntax (`/dm @user`, `/ignore @user`, etc.), so display formatting and mention syntax are deliberately different.
 - **Chat wrapping is word-aware:** Shared wrapping prefers breaking on whitespace for regular messages, reply quote lines, news-card text, and the composer. Hard splits are only valid for single words longer than the available width.
 - **Chat room list order is UI-defined:** The chat sidebar order is hardcoded as `core` (`general`, `announcements`, `suggestions`, any other permanent rooms, then synthetic `news`) → `public` → `private` → `dm`, with divider rows rendered in the UI. Here, "private" is a UI/product label for non-auto-join rooms (`auto_join = false`), not necessarily DB `visibility = 'private'`. The synthetic `news` row now carries its own unread badge sourced from `article_feed_reads`, not `chat_room_members`.
 - **Transcript render cost is cache-sensitive:** every member room keeps a warm tail (broadcast-driven, hard-capped at 1000 messages per room). The chat UI caches wrapped transcript rows for the dashboard general card and the active room; invalidation must track width, message content/order, usernames, badges, and bonsai glyphs. Only the selected room and general are fetched from DB on snapshot refresh — other rooms warm up from broadcasts and pull a one-shot backfill via `request_list` on first open per session.
@@ -791,11 +850,12 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI (chat composer, screen switches). Findings from two independent code reads, grouped and deduplicated below. Ordered by likely impact. None of these have been fixed yet — keep this list current as work lands.
 
-### A. Render lock blocks input (highest-impact, easiest fix)
-- The SSH `data` handler (`late-ssh/src/ssh.rs:811`) and the 15 FPS render task (`late-ssh/src/ssh.rs:773`, `render_once` at `late-ssh/src/ssh.rs:881`) both take the same `TokioMutex<App>`.
-- `render_once` holds the lock across the **whole** synchronous `app.tick()` + `app.render()` (full ratatui draw + diff). The lock is only released before `handle.data(...)` is awaited, so any single expensive frame stalls every keystroke that arrives during it.
+### A. Render lock blocks input (partially addressed)
+- The SSH `data` handler and the render task both take the same `TokioMutex<App>` (see `late-ssh/src/ssh.rs`).
+- `render_once` holds the lock across the whole synchronous `app.tick()` + `app.render()` (full ratatui draw + diff). The lock is only released before `handle.data(...)` is awaited, so any single expensive frame stalls every keystroke that arrives during it.
 - With 60 sessions × 15 FPS = ~900 frame builds/sec sharing tokio worker threads, even modestly expensive frames push input latency into the felt range.
-- **Direction:** decouple input from the render mutex — `data()` pushes raw bytes into a per-session `mpsc::UnboundedSender<Vec<u8>>`; the render task drains it at the top of each tick. Input never blocks on the render lock again.
+- **Cadence gap closed (§2.6):** the render loop now wakes on input via `RenderSignal` within ~15ms instead of waiting up to 66ms for the next world tick. This removes the "input lands right after a world tick → 60ms dead zone" case entirely. Typical input-to-frame latency is now bounded by the mutex contention tail, not the world-tick cadence.
+- **Still open — lock contention:** `data()` still awaits the app mutex. A slow render on another task will block input. Further fix (not yet done): `data()` pushes raw bytes into a per-session `mpsc::UnboundedSender<Vec<u8>>`; the render task drains it at the top of each tick. Input never blocks on the render lock again.
 
 ### B. Chat row cache is expensive even on hits
 - `ensure_chat_rows_cache` (`late-ssh/src/app/chat/ui.rs:324`) calls `chat_rows_fingerprint` (`late-ssh/src/app/chat/ui.rs:297`) every render. The fingerprint hashes message id, user_id, created, **body string**, plus username/badge/glyph lookups for every visible message.
@@ -956,7 +1016,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
 | **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/help`) with grouped room sections and a synthetic `news` entry in the room list |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Profile** | 4 | Active | Read-only public identity card: username, country, timezone, bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. All editing happens in the **welcome/profile modal** (auto-opens on first login, reopen via Profile's edit action) — sectioned into Identity / Appearance / Notifications / Location, with a Save CTA and a `?` callout that opens the help modal on top. Theme + background color preview live from the draft while the modal is open. |
+| **Profile** | 4 | Active | Read-only public identity card: username, country, timezone, optional `Current time` (derived from timezone when parseable), bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. Bio is wrapped at the same width the modal editor uses (`welcome_modal::ui::bio_text_width(MODAL_WIDTH)`) via `build_composer_rows`, so pasted URLs fold instead of running off-screen. All editing happens in the **welcome/profile modal** (auto-opens on first login, reopen via Profile's edit action) — sectioned into Identity / Appearance / Notifications / Location, with a Save CTA and a `?` callout that opens the help modal on top. Bio is an inline full-width bordered editor under the Identity heading (encouraging people to share site / GitHub / socials); it accepts bracketed-paste so URLs drop in whole. Theme + background color preview live from the draft while the modal is open. Selecting a chat message and pressing `p` opens a separate read-only **profile modal** for that author; it shows the same public identity summary, supports `j/k` or arrows for scroll, and is slightly wider than the first revision. |
 
 ### Layout
 
@@ -995,7 +1055,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 |-----|---------|--------|
 | `q` / `Q` / `Ctrl+C` | Global | Quit |
 | `?` | Global (not composing) | Open help modal (multi-slide guide). Also works inside the welcome/profile modal, which renders help on top while keeping the draft intact. |
-| `h` / `l` / `←` / `→` | Help modal | Switch slides (Overview / Architecture / Chat / Music / News / Arcade / Bonsai / Profile) |
+| `h` / `l` / `←` / `→` | Help modal | Switch slides (Overview / Chat / Music / News / Arcade / Bonsai / Profile / Architecture) |
 | `j` / `k` / `↑` / `↓` | Help modal | Scroll current slide (uncapped — past the last line is blank space) |
 | `?` / `q` / `Esc` | Help modal | Close (returns to underlying screen, including welcome modal if it was open) |
 | `Tab` | Global | Cycle screens |
@@ -1011,6 +1071,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
 | `s` | Dashboard | Copy bonsai ASCII snippet to clipboard |
 | `j` / `k` / arrows | Dashboard | Scroll chat |
+| `p` | Dashboard chat selection | Open selected user's read-only profile modal |
 | `r` | Dashboard chat selection | Reply to selected general chat message |
 | `e` | Dashboard / Chat (own message selected) | Edit selected message — same composer, different title |
 | `d` | Dashboard / Chat (own message selected) | Delete selected message |
@@ -1049,7 +1110,9 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `Esc` | Chat (`news` composing) | Cancel URL compose |
 | `i` / `Enter` | Dashboard | Start composing chat |
 | `j` / `k` | Chat | Move message selection newer/older |
+| `p` | Chat | Open selected user's read-only profile modal |
 | `r` | Chat | Reply to selected message |
+| `P` | Global | Show browser-pairing QR (copies pairing URL) |
 | `/help` | Chat composer | Open scrollable chat help overlay (commands + all chat keys) |
 | `/active` | Chat composer | List active SSH users from the in-memory session registry |
 | `/list` | Chat composer | List users in the selected non-auto-join ("private") room |
@@ -1064,6 +1127,8 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `Space` / `Enter` / `e` | Welcome/profile modal | Activate row — edit username/bio, cycle a setting, open country/timezone picker, or fire Save |
 | `Alt+Enter` | Welcome/profile modal (bio editing) | Insert newline |
 | `?` | Welcome/profile modal | Open help modal on top |
+| `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |
+| `q` / `Esc` | Read-only profile modal | Close |
 | `Esc` | Any modal | Close/cancel |
 | `c` | Chat (not composing) | Open web chat QR (copies URL + shows it as fallback) |
 | `Ctrl+]` | Dashboard / Chat | Open icon picker (emoji + nerd font). Auto-starts the composer if not already composing. Inserts into the chat composer only. |
