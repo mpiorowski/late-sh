@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use late_core::{
     MutexRecover,
-    models::{article::NEWS_MARKER, chat_message::ChatMessage, chat_room::ChatRoom},
+    models::{
+        article::NEWS_MARKER, chat_message::ChatMessage,
+        chat_message_reaction::ChatMessageReactionSummary, chat_room::ChatRoom,
+    },
 };
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -77,6 +80,7 @@ pub struct ChatState {
     pub(crate) mention_ac: MentionAutocomplete,
     pub(crate) all_usernames: Vec<String>,
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
+    pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub(crate) selected_message_id: Option<Uuid>,
     pub(crate) highlighted_message_id: Option<Uuid>,
     pub(crate) edited_message_id: Option<Uuid>,
@@ -150,6 +154,7 @@ impl ChatState {
             mention_ac: MentionAutocomplete::default(),
             all_usernames: Vec::new(),
             bonsai_glyphs: HashMap::new(),
+            message_reactions: HashMap::new(),
             selected_message_id: None,
             highlighted_message_id: None,
             edited_message_id: None,
@@ -393,6 +398,17 @@ impl ChatState {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| short_user_id(user_id));
         Some((user_id, display_name))
+    }
+
+    pub fn react_to_selected_message_in_room(
+        &mut self,
+        room_id: Uuid,
+        kind: i16,
+    ) -> Option<Banner> {
+        let message = self.selected_message_in_room(room_id)?;
+        self.service
+            .toggle_message_reaction_task(self.user_id, message.id, kind);
+        None
     }
 
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {
@@ -998,6 +1014,10 @@ impl ChatState {
         &self.bonsai_glyphs
     }
 
+    pub fn message_reactions(&self) -> &HashMap<Uuid, Vec<ChatMessageReactionSummary>> {
+        &self.message_reactions
+    }
+
     fn drain_snapshot(&mut self) {
         if !self.snapshot_rx.has_changed().unwrap_or(false) {
             return;
@@ -1016,6 +1036,7 @@ impl ChatState {
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
         self.all_usernames = snapshot.all_usernames;
         self.bonsai_glyphs = snapshot.bonsai_glyphs;
+        self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
         self.sync_selection();
     }
 
@@ -1168,6 +1189,19 @@ impl ChatState {
                     }
                     self.replace_message(message);
                 }
+                ChatEvent::MessageReactionsUpdated {
+                    room_id: _,
+                    message_id,
+                    reactions,
+                    target_user_ids,
+                } => {
+                    if let Some(targets) = target_user_ids
+                        && !targets.contains(&self.user_id)
+                    {
+                        continue;
+                    }
+                    self.message_reactions.insert(message_id, reactions);
+                }
                 ChatEvent::EditSucceeded {
                     user_id,
                     request_id,
@@ -1272,7 +1306,15 @@ impl ChatState {
         let room_id = message.room_id;
         messages.insert(0, message);
         if messages.len() > 1000 {
+            let removed_ids: Vec<Uuid> = messages
+                .iter()
+                .skip(1000)
+                .map(|message| message.id)
+                .collect();
             messages.truncate(1000);
+            for message_id in removed_ids {
+                self.message_reactions.remove(&message_id);
+            }
         }
 
         // Only mark the room as read if the user is actually viewing it.
@@ -1286,6 +1328,7 @@ impl ChatState {
         if let Some((_, messages)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) {
             messages.retain(|m| m.id != message_id);
         }
+        self.message_reactions.remove(&message_id);
     }
 
     fn replace_message(&mut self, message: ChatMessage) {
@@ -1342,6 +1385,27 @@ impl ChatState {
                 None => true,
             });
         incoming
+    }
+
+    fn merge_message_reactions(
+        &self,
+        incoming: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    ) -> HashMap<Uuid, Vec<ChatMessageReactionSummary>> {
+        let visible_message_ids: HashSet<Uuid> = self
+            .rooms
+            .iter()
+            .flat_map(|(_, messages)| messages.iter().map(|message| message.id))
+            .collect();
+        let mut merged: HashMap<Uuid, Vec<ChatMessageReactionSummary>> = self
+            .message_reactions
+            .iter()
+            .filter(|(message_id, _)| visible_message_ids.contains(message_id))
+            .map(|(message_id, reactions)| (*message_id, reactions.clone()))
+            .collect();
+        for (message_id, reactions) in incoming {
+            merged.insert(message_id, reactions);
+        }
+        merged
     }
 
     fn filter_messages(&self, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {

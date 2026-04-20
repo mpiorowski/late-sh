@@ -10,6 +10,13 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     let general_room_id = app.chat.general_room_id();
 
+    if matches!(byte, b'i' | b'I')
+        && let Some(room_id) = general_room_id
+    {
+        app.chat.start_composing_in_room(room_id);
+        return true;
+    }
+
     if byte == b'c'
         && let Some(room_id) = general_room_id
         && app.chat.selected_message_body_in_room(room_id).is_some()

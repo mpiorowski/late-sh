@@ -2,6 +2,7 @@ pub mod article;
 pub mod article_feed_read;
 pub mod bonsai;
 pub mod chat_message;
+pub mod chat_message_reaction;
 pub mod chat_room;
 pub mod chat_room_member;
 pub mod chips;

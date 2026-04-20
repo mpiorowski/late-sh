@@ -1,4 +1,5 @@
 use late_core::models::chat_message::ChatMessage;
+use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -40,6 +41,7 @@ pub struct DashboardChatView<'a> {
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
+    pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
     pub composer: &'a TextArea<'static>,
@@ -176,7 +178,7 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
 
     if !view.composing && view.composer.is_empty() && !view.mention_active {
         let placeholder_text = if view.selected_message {
-            "r reply · e edit · d delete · p profile · c copy · i compose"
+            "1-5 react · r reply · e edit · d delete · p profile · c copy · i compose"
         } else {
             "Type a message · j/k select · /help"
         };
@@ -249,6 +251,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 countries: view.countries,
                 badges: view.badges,
                 bonsai_glyphs: view.bonsai_glyphs,
+                message_reactions: view.message_reactions,
             },
         );
         lines = visible_chat_rows(view.rows_cache, view.selected_message_id, None, height);
@@ -285,6 +288,7 @@ struct ChatRowsContext<'a> {
     countries: &'a HashMap<Uuid, String>,
     badges: &'a HashMap<Uuid, BadgeTier>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
+    message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
 }
 
 #[derive(Default)]
@@ -319,6 +323,7 @@ fn chat_rows_fingerprint(
             .map(|badge| badge.label())
             .hash(&mut hasher);
         ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
+        ctx.message_reactions.get(&msg.id).hash(&mut hasher);
     }
 
     hasher.finish()
@@ -390,6 +395,11 @@ fn ensure_chat_rows_cache(
             .map(|g| format!(" {}", g))
             .unwrap_or_default();
         let prefix = format!("{author}{contributor_badge}{streak_badge}{bonsai_badge}");
+        let reactions = ctx
+            .message_reactions
+            .get(&msg.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
 
         let mentions_us = our_mention
             .as_ref()
@@ -410,6 +420,7 @@ fn ensure_chat_rows_cache(
             body_style,
             mentions_us,
             is_continuation,
+            reactions,
         );
         all_rows.extend(msg_lines);
 
@@ -634,6 +645,7 @@ pub struct ChatRenderInput<'a> {
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
+    pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
@@ -1002,6 +1014,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                         countries,
                         badges: view.badges,
                         bonsai_glyphs: view.bonsai_glyphs,
+                        message_reactions: view.message_reactions,
                     },
                 );
                 let mut lines = visible_chat_rows(

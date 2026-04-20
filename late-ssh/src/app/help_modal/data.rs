@@ -116,6 +116,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  End                jump to most recent",
         "  g / G              clear selection (back to live view)",
         "  p                  open selected user's profile",
+        "  1 / 2 / 3 / 4 / 5  react to selected message",
         "  r                  reply to selected message",
         "  e                  edit selected message",
         "  d                  delete selected message",

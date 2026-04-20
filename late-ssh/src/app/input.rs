@@ -964,6 +964,15 @@ fn reset_composers_for_page_change(app: &mut App) {
 }
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
+    if matches!(byte, b'1' | b'2' | b'3' | b'4' | b'5')
+        && !ctx.chat_composing
+        && !ctx.news_composing
+        && (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat)
+        && app.chat.selected_message_id.is_some()
+    {
+        return false;
+    }
+
     // ? opens help unless composing text
     if byte == b'?' && !ctx.chat_composing && !ctx.news_composing {
         app.help_modal_state

@@ -3,7 +3,7 @@
   "uid": "observability",
   "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 8,
+  "version": 9,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -254,8 +254,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Log Volume",
-      "description": "Total log hits over time for the selected services.",
+      "title": "Log Volume by Service",
+      "description": "Log line count per service, bucketed to the panel's auto step.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -263,21 +263,41 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{service.name=~\"$service\"}",
-          "queryType": "range"
+          "expr": "{service.name=~\"$service\"} | stats by (\"service.name\") count() logs",
+          "queryType": "statsRange",
+          "legendFormat": "{{service.name}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "lineWidth": 2,
-            "showPoints": "auto"
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
           }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": ["sum"],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "gridPos": {
         "h": 8,
@@ -288,8 +308,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Error Volume",
-      "description": "Total ERROR log hits over time for the selected services.",
+      "title": "Error Volume by Service",
+      "description": "ERROR-severity log count per service, bucketed to the panel's auto step.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -297,21 +317,41 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{service.name=~\"$service\"} severity:ERROR",
-          "queryType": "range"
+          "expr": "{service.name=~\"$service\"} severity:ERROR | stats by (\"service.name\") count() errors",
+          "queryType": "statsRange",
+          "legendFormat": "{{service.name}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "lineWidth": 2,
-            "showPoints": "auto"
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
           }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": ["sum"],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "gridPos": {
         "h": 8,
@@ -321,9 +361,9 @@
       }
     },
     {
-      "type": "bargauge",
-      "title": "Log Mix by Service + Severity",
-      "description": "Current distribution of logs by service and severity in the selected time range.",
+      "type": "timeseries",
+      "title": "Log Volume by Severity",
+      "description": "Log count stacked by severity - red ERROR bursts are visible at a glance.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -331,40 +371,63 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{service.name=~\"$service\"} | stats by (\"service.name\", severity) count() logs_total | sort by (logs_total desc) | limit 12",
-          "queryType": "instant"
+          "expr": "{service.name=~\"$service\"} | stats by (severity) count() logs",
+          "queryType": "statsRange",
+          "legendFormat": "{{severity}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 10
-              },
-              {
-                "color": "red",
-                "value": 50
-              }
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "ERROR" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
             ]
           },
-          "mappings": []
-        },
-        "overrides": []
+          {
+            "matcher": { "id": "byName", "options": "WARN" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "INFO" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "DEBUG" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "gray" } }
+            ]
+          }
+        ]
       },
       "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "minVizWidth": 0,
-        "minVizHeight": 10
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": ["sum"],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "gridPos": {
         "h": 8,
