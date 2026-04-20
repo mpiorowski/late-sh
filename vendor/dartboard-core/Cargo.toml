@@ -1,0 +1,12 @@
+[package]
+name = "dartboard-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+serde.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

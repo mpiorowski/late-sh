@@ -3,8 +3,8 @@
 mod helpers;
 
 use helpers::{
-    chat_compose_app, make_app, make_app_with_chat_service, new_test_db, render_plain,
-    wait_for_render_contains, wait_until,
+    chat_compose_app, make_app, make_app_with_chat_service, make_app_with_devtest_jump,
+    new_test_db, render_plain, wait_for_render_contains, wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -13,6 +13,7 @@ use late_core::models::{
     user::User,
 };
 use late_core::test_utils::create_test_user;
+use late_ssh::app::state::DevtestJump;
 use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;
@@ -71,6 +72,66 @@ async fn screen_number_keys_switch_between_dashboard_games_and_chat() {
 
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Dashboard ").await;
+}
+
+#[tokio::test]
+async fn devtest_sudoku_jump_starts_on_games_without_intro_overlays() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "devtest-sudoku-it").await;
+    let mut app = make_app_with_devtest_jump(
+        test_db.db.clone(),
+        user.id,
+        "devtest-sudoku-flow-it",
+        DevtestJump::Sudoku,
+    );
+
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" The Arcade "),
+        "expected devtest jump to land on the games hub; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("> [ Sudoku ]"),
+        "expected sudoku to be preselected on devtest jump; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Settings "),
+        "expected devtest jump to bypass the settings modal; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("take a break, grab a coffee"),
+        "expected devtest jump to bypass the splash screen; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn devtest_artboard_jump_starts_on_games_without_intro_overlays() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "devtest-artboard-it").await;
+    let mut app = make_app_with_devtest_jump(
+        test_db.db.clone(),
+        user.id,
+        "devtest-artboard-flow-it",
+        DevtestJump::Artboard,
+    );
+
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" The Arcade "),
+        "expected devtest jump to land on the games hub; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("> [ Artboard ]"),
+        "expected artboard to be preselected on devtest jump; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Settings "),
+        "expected devtest jump to bypass the settings modal; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("take a break, grab a coffee"),
+        "expected devtest jump to bypass the splash screen; frame={frame:?}"
+    );
 }
 
 #[tokio::test]

@@ -123,6 +123,8 @@ pub struct GamesHubView<'a> {
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
     pub blackjack_state: &'a super::blackjack::state::State,
+    pub dartboard_state: Option<&'a super::dartboard::state::State>,
+    pub dartboard_peer_count: usize,
     pub is_admin: bool,
     pub leaderboard: &'a Arc<LeaderboardData>,
 }
@@ -149,6 +151,11 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             return;
         } else if view.game_selection == 6 && view.is_admin {
             super::blackjack::ui::draw_game(frame, area, view.blackjack_state);
+            return;
+        } else if view.game_selection == 7 {
+            if let Some(state) = view.dartboard_state {
+                super::dartboard::ui::draw_game(frame, area, state);
+            }
             return;
         }
     }
@@ -282,6 +289,18 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
                 r#"     ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝ ╚════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝"#,
             ],
             "Hit or stand against the house. Chips on the line every hand.",
+            "     ",
+        ),
+        7 => (
+            vec![
+                r#"     ██████╗  █████╗ ██████╗ ████████╗██████╗  ██████╗  █████╗ ██████╗ ██████╗ "#,
+                r#"     ██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗██╔═══██╗██╔══██╗██╔══██╗██╔══██╗"#,
+                r#"     ██║  ██║███████║██████╔╝   ██║   ██████╔╝██║   ██║███████║██████╔╝██║  ██║"#,
+                r#"     ██║  ██║██╔══██║██╔══██╗   ██║   ██╔══██╗██║   ██║██╔══██║██╔══██╗██║  ██║"#,
+                r#"     ██████╔╝██║  ██║██║  ██║   ██║   ██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝"#,
+                r#"     ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ "#,
+            ],
+            "A shared canvas for late-night doodles, diagrams, and terminal graffiti.",
             "     ",
         ),
         _ => (
@@ -538,41 +557,48 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         ),
         (
             7,
+            "Artboard",
+            "Shared multiplayer canvas. Draw live with everyone in the room.",
+            true,
+            Some(format!("Peers {}", view.dartboard_peer_count)),
+        ),
+        (
+            8,
             "Texas Hold'em",
             "The ultimate late-night poker table.",
             false,
             None,
         ),
         (
-            8,
+            9,
             "Bridge",
             "Classic trick-taking for four. Deep strategy, cozy pace.",
             false,
             None,
         ),
         (
-            9,
+            10,
             "Thousand",
             "Polish card classic. Bid, meld, and outsmart your rivals.",
             false,
             None,
         ),
         (
-            10,
+            11,
             "Chess",
             "Async correspondence chess. Move at your own pace.",
             false,
             None,
         ),
         (
-            11,
+            12,
             "Battleship",
             "Fire a shot, check back tomorrow.",
             false,
             None,
         ),
         (
-            12,
+            13,
             "Tron",
             "Real-time lightbike arena. Last one standing wins.",
             false,

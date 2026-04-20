@@ -1151,6 +1151,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "dartboard-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "unicode-width",
+]
+
+[[package]]
+name = "dartboard-local"
+version = "0.1.0"
+dependencies = [
+ "dartboard-core",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "dartboard-tui"
+version = "0.1.0"
+dependencies = [
+ "dartboard-core",
+ "ratatui",
+ "unicode-width",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2571,6 +2597,9 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "crossterm",
+ "dartboard-core",
+ "dartboard-local",
+ "dartboard-tui",
  "emojis",
  "ipnet",
  "late-core",

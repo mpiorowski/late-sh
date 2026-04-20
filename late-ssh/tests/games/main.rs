@@ -1,6 +1,7 @@
 #[path = "../helpers/mod.rs"]
 mod helpers;
 
+mod dartboard;
 mod minesweeper;
 mod nonogram;
 mod solitaire;

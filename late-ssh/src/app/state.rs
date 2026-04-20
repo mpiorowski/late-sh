@@ -47,6 +47,21 @@ pub(crate) enum NotificationMode {
     Osc9,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DevtestJump {
+    Artboard,
+    Sudoku,
+}
+
+impl DevtestJump {
+    const fn game_selection(self) -> usize {
+        match self {
+            Self::Sudoku => 2,
+            Self::Artboard => 7,
+        }
+    }
+}
+
 /// Map an XTVERSION payload (the bytes between `ESC P > |` and `ESC \`,
 /// e.g. `kitty(0.31.0)`) to the preferred notification mode. Returns
 /// `None` when the terminal is unknown, so callers leave the session on
@@ -126,6 +141,11 @@ pub struct SessionConfig {
     pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub blackjack_service: crate::app::games::blackjack::svc::BlackjackService,
+    /// Shared dartboard server. Each session only connects — consuming a
+    /// color slot and showing up in `peer_count` — when the user actually
+    /// enters the dartboard game from the arcade.
+    pub dartboard_server: dartboard_local::ServerHandle,
+    pub username: String,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub nonogram_library: crate::app::games::nonogram::state::Library,
@@ -152,6 +172,7 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
+    pub devtest_jump: Option<DevtestJump>,
 
     /// Display config (informational, shown on profile screen)
     pub ai_model: String,
@@ -234,6 +255,15 @@ pub struct App {
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
     pub(crate) blackjack_state: crate::app::games::blackjack::state::State,
+    /// `Some` while the user is inside the dartboard game, `None` otherwise.
+    /// Constructed on entry (connecting + consuming a color slot) and
+    /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
+    /// `Drop` impl). A full SSH-session drop cascades through `App` → this
+    /// `Option` → the underlying client, so the seat is released on logout
+    /// or connection loss.
+    pub(crate) dartboard_state: Option<crate::app::games::dartboard::state::State>,
+    pub(crate) dartboard_server: dartboard_local::ServerHandle,
+    pub(crate) username: String,
 
     /// Late Chips balance (loaded on login, updated via leaderboard refresh)
     pub(crate) chip_balance: i64,
@@ -370,6 +400,8 @@ impl App {
             config.user_id,
             config.initial_chip_balance,
         );
+        let dartboard_server = config.dartboard_server.clone();
+        let username = config.username.clone();
 
         let bonsai_state = if let Some(tree) = config.initial_bonsai_tree {
             crate::app::bonsai::state::BonsaiState::new(
@@ -406,14 +438,18 @@ impl App {
             config.user_id,
         );
         settings_modal_state.open_from_profile(&initial_profile, settings_modal::ui::MODAL_WIDTH);
+        let (screen, show_settings, show_splash, game_selection) = match config.devtest_jump {
+            Some(jump) => (Screen::Games, false, false, jump.game_selection()),
+            None => (Screen::Dashboard, true, true, 0),
+        };
 
         Ok(Self {
             running: true,
             size: (cols, rows),
-            screen: Screen::Dashboard,
+            screen,
             banner: None,
-            show_settings: true,
-            show_splash: true,
+            show_settings,
+            show_splash,
             splash_ticks: 0,
             splash_hint,
             show_help: false,
@@ -465,7 +501,7 @@ impl App {
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
-            game_selection: 0,
+            game_selection,
             is_playing_game: false,
             twenty_forty_eight_state,
             tetris_state,
@@ -474,6 +510,9 @@ impl App {
             solitaire_state,
             minesweeper_state,
             blackjack_state,
+            dartboard_state: None,
+            dartboard_server,
+            username,
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
             pending_terminal_commands: Vec::new(),
@@ -485,6 +524,28 @@ impl App {
             last_terminal_bg: None,
             notification_mode: NotificationMode::Both,
         })
+    }
+
+    /// Connect this session to the shared dartboard and install per-user
+    /// state. No-op if already connected (e.g. re-entering the game without
+    /// having left). Idempotent so input/render paths can call it without
+    /// bookkeeping.
+    pub(crate) fn enter_dartboard(&mut self) {
+        if self.dartboard_state.is_some() {
+            return;
+        }
+        let svc = crate::app::games::dartboard::svc::DartboardService::new(
+            self.dartboard_server.clone(),
+            self.user_id,
+            &self.username,
+        );
+        self.dartboard_state = Some(crate::app::games::dartboard::state::State::new(svc));
+    }
+
+    /// Drop this session's dartboard state. The underlying `LocalClient`'s
+    /// `Drop` impl fires `server.disconnect()`, freeing the color slot.
+    pub(crate) fn leave_dartboard(&mut self) {
+        self.dartboard_state = None;
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
@@ -563,13 +624,15 @@ impl App {
         )
         .expect("failed to enter alt screen");
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
+        // 1003h = any-event mouse tracking (motion reports with or without a
+        // button held). Dartboard needs drag + hover parity with standalone.
         // 1006h = SGR extended encoding (ESC[< sequences instead of legacy X11)
         // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~)
         // CSI > q = XTVERSION query. Reply is a DCS sequence
         // (`ESC P > | <name>(<version>) ESC \`) parsed in input.rs; the
         // session starts in NotificationMode::Both and narrows once it
         // arrives. Terminals that don't implement XTVERSION stay on Both.
-        buf.extend_from_slice(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[>q");
+        buf.extend_from_slice(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h\x1b[>q");
         buf
     }
 
@@ -577,9 +640,10 @@ impl App {
         let mut buf = Vec::new();
         // 2004l = disable bracketed paste
         // 1006l = disable SGR mouse tracking
+        // 1003l = disable any-event mouse tracking
         // 1000l = disable basic mouse tracking
         // OSC 111 = reset terminal background color
-        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b]111\x1b\\");
+        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\");
         crossterm::execute!(buf, cursor::Show, terminal::LeaveAlternateScreen)
             .expect("failed to leave alt screen");
         buf

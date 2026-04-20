@@ -67,6 +67,9 @@ impl App {
             self.tetris_state.tick();
         }
         self.blackjack_state.tick();
+        if let Some(state) = self.dartboard_state.as_mut() {
+            state.tick();
+        }
         self.chip_balance = self.blackjack_state.balance;
 
         // Leaderboard

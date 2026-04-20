@@ -1,6 +1,6 @@
 use crate::app::state::App;
 
-const LOBBY_GAME_COUNT: usize = 7;
+const LOBBY_GAME_COUNT: usize = 8;
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.is_playing_game {
@@ -58,6 +58,23 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                     return true;
                 }
             }
+        } else if app.game_selection == 7 {
+            let Some(state) = app.dartboard_state.as_mut() else {
+                // Not connected (shouldn't happen once we've entered the
+                // game, but guard rather than panic). Treat as a leave.
+                app.is_playing_game = false;
+                return true;
+            };
+            let action = super::dartboard::input::handle_byte(state, app.size, byte);
+            match action {
+                super::dartboard::input::InputAction::Ignored => return false,
+                super::dartboard::input::InputAction::Handled => return true,
+                super::dartboard::input::InputAction::Leave => {
+                    app.is_playing_game = false;
+                    app.leave_dartboard();
+                    return true;
+                }
+            }
         }
         return false;
     }
@@ -81,8 +98,12 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 || app.game_selection == 4
                 || app.game_selection == 5
                 || (app.game_selection == 6 && app.is_admin)
+                || app.game_selection == 7
             {
                 app.is_playing_game = true;
+                if app.game_selection == 7 {
+                    app.enter_dartboard();
+                }
             }
             true
         }
@@ -107,6 +128,11 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
             return super::minesweeper::input::handle_arrow(&mut app.minesweeper_state, key);
         } else if app.game_selection == 5 {
             return super::solitaire::input::handle_arrow(&mut app.solitaire_state, key);
+        } else if app.game_selection == 7 {
+            let Some(state) = app.dartboard_state.as_mut() else {
+                return false;
+            };
+            return super::dartboard::input::handle_arrow(state, app.size, key);
         }
         return false;
     }
@@ -125,5 +151,25 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput) -> bool {
+    if !(app.is_playing_game && app.game_selection == 7) {
+        return false;
+    }
+    let Some(state) = app.dartboard_state.as_mut() else {
+        return false;
+    };
+
+    let action = super::dartboard::input::handle_event(state, app.size, event);
+    match action {
+        super::dartboard::input::InputAction::Ignored => false,
+        super::dartboard::input::InputAction::Handled => true,
+        super::dartboard::input::InputAction::Leave => {
+            app.is_playing_game = false;
+            app.leave_dartboard();
+            true
+        }
     }
 }

@@ -1,5 +1,8 @@
 [workspace]
 members = [
+    "vendor/dartboard-core",
+    "vendor/dartboard-local",
+    "vendor/dartboard-tui",
     "late-cli",
     "late-core",
     "late-ssh",
@@ -45,6 +48,9 @@ base64 = "0.22"
 bytes = "1"
 cpal = "0.16"
 crossterm = "0.29"
+dartboard-core = { path = "vendor/dartboard-core" }
+dartboard-local = { path = "vendor/dartboard-local" }
+dartboard-tui = { path = "vendor/dartboard-tui" }
 deadpool-postgres = "0.14"
 emojis = "0.7"
 futures-util = "0.3"
@@ -53,6 +59,7 @@ ipnet = "2.11"
 late-core = { path = "late-core", default-features = false }
 nix = "0.29.0"
 qrcodegen = "1.8.0"
+rand = "0.8"
 rand_core = "0.6"
 ratatui = "0.30"
 rstest = "0.26.1"

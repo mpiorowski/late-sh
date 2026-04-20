@@ -64,6 +64,7 @@ pub struct State {
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
     pub blackjack_service: BlackjackService,
+    pub dartboard_server: dartboard_local::ServerHandle,
     pub leaderboard_service: LeaderboardService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,

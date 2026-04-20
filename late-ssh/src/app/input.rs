@@ -49,14 +49,14 @@ pub(crate) enum ParsedInput {
     Byte(u8),
     Arrow(u8),
     CtrlArrow(u8),
+    ShiftArrow(u8),
+    AltArrow(u8),
+    CtrlShiftArrow(u8),
     Delete,
     CtrlBackspace,
     CtrlDelete,
     Scroll(isize),
-    MousePress {
-        x: u16,
-        y: u16,
-    },
+    Mouse(MouseEvent),
     BackTab,
     // Alt+Enter inserts a newline. `ESC`-prefixed control chords that would
     // otherwise wedge vte are pre-scanned before the parser sees them.
@@ -69,11 +69,43 @@ pub(crate) enum ParsedInput {
     PageUp,
     PageDown,
     End,
+    Home,
     FocusGained,
     FocusLost,
     /// Payload of an XTVERSION (`CSI > q`) DCS reply — the bytes between
     /// `ESC P > |` and `ESC \`, e.g. `kitty(0.31.0)`.
     TerminalVersion(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MouseModifiers {
+    pub shift: bool,
+    pub alt: bool,
+    pub ctrl: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseEventKind {
+    Down,
+    Up,
+    Drag,
+    Moved,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MouseEvent {
+    pub kind: MouseEventKind,
+    pub button: Option<MouseButton>,
+    pub x: u16,
+    pub y: u16,
+    pub modifiers: MouseModifiers,
 }
 
 /// vte keeps pending escape state when `ESC` is followed by control bytes
@@ -196,6 +228,10 @@ impl Perform for VtCollector {
                     self.events.push(ParsedInput::End);
                     return;
                 }
+                'H' => {
+                    self.events.push(ParsedInput::Home);
+                    return;
+                }
                 _ => {}
             }
         }
@@ -257,10 +293,21 @@ impl Perform for VtCollector {
             }
             'A' | 'B' | 'C' | 'D' => {
                 let key = action as u8;
-                if p1 == Some(5) || (p0 == Some(5) && p1.is_none()) {
-                    self.events.push(ParsedInput::CtrlArrow(key));
-                } else {
-                    self.events.push(ParsedInput::Arrow(key));
+                // xterm modifier param encoding: 2=Shift, 3=Alt, 4=Shift+Alt,
+                // 5=Ctrl, 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Shift+Alt. Some
+                // terminals drop the leading "1;" (e.g. CSI 2 A instead of
+                // CSI 1;2 A), so accept either placement.
+                let modifier = match (p0, p1) {
+                    (_, Some(m)) => Some(m),
+                    (Some(m), None) if m > 1 => Some(m),
+                    _ => None,
+                };
+                match modifier {
+                    Some(2) => self.events.push(ParsedInput::ShiftArrow(key)),
+                    Some(3) => self.events.push(ParsedInput::AltArrow(key)),
+                    Some(5) => self.events.push(ParsedInput::CtrlArrow(key)),
+                    Some(6) => self.events.push(ParsedInput::CtrlShiftArrow(key)),
+                    _ => self.events.push(ParsedInput::Arrow(key)),
                 }
             }
             '~' if p0 == Some(3) && p1 == Some(5) => {
@@ -284,6 +331,13 @@ impl Perform for VtCollector {
             'F' if intermediates.is_empty() && p0.unwrap_or(0) <= 1 => {
                 self.events.push(ParsedInput::End);
             }
+            // Home: numeric forms `CSI 1~` / `CSI 7~` and bare `CSI H`.
+            '~' if p0 == Some(1) || p0 == Some(7) => {
+                self.events.push(ParsedInput::Home);
+            }
+            'H' if intermediates.is_empty() && p0.unwrap_or(0) <= 1 => {
+                self.events.push(ParsedInput::Home);
+            }
             // Kitty keyboard protocol: some terminals report Backspace as
             // codepoint 127, others as 8 (BS). Accept both for Ctrl+Backspace.
             'u' if (p0 == Some(127) || p0 == Some(8)) && p1 == Some(5) => {
@@ -300,17 +354,52 @@ impl Perform for VtCollector {
                 self.events.push(ParsedInput::FocusLost);
             }
             'M' | 'm' if intermediates == [b'<'] && params.len() >= 3 => {
-                let button = p0.unwrap_or_default();
+                let raw = p0.unwrap_or_default();
                 let x = params.get(1).copied().unwrap_or(0);
                 let y = params.get(2).copied().unwrap_or(0);
-                match button {
-                    64 => self.events.push(ParsedInput::Scroll(1)),
-                    65 => self.events.push(ParsedInput::Scroll(-1)),
-                    // Left-button press only; release (action == 'm') ignored for now.
-                    0 if action == 'M' => {
-                        self.events.push(ParsedInput::MousePress { x, y });
+                // Wheel is a fixed pair — bits 6/0-1 (64/65); ignore modifier
+                // bits here since scroll handlers don't use them.
+                if raw & 64 != 0 {
+                    match raw & 0b0100_0011 {
+                        64 => self.events.push(ParsedInput::Scroll(1)),
+                        65 => self.events.push(ParsedInput::Scroll(-1)),
+                        _ => {}
                     }
-                    _ => {}
+                } else {
+                    let modifiers = MouseModifiers {
+                        shift: raw & 4 != 0,
+                        alt: raw & 8 != 0,
+                        ctrl: raw & 16 != 0,
+                    };
+                    let motion = raw & 32 != 0;
+                    let low = raw & 0b11;
+                    // Low bits 0..=2 identify the button; 3 means "no button"
+                    // (only meaningful with the motion bit set — mouse move
+                    // without any button held, reported by ?1003h).
+                    let button = match low {
+                        0 => Some(MouseButton::Left),
+                        1 => Some(MouseButton::Middle),
+                        2 => Some(MouseButton::Right),
+                        _ => None,
+                    };
+                    let kind = if motion {
+                        if button.is_some() {
+                            MouseEventKind::Drag
+                        } else {
+                            MouseEventKind::Moved
+                        }
+                    } else if action == 'M' {
+                        MouseEventKind::Down
+                    } else {
+                        MouseEventKind::Up
+                    };
+                    self.events.push(ParsedInput::Mouse(MouseEvent {
+                        kind,
+                        button,
+                        x,
+                        y,
+                        modifiers,
+                    }));
                 }
             }
             _ => {}
@@ -563,6 +652,15 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // Games that consume richer events (dartboard) get first crack at
+    // Mouse/Home/modified-arrow events before the generic dispatch below.
+    if ctx.screen == Screen::Games
+        && app.is_playing_game
+        && crate::app::games::input::handle_event(app, &event)
+    {
+        return;
+    }
+
     match event {
         ParsedInput::FocusGained | ParsedInput::FocusLost => {}
         ParsedInput::TerminalVersion(payload) => app.set_terminal_version(&payload),
@@ -594,8 +692,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
-        // Mouse clicks only matter inside the icon picker today; ignore here.
-        ParsedInput::MousePress { .. } => {}
+        // Mouse events only matter to a few specific consumers (icon picker,
+        // dartboard). The general dispatch path ignores them; anything that
+        // cares routes them earlier in `handle_parsed_input`.
+        ParsedInput::Mouse(_) => {}
         ParsedInput::BackTab => {
             if ctx.screen == Screen::Chat && app.chat.room_jump_active {
                 return;
@@ -719,6 +819,12 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::CtrlArrow(_)
         | ParsedInput::CtrlBackspace
         | ParsedInput::CtrlDelete => {}
+        // Modified arrows are only bound in games that opt-in via the early
+        // `handle_event` hook (dartboard). Everywhere else they're inert.
+        ParsedInput::ShiftArrow(_)
+        | ParsedInput::AltArrow(_)
+        | ParsedInput::CtrlShiftArrow(_)
+        | ParsedInput::Home => {}
         ParsedInput::Arrow(key) => {
             if ctx.screen == Screen::Chat && app.chat.room_jump_active {
                 let _ = chat::input::handle_arrow(app, key);
@@ -1214,7 +1320,13 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x05) => app.icon_picker_state.search_cursor_end(),
         ParsedInput::Byte(0x19) => app.icon_picker_state.search_paste(),
         ParsedInput::Byte(0x1F) => app.icon_picker_state.search_undo(),
-        ParsedInput::MousePress { x, y } => handle_icon_picker_click(app, x, y),
+        ParsedInput::Mouse(MouseEvent {
+            kind: MouseEventKind::Down,
+            button: Some(MouseButton::Left),
+            x,
+            y,
+            ..
+        }) => handle_icon_picker_click(app, x, y),
         ParsedInput::Char(ch) if !ch.is_control() => app.icon_picker_state.search_insert_char(ch),
         _ => {}
     }
@@ -1623,6 +1735,132 @@ mod tests {
     fn vt_parser_parses_end_ss3_form() {
         let mut parser = VtInputParser::default();
         assert_eq!(parser.feed(b"\x1bOF"), vec![ParsedInput::End]);
+    }
+
+    #[test]
+    fn vt_parser_parses_home_forms() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b[1~"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1b[7~"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1b[H"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1bOH"), vec![ParsedInput::Home]);
+    }
+
+    #[test]
+    fn vt_parser_parses_modified_arrow_variants() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed(b"\x1b[1;2A"),
+            vec![ParsedInput::ShiftArrow(b'A')]
+        );
+        assert_eq!(parser.feed(b"\x1b[2A"), vec![ParsedInput::ShiftArrow(b'A')]);
+        assert_eq!(parser.feed(b"\x1b[1;3B"), vec![ParsedInput::AltArrow(b'B')]);
+        assert_eq!(parser.feed(b"\x1b[3C"), vec![ParsedInput::AltArrow(b'C')]);
+        assert_eq!(
+            parser.feed(b"\x1b[1;6D"),
+            vec![ParsedInput::CtrlShiftArrow(b'D')]
+        );
+        assert_eq!(
+            parser.feed(b"\x1b[6A"),
+            vec![ParsedInput::CtrlShiftArrow(b'A')]
+        );
+    }
+
+    #[test]
+    fn vt_parser_parses_mouse_press_and_release() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed(b"\x1b[<0;10;5M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 10,
+                y: 5,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+        assert_eq!(
+            parser.feed(b"\x1b[<0;10;5m"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Up,
+                button: Some(MouseButton::Left),
+                x: 10,
+                y: 5,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+        assert_eq!(
+            parser.feed(b"\x1b[<2;10;5M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Right),
+                x: 10,
+                y: 5,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+    }
+
+    #[test]
+    fn vt_parser_parses_mouse_drag_and_move() {
+        let mut parser = VtInputParser::default();
+        // Left-button drag: base button 0 + motion bit 32 = 32.
+        assert_eq!(
+            parser.feed(b"\x1b[<32;4;6M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag,
+                button: Some(MouseButton::Left),
+                x: 4,
+                y: 6,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+        // Hover / motion without a button: low bits = 3, plus motion bit 32 = 35.
+        assert_eq!(
+            parser.feed(b"\x1b[<35;4;6M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                button: None,
+                x: 4,
+                y: 6,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+    }
+
+    #[test]
+    fn vt_parser_parses_mouse_modifier_bits() {
+        let mut parser = VtInputParser::default();
+        // Left press with Shift (bit 4): 0 | 4 = 4.
+        assert_eq!(
+            parser.feed(b"\x1b[<4;1;1M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 1,
+                y: 1,
+                modifiers: MouseModifiers {
+                    shift: true,
+                    alt: false,
+                    ctrl: false
+                },
+            })]
+        );
+        // Left press with Ctrl+Alt (bits 16|8 = 24): 0 | 24 = 24.
+        assert_eq!(
+            parser.feed(b"\x1b[<24;2;3M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 2,
+                y: 3,
+                modifiers: MouseModifiers {
+                    shift: false,
+                    alt: true,
+                    ctrl: true
+                },
+            })]
+        );
     }
 
     #[test]
