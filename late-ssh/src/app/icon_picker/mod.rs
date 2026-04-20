@@ -4,7 +4,7 @@ pub mod picker;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui_textarea::{CursorMove, TextArea, WrapMode};
+use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use std::cell::Cell;
 use std::time::Instant;
 
@@ -89,22 +89,19 @@ impl IconPickerState {
         self.search_query.move_cursor(CursorMove::WordForward);
     }
 
-    pub fn search_cursor_home(&mut self) {
-        self.search_query.move_cursor(CursorMove::Head);
-    }
-
-    pub fn search_cursor_end(&mut self) {
-        self.search_query.move_cursor(CursorMove::End);
-    }
-
-    pub fn search_paste(&mut self) {
-        self.search_query.paste();
-        self.reset_selection();
-    }
-
     pub fn search_undo(&mut self) {
         self.search_query.undo();
         self.reset_selection();
+    }
+
+    /// Forward an unclaimed `Input` to ratatui-textarea's emacs keymap
+    /// (^A/^E/^K/^F/^B/^Y/...). Any chord that actually modifies the
+    /// query resets the icon list selection, matching the hand-wired
+    /// behavior of the individual `search_*` helpers above.
+    pub fn search_input(&mut self, input: Input) {
+        if self.search_query.input(input) {
+            self.reset_selection();
+        }
     }
 
     fn reset_selection(&mut self) {

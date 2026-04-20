@@ -163,7 +163,7 @@ fn draw_settings_column(frame: &mut Frame, area: Rect, state: &SettingsModalStat
             width,
             "Username",
             if state.editing_username() {
-                let typed = state.username_input().lines().join("");
+                let typed = state.username_textarea().lines().join("");
                 if typed.is_empty() {
                     value_span("typing…", theme::AMBER())
                 } else {
@@ -343,7 +343,7 @@ fn draw_bio_pane(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 }
 
 fn draw_bio_intro(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
-    let bio = state.bio_input();
+    let bio = state.bio_textarea();
     let text = bio.lines().join("\n");
     let char_count = text.chars().count();
     let line_count = bio.lines().len().max(1);
@@ -402,7 +402,7 @@ fn draw_bio_intro(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 fn draw_bio_content(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let editing = state.editing_bio();
 
-    let composer = state.bio_input();
+    let composer = state.bio_textarea();
     let padded = area.inner(Margin::new(1, 0));
     if composer.is_empty() {
         frame.render_widget(
@@ -435,7 +435,7 @@ fn bio_placeholder_lines(editing: bool) -> Vec<Line<'static>> {
 }
 
 fn bio_summary_value(state: &SettingsModalState) -> ValueSpan {
-    let bio = state.bio_input();
+    let bio = state.bio_textarea();
     let text = bio.lines().join("\n");
     let char_count = text.chars().count();
     let line_count = bio.lines().len().max(1);

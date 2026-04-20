@@ -2,6 +2,7 @@ use super::{
     chat, dashboard, help_modal, icon_picker, profile, profile_modal, settings_modal, state::App,
 };
 use crate::app::common::primitives::Screen;
+use crate::app::common::readline::ctrl_byte_to_input;
 use std::{mem, time::Duration};
 use vte::{Params, Parser, Perform};
 
@@ -1185,7 +1186,10 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         ParsedInput::CtrlDelete => app.icon_picker_state.search_delete_word_right(),
         ParsedInput::Arrow(b'A') => picker_move_selection(app, -1),
         ParsedInput::Arrow(b'B') => picker_move_selection(app, 1),
-        // Ctrl+K / Ctrl+J mirror vim-style up/down without stealing plain j/k from the search box.
+        // Ctrl+K / Ctrl+J mirror vim-style up/down without stealing plain j/k
+        // from the search box. These stay claimed for list nav and are NOT
+        // forwarded to ratatui-textarea's keymap (which would kill-to-EOL /
+        // insert-newline respectively).
         ParsedInput::Byte(0x0B) => picker_move_selection(app, -1),
         ParsedInput::Byte(0x0A) => picker_move_selection(app, 1),
         ParsedInput::Scroll(delta) => picker_move_selection(app, -delta * 3),
@@ -1201,7 +1205,8 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
             let page = app.icon_picker_state.visible_height.get().max(1) as isize;
             picker_move_selection(app, page);
         }
-        // Ctrl+U / Ctrl+D half-page jumps mirror the chat viewport convention.
+        // Ctrl+U / Ctrl+D half-page jumps mirror the chat viewport convention
+        // and intentionally shadow ratatui-textarea's undo / delete-next-char.
         ParsedInput::Byte(0x15) => {
             let half = (app.icon_picker_state.visible_height.get() / 2).max(1) as isize;
             picker_move_selection(app, -half);
@@ -1210,12 +1215,18 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
             let half = (app.icon_picker_state.visible_height.get() / 2).max(1) as isize;
             picker_move_selection(app, half);
         }
-        ParsedInput::Byte(0x01) => app.icon_picker_state.search_cursor_home(),
-        ParsedInput::Byte(0x05) => app.icon_picker_state.search_cursor_end(),
-        ParsedInput::Byte(0x19) => app.icon_picker_state.search_paste(),
+        // ^/ (^_) stays on the app-level undo path so `reset_selection()` fires.
         ParsedInput::Byte(0x1F) => app.icon_picker_state.search_undo(),
         ParsedInput::MousePress { x, y } => handle_icon_picker_click(app, x, y),
         ParsedInput::Char(ch) if !ch.is_control() => app.icon_picker_state.search_insert_char(ch),
+        ParsedInput::Byte(byte) => {
+            // Fallthrough: forward remaining Ctrl+<letter> chords (^A/^E/^F/
+            // ^B/^Y/...) to ratatui-textarea's emacs keymap. The wrapper
+            // resets icon-list selection whenever the query is modified.
+            if let Some(input) = ctrl_byte_to_input(byte) {
+                app.icon_picker_state.search_input(input);
+            }
+        }
         _ => {}
     }
 }
