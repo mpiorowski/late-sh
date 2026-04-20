@@ -74,6 +74,16 @@ resource "kubernetes_manifest" "postgres_object_store" {
       retentionPolicy = "7d"
       instanceSidecarConfiguration = {
         retentionPolicyIntervalSeconds = 1800
+        resources = {
+          requests = {
+            cpu    = "50m"
+            memory = "128Mi"
+          }
+          limits = {
+            cpu    = "500m"
+            memory = "384Mi"
+          }
+        }
       }
     }
   }
