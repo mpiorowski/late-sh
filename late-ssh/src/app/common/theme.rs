@@ -1,5 +1,4 @@
 use std::cell::Cell;
-
 use ratatui::style::Color;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7,6 +6,10 @@ pub enum ThemeKind {
     Late = 0,
     Contrast = 1,
     Purple = 2,
+    Mocha = 3,
+    Macchiato = 4,
+    Frappe = 5,
+    Latte = 6,
 }
 
 #[derive(Clone, Copy)]
@@ -48,21 +51,34 @@ struct Palette {
 }
 
 pub const OPTIONS: &[ThemeOption] = &[
-    ThemeOption {
-        kind: ThemeKind::Late,
-        id: "late",
-        label: "Late",
-    },
-    ThemeOption {
-        kind: ThemeKind::Contrast,
-        id: "contrast",
-        label: "High Contrast",
-    },
-    ThemeOption {
-        kind: ThemeKind::Purple,
-        id: "purple",
-        label: "Purple Haze",
-    },
+    ThemeOption { 
+        kind: ThemeKind::Late, 
+        id: "late", 
+        label: "Late" },
+    ThemeOption { 
+        kind: ThemeKind::Contrast, 
+        id: "contrast", 
+        label: "High Contrast" },
+    ThemeOption { 
+        kind: ThemeKind::Purple, 
+        id: "purple", 
+        label: "Purple Haze" },
+    ThemeOption { 
+        kind: ThemeKind::Mocha, 
+        id: "mocha", 
+        label: "Catppuccin Mocha" },
+    ThemeOption { 
+        kind: ThemeKind::Macchiato, 
+        id: "macchiato", 
+        label: "Catppuccin Macchiato" },
+    ThemeOption { 
+        kind: ThemeKind::Frappe, 
+        id: "frappe", 
+        label: "Catppuccin Frappé" },
+    ThemeOption { 
+        kind: ThemeKind::Latte, 
+        id: "latte", 
+        label: "Catppuccin Latte" },
 ];
 
 const PALETTE_LATE: Palette = Palette {
@@ -155,6 +171,126 @@ const PALETTE_PURPLE: Palette = Palette {
     badge_gold: Color::Rgb(255, 219, 122),
 };
 
+const PALETTE_MOCHA: Palette = Palette {
+    bg_canvas: Color::Rgb(30, 30, 46),
+    bg_selection: Color::Rgb(69, 71, 90),
+    bg_highlight: Color::Rgb(88, 91, 112),
+    border_dim: Color::Rgb(49, 50, 68),
+    border: Color::Rgb(88, 91, 112),
+    border_active: Color::Rgb(203, 166, 247),
+    text_faint: Color::Rgb(108, 112, 134),
+    text_dim: Color::Rgb(147, 153, 178),
+    text_muted: Color::Rgb(166, 173, 200),
+    text: Color::Rgb(205, 214, 244),
+    text_bright: Color::Rgb(245, 224, 220),
+    amber: Color::Rgb(250, 179, 135),
+    amber_dim: Color::Rgb(235, 160, 120),
+    amber_glow: Color::Rgb(249, 226, 175),
+    chat_body: Color::Rgb(205, 214, 244),
+    chat_author: Color::Rgb(137, 180, 250),
+    mention: Color::Rgb(245, 194, 231),
+    success: Color::Rgb(166, 227, 161),
+    error: Color::Rgb(243, 139, 168),
+    bot: Color::Rgb(180, 190, 254),
+    bonsai_sprout: Color::Rgb(148, 226, 213),
+    bonsai_leaf: Color::Rgb(166, 227, 161),
+    bonsai_canopy: Color::Rgb(137, 220, 235),
+    bonsai_bloom: Color::Rgb(203, 166, 247),
+    badge_bronze: Color::Rgb(235, 160, 120),
+    badge_silver: Color::Rgb(186, 194, 222),
+    badge_gold: Color::Rgb(249, 226, 175),
+};
+
+const PALETTE_MACCHIATO: Palette = Palette {
+    bg_canvas: Color::Rgb(36, 39, 58),
+    bg_selection: Color::Rgb(65, 69, 89),
+    bg_highlight: Color::Rgb(73, 77, 100),
+    border_dim: Color::Rgb(46, 49, 71),
+    border: Color::Rgb(73, 77, 100),
+    border_active: Color::Rgb(198, 160, 246),
+    text_faint: Color::Rgb(110, 115, 141),
+    text_dim: Color::Rgb(165, 173, 203),
+    text_muted: Color::Rgb(184, 192, 224),
+    text: Color::Rgb(202, 211, 245),
+    text_bright: Color::Rgb(244, 219, 214),
+    amber: Color::Rgb(245, 169, 127),
+    amber_dim: Color::Rgb(238, 153, 114),
+    amber_glow: Color::Rgb(238, 212, 159),
+    chat_body: Color::Rgb(202, 211, 245),
+    chat_author: Color::Rgb(138, 173, 244),
+    mention: Color::Rgb(245, 189, 230),
+    success: Color::Rgb(166, 218, 149),
+    error: Color::Rgb(237, 135, 150),
+    bot: Color::Rgb(183, 189, 248),
+    bonsai_sprout: Color::Rgb(145, 215, 227),
+    bonsai_leaf: Color::Rgb(166, 218, 149),
+    bonsai_canopy: Color::Rgb(145, 215, 227),
+    bonsai_bloom: Color::Rgb(198, 160, 246),
+    badge_bronze: Color::Rgb(238, 153, 114),
+    badge_silver: Color::Rgb(174, 182, 211),
+    badge_gold: Color::Rgb(238, 212, 159),
+};
+
+const PALETTE_FRAPPE: Palette = Palette {
+    bg_canvas: Color::Rgb(48, 52, 70),
+    bg_selection: Color::Rgb(81, 87, 109),
+    bg_highlight: Color::Rgb(98, 104, 128),
+    border_dim: Color::Rgb(65, 69, 89),
+    border: Color::Rgb(98, 104, 128),
+    border_active: Color::Rgb(202, 158, 230),
+    text_faint: Color::Rgb(115, 121, 148),
+    text_dim: Color::Rgb(165, 172, 196),
+    text_muted: Color::Rgb(181, 191, 226),
+    text: Color::Rgb(198, 208, 245),
+    text_bright: Color::Rgb(242, 213, 207),
+    amber: Color::Rgb(239, 159, 118),
+    amber_dim: Color::Rgb(231, 145, 106),
+    amber_glow: Color::Rgb(229, 200, 144),
+    chat_body: Color::Rgb(198, 208, 245),
+    chat_author: Color::Rgb(140, 170, 238),
+    mention: Color::Rgb(244, 184, 228),
+    success: Color::Rgb(166, 209, 137),
+    error: Color::Rgb(231, 130, 132),
+    bot: Color::Rgb(186, 187, 241),
+    bonsai_sprout: Color::Rgb(129, 200, 190),
+    bonsai_leaf: Color::Rgb(166, 209, 137),
+    bonsai_canopy: Color::Rgb(153, 209, 219),
+    bonsai_bloom: Color::Rgb(202, 158, 230),
+    badge_bronze: Color::Rgb(231, 145, 106),
+    badge_silver: Color::Rgb(173, 184, 216),
+    badge_gold: Color::Rgb(229, 200, 144),
+};
+
+const PALETTE_LATTE: Palette = Palette {
+    bg_canvas: Color::Rgb(239, 241, 245),
+    bg_selection: Color::Rgb(172, 176, 190),
+    bg_highlight: Color::Rgb(188, 192, 204),
+    border_dim: Color::Rgb(204, 208, 218),
+    border: Color::Rgb(156, 160, 176),
+    border_active: Color::Rgb(136, 57, 239),
+    text_faint: Color::Rgb(140, 143, 161),
+    text_dim: Color::Rgb(92, 95, 119),
+    text_muted: Color::Rgb(76, 79, 105),
+    text: Color::Rgb(76, 79, 105),
+    text_bright: Color::Rgb(220, 138, 120),
+    amber: Color::Rgb(254, 100, 11),
+    amber_dim: Color::Rgb(230, 69, 83),
+    amber_glow: Color::Rgb(223, 142, 29),
+    chat_body: Color::Rgb(76, 79, 105),
+    chat_author: Color::Rgb(30, 102, 245),
+    mention: Color::Rgb(234, 118, 203),
+    success: Color::Rgb(64, 160, 43),
+    error: Color::Rgb(210, 15, 57),
+    bot: Color::Rgb(114, 135, 253),
+    bonsai_sprout: Color::Rgb(23, 146, 153),
+    bonsai_leaf: Color::Rgb(64, 160, 43),
+    bonsai_canopy: Color::Rgb(4, 165, 229),
+    bonsai_bloom: Color::Rgb(136, 57, 239),
+    badge_bronze: Color::Rgb(230, 69, 83),
+    badge_silver: Color::Rgb(156, 160, 176),
+    badge_gold: Color::Rgb(223, 142, 29),
+};
+
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Late) };
 }
@@ -205,6 +341,10 @@ fn current_palette() -> &'static Palette {
     CURRENT_THEME.with(|current| match current.get() {
         ThemeKind::Contrast => &PALETTE_CONTRAST,
         ThemeKind::Purple => &PALETTE_PURPLE,
+        ThemeKind::Mocha => &PALETTE_MOCHA,
+        ThemeKind::Macchiato => &PALETTE_MACCHIATO,
+        ThemeKind::Frappe => &PALETTE_FRAPPE,
+        ThemeKind::Latte => &PALETTE_LATTE,
         ThemeKind::Late => &PALETTE_LATE,
     })
 }
@@ -221,7 +361,6 @@ pub fn color_to_hex(color: Color) -> String {
         Color::DarkGray => "#545454".to_string(),
         Color::Gray => "#a8a8a8".to_string(),
         Color::White => "#ffffff".to_string(),
-        // Fallback for others; dynamic themes primarily use Rgb
         _ => "#000000".to_string(),
     }
 }
@@ -230,102 +369,127 @@ pub fn color_to_hex(color: Color) -> String {
 pub fn BG_SELECTION() -> Color {
     current_palette().bg_selection
 }
+
 #[allow(non_snake_case)]
 pub fn BG_HIGHLIGHT() -> Color {
     current_palette().bg_highlight
 }
+
 #[allow(non_snake_case)]
 pub fn BORDER_DIM() -> Color {
     current_palette().border_dim
 }
+
 #[allow(non_snake_case)]
 pub fn BORDER() -> Color {
     current_palette().border
 }
+
 #[allow(non_snake_case)]
 pub fn BORDER_ACTIVE() -> Color {
     current_palette().border_active
 }
+
 #[allow(non_snake_case)]
 pub fn TEXT_FAINT() -> Color {
     current_palette().text_faint
 }
+
 #[allow(non_snake_case)]
 pub fn TEXT_DIM() -> Color {
     current_palette().text_dim
 }
+
 #[allow(non_snake_case)]
 pub fn TEXT_MUTED() -> Color {
     current_palette().text_muted
 }
+
 #[allow(non_snake_case)]
 pub fn TEXT() -> Color {
     current_palette().text
 }
+
 #[allow(non_snake_case)]
 pub fn TEXT_BRIGHT() -> Color {
     current_palette().text_bright
 }
+
 #[allow(non_snake_case)]
 pub fn AMBER() -> Color {
     current_palette().amber
 }
+
 #[allow(non_snake_case)]
 pub fn AMBER_DIM() -> Color {
     current_palette().amber_dim
 }
+
 #[allow(non_snake_case)]
 pub fn AMBER_GLOW() -> Color {
     current_palette().amber_glow
 }
+
 #[allow(non_snake_case)]
 pub fn CHAT_BODY() -> Color {
     current_palette().chat_body
 }
+
 #[allow(non_snake_case)]
 pub fn CHAT_AUTHOR() -> Color {
     current_palette().chat_author
 }
+
 #[allow(non_snake_case)]
 pub fn MENTION() -> Color {
     current_palette().mention
 }
+
 #[allow(non_snake_case)]
 pub fn SUCCESS() -> Color {
     current_palette().success
 }
+
 #[allow(non_snake_case)]
 pub fn ERROR() -> Color {
     current_palette().error
 }
+
 #[allow(non_snake_case)]
 pub fn BOT() -> Color {
     current_palette().bot
 }
+
 #[allow(non_snake_case)]
 pub fn BONSAI_SPROUT() -> Color {
     current_palette().bonsai_sprout
 }
+
 #[allow(non_snake_case)]
 pub fn BONSAI_LEAF() -> Color {
     current_palette().bonsai_leaf
 }
+
 #[allow(non_snake_case)]
 pub fn BONSAI_CANOPY() -> Color {
     current_palette().bonsai_canopy
 }
+
 #[allow(non_snake_case)]
 pub fn BONSAI_BLOOM() -> Color {
     current_palette().bonsai_bloom
 }
+
 #[allow(non_snake_case)]
 pub fn BADGE_BRONZE() -> Color {
     current_palette().badge_bronze
 }
+
 #[allow(non_snake_case)]
 pub fn BADGE_SILVER() -> Color {
     current_palette().badge_silver
 }
+
 #[allow(non_snake_case)]
 pub fn BADGE_GOLD() -> Color {
     current_palette().badge_gold
@@ -342,7 +506,7 @@ mod tests {
 
     #[test]
     fn cycle_theme_wraps() {
-        assert_eq!(cycle_id("purple", true), "late");
-        assert_eq!(cycle_id("late", false), "purple");
+        assert_eq!(cycle_id("latte", true), "late");
+        assert_eq!(cycle_id("late", false), "latte");
     }
 }
