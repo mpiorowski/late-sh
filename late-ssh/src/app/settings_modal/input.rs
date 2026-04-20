@@ -97,8 +97,12 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
         ParsedInput::CtrlDelete => state.username_delete_word_right(),
         ParsedInput::Arrow(b'C') => state.username_cursor_right(),
         ParsedInput::Arrow(b'D') => state.username_cursor_left(),
-        ParsedInput::CtrlArrow(b'C') => state.username_cursor_word_right(),
-        ParsedInput::CtrlArrow(b'D') => state.username_cursor_word_left(),
+        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
+            state.username_cursor_word_right()
+        }
+        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => {
+            state.username_cursor_word_left()
+        }
         ParsedInput::Paste(pasted) => {
             let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
             for ch in cleaned.chars() {
@@ -145,8 +149,8 @@ fn handle_bio_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Arrow(b'B') => state.bio_cursor_down(),
         ParsedInput::Arrow(b'C') => state.bio_cursor_right(),
         ParsedInput::Arrow(b'D') => state.bio_cursor_left(),
-        ParsedInput::CtrlArrow(b'C') => state.bio_cursor_word_right(),
-        ParsedInput::CtrlArrow(b'D') => state.bio_cursor_word_left(),
+        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => state.bio_cursor_word_right(),
+        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => state.bio_cursor_word_left(),
         ParsedInput::Paste(pasted) => {
             let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
             let normalized = cleaned.replace("\r\n", "\n").replace('\r', "\n");
