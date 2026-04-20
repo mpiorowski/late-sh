@@ -1,3 +1,4 @@
+use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::state::App;
 
 pub fn handle_composer_input(app: &mut App, byte: u8) {
@@ -6,12 +7,8 @@ pub fn handle_composer_input(app: &mut App, byte: u8) {
         0x1B => app.chat.news.stop_composing(),
         b'\r' | b'\n' => app.chat.news.submit_composer(),
         0x15 => {
-            // Ctrl-U: clear composer
-            app.chat.news.composer_clear();
-        }
-        0x19 => {
-            // Ctrl-Y: yank from kill-ring
-            app.chat.news.composer_paste();
+            // Readline ^U: kill from cursor to start of current line.
+            app.chat.news.composer_kill_to_head();
         }
         0x1F => {
             // Ctrl-/ (same byte as Ctrl-_): undo
@@ -21,7 +18,14 @@ pub fn handle_composer_input(app: &mut App, byte: u8) {
         b if (32..127).contains(&b) => {
             app.chat.news.composer_push(b as char);
         }
-        _ => {}
+        b => {
+            // Remaining Ctrl+<letter> chords flow through ratatui-textarea's
+            // emacs keymap (^A/^E/^K/^Y/^F/^B/...). ^W/^H are intercepted
+            // by app::input for delete-word-left before reaching here.
+            if let Some(input) = ctrl_byte_to_input(b) {
+                app.chat.news.composer_input(input);
+            }
+        }
     }
 }
 

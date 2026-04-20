@@ -1,4 +1,5 @@
 use crate::app::common::primitives::Banner;
+use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::state::App;
 use uuid::Uuid;
@@ -40,13 +41,8 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             }
         }
         0x15 => {
-            // Ctrl-U: clear composer
-            app.chat.composer_clear();
-            app.chat.update_autocomplete();
-        }
-        0x19 => {
-            // Ctrl-Y: yank from kill-ring (filled by Alt-D / Ctrl-W word deletes)
-            app.chat.composer_paste();
+            // Readline ^U: kill from cursor to start of current line.
+            app.chat.composer_kill_to_head();
             app.chat.update_autocomplete();
         }
         0x1F => {
@@ -58,7 +54,16 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             app.chat.composer_backspace();
             app.chat.update_autocomplete();
         }
-        _ => {}
+        b => {
+            // Hand remaining Ctrl+<letter> chords to ratatui-textarea so its
+            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/^N/^P/etc.
+            // ^W and ^H are intercepted earlier in app::input for
+            // delete-word-left and don't reach this point.
+            if let Some(input) = ctrl_byte_to_input(b) {
+                app.chat.composer_input(input);
+                app.chat.update_autocomplete();
+            }
+        }
     }
 }
 

@@ -5,7 +5,7 @@ use late_core::{
     models::{article::NEWS_MARKER, chat_message::ChatMessage, chat_room::ChatRoom},
 };
 use ratatui::style::{Modifier, Style};
-use ratatui_textarea::{CursorMove, TextArea, WrapMode};
+use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -857,6 +857,19 @@ impl ChatState {
 
     pub fn composer_undo(&mut self) {
         self.composer.undo();
+    }
+
+    /// Readline ^U: drop everything from the cursor back to the start of the
+    /// current line, leaving later lines intact. Replaces the earlier
+    /// clear-the-whole-composer behavior.
+    pub fn composer_kill_to_head(&mut self) {
+        self.composer.delete_line_by_head();
+    }
+
+    /// Forward a synthesized `Input` to the TextArea so it can dispatch via
+    /// its built-in emacs/readline keymap (^A/^E/^K/^F/^B/...).
+    pub fn composer_input(&mut self, input: Input) {
+        self.composer.input(input);
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
