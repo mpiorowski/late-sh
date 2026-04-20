@@ -54,11 +54,25 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             app.chat.composer_backspace();
             app.chat.update_autocomplete();
         }
+        // ^N / ^P switch to the next/previous room without losing the
+        // in-progress draft — useful when you start typing and realize you
+        // meant to be in another room. Reply/edit targets are dropped on
+        // the jump (they point at a message in the prior room); composer
+        // text and cursor survive. Shadows ratatui-textarea's cursor-
+        // down/up, which is rarely useful in a chat composer.
+        0x0E => {
+            app.chat.switch_room_preserving_draft(1);
+            app.chat.update_autocomplete();
+        }
+        0x10 => {
+            app.chat.switch_room_preserving_draft(-1);
+            app.chat.update_autocomplete();
+        }
         b => {
             // Hand remaining Ctrl+<letter> chords to ratatui-textarea so its
-            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/^N/^P/etc.
-            // ^W and ^H are intercepted earlier in app::input for
-            // delete-word-left and don't reach this point.
+            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/etc. ^W and ^H
+            // are intercepted earlier in app::input for delete-word-left
+            // and don't reach this point.
             if let Some(input) = ctrl_byte_to_input(b) {
                 app.chat.composer_input(input);
                 app.chat.update_autocomplete();

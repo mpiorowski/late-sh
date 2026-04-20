@@ -529,6 +529,27 @@ impl ChatState {
         }
     }
 
+    /// Switch to the adjacent room while keeping an in-progress composer
+    /// draft in place. Reply/edit targets are dropped (they reference a
+    /// message in the prior room, and carrying them across would submit
+    /// to the wrong thread) and the composer is re-anchored to the new
+    /// room so `submit_composer` posts to the correct place.
+    ///
+    /// Returns `true` if the selection actually changed.
+    pub fn switch_room_preserving_draft(&mut self, delta: isize) -> bool {
+        if !self.move_selection(delta) {
+            return false;
+        }
+        self.reply_target = None;
+        self.edited_message_id = None;
+        if let Some(room_id) = self.selected_room_id {
+            self.composer_room_id = Some(room_id);
+        }
+        self.mark_selected_room_read();
+        self.request_list();
+        true
+    }
+
     pub fn move_selection(&mut self, delta: isize) -> bool {
         let order = self.visual_order();
         if order.is_empty() {
