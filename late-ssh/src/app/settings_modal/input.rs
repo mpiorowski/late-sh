@@ -1,4 +1,3 @@
-use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::input::{ParsedInput, sanitize_paste_markers};
 use crate::app::state::App;
 
@@ -83,12 +82,9 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B) => state.cancel_username_edit(),
         ParsedInput::Byte(b'\r') => state.submit_username(),
-        // Readline ^U: kill from cursor to start of line. (Single-line field,
-        // so equivalent to "clear everything before the cursor".)
-        ParsedInput::Byte(0x15) => state.username_kill_to_head(),
-        // ^Y stays explicit so the capped `username_paste` path runs; handing
-        // it to ratatui-textarea's built-in `paste()` would bypass
-        // `USERNAME_MAX_LEN`.
+        ParsedInput::Byte(0x15) => state.clear_username(),
+        ParsedInput::Byte(0x01) => state.username_cursor_home(),
+        ParsedInput::Byte(0x05) => state.username_cursor_end(),
         ParsedInput::Byte(0x19) => state.username_paste(),
         ParsedInput::Byte(0x1F) => state.username_undo(),
         ParsedInput::Byte(0x7F) => state.username_backspace(),
@@ -115,14 +111,6 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             state.username_push(byte as char)
         }
-        ParsedInput::Byte(byte) => {
-            // Fallthrough: forward remaining Ctrl+<letter> chords (^A/^E/^K/
-            // ^F/^B/...) to ratatui-textarea's emacs keymap. None of them
-            // insert text, so the length cap isn't affected.
-            if let Some(input) = ctrl_byte_to_input(byte) {
-                state.username_input(input);
-            }
-        }
         _ => {}
     }
 }
@@ -133,11 +121,7 @@ fn handle_bio_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x1B) => state.stop_bio_edit(),
         ParsedInput::Byte(b'\r') => state.stop_bio_edit(),
         ParsedInput::AltEnter | ParsedInput::Byte(b'\n') => state.bio_push('\n'),
-        // Readline ^U: kill cursor-to-head of the current line only (not the
-        // whole buffer).
-        ParsedInput::Byte(0x15) => state.bio_kill_to_head(),
-        // ^Y stays explicit so the capped `bio_paste` path runs; handing it
-        // to ratatui-textarea's built-in `paste()` would bypass `BIO_MAX_LEN`.
+        ParsedInput::Byte(0x15) => state.bio_clear(),
         ParsedInput::Byte(0x19) => state.bio_paste(),
         ParsedInput::Byte(0x1F) => state.bio_undo(),
         ParsedInput::Byte(0x17) => state.bio_delete_word_left(),
@@ -161,14 +145,6 @@ fn handle_bio_input(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::Char(ch) if !ch.is_control() => state.bio_push(ch),
-        ParsedInput::Byte(byte) => {
-            // Fallthrough: forward remaining Ctrl+<letter> chords (^A/^E/^K/
-            // ^F/^B/^N/^P/...) to ratatui-textarea's emacs keymap. None of
-            // them insert text, so `BIO_MAX_LEN` isn't affected.
-            if let Some(input) = ctrl_byte_to_input(byte) {
-                state.bio_input(input);
-            }
-        }
         _ => {}
     }
 }

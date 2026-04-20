@@ -1,5 +1,5 @@
 use ratatui::style::{Modifier, Style};
-use ratatui_textarea::{Input, TextArea, WrapMode};
+use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -130,18 +130,6 @@ impl State {
     pub fn composer_undo(&mut self) {
         if !self.processing {
             self.composer.undo();
-        }
-    }
-
-    pub fn composer_kill_to_head(&mut self) {
-        if !self.processing {
-            self.composer.delete_line_by_head();
-        }
-    }
-
-    pub fn composer_input(&mut self, input: Input) {
-        if !self.processing {
-            self.composer.input(input);
         }
     }
 

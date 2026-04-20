@@ -3,7 +3,7 @@ use std::cell::Cell;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::user::sanitize_username_input;
 use ratatui::style::{Modifier, Style};
-use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
+use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use uuid::Uuid;
 
 use crate::app::common::theme;
@@ -124,7 +124,7 @@ impl SettingsModalState {
         self.editing_bio
     }
 
-    pub fn username_textarea(&self) -> &TextArea<'static> {
+    pub fn username_input(&self) -> &TextArea<'static> {
         &self.username_input
     }
 
@@ -140,7 +140,7 @@ impl SettingsModalState {
             .sum()
     }
 
-    pub fn bio_textarea(&self) -> &TextArea<'static> {
+    pub fn bio_input(&self) -> &TextArea<'static> {
         &self.bio_input
     }
 
@@ -296,6 +296,14 @@ impl SettingsModalState {
         self.username_input.move_cursor(CursorMove::WordForward);
     }
 
+    pub fn username_cursor_home(&mut self) {
+        self.username_input.move_cursor(CursorMove::Head);
+    }
+
+    pub fn username_cursor_end(&mut self) {
+        self.username_input.move_cursor(CursorMove::End);
+    }
+
     pub fn username_paste(&mut self) {
         let yank = self.username_input.yank_text();
         insert_username_text_limited(&mut self.username_input, &yank);
@@ -305,17 +313,9 @@ impl SettingsModalState {
         self.username_input.undo();
     }
 
-    /// Readline ^U: kill from cursor to start of the current line.
-    pub fn username_kill_to_head(&mut self) {
-        self.username_input.delete_line_by_head();
-    }
-
-    /// Forward an unclaimed `Input` to the TextArea so ratatui-textarea's
-    /// emacs keymap (^A/^E/^K/^F/^B/...) takes over. ^Y is handled via
-    /// `username_paste` before reaching here so the `USERNAME_MAX_LEN`
-    /// cap stays enforced.
-    pub fn username_input(&mut self, input: Input) {
-        self.username_input.input(input);
+    pub fn clear_username(&mut self) {
+        let editing = self.editing_username;
+        self.username_input = new_username_textarea(editing);
     }
 
     pub fn start_bio_edit(&mut self) {
@@ -386,18 +386,8 @@ impl SettingsModalState {
         self.bio_input.undo();
     }
 
-    /// Readline ^U: kill from cursor to start of the current line. Later
-    /// lines are untouched.
-    pub fn bio_kill_to_head(&mut self) {
-        self.bio_input.delete_line_by_head();
-    }
-
-    /// Forward an unclaimed `Input` to the TextArea so ratatui-textarea's
-    /// emacs keymap (^A/^E/^K/^F/^B/...) takes over. ^Y is handled via
-    /// `bio_paste` before reaching here so the `BIO_MAX_LEN` cap stays
-    /// enforced.
-    pub fn bio_input(&mut self, input: Input) {
-        self.bio_input.input(input);
+    pub fn bio_clear(&mut self) {
+        self.bio_input = new_bio_textarea(self.editing_bio);
     }
 
     pub fn cycle_setting(&mut self, forward: bool) {
