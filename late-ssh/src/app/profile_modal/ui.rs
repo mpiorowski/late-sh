@@ -7,7 +7,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::{common::theme, settings_modal::data::country_label};
+use crate::app::{
+    common::{markdown::render_body_to_lines, theme},
+    settings_modal::data::country_label,
+};
 
 use super::state::ProfileModalState;
 use crate::app::profile::ui::timezone_current_time;
@@ -37,7 +40,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 
     let layout = Layout::vertical([Constraint::Min(8), Constraint::Length(1)]).split(content_area);
 
-    let lines = build_lines(state);
+    let lines = build_lines(state, content_area.width as usize);
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -56,7 +59,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     frame.render_widget(Paragraph::new(footer), layout[1]);
 }
 
-fn build_lines(state: &ProfileModalState) -> Vec<Line<'static>> {
+fn build_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let text = Style::default().fg(theme::TEXT());
 
@@ -106,9 +109,12 @@ fn build_lines(state: &ProfileModalState) -> Vec<Line<'static>> {
     if profile.bio.trim().is_empty() {
         lines.push(Line::from(Span::styled("Not set", dim)));
     } else {
-        for line in profile.bio.lines() {
-            lines.push(Line::from(Span::styled(line.to_string(), text)));
-        }
+        lines.extend(render_body_to_lines(
+            &profile.bio,
+            width,
+            Span::raw(""),
+            text,
+        ));
     }
 
     lines
