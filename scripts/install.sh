@@ -132,6 +132,16 @@ install_binary() {
   printf '%s\n' "$dest_path"
 }
 
+install_target_dir() {
+  if is_termux; then
+    printf '%s\n' "${PREFIX:-/data/data/com.termux/files/usr}/bin"
+  elif [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    printf '%s\n' "/usr/local/bin"
+  else
+    printf '%s\n' "${HOME}/.local/bin"
+  fi
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -209,11 +219,7 @@ main() {
     log "warning: checksum file unavailable at ${checksum_url}; continuing without verification"
   fi
 
-  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-    target_dir="/usr/local/bin"
-  else
-    target_dir="${HOME}/.local/bin"
-  fi
+  target_dir="$(install_target_dir)"
 
   log_verbose "target_dir=${target_dir}"
   dest_path="$(install_binary "${tmp_dir}/${binary_name}" "$target_dir")"

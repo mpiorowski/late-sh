@@ -436,6 +436,35 @@ mod tests {
     }
 
     #[test]
+    fn ws_payload_android_client_state_parses() {
+        let json = r#"{
+            "event": "client_state",
+            "client_kind": "cli",
+            "ssh_mode": "native",
+            "platform": "android",
+            "muted": false,
+            "volume_percent": 30
+        }"#;
+        let payload: WsPayload = serde_json::from_str(json).unwrap();
+        match payload {
+            WsPayload::ClientState {
+                client_kind,
+                ssh_mode,
+                platform,
+                muted,
+                volume_percent,
+            } => {
+                assert_eq!(client_kind, crate::session::ClientKind::Cli);
+                assert_eq!(ssh_mode, crate::session::ClientSshMode::Native);
+                assert_eq!(platform, crate::session::ClientPlatform::Android);
+                assert!(!muted);
+                assert_eq!(volume_percent, 30);
+            }
+            _ => panic!("expected ClientState"),
+        }
+    }
+
+    #[test]
     fn ws_payload_unknown_event_fails() {
         let json = r#"{"event": "unknown"}"#;
         assert!(serde_json::from_str::<WsPayload>(json).is_err());
