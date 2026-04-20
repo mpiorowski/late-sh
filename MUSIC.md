@@ -9,7 +9,7 @@ This file tracks the local music catalog used by `late.sh` radio.
 ## Library Status
 
 - `lofi`: done, 50 tracks, mixed `CC0` and `CC-BY 4.0`
-- `ambient`: done, 20 tracks, all `CC-BY 4.0`
+- `ambient`: done, 14 tracks, all `CC-BY 4.0`
 - `classic`: done, 40 tracks, public domain via Musopen / Internet Archive
 - `jazz`: pending
 
@@ -86,12 +86,6 @@ This file tracks the local music catalog used by `late.sh` radio.
 | 12 | Ketsa | Meditation | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/modern-meditations/meditation-5/ |
 | 13 | Ketsa | Morning Stillness | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/modern-meditations/morning-stillness/ |
 | 14 | Ketsa | Patterns | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/modern-meditations/patterns-1/ |
-| 15 | The Imperfectionist | White Noise Part 1 | CC-BY 4.0 | https://freemusicarchive.org/music/the-imperfectionist/white-noise/1-white-noise-part1mp3/ |
-| 16 | The Imperfectionist | White Noise Part 2 | CC-BY 4.0 | https://freemusicarchive.org/music/the-imperfectionist/white-noise/2-white-noise-part2mp3/ |
-| 17 | The Imperfectionist | White Noise Part 3 | CC-BY 4.0 | https://freemusicarchive.org/music/the-imperfectionist/white-noise/3-white-noise-part3mp3/ |
-| 18 | The Imperfectionist | White Noise Part 4 | CC-BY 4.0 | https://freemusicarchive.org/music/the-imperfectionist/white-noise/4-white-noise-part4mp3/ |
-| 19 | The Imperfectionist | White Noise Part 5 | CC-BY 4.0 | https://freemusicarchive.org/music/the-imperfectionist/white-noise/5-white-noise-part5mp3/ |
-| 20 | The Imperfectionist | White Noise Part 6 | CC-BY 4.0 | https://freemusicarchive.org/music/the-imperfectionist/white-noise/6-white-noise-part6mp3/ |
 
 ## Classic
 

@@ -52,10 +52,14 @@ impl ChatRoom {
 
         let row = client
             .query_one(
-                "INSERT INTO chat_rooms (kind, slug, language_code)
-                 VALUES ('language', $1, $2)
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, language_code)
+                 VALUES ('language', 'public', false, $1, $2)
                  ON CONFLICT (language_code) WHERE kind = 'language'
-                 DO UPDATE SET slug = EXCLUDED.slug, updated = current_timestamp
+                 DO UPDATE
+                    SET visibility = 'public',
+                        auto_join = false,
+                        slug = EXCLUDED.slug,
+                        updated = current_timestamp
                  RETURNING *",
                 &[&slug, &language_code],
             )
@@ -63,26 +67,66 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    pub async fn get_or_create_room(client: &Client, slug: &str) -> Result<Self> {
-        let slug = slug.trim().to_lowercase();
-        if slug.is_empty() {
-            bail!("room name cannot be empty");
-        }
-        if slug == "general" {
-            bail!("cannot create room with reserved name 'general'");
-        }
+    pub async fn find_topic_room(
+        client: &Client,
+        visibility: &str,
+        slug: &str,
+    ) -> Result<Option<Self>> {
+        let slug = normalize_topic_slug(slug)?;
+        let row = client
+            .query_opt(
+                "SELECT *
+                 FROM chat_rooms
+                 WHERE kind = 'topic' AND visibility = $1 AND slug = $2",
+                &[&visibility, &slug],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
 
+    pub async fn get_or_create_public_room(client: &Client, slug: &str) -> Result<Self> {
+        let slug = normalize_topic_slug(slug)?;
         let row = client
             .query_one(
                 "INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
                  VALUES ('topic', 'public', false, $1)
-                 ON CONFLICT (slug) WHERE kind = 'topic'
+                 ON CONFLICT (visibility, slug) WHERE kind = 'topic'
                  DO UPDATE SET updated = current_timestamp
                  RETURNING *",
                 &[&slug],
             )
             .await?;
         Ok(Self::from(row))
+    }
+
+    pub async fn create_private_room(client: &Client, slug: &str) -> Result<Self> {
+        let slug = normalize_topic_slug(slug)?;
+
+        let existing = client
+            .query_opt(
+                "SELECT id
+                 FROM chat_rooms
+                 WHERE kind = 'topic' AND visibility = 'private' AND slug = $1",
+                &[&slug],
+            )
+            .await?;
+        if existing.is_some() {
+            bail!("private room #{slug} already exists");
+        }
+
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
+                 VALUES ('topic', 'private', false, $1)
+                 RETURNING *",
+                &[&slug],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    pub async fn get_or_create_room(client: &Client, slug: &str) -> Result<Self> {
+        Self::get_or_create_public_room(client, slug).await
     }
 
     pub async fn get_or_create_dm(client: &Client, user_a: Uuid, user_b: Uuid) -> Result<Self> {
@@ -172,7 +216,9 @@ impl ChatRoom {
 
         let existing = client
             .query_opt(
-                "SELECT id FROM chat_rooms WHERE slug = $1 AND kind = 'topic'",
+                "SELECT id
+                 FROM chat_rooms
+                 WHERE slug = $1 AND kind = 'topic' AND visibility = 'public'",
                 &[&slug],
             )
             .await?;
@@ -204,7 +250,9 @@ impl ChatRoom {
 
         let existing = client
             .query_opt(
-                "SELECT id FROM chat_rooms WHERE slug = $1 AND kind = 'topic'",
+                "SELECT id
+                 FROM chat_rooms
+                 WHERE slug = $1 AND kind = 'topic' AND visibility = 'public'",
                 &[&slug],
             )
             .await?;
@@ -258,6 +306,17 @@ pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
     } else {
         (user_b, user_a)
     }
+}
+
+fn normalize_topic_slug(slug: &str) -> Result<String> {
+    let slug = slug.trim().to_lowercase();
+    if slug.is_empty() {
+        bail!("room name cannot be empty");
+    }
+    if slug == "general" {
+        bail!("cannot create room with reserved name 'general'");
+    }
+    Ok(slug)
 }
 
 #[cfg(test)]

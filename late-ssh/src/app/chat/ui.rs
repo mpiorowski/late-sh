@@ -842,10 +842,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         }
     }
 
-    // ── Rooms (public, via /create, alpha sorted) ──
+    // ── Rooms (public visibility, alpha sorted) ──
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.auto_join)
+        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
         .collect();
     public_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !public_rooms.is_empty() {
@@ -871,10 +871,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         }
     }
 
-    // ── Private (via /join, alpha sorted) ──
+    // ── Private (private visibility, alpha sorted) ──
     let mut private_rooms: Vec<_> = chat_rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && !r.auto_join)
+        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
         .collect();
     private_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !private_rooms.is_empty() {

@@ -428,7 +428,8 @@ impl ChatState {
     }
 
     /// Build the flat visual navigation order.
-    /// Order: core (general, announcements) → news → mentions → public rooms (alpha) → private (alpha) → DMs
+    /// Order: core (general, announcements) → news → mentions → public rooms
+    /// (alpha) → private rooms (alpha) → DMs
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
         let mut order = Vec::new();
 
@@ -459,20 +460,20 @@ impl ChatState {
         // Mentions / notifications
         order.push(RoomSlot::Notifications);
 
-        // Public rooms (auto_join, alpha by slug)
+        // Public rooms (non-DM, non-permanent, alpha by slug)
         let mut public: Vec<_> = self
             .rooms
             .iter()
-            .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.auto_join)
+            .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
             .collect();
         public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
         order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
 
-        // Private rooms (!auto_join, alpha by slug)
+        // Private rooms (visibility=private, alpha by slug)
         let mut private: Vec<_> = self
             .rooms
             .iter()
-            .filter(|(r, _)| r.kind != "dm" && !r.permanent && !r.auto_join)
+            .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
             .collect();
         private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
         order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
@@ -662,15 +663,18 @@ impl ChatState {
             return None;
         }
 
-        if body.trim() == "/list" {
+        if body.trim() == "/members" {
             self.clear_composer_after_submit();
-            let Some(room) = self.selected_room() else {
+            let Some(room_id) = self.selected_room_id else {
                 return Some(Banner::error("No room selected"));
             };
-            if !room_supports_member_list(room) {
-                return Some(Banner::error("/list only works in private rooms"));
-            }
-            self.service.list_room_members_task(self.user_id, room.id);
+            self.service.list_room_members_task(self.user_id, room_id);
+            return None;
+        }
+
+        if body.trim() == "/list" {
+            self.clear_composer_after_submit();
+            self.service.list_public_rooms_task(self.user_id);
             return None;
         }
 
@@ -701,10 +705,31 @@ impl ChatState {
             return Some(Banner::success(&format!("Opening DM with {target}...")));
         }
 
-        if let Some(room) = parse_join_command(&body) {
-            self.service.join_room_task(self.user_id, room.to_string());
+        if let Some(room) = parse_room_command(&body, "/public") {
+            self.service
+                .open_public_room_task(self.user_id, room.to_string());
             self.clear_composer_after_submit();
-            return Some(Banner::success(&format!("Joining #{room}...")));
+            return Some(Banner::success(&format!("Opening public #{room}...")));
+        }
+
+        if let Some(room) = parse_room_command(&body, "/private") {
+            self.clear_composer_after_submit();
+            self.service
+                .create_private_room_task(self.user_id, room.to_string());
+            return Some(Banner::success(&format!("Creating private #{room}...")));
+        }
+
+        if let Some(target) = parse_user_command(&body, "/invite") {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.selected_room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let Some(target) = target else {
+                return Some(Banner::error("Usage: /invite @user"));
+            };
+            self.service
+                .invite_user_to_room_task(self.user_id, room_id, target.to_string());
+            return Some(Banner::success(&format!("Inviting @{target}...")));
         }
 
         if parse_leave_command(&body) {
@@ -726,13 +751,6 @@ impl ChatState {
             }
             self.service
                 .create_permanent_room_task(self.user_id, slug.to_string());
-            return Some(Banner::success(&format!("Creating #{slug}...")));
-        }
-
-        if let Some(slug) = parse_create_command(&body) {
-            self.clear_composer_after_submit();
-            self.service
-                .create_room_task(self.user_id, slug.to_string());
             return Some(Banner::success(&format!("Creating #{slug}...")));
         }
 
@@ -1105,8 +1123,14 @@ impl ChatState {
                 ChatEvent::LeaveFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
-                ChatEvent::RoomCreated { user_id, slug } if self.user_id == user_id => {
+                ChatEvent::RoomCreated {
+                    user_id,
+                    room_id,
+                    slug,
+                } if self.user_id == user_id => {
+                    self.selected_room_id = Some(room_id);
                     self.request_list();
+                    self.pending_dm_screen_switch = true;
                     banner = Some(Banner::success(&format!("Created #{slug}")));
                 }
                 ChatEvent::RoomCreateFailed { user_id, message } if self.user_id == user_id => {
@@ -1181,9 +1205,37 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.open_overlay(&title, members);
                 }
+                ChatEvent::PublicRoomsListed {
+                    user_id,
+                    title,
+                    rooms,
+                } if self.user_id == user_id => {
+                    self.open_overlay(&title, rooms);
+                }
+                ChatEvent::InviteSucceeded {
+                    user_id,
+                    room_id,
+                    room_slug,
+                    username,
+                } if self.user_id == user_id => {
+                    if Some(room_id) == self.selected_room_id {
+                        self.request_list();
+                    }
+                    banner = Some(Banner::success(&format!(
+                        "Invited @{username} to #{room_slug}"
+                    )));
+                }
                 ChatEvent::RoomMembersListFailed { user_id, message }
                     if self.user_id == user_id =>
                 {
+                    banner = Some(Banner::error(&message));
+                }
+                ChatEvent::PublicRoomsListFailed { user_id, message }
+                    if self.user_id == user_id =>
+                {
+                    banner = Some(Banner::error(&message));
+                }
+                ChatEvent::InviteFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 _ => {}
@@ -1342,25 +1394,14 @@ fn parse_dm_command(input: &str) -> Option<&str> {
     Some(username)
 }
 
-/// Parse `/join #room` or `/join room` from the composer text.
-/// Returns the room slug if the input matches.
-fn parse_join_command(input: &str) -> Option<&str> {
-    let rest = input.strip_prefix("/join ")?.trim_start();
-    let room = rest.strip_prefix('#').unwrap_or(rest).trim();
-    if room.is_empty() {
-        return None;
-    }
-    Some(room)
-}
-
 /// Parse `/leave` from the composer text.
 fn parse_leave_command(input: &str) -> bool {
     input.trim() == "/leave"
 }
 
-/// Parse `/create <slug>` or `/create #slug` from the composer text.
-fn parse_create_command(input: &str) -> Option<&str> {
-    let rest = input.strip_prefix("/create ")?.trim_start();
+/// Parse `/public <slug>` or `/private <slug>` style commands.
+fn parse_room_command<'a>(input: &'a str, command: &str) -> Option<&'a str> {
+    let rest = input.strip_prefix(&format!("{command} "))?.trim_start();
     let slug = rest.strip_prefix('#').unwrap_or(rest).trim();
     if slug.is_empty() {
         return None;
@@ -1386,10 +1427,6 @@ fn parse_delete_room_command(input: &str) -> Option<&str> {
         return None;
     }
     Some(slug)
-}
-
-fn room_supports_member_list(room: &ChatRoom) -> bool {
-    room.kind != "dm" && !room.auto_join
 }
 
 fn online_username_set(active_users: Option<&ActiveUsers>) -> HashSet<String> {
@@ -1809,6 +1846,42 @@ mod tests {
     }
 
     #[test]
+    fn parse_public_room_with_hash() {
+        assert_eq!(
+            parse_room_command("/public #lobby", "/public"),
+            Some("lobby")
+        );
+    }
+
+    #[test]
+    fn parse_public_room_without_hash() {
+        assert_eq!(
+            parse_room_command("/public lobby", "/public"),
+            Some("lobby")
+        );
+    }
+
+    #[test]
+    fn parse_private_room_with_hash() {
+        assert_eq!(
+            parse_room_command("/private #hideout", "/private"),
+            Some("hideout")
+        );
+    }
+
+    #[test]
+    fn parse_private_room_empty() {
+        assert_eq!(parse_room_command("/private ", "/private"), None);
+        assert_eq!(parse_room_command("/private #", "/private"), None);
+    }
+
+    #[test]
+    fn parse_private_room_not_command() {
+        assert_eq!(parse_room_command("hello", "/private"), None);
+        assert_eq!(parse_room_command("/privates foo", "/private"), None);
+    }
+
+    #[test]
     fn parse_create_room_with_hash() {
         assert_eq!(
             parse_create_room_command("/create-room #announcements"),
@@ -1860,37 +1933,6 @@ mod tests {
     #[test]
     fn parse_delete_room_not_command() {
         assert_eq!(parse_delete_room_command("hello"), None);
-    }
-
-    #[test]
-    fn room_supports_member_list_only_for_non_auto_join_non_dm_rooms() {
-        let private_room = ChatRoom {
-            id: Uuid::now_v7(),
-            created: chrono::Utc::now(),
-            updated: chrono::Utc::now(),
-            kind: "topic".to_string(),
-            visibility: "public".to_string(),
-            auto_join: false,
-            permanent: false,
-            slug: Some("side".to_string()),
-            language_code: None,
-            dm_user_a: None,
-            dm_user_b: None,
-        };
-        assert!(room_supports_member_list(&private_room));
-
-        let public_room = ChatRoom {
-            auto_join: true,
-            ..private_room.clone()
-        };
-        assert!(!room_supports_member_list(&public_room));
-
-        let dm_room = ChatRoom {
-            kind: "dm".to_string(),
-            visibility: "dm".to_string(),
-            ..private_room
-        };
-        assert!(!room_supports_member_list(&dm_room));
     }
 
     #[test]

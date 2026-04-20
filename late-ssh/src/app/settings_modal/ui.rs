@@ -498,7 +498,7 @@ fn draw_save_cta(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 fn draw_footer(frame: &mut Frame, area: Rect) {
     let footer = Line::from(vec![
         Span::raw("  "),
-        Span::styled("j/k ↑↓", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" cycle  ", Style::default().fg(theme::TEXT_DIM())),

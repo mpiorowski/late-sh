@@ -581,19 +581,6 @@ impl russh::server::Handler for ClientHandler {
         };
 
         let user_id = user.id;
-        match self
-            .state
-            .chat_service
-            .auto_join_public_rooms(user_id)
-            .await
-        {
-            Ok(joined) => {
-                tracing::debug!(user_id = %user_id, joined, "auto-joined public chat rooms");
-            }
-            Err(e) => {
-                tracing::warn!(user_id = %user_id, error = ?e, "failed to auto-join public chat rooms");
-            }
-        }
 
         let my_vote = match self.state.vote_service.get_user_vote(user_id).await {
             Ok(v) => v,
@@ -1155,6 +1142,22 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
                 },
             )
             .await?;
+            match state.chat_service.auto_join_public_rooms(user.id).await {
+                Ok(joined) => {
+                    tracing::debug!(
+                        user_id = %user.id,
+                        joined,
+                        "seeded auto-join chat rooms for newly created user"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        user_id = %user.id,
+                        error = ?e,
+                        "failed to seed auto-join chat rooms for newly created user"
+                    );
+                }
+            }
             (user, true)
         }
     };

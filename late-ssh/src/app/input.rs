@@ -503,13 +503,33 @@ fn handle_vt_segment(app: &mut App, data: &[u8]) {
 }
 
 fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
+    match overlay_input_action(event) {
+        Some(OverlayInputAction::Close) => app.chat.close_overlay(),
+        Some(OverlayInputAction::Scroll(delta)) => app.chat.scroll_overlay(delta),
+        None => {}
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OverlayInputAction {
+    Close,
+    Scroll(i16),
+}
+
+fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
     match event {
-        ParsedInput::Byte(b'q' | b'Q') => app.chat.close_overlay(),
-        ParsedInput::Byte(b'j' | b'J') => app.chat.scroll_overlay(1),
-        ParsedInput::Byte(b'k' | b'K') => app.chat.scroll_overlay(-1),
-        ParsedInput::Arrow(b'B') => app.chat.scroll_overlay(1),
-        ParsedInput::Arrow(b'A') => app.chat.scroll_overlay(-1),
-        _ => {}
+        ParsedInput::Byte(b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            Some(OverlayInputAction::Close)
+        }
+        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Char('j' | 'J') => {
+            Some(OverlayInputAction::Scroll(1))
+        }
+        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Char('k' | 'K') => {
+            Some(OverlayInputAction::Scroll(-1))
+        }
+        ParsedInput::Arrow(b'B') => Some(OverlayInputAction::Scroll(1)),
+        ParsedInput::Arrow(b'A') => Some(OverlayInputAction::Scroll(-1)),
+        _ => None,
     }
 }
 
@@ -1717,5 +1737,29 @@ mod tests {
             news_composing: false,
         };
         assert!(ctx.blocks_arrow_sequence());
+    }
+
+    #[test]
+    fn overlay_input_action_accepts_printable_chars_and_arrows() {
+        assert_eq!(
+            overlay_input_action(&ParsedInput::Char('j')),
+            Some(OverlayInputAction::Scroll(1))
+        );
+        assert_eq!(
+            overlay_input_action(&ParsedInput::Char('k')),
+            Some(OverlayInputAction::Scroll(-1))
+        );
+        assert_eq!(
+            overlay_input_action(&ParsedInput::Char('q')),
+            Some(OverlayInputAction::Close)
+        );
+        assert_eq!(
+            overlay_input_action(&ParsedInput::Arrow(b'B')),
+            Some(OverlayInputAction::Scroll(1))
+        );
+        assert_eq!(
+            overlay_input_action(&ParsedInput::Arrow(b'A')),
+            Some(OverlayInputAction::Scroll(-1))
+        );
     }
 }
