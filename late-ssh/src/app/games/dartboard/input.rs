@@ -5,6 +5,7 @@ use super::state::State;
 pub enum InputAction {
     Ignored,
     Handled,
+    Copy(String),
     Leave,
 }
 
@@ -12,12 +13,25 @@ pub fn handle_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> Inpu
     state.set_viewport_for_screen(screen_size);
     match byte {
         0x11 => InputAction::Leave, // Ctrl+Q
-        // Ctrl+C and Ctrl+X are swallowed: left unbound they bubble up to
-        // the global input dispatcher and tear down the SSH session. Match
-        // standalone dartboard, which also treats them as no-ops in
-        // drawing mode.
-        0x03 | 0x18 => InputAction::Handled,
+        0x1B => {
+            if !state.dismiss_floating() {
+                state.clear_local_state();
+            }
+            InputAction::Handled
+        }
+        0x03 => InputAction::Handled, // Ctrl+C stays unbound inside artboard
+        0x16 => {
+            let _ = state.commit_floating();
+            InputAction::Handled
+        }
+        0x18 => {
+            let _ = state.lift_selection_to_floating();
+            InputAction::Handled
+        }
         b'\r' | b'\n' => {
+            if state.commit_floating() {
+                return InputAction::Handled;
+            }
             state.move_down(screen_size);
             InputAction::Handled
         }
@@ -26,7 +40,7 @@ pub fn handle_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> Inpu
             InputAction::Handled
         }
         _ if byte.is_ascii_graphic() || byte == b' ' => {
-            state.paint_char(byte as char);
+            state.type_char(byte as char, screen_size);
             InputAction::Handled
         }
         _ => InputAction::Ignored,
@@ -81,6 +95,7 @@ pub(crate) fn handle_event(
             state.move_page_down(screen_size);
             InputAction::Handled
         }
+        ParsedInput::AltC => InputAction::Copy(state.export_system_clipboard_text()),
         ParsedInput::Delete => {
             state.clear_at_cursor();
             InputAction::Handled
@@ -126,6 +141,10 @@ fn jump_to_edge(state: &mut State, screen_size: (u16, u16), key: u8) {
 }
 
 fn handle_mouse(state: &mut State, screen_size: (u16, u16), mouse: &MouseEvent) -> InputAction {
+    if state.has_floating() {
+        return handle_floating_mouse(state, screen_size, mouse);
+    }
+
     match mouse.kind {
         MouseEventKind::Moved => {
             if state.move_to_screen_point(screen_size, mouse.x, mouse.y) {
@@ -138,6 +157,64 @@ fn handle_mouse(state: &mut State, screen_size: (u16, u16), mouse: &MouseEvent) 
             if matches!(mouse.button, Some(MouseButton::Left)) =>
         {
             if state.move_to_screen_point(screen_size, mouse.x, mouse.y) {
+                if mouse.modifiers.ctrl {
+                    state.clear_drag_brush();
+                    if matches!(mouse.kind, MouseEventKind::Down) {
+                        state.begin_selection_from_cursor();
+                    } else {
+                        state.update_selection_to_cursor();
+                    }
+                } else {
+                    if matches!(mouse.kind, MouseEventKind::Down) {
+                        state.begin_drag_brush_from_cursor();
+                    }
+                    state.paint_drag_brush();
+                }
+                InputAction::Handled
+            } else {
+                InputAction::Ignored
+            }
+        }
+        MouseEventKind::Up if matches!(mouse.button, Some(MouseButton::Left)) => {
+            if state.move_to_screen_point(screen_size, mouse.x, mouse.y) {
+                if mouse.modifiers.ctrl {
+                    state.update_selection_to_cursor();
+                } else {
+                    state.clear_drag_brush();
+                }
+                InputAction::Handled
+            } else {
+                state.clear_drag_brush();
+                InputAction::Ignored
+            }
+        }
+        _ => InputAction::Ignored,
+    }
+}
+
+fn handle_floating_mouse(
+    state: &mut State,
+    screen_size: (u16, u16),
+    mouse: &MouseEvent,
+) -> InputAction {
+    match mouse.kind {
+        MouseEventKind::Moved => {
+            if state.move_to_screen_point(screen_size, mouse.x, mouse.y) {
+                InputAction::Handled
+            } else {
+                InputAction::Ignored
+            }
+        }
+        MouseEventKind::Down if matches!(mouse.button, Some(MouseButton::Left)) => {
+            if state.move_to_screen_point(screen_size, mouse.x, mouse.y) && state.commit_floating()
+            {
+                InputAction::Handled
+            } else {
+                InputAction::Ignored
+            }
+        }
+        MouseEventKind::Down if matches!(mouse.button, Some(MouseButton::Right)) => {
+            if state.dismiss_floating() {
                 InputAction::Handled
             } else {
                 InputAction::Ignored

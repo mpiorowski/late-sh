@@ -90,6 +90,9 @@ pub(crate) fn notification_mode_for_terminal(payload: &str) -> Option<Notificati
     }
 }
 
+const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
+const CURSOR_SHAPE_STEADY_UNDERLINE: &[u8] = b"\x1b[4 q";
+
 #[derive(Clone, Default)]
 pub(super) struct SharedBuffer {
     inner: Arc<Mutex<Vec<u8>>>,
@@ -540,12 +543,21 @@ impl App {
             &self.username,
         );
         self.dartboard_state = Some(crate::app::games::dartboard::state::State::new(svc));
+        self.set_cursor_shape(CURSOR_SHAPE_STEADY_UNDERLINE);
     }
 
     /// Drop this session's dartboard state. The underlying `LocalClient`'s
     /// `Drop` impl fires `server.disconnect()`, freeing the color slot.
     pub(crate) fn leave_dartboard(&mut self) {
+        if self.dartboard_state.is_none() {
+            return;
+        }
         self.dartboard_state = None;
+        self.set_cursor_shape(CURSOR_SHAPE_STEADY_BLOCK);
+    }
+
+    fn set_cursor_shape(&mut self, sequence: &[u8]) {
+        self.pending_terminal_commands.push(sequence.to_vec());
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
@@ -644,6 +656,7 @@ impl App {
         // 1000l = disable basic mouse tracking
         // OSC 111 = reset terminal background color
         buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\");
+        buf.extend_from_slice(CURSOR_SHAPE_STEADY_BLOCK);
         crossterm::execute!(buf, cursor::Show, terminal::LeaveAlternateScreen)
             .expect("failed to leave alt screen");
         buf
@@ -747,5 +760,22 @@ mod tests {
             bytes.windows(4).any(|w| w == b"\x1b[>q"),
             "expected CSI > q in startup bytes, got: {bytes:?}"
         );
+    }
+
+    #[test]
+    fn leave_alt_screen_resets_cursor_shape() {
+        let bytes = App::leave_alt_screen();
+        assert!(
+            bytes
+                .windows(CURSOR_SHAPE_STEADY_BLOCK.len())
+                .any(|w| w == CURSOR_SHAPE_STEADY_BLOCK),
+            "expected steady block cursor reset in shutdown bytes, got: {bytes:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_shape_sequences_match_expected_descusr_codes() {
+        assert_eq!(CURSOR_SHAPE_STEADY_BLOCK, b"\x1b[2 q");
+        assert_eq!(CURSOR_SHAPE_STEADY_UNDERLINE, b"\x1b[4 q");
     }
 }

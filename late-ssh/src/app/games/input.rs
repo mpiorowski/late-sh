@@ -69,6 +69,10 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             match action {
                 super::dartboard::input::InputAction::Ignored => return false,
                 super::dartboard::input::InputAction::Handled => return true,
+                super::dartboard::input::InputAction::Copy(text) => {
+                    app.pending_clipboard = Some(text);
+                    return true;
+                }
                 super::dartboard::input::InputAction::Leave => {
                     app.is_playing_game = false;
                     app.leave_dartboard();
@@ -166,6 +170,10 @@ pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput
     match action {
         super::dartboard::input::InputAction::Ignored => false,
         super::dartboard::input::InputAction::Handled => true,
+        super::dartboard::input::InputAction::Copy(text) => {
+            app.pending_clipboard = Some(text);
+            true
+        }
         super::dartboard::input::InputAction::Leave => {
             app.is_playing_game = false;
             app.leave_dartboard();

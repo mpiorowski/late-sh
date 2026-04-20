@@ -65,6 +65,7 @@ pub(crate) enum ParsedInput {
     // because tmux collapses Ctrl-modified Enter to bare `\r` unless the
     // kitty keyboard protocol is forwarded, which it isn't by default.
     AltS,
+    AltC,
     Paste(Vec<u8>),
     PageUp,
     PageDown,
@@ -416,11 +417,15 @@ impl Perform for VtCollector {
             return;
         }
 
-        // Alt+S: "send and stay in compose". Picked over Ctrl+Enter because
-        // tmux collapses Ctrl-modified Enter to bare `\r` without the kitty
-        // keyboard protocol, but `ESC + <letter>` passes through unchanged.
-        if intermediates.is_empty() && (byte == b's' || byte == b'S') {
-            self.events.push(ParsedInput::AltS);
+        // Explicit Alt+printable chords we route across the app. Everything
+        // else falls through and is intentionally swallowed as a lone Alt
+        // modifier rather than leaking ESC + byte separately.
+        if intermediates.is_empty() {
+            match byte {
+                b's' | b'S' => self.events.push(ParsedInput::AltS),
+                b'c' | b'C' => self.events.push(ParsedInput::AltC),
+                _ => {}
+            }
         }
 
         // Alt+printable falls through and is intentionally ignored, so ESC does
@@ -691,6 +696,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 }
             }
         }
+        ParsedInput::AltC => {}
         ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
         // Mouse events only matter to a few specific consumers (icon picker,
         // dartboard). The general dispatch path ignores them; anything that
@@ -1605,6 +1611,12 @@ mod tests {
     fn vt_parser_consumes_alt_printable_without_emitting_bytes() {
         let mut parser = VtInputParser::default();
         assert!(parser.feed(b"\x1bq").is_empty());
+    }
+
+    #[test]
+    fn vt_parser_emits_alt_c_for_explicit_clipboard_chord() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1bc"), vec![ParsedInput::AltC]);
     }
 
     #[test]

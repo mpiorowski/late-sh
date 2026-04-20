@@ -1,130 +1,151 @@
 # PLAN.md — Arcade Economy & Multiplayer Roadmap
 
-## Immediate next: Dartboard in late-sh
+## Immediate next: Artboard (embedded dartboard) in late-sh
 
-**Goal:** integrate `~/p/my/dartboard` into `late-sh` as a shared multiplayer drawing board reachable from the Games screen, with `Ctrl+Q` as the quit key so `Esc` stays available for local selection/floating cancel.
+**Goal:** integrate `~/p/my/dartboard` into `late-sh` as a shared multiplayer drawing board reachable from the Games screen ("Artboard"), with `Ctrl+Q` as the quit key so `Esc` stays available for local selection/floating cancel.
 
-### Discovery summary
+### Dartboard interaction model (authoritative reference)
 
-- The arcade already has a Multiplayer section, but the selector is only wired for indices `0..=6` in `late-ssh/src/app/games/input.rs`. Rows `7+` are rendered as placeholders only. Dartboard cannot just be "added to the list"; the selector/index map needs to grow and be renumbered.
-- Existing late-sh games already use `Esc` to leave the game, but dartboard relies on `Esc` for local selection / floating cancel. Embedded dartboard in late-sh should keep `Ctrl+Q` as quit instead of forcing the house style here.
-- `late-ssh` currently enables mouse press/release + wheel tracking only (`?1000h` + `?1006h` in `late-ssh/src/app/state.rs`). Dartboard needs drag events, and full hover/move support if we want parity with standalone floating-selection behavior. The terminal bootstrap will need a stronger mouse mode (`?1003h` most likely) and matching teardown.
-- The current VTE/input layer is too narrow for dartboard as-is. `ParsedInput` has bytes, plain arrows, ctrl-arrows, delete, paste, scroll, and a single `MousePress`, but dartboard needs at least:
-  - modified arrows (`Shift`, `Alt`, `Ctrl+Shift`)
-  - `Home`
-  - richer mouse phases (`Down`, `Up`, `Drag`, `Moved`)
-  - mouse button + modifier data (`Alt+click`, `Ctrl+drag`, right-drag pan)
-- The imported dartboard plan says late-sh can avoid WS deps by depending on `dartboard-server`, but the current `dartboard-server` crate still directly depends on `tokio-tungstenite`. Per the preferred direction for this repo, we should split the in-proc/local transport from the WS transport before wiring late-sh to it.
-- The imported dartboard plan suggests direct late-sh user-id passthrough, but the types do not match today: late-sh uses `Uuid`, dartboard wire ids are `u64`. v1 should use dartboard's server-assigned peer ids and keep late-sh identity mapping local to the integration layer unless dartboard's wire model changes.
+Every user-facing decision below should match this description of standalone dartboard (`~/p/my/dartboard/dartboard/src/app.rs`). Where late-sh deliberately diverges, the divergence is called out explicitly.
+
+**Transport & identity**
+
+- Wire types: `UserId = u64`, `ClientOpId = u64`, `Seq = u64`. Server assigns `UserId` on connect — late-sh's own `Uuid` stays local to the integration layer and never reaches the wire.
+- Client → server: `Hello { name, color }`, `Op { client_op_id, op }`.
+- Server → client: `Welcome { your_user_id, your_color, peers, snapshot }`, `Ack { client_op_id, seq }`, `OpBroadcast { from, op, seq }` (echoed to sender too), `PeerJoined`, `PeerLeft`, `Reject { client_op_id, reason }`.
+- Color assignment: the server remaps a requested color that collides with an in-use one to the next free palette entry. In the vendored `dartboard-local` the palette is 10 entries and doubles as the seat cap — the 11th connect is a `ConnectRejected`. Clients never pick their own final color; they must read `Welcome.your_color`.
+- Canvas ops (`dartboard-core::ops`): `PaintCell { pos, ch, fg }`, `ClearCell { pos }`, `PaintRegion { cells: Vec<CellWrite> }` (batched writes used for multi-cell stamps), `ShiftRow { y, kind }` / `ShiftCol { x, kind }` (whole row/column moves, not N cell writes). Conflict resolution is last-write-wins by server-assigned `Seq`; there is no CRDT.
+- Per-peer cursors are **not** on the wire. `Peer` carries only `user_id`/`name`/`color`. Any cursor/selection/floating view in late-sh is strictly session-local.
+- Welcome race: Remote clients must drain until `Welcome` lands before letting the user submit the first op, or `Welcome.snapshot` will stomp it. For in-proc `LocalClient` the `Welcome` is enqueued synchronously during `connect_local`, but the drain-until-welcome invariant is still the cleanest contract.
+
+**Two top-level modes: `Draw` and `Select`**
+
+- `Draw` is the default. Typed characters `insert_char` at the cursor and advance x by glyph display-width (wide glyphs advance 2). Backspace moves left then clears, honoring wide-glyph origin. Delete clears at cursor, snapping to the glyph origin first. Enter is a typewriter-style `move_down` — it does **not** wrap x back to column 0.
+- `Select` is entered by Shift+Arrow, by mouse drag, or by lifting a selection to floating. In Select, typing a character fills the entire selection with that glyph (respecting ellipse shape). Esc clears the selection and returns to Draw.
+
+**Selection shapes: Rect and Ellipse**
+
+- Rect is the default; Ctrl+Left-Down starts an ellipse-shaped drag. Ellipse fill/border uses a standard `(dx/rx)² + (dy/ry)² ≤ 1` test; the border primitive draws `*` only on selected cells that have an unselected neighbor.
+- Bounds are normalized against the canvas before capture so a selection that lands on a wide-glyph continuation extends outward to cover the whole glyph.
+
+**Swatches (5-slot clipboard LRU with pinning)**
+
+- Capacity 5. `Ctrl+C` / `Ctrl+X` on a selection (or single cell, when no selection exists) pushes a `Clipboard` into slot 0; older unpinned slots shift down; pinned slots are immune to eviction and never shift. If every slot is pinned, the push is dropped.
+- Mouse click on a swatch body activates it (see below). Mouse click on a swatch's pin zone toggles pin state.
+- `Ctrl+A/S/D/F/G` is a home-row shortcut for activating swatches 0..4.
+
+**Floating selection (the "stamp" mode)**
+
+- Activated by clicking a swatch, `Ctrl+V`, or lifting the current selection. The floating payload is a `Clipboard` (width × height × `Option<CellValue>`) anchored at the cursor; moving the cursor moves the preview.
+- Two render modes: **opaque** (None cells in the clipboard erase what's under them) and **transparent** (None cells pass through). `Ctrl+T` toggles transparency. Re-activating the same swatch while it is already floating also toggles transparency; activating a different swatch replaces the float and resets to opaque.
+- Commits: `Ctrl+V` stamps at the current cursor **and keeps floating active** (the preview remains — this is how "repeat stamp along a path" works). `Esc` dismisses. Typing any non-binding char while floating dismisses floating first, then inserts that char.
+- Mouse while floating:
+  - `Moved` → cursor follows mouse, preview moves with it.
+  - `Left Down` → begin a paint stroke and stamp at cursor.
+  - `Left Drag` → continue paint stroke. Pure-horizontal runs snap the brush to a `brush_width`-aligned grid from the stroke anchor so wide stamps tile without overlap. Diagonal segments fill via Bresenham with a "don't stamp more than once per `brush_width`" gate so long diagonal drags don't produce a smear.
+  - `Left Up` → end paint stroke (commits the stroke to undo as one step).
+  - `Right Down` → dismiss floating.
+- A paint stroke is a client-side transaction: the canvas is snapshotted at stroke start (`paint_canvas_before`), ops are submitted immediately, and the snapshot is pushed to the undo stack only when the stroke ends. Late-sh v1 has no undo, so it only needs the server-side "submit immediately" half.
+
+**Lift → move → commit / dismiss lifecycle**
+
+- While a selection is in Select mode, `Ctrl+X`-then-`Ctrl+V` is one legitimate flow, but the idiomatic one is: lift the selection into a floating selection (the source region remains cleared while floating is in flight), move the cursor to the drop site, `Ctrl+V` to stamp or Enter/click to commit. `Esc` cancels the move and restores the original selection.
+- late-sh implements this as a single `CanvasOp::PaintRegion` on commit: the region contains `Clear` writes for every source cell plus `Paint` writes for every destination cell, so the server sees one atomic move rather than a "clear + paint" pair that might interleave with a peer's op.
+
+**Row / column shifts**
+
+- `Ctrl+H` / `Ctrl+Backspace` = `push_left`; `Ctrl+J/K/L` = `push_down/up/right`; `Ctrl+Y/U/I` (or `Ctrl+Tab`) `/O` = `pull_from_left/down/up/right`. These emit `ShiftRow` / `ShiftCol` ops against the cursor's row or column. They are distinct from cell writes because the server applies them atomically against the canonical canvas — replaying them as N cell writes would fight concurrent peers.
+
+**Keyboard: other bindings relevant to user↔canvas behavior**
+
+- Plain arrows / Home / End / PageUp / PageDown → move cursor within visible bounds; leaving Select via a plain arrow clears the selection.
+- Shift+Arrow → enter Select, extend to cursor. Shift+Home/End/PageUp/PageDown do the same but jump to visible-bounds edges.
+- Alt+Arrow and Ctrl+Shift+Arrow → pan the viewport by 1 (no cursor move).
+- Alt+C → copy current selection (or full canvas) to the system clipboard via OSC 52.
+- Ctrl+Space → smart-fill the selection (`|` for vertical-line shape, `-` for horizontal, `*` for everything else).
+- Ctrl+B → draw an ASCII border inside the selection; shape-aware for ellipse.
+- Ctrl+T → transpose the selection's anchor and cursor corners (useful after starting a drag from the wrong corner).
+- Ctrl+Z / Ctrl+R → undo / redo in standalone only. Undo is gated on "no other writers" because a local snapshot stack is incoherent under LWW multiplayer; embedded's "every peer is a local user I own" case sidesteps this. **Unbound in late-sh v1** for the same LWW reason.
+- Ctrl+Q → quit.
+- Ctrl+P / F1 → toggle help overlay (standalone chrome; not load-bearing for user↔canvas).
+- Tab / BackTab → cycle active local user in standalone's Embedded 5-user demo. Irrelevant to late-sh because each SSH session is exactly one user.
+
+**Emoji picker**
+
+- Open keys: `Ctrl+]`, `Ctrl+5`, or raw GS (`\x1d`). Picker is a modal: search + tabs + keyboard-and-mouse navigation; Enter inserts the selected glyph at the cursor; Alt+Enter inserts and keeps the picker open. The picker ultimately funnels into `insert_char`, i.e. a single `PaintCell` — so downstream op plumbing is unaffected by whether late-sh adopts the picker UI or defers it. v1 may ship without the picker; the open-key reservations should still be noted so they can be added later without keymap churn.
+
+**Mouse: outside floating mode**
+
+- `Left Down` on canvas sets the cursor to that cell, clears any prior selection (unless modifiers say otherwise), and records `drag_origin`. Modifiers on `Left Down`:
+  - `Ctrl` → start an ellipse-shaped selection drag.
+  - `Alt` with an existing anchor → extend that selection to the clicked cell.
+- `Left Drag` → if the mouse actually moved or we were already selecting, anchor a selection at `drag_origin` and follow the cursor.
+- `Left Up` → clear `drag_origin`.
+- `Right Down` on the canvas → begin viewport pan. `Right Drag` → pan. `Right Up` → end pan.
+- `Scroll` (wheel) → no zoom in standalone; scroll events only matter inside the emoji picker.
+- `Moved` with no button down → **no-op in standalone** outside the floating-preview case. This is a live divergence in current late-sh (see "Open questions" below).
+
+**Bracketed paste**
+
+- A paste is applied relative to the cursor. `\n` / normalized `\r\n` wraps x back to the column where the paste started and advances y by 1. Runs that exceed the canvas width or height are truncated, not wrapped. All emitted glyphs use the active user's color.
+
+**Viewport**
+
+- Cursor motion scrolls the viewport one cell at a time just enough to keep the cursor visible; there is no "recentering." Viewport origin is clamped so the viewport never extends past the canvas edge. Right-drag and Alt/Ctrl+Shift+Arrow are the only ways to pan without moving the cursor.
+
+### Where late-sh is today
+
+All Discovery items from the earlier plan are now either landed or superseded. What's actually true as of this branch:
+
+- `dartboard-server` no longer sits between late-sh and the canvas. `vendor/dartboard-local` is the in-proc server + `LocalClient` with no `tokio-tungstenite` dependency, and late-sh depends on `dartboard-{core,local,tui}`. The "Phase A crate split" prerequisite is obsolete — the split is done inside the vendored tree.
+- `App::enter_alt_screen` in `late-ssh/src/app/state.rs` already enables `?1000h` + `?1003h` + `?1006h` (+ `?2004h` for bracketed paste), and `leave_alt_screen` tears them down in reverse order. Drag and `Moved` events reach the VTE layer today.
+- `ParsedInput` in `late-ssh/src/app/input.rs` already carries `ShiftArrow`, `AltArrow`, `CtrlShiftArrow`, `Home`, `End`, `PageUp`, `PageDown`, `Delete`, `CtrlDelete`, `AltC`, `BackTab`, `Paste(Vec<u8>)`, and `Mouse(MouseEvent)` with `kind ∈ {Down, Up, Drag, Moved, Scroll…}`, `button ∈ {Left, Middle, Right}`, SGR-decoded modifiers, and 1-based coords. Parser tests cover modifier bits and drag/move.
+- The arcade selector recognizes `GameRow::Artboard = 7`; the Games hub renders a tile with live peer count.
+- `late-ssh/src/app/games/dartboard/{mod,svc,state,ui,input}.rs` exist. `DartboardService` owns the `LocalClient`, spawns a dedicated thread for op submission + message drain, and publishes a `DartboardSnapshot` via `watch` plus `DartboardEvent` via `broadcast`. `ConnectRejected` is modeled on the snapshot because it fires before any caller can subscribe.
+- `state.rs` implements cursor/viewport, type/backspace/delete, brush sampling from drag, `Rect`-only selection with lift / commit-as-`PaintRegion` / dismiss, bracketed paste with paste-origin x wrapping, and system-clipboard export. It drains `watch` + `broadcast` in `tick()`.
+
+### What's actually left
+
+Scope for the rest of this integration is now about **parity with dartboard's interaction model**, not about plumbing. The remaining gaps against the interaction spec above:
+
+1. **Selection shapes.** Only `Rect` is implemented. Add `Ellipse` (Ctrl+Left-Down to initiate; shape-aware fill; shape-aware border).
+2. **Swatches.** Not implemented. Needs the 5-slot LRU with pin, `Ctrl+C`/`Ctrl+X` to push, `Ctrl+A/S/D/F/G` home-row activation, swatch panel UI, and mouse hit-testing for body-vs-pin zones.
+3. **Floating mode full semantics.** `lift_selection_to_floating` exists, but:
+   - No transparency toggle (`Ctrl+T`) or opaque/transparent distinction in the floating renderer (`floating_view` hardcodes `transparent: false`).
+   - `Ctrl+V` while floating should re-stamp without dismissing; currently the code path commits and exits.
+   - Mouse paint-stroke while floating (brush-width snap, Bresenham diagonal) is not implemented. Current late-sh mouse drag paints with the active/drag brush, not with the floating clipboard.
+   - Swatch re-activation doesn't toggle transparency.
+4. **Row / column shifts.** `Ctrl+hjkl/yuio` unbound; the `ShiftRow` / `ShiftCol` ops are defined in `dartboard-core` but never emitted by late-sh.
+5. **Smart fill, draw border, transpose corner.** Unbound (`Ctrl+Space`, `Ctrl+B`, `Ctrl+T`).
+6. **Viewport pan.** `Alt+Arrow` and `Ctrl+Shift+Arrow` currently jump the cursor to the visible edge instead of panning (see `handle_event` in `app/games/dartboard/input.rs`). Right-drag pan is not implemented.
+7. **Emoji picker.** Not implemented. Open-key reservations (`Ctrl+]`, `Ctrl+5`, GS) should be decided one way or the other before the arcade's global keymap grows more claims on those codes.
+8. **Peer-presence UI.** Snapshot carries `peers: Vec<Peer>`, but the UI only shows a count. Listing connected peers with their assigned color matches standalone's help panel and makes the color-collision remap visible to users.
+9. **Leave-on-last-session semantics.** `DartboardService` threads one `LocalClient` per SSH session; no explicit teardown other than `Drop`. Worth a one-liner confirming the server stays alive at peer_count=0 (it does, because `ServerHandle` is held by `App` state).
 
 ### Decisions locked in
 
-- Dartboard lives in the Games screen under the Multiplayer section.
-- Embedded late-sh dartboard exits with `Ctrl+Q`; bare `Esc` remains local to the canvas.
-- v1 is one shared in-proc canvas for the lifetime of the `late-sh` process.
-- v1 is in-memory only; persistence stays out of scope.
-- v1 uses a crate split so late-sh depends only on the local/in-proc dartboard host/client pieces, not the WS transport crate.
-- v1 keeps full mouse parity with standalone dartboard, including hover/move behavior used by floating previews.
-- Undo/redo stays unbound in late-sh v1, matching the imported plan and avoiding multiplayer history conflicts.
+- Embedded late-sh dartboard exits with `Ctrl+Q`; bare `Esc` remains local to the canvas (clears selection / dismisses floating).
+- v1 is one shared in-proc canvas for the lifetime of the `late-sh` process. In-memory only.
+- late-sh depends only on `dartboard-{core,local,tui}`; it must not transitively pull `dartboard-server` or `tokio-tungstenite`.
+- Server-assigned `UserId` (`u64`) is the source of truth on the wire. late-sh's session `Uuid` + username go into `Hello` for thread naming and peer display, not onto the wire as an identity.
+- Per-peer cursors stay off the wire in v1, matching dartboard's protocol.
+- Undo/redo stays unbound in late-sh v1: a local snapshot stack is incoherent under LWW when other peers write, and this is the exact reason dartboard gates undo behind `undo_enabled()`.
+- Floating commits that move a region use a single `PaintRegion` op containing both clears and paints, so a concurrent peer can't interleave between the source-clear and destination-paint.
 
-### Phase A: split dartboard crates for local-only embedding
+### Open questions
 
-**Goal:** make the dependency story match the intended architecture before touching late-sh.
+- **`Moved` without a button.** Standalone dartboard ignores `Moved` outside the floating-preview case; current late-sh updates the cursor on every `Moved`, which doubles the cursor's responsiveness but also means hovering over the canvas constantly repositions focus. Pick one: (a) match standalone and only honor `Moved` while floating, or (b) keep the current behavior and document it as a deliberate deviation. Current code = (b); interaction spec defaults to (a).
+- **Emoji picker in v1.** Ship it, or reserve the open keys and defer? Inserting a glyph is trivially `PaintCell`; the picker itself is a ~300-line modal. Deferring is fine if the open-key codes are reserved in `ParsedInput`/the global keymap now so the eventual add doesn't rebind anything.
+- **Canvas widget source.** `dartboard-tui::CanvasWidget` is already the render primitive on both sides — extraction is done. The open question is only whether the late-sh sidebar (swatches, peers, brush label) should move into `dartboard-tui` too, or stay as bespoke late-sh UI.
 
-- Split `dartboard-server` so `ServerHandle` + `LocalClient` live in a local-only crate with no `tokio-tungstenite` dependency.
-- Move WS listener / websocket client-server glue into a separate transport crate or feature-gated module.
-- Keep `dartboard-core` transport-agnostic.
-- Update the dartboard standalone app to use the new local crate for embedded mode and the WS crate only for `--listen` / `--connect`.
-- Treat this split as a prerequisite for late-sh integration.
+### Verification
 
-### Phase B: late-sh host wiring
-
-**Goal:** host one shared dartboard server inside `late-sh` and hand each SSH session a local client.
-
-- Add the new local dartboard crates as dependencies in `late-ssh/Cargo.toml`.
-- Create one shared server handle during `late-ssh/src/main.rs` startup alongside the other shared services.
-- Store that handle in `late-ssh/src/state.rs::State`.
-- Thread it through `late-ssh/src/ssh.rs` into `SessionConfig`.
-- Add `late-ssh/src/app/games/dartboard/` with `mod.rs`, `svc.rs`, `state.rs`, `input.rs`, and `ui.rs`.
-
-### Phase C: arcade wiring
-
-**Goal:** make dartboard reachable from the existing Games hub.
-
-- Add `pub mod dartboard` in `late-ssh/src/app/games/mod.rs`.
-- Add `dartboard_state` to `late-ssh/src/app/state.rs::App` and initialize it in `App::new`.
-- Add render dispatch in `late-ssh/src/app/games/ui.rs` and `late-ssh/src/app/render.rs`.
-- Add tick draining in `late-ssh/src/app/tick.rs`.
-- Expand the selector count in `late-ssh/src/app/games/input.rs` and renumber Multiplayer rows so Dartboard gets a real selectable slot.
-- Recommended slotting:
-  - `6` = Blackjack
-  - `7` = Dartboard
-  - shift current placeholder multiplayer rows up by one
-- Update arcade copy in the Games hub and help modal to mention Dartboard.
-
-### Phase D: input/runtime upgrades in late-sh
-
-**Goal:** let late-sh pass enough input detail to support dartboard cleanly.
-
-- Extend `ParsedInput` in `late-ssh/src/app/input.rs` beyond byte-oriented game routing.
-- Add modifier-aware key events for the combinations dartboard actually uses:
-  - `Shift+Arrow`
-  - `Alt+Arrow`
-  - `Ctrl+Shift+Arrow`
-  - `Home`
-  - keep existing `BackTab`, `PageUp`, `PageDown`, `Delete`, paste
-- Replace `MousePress` with a richer mouse event model carrying:
-  - phase (`Down`, `Up`, `Drag`, `Moved`, `Scroll`)
-  - button (`Left`, `Right`)
-  - modifiers
-  - coordinates
-- Parse SGR mouse modifier bits instead of dropping them.
-- Parse modified arrow CSI forms instead of only plain / ctrl arrows.
-- Preserve the existing pending-`Esc` logic so bare `Esc` remains available for local dartboard cancel behavior without breaking Alt-prefixed sequences.
-- Route `Ctrl+Q` to "leave dartboard" in the games shell without conflicting with existing global quit behavior.
-- Update `App::enter_alt_screen()` / `leave_alt_screen()` so late-sh requests and later disables the mouse tracking level dartboard needs.
-- Add parser tests for the new escape-sequence forms before game integration lands.
-
-### Phase E: embedded dartboard module
-
-**Goal:** adapt dartboard's client/session model to late-sh's `svc.rs` / `state.rs` / `input.rs` / `ui.rs` pattern.
-
-- `svc.rs`
-  - owns one local dartboard client per SSH session
-  - drains server messages on a spawned task
-  - publishes latest canvas snapshot via `watch`
-  - publishes peer join/leave, ack, and reject events via `broadcast`
-  - fire-and-forget op submission methods only
-- `state.rs`
-  - owns late-sh-local UI state: viewport, cursor, mode, swatches, selection, floating selection, emoji picker, peer list
-  - drains `watch` + `broadcast` in `tick()`
-  - keeps no authoritative canvas state outside the latest snapshot
-- `input.rs`
-  - consumes the richer parsed input events rather than plain bytes only
-  - keeps bare `Esc` for standalone-style local cancel behavior
-  - uses `Ctrl+Q` for "leave dartboard"
-- `ui.rs`
-  - pure ratatui draw
-  - preferred path is a reusable canvas widget extracted from dartboard once the API settles
-  - temporary fork is acceptable only if extraction blocks the integration
-
-### Phase F: verification
-
-- Add multiplayer service tests in `late-ssh/tests/games/`:
-  - two simulated sessions subscribe to the same host
-  - session A paints
-  - session B ticks and sees the change
-  - reject path coverage
-  - peer join/leave coverage
-- Add input-parser tests for modified arrows and richer mouse sequences.
+- Multiplayer service tests in `late-ssh/tests/games/`: two sessions subscribe to the same host; A paints, B ticks and sees it; peer join/leave; `ConnectRejected` when the 11th session joins.
+- Parser tests for the modified-arrow and SGR-mouse forms already exist; extend them when new `ParsedInput` variants are added (e.g. to distinguish `Alt+Enter` from `Enter` for a future emoji picker).
 - Run:
   - `cargo check -p late-ssh`
   - `cargo check -p late-ssh --tests`
-  - targeted dartboard integration tests
-
-### Open questions to resolve during implementation
-
-- Widget extraction timing: land the shared canvas widget first, or temporarily fork `ui.rs` into late-sh and extract after the gameplay path is stable?
+  - `cargo test -p late-ssh dartboard`
 
 ---
 
