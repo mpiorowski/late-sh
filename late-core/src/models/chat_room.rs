@@ -102,27 +102,21 @@ impl ChatRoom {
     pub async fn create_private_room(client: &Client, slug: &str) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 
-        let existing = client
-            .query_opt(
-                "SELECT id
-                 FROM chat_rooms
-                 WHERE kind = 'topic' AND visibility = 'private' AND slug = $1",
-                &[&slug],
-            )
-            .await?;
-        if existing.is_some() {
-            bail!("private room #{slug} already exists");
-        }
-
         let row = client
-            .query_one(
+            .query_opt(
                 "INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
                  VALUES ('topic', 'private', false, $1)
+                 ON CONFLICT (visibility, slug) WHERE kind = 'topic'
+                 DO NOTHING
                  RETURNING *",
                 &[&slug],
             )
             .await?;
-        Ok(Self::from(row))
+
+        match row {
+            Some(row) => Ok(Self::from(row)),
+            None => bail!("private room #{slug} already exists"),
+        }
     }
 
     pub async fn get_or_create_room(client: &Client, slug: &str) -> Result<Self> {

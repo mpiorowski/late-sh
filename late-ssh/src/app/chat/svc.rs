@@ -718,7 +718,7 @@ impl ChatService {
                         COUNT(m.user_id)::bigint AS member_count
                  FROM chat_rooms r
                  LEFT JOIN chat_room_members m ON m.room_id = r.id
-                 WHERE r.kind <> 'dm'
+                 WHERE r.kind = 'topic'
                    AND r.visibility = 'public'
                    AND r.permanent = false
                  GROUP BY r.id, r.kind, r.slug, r.language_code, r.created

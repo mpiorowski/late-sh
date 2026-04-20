@@ -28,8 +28,8 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
-        if self.chat.pending_dm_screen_switch {
-            self.chat.pending_dm_screen_switch = false;
+        if self.chat.pending_chat_screen_switch {
+            self.chat.pending_chat_screen_switch = false;
             self.screen = Screen::Chat;
         }
         if let Some(b) = self.vote.tick() {

@@ -73,7 +73,7 @@ pub struct ChatState {
     pub(crate) composing: bool,
     composer_room_id: Option<Uuid>,
     pending_send_notices: VecDeque<Uuid>,
-    pub(crate) pending_dm_screen_switch: bool,
+    pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
     pub(crate) all_usernames: Vec<String>,
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
@@ -146,7 +146,7 @@ impl ChatState {
             composing: false,
             composer_room_id: None,
             pending_send_notices: VecDeque::new(),
-            pending_dm_screen_switch: false,
+            pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
             all_usernames: Vec::new(),
             bonsai_glyphs: HashMap::new(),
@@ -1096,7 +1096,7 @@ impl ChatState {
                 ChatEvent::DmOpened { user_id, room_id } if self.user_id == user_id => {
                     self.selected_room_id = Some(room_id);
                     self.request_list();
-                    self.pending_dm_screen_switch = true;
+                    self.pending_chat_screen_switch = true;
                     banner = Some(Banner::success("DM opened"));
                 }
                 ChatEvent::DmFailed { user_id, message } if self.user_id == user_id => {
@@ -1109,7 +1109,7 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.selected_room_id = Some(room_id);
                     self.request_list();
-                    self.pending_dm_screen_switch = true;
+                    self.pending_chat_screen_switch = true;
                     banner = Some(Banner::success(&format!("Joined #{slug}")));
                 }
                 ChatEvent::RoomFailed { user_id, message } if self.user_id == user_id => {
@@ -1130,7 +1130,7 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.selected_room_id = Some(room_id);
                     self.request_list();
-                    self.pending_dm_screen_switch = true;
+                    self.pending_chat_screen_switch = true;
                     banner = Some(Banner::success(&format!("Created #{slug}")));
                 }
                 ChatEvent::RoomCreateFailed { user_id, message } if self.user_id == user_id => {
