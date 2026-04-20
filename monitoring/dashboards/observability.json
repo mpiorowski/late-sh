@@ -3,7 +3,7 @@
   "uid": "observability",
   "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 10,
+  "version": 12,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -55,7 +55,8 @@
           "type": "victoriametrics-metrics-datasource"
         },
         "refresh": 2,
-        "includeAll": false,
+        "includeAll": true,
+        "allValue": "",
         "multi": false,
         "current": {}
       }
@@ -108,7 +109,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", status_code=\"STATUS_CODE_ERROR\"}[5m])) / sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\"}[5m])) * 100",
+          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", status_code=\"STATUS_CODE_ERROR\"}[5m])) / (sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\"}[5m])) > 0) * 100",
           "legendFormat": "{{service_name}}"
         }
       ],
@@ -165,37 +166,99 @@
       }
     },
     {
-      "type": "nodeGraph",
-      "title": "Service Graph",
+      "type": "table",
+      "title": "Service Call Edges",
+      "description": "Request rate between services from the OTel servicegraph connector. Shows who calls whom.",
       "datasource": {
-        "uid": "victoriatraces",
-        "type": "jaeger"
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
       },
       "targets": [
         {
-          "datasource": {
-            "type": "jaeger",
-            "uid": "victoriatraces"
-          },
           "refId": "A",
-          "queryType": "dependencyGraph",
-          "limit": 20,
-          "tableType": "traces",
-          "metricsQueryType": "range",
-          "serviceMapUseNativeHistograms": false
+          "expr": "sum by (client, server) (rate(traces_service_graph_request_total[$__rate_interval]))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "format": "table"
         }
       ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "client": "Client",
+              "server": "Server",
+              "Value": "Requests/s"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Requests/s"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "gradient-gauge"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "Requests/s",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm"
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 8
-      },
-      "options": {
-        "zoomMode": "cooperative",
-        "layoutAlgorithm": "layered",
-        "nodes": {},
-        "edges": {}
+        "y": 48
       }
     },
     {
@@ -249,7 +312,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 48
       }
     },
     {
@@ -277,6 +340,14 @@
               {
                 "color": "blue",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 500
               }
             ]
           },
@@ -295,7 +366,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 40
+        "y": 8
       }
     },
     {
@@ -323,6 +394,10 @@
               {
                 "color": "orange",
                 "value": null
+              },
+              {
+                "color": "red",
+                "value": 50
               }
             ]
           },
@@ -341,7 +416,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 40
+        "y": 8
       }
     },
     {
@@ -376,27 +451,63 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "ERROR" },
+            "matcher": {
+              "id": "byName",
+              "options": "ERROR"
+            },
             "properties": [
-              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "WARN" },
+            "matcher": {
+              "id": "byName",
+              "options": "WARN"
+            },
             "properties": [
-              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "INFO" },
+            "matcher": {
+              "id": "byName",
+              "options": "INFO"
+            },
             "properties": [
-              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "DEBUG" },
+            "matcher": {
+              "id": "byName",
+              "options": "DEBUG"
+            },
             "properties": [
-              { "id": "color", "value": { "mode": "fixed", "fixedColor": "gray" } }
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "gray"
+                }
+              }
             ]
           }
         ]
@@ -405,7 +516,9 @@
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
-          "calcs": ["sum"],
+          "calcs": [
+            "sum"
+          ],
           "showLegend": true
         },
         "tooltip": {
@@ -415,9 +528,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 40
+        "w": 24,
+        "x": 0,
+        "y": 16
       }
     },
     {
@@ -431,7 +544,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{service.name=~\"$service\"} severity:ERROR | stats by (\"service.name\", _msg) count() error_logs_total | sort by (error_logs_total desc) | limit 10",
+          "expr": "{service.name=~\"$service\"} severity:ERROR | stats by (\"service.name\", _msg) count() error_logs_total | sort by (error_logs_total desc) | limit 8",
           "queryType": "stats",
           "legendFormat": "{{service.name}} - {{_msg}}"
         }
@@ -469,9 +582,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 48
+        "w": 8,
+        "x": 16,
+        "y": 8
       }
     },
     {
@@ -486,7 +599,7 @@
         {
           "refId": "A",
           "expr": "{service.name=~\"$service\"}",
-          "queryType": "range"
+          "queryType": "hits"
         }
       ],
       "options": {
@@ -503,7 +616,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 56
+        "y": 24
       }
     },
     {
@@ -537,7 +650,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 16
+        "y": 80
       }
     },
     {
@@ -576,7 +689,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 80
       }
     },
     {
@@ -620,7 +733,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 88
       }
     },
     {
@@ -659,7 +772,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 24
+        "y": 88
       }
     },
     {
@@ -693,7 +806,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 96
       }
     },
     {
@@ -727,7 +840,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 96
       }
     },
     {
@@ -742,7 +855,7 @@
         {
           "refId": "A",
           "expr": "{service.name=\"late-web\"} severity:ERROR",
-          "queryType": "range"
+          "queryType": "hits"
         }
       ],
       "options": {
@@ -759,7 +872,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 68
+        "y": 36
       }
     },
     {
@@ -774,7 +887,7 @@
         {
           "refId": "A",
           "expr": "{service.name=\"late-ssh\"} severity:ERROR",
-          "queryType": "range"
+          "queryType": "hits"
         }
       ],
       "options": {
@@ -791,7 +904,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 68
+        "y": 36
       }
     },
     {
@@ -864,7 +977,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 80
+        "y": 56
       }
     },
     {
@@ -937,7 +1050,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 92
+        "y": 68
       }
     },
     {
@@ -1010,7 +1123,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 92
+        "y": 68
       }
     }
   ]
