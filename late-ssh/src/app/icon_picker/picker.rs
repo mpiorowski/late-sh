@@ -100,44 +100,19 @@ pub fn render(f: &mut Frame, area: Rect, state: &IconPickerState, catalog: &Icon
 }
 
 fn render_search(f: &mut Frame, area: Rect, state: &IconPickerState) {
-    let mut spans = vec![
+    use ratatui::layout::{Constraint, Layout};
+
+    let prompt = Paragraph::new(Line::from(vec![
         Span::styled("  search ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("› ", Style::default().fg(theme::AMBER_DIM())),
-    ];
-    spans.extend(render_text_with_cursor(
-        &state.search_query,
-        state.search_cursor,
-    ));
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-/// Return spans rendering a text field with a block cursor at the given
-/// character position.
-fn render_text_with_cursor(text: &str, cursor_pos: usize) -> Vec<Span<'static>> {
-    let before: String = text.chars().take(cursor_pos).collect();
-    let cursor_char: String = text
-        .chars()
-        .nth(cursor_pos)
-        .map_or("\u{2588}".to_string(), |c| c.to_string());
-    let after: String = text.chars().skip(cursor_pos + 1).collect();
-
-    let cursor_style = if cursor_pos < text.chars().count() {
-        Style::default()
-            .fg(theme::BG_SELECTION())
-            .bg(theme::AMBER_GLOW())
-    } else {
-        Style::default().fg(theme::AMBER_GLOW())
-    };
-
-    vec![
-        Span::styled(before, Style::default().fg(theme::TEXT_BRIGHT())),
-        Span::styled(cursor_char, cursor_style),
-        Span::styled(after, Style::default().fg(theme::TEXT_BRIGHT())),
-    ]
+    ]));
+    let split = Layout::horizontal([Constraint::Length(11), Constraint::Fill(1)]).split(area);
+    f.render_widget(prompt, split[0]);
+    f.render_widget(&state.search_query, split[1]);
 }
 
 fn render_icon_list(f: &mut Frame, area: Rect, state: &IconPickerState, catalog: &IconCatalogData) {
-    let sections = catalog.filtered(&state.search_query);
+    let sections = catalog.filtered(&state.search_str());
 
     let inner = area;
     let visible_height = inner.height as usize;

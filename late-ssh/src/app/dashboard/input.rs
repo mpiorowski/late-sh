@@ -8,6 +8,15 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
+    let general_room_id = app.chat.general_room_id();
+
+    if byte == b'c'
+        && let Some(room_id) = general_room_id
+        && app.chat.selected_message_body_in_room(room_id).is_some()
+    {
+        return chat::input::handle_message_action_in_room(app, room_id, byte);
+    }
+
     if vote::input::handle_key(app, byte) {
         return true;
     }
@@ -23,7 +32,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    let Some(room_id) = app.chat.general_room_id() else {
+    let Some(room_id) = general_room_id else {
         return false;
     };
     chat::input::handle_message_action_in_room(app, room_id, byte)

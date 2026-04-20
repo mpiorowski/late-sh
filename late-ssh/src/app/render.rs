@@ -19,10 +19,9 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar},
         theme,
     },
-    dashboard, help_modal, icon_picker, profile, profile_modal,
+    dashboard, help_modal, icon_picker, profile, profile_modal, settings_modal,
     state::{App, NotificationMode},
     visualizer::Visualizer,
-    welcome_modal,
 };
 use crate::session::ClientAudioState;
 
@@ -83,8 +82,8 @@ struct DrawContext<'a> {
     activity: &'a std::collections::VecDeque<crate::state::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
-    show_welcome: bool,
-    welcome_modal_state: &'a welcome_modal::state::WelcomeModalState,
+    show_settings: bool,
+    settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_help: bool,
@@ -102,9 +101,9 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
-        // Init theme and layout sync — preview welcome-modal draft live while open.
-        let active_theme_id = if self.show_welcome {
-            self.welcome_modal_state
+        // Init theme and layout sync — preview settings-modal draft live while open.
+        let active_theme_id = if self.show_settings {
+            self.settings_modal_state
                 .draft()
                 .theme_id
                 .clone()
@@ -114,15 +113,9 @@ impl App {
         };
         theme::set_current_by_id(&active_theme_id);
 
-        // Keep composer text width in sync for cursor up/down navigation.
-        // outer border(2) + sidebar(24) + chat-block border(2) + composer padding(3) = 31
-        self.chat
-            .set_composer_text_width(self.size.0.saturating_sub(31).max(1) as usize);
-        self.chat.sync_composer_layout();
-
         // Synchronize terminal background color with theme bg_canvas if enabled
-        let enabled = if self.show_welcome {
-            self.welcome_modal_state.draft().enable_background_color
+        let enabled = if self.show_settings {
+            self.settings_modal_state.draft().enable_background_color
         } else {
             self.profile_state.profile().enable_background_color
         };
@@ -177,11 +170,8 @@ impl App {
                 badges: &chat_badges,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
-                composer: self.chat.composer_text(),
-                composer_rows: self.chat.composer_rows(),
-                composer_cursor: self.chat.composer_cursor(),
+                composer: self.chat.composer(),
                 composing: self.chat.composing,
-                cursor_visible: self.chat.cursor_visible(),
                 mention_matches: &self.chat.mention_ac.matches,
                 mention_selected: self.chat.mention_ac.selected,
                 mention_active: self.chat.mention_ac.active,
@@ -213,9 +203,7 @@ impl App {
             room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
             highlighted_message_id: self.chat.highlighted_message_id,
-            composer: self.chat.composer_text(),
-            composer_rows: self.chat.composer_rows(),
-            composer_cursor: self.chat.composer_cursor(),
+            composer: self.chat.composer(),
             composing: self.chat.composing,
             current_user_id: self.user_id,
             cursor_visible: self.chat.cursor_visible(),
@@ -250,8 +238,8 @@ impl App {
             tetris_best: self.tetris_state.best_score,
             twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
         };
-        self.welcome_modal_state
-            .set_modal_width(welcome_modal::ui::MODAL_WIDTH);
+        self.settings_modal_state
+            .set_modal_width(settings_modal::ui::MODAL_WIDTH);
         let online_count = self
             .active_users
             .as_ref()
@@ -288,8 +276,8 @@ impl App {
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
-                        show_welcome: self.show_welcome,
-                        welcome_modal_state: &self.welcome_modal_state,
+                        show_settings: self.show_settings,
+                        settings_modal_state: &self.settings_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
                         show_help: self.show_help,
@@ -528,8 +516,8 @@ impl App {
             draw_banner(frame, notif_inner, &banner);
         }
 
-        if ctx.show_welcome {
-            welcome_modal::ui::draw(frame, inner, ctx.welcome_modal_state);
+        if ctx.show_settings {
+            settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
         }
 
         if ctx.show_profile_modal {

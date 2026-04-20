@@ -104,6 +104,7 @@ pub enum ChatEvent {
     },
     RoomCreated {
         user_id: Uuid,
+        room_id: Uuid,
         slug: String,
     },
     RoomCreateFailed {
@@ -141,11 +142,30 @@ pub enum ChatEvent {
         title: String,
         members: Vec<String>,
     },
+    PublicRoomsListed {
+        user_id: Uuid,
+        title: String,
+        rooms: Vec<String>,
+    },
+    InviteSucceeded {
+        user_id: Uuid,
+        room_id: Uuid,
+        room_slug: String,
+        username: String,
+    },
     IgnoreFailed {
         user_id: Uuid,
         message: String,
     },
     RoomMembersListFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    PublicRoomsListFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    InviteFailed {
         user_id: Uuid,
         message: String,
     },
@@ -654,13 +674,89 @@ impl ChatService {
                     .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(id)))
             })
             .collect();
-        let title = room
-            .slug
-            .as_deref()
-            .map(|slug| format!("#{slug} Members"))
-            .unwrap_or_else(|| "Room Members".to_string());
+        let title = if room.kind == "dm" {
+            "DM Members".to_string()
+        } else {
+            room.slug
+                .as_deref()
+                .map(|slug| format!("#{slug} Members"))
+                .unwrap_or_else(|| "Room Members".to_string())
+        };
 
         Ok((title, members))
+    }
+
+    pub fn list_public_rooms_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        let span = info_span!("chat.list_public_rooms_task", user_id = %user_id);
+        tokio::spawn(
+            async move {
+                let event = match service.list_public_rooms().await {
+                    Ok((title, rooms)) => ChatEvent::PublicRoomsListed {
+                        user_id,
+                        title,
+                        rooms,
+                    },
+                    Err(e) => ChatEvent::PublicRoomsListFailed {
+                        user_id,
+                        message: e.to_string(),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn list_public_rooms(&self) -> Result<(String, Vec<String>)> {
+        let client = &self.db.get().await?;
+        let rows = client
+            .query(
+                "SELECT r.kind,
+                        r.slug,
+                        r.language_code,
+                        COUNT(m.user_id)::bigint AS member_count
+                 FROM chat_rooms r
+                 LEFT JOIN chat_room_members m ON m.room_id = r.id
+                 WHERE r.kind = 'topic'
+                   AND r.visibility = 'public'
+                   AND r.permanent = false
+                 GROUP BY r.id, r.kind, r.slug, r.language_code, r.created
+                 ORDER BY
+                    member_count DESC,
+                    COALESCE(r.slug, COALESCE(r.language_code, '')) ASC,
+                    r.created ASC,
+                    r.id ASC",
+                &[],
+            )
+            .await?;
+
+        let rooms: Vec<String> = rows
+            .into_iter()
+            .map(|row| {
+                let kind: String = row.get("kind");
+                let slug: Option<String> = row.get("slug");
+                let language_code: Option<String> = row.get("language_code");
+                let member_count: i64 = row.get("member_count");
+                let label = slug
+                    .map(|slug| format!("#{slug}"))
+                    .or_else(|| language_code.map(|code| format!("language:{code}")))
+                    .unwrap_or(kind);
+                let noun = if member_count == 1 {
+                    "member"
+                } else {
+                    "members"
+                };
+                format!("{label} ({member_count} {noun})")
+            })
+            .collect();
+        let rooms = if rooms.is_empty() {
+            vec!["No public rooms".to_string()]
+        } else {
+            rooms
+        };
+
+        Ok(("Public Rooms".to_string(), rooms))
     }
 
     pub fn ignore_user_task(&self, user_id: Uuid, target_username: String) {
@@ -747,12 +843,12 @@ impl ChatService {
         Ok((ids, format!("Unignored @{}", target.username)))
     }
 
-    pub fn join_room_task(&self, user_id: Uuid, slug: String) {
+    pub fn open_public_room_task(&self, user_id: Uuid, slug: String) {
         let service = self.clone();
-        let span = info_span!("chat.join_room_task", user_id = %user_id, slug = %slug);
+        let span = info_span!("chat.open_public_room_task", user_id = %user_id, slug = %slug);
         tokio::spawn(
             async move {
-                match service.join_room(user_id, &slug).await {
+                match service.open_public_room(user_id, &slug).await {
                     Ok(room_id) => {
                         let _ = service.evt_tx.send(ChatEvent::RoomJoined {
                             user_id,
@@ -772,9 +868,44 @@ impl ChatService {
         );
     }
 
-    async fn join_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
+    async fn open_public_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
         let client = &self.db.get().await?;
-        let room = ChatRoom::get_or_create_room(client, slug).await?;
+        let room = match ChatRoom::find_topic_room(client, "public", slug).await? {
+            Some(room) => room,
+            None => ChatRoom::get_or_create_public_room(client, slug).await?,
+        };
+        ChatRoomMember::join(client, room.id, user_id).await?;
+        Ok(room.id)
+    }
+
+    pub fn create_private_room_task(&self, user_id: Uuid, slug: String) {
+        let service = self.clone();
+        let span = info_span!("chat.create_private_room_task", user_id = %user_id, slug = %slug);
+        tokio::spawn(
+            async move {
+                match service.create_private_room(user_id, &slug).await {
+                    Ok(room_id) => {
+                        let _ = service.evt_tx.send(ChatEvent::RoomCreated {
+                            user_id,
+                            room_id,
+                            slug,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::RoomCreateFailed {
+                            user_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn create_private_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
+        let client = &self.db.get().await?;
+        let room = ChatRoom::create_private_room(client, slug).await?;
         ChatRoomMember::join(client, room.id, user_id).await?;
         Ok(room.id)
     }
@@ -819,10 +950,12 @@ impl ChatService {
         tokio::spawn(
             async move {
                 match service.create_room(&slug).await {
-                    Ok(_) => {
-                        let _ = service
-                            .evt_tx
-                            .send(ChatEvent::RoomCreated { user_id, slug });
+                    Ok(room_id) => {
+                        let _ = service.evt_tx.send(ChatEvent::RoomCreated {
+                            user_id,
+                            room_id,
+                            slug,
+                        });
                     }
                     Err(e) => {
                         let _ = service.evt_tx.send(ChatEvent::RoomCreateFailed {
@@ -836,12 +969,12 @@ impl ChatService {
         );
     }
 
-    async fn create_room(&self, slug: &str) -> Result<()> {
+    async fn create_room(&self, slug: &str) -> Result<Uuid> {
         let client = &self.db.get().await?;
         let room = ChatRoom::ensure_auto_join(client, slug).await?;
         let added = ChatRoom::add_all_users(client, room.id).await?;
         tracing::info!(slug = %slug, room_id = %room.id, users_added = added, "room created");
-        Ok(())
+        Ok(room.id)
     }
 
     pub fn create_permanent_room_task(&self, user_id: Uuid, slug: String) {
@@ -873,6 +1006,67 @@ impl ChatService {
         let added = ChatRoom::add_all_users(client, room.id).await?;
         tracing::info!(slug = %slug, room_id = %room.id, users_added = added, "permanent room created");
         Ok(())
+    }
+
+    pub fn invite_user_to_room_task(&self, user_id: Uuid, room_id: Uuid, target_username: String) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.invite_user_to_room_task",
+            user_id = %user_id,
+            room_id = %room_id,
+            target = %target_username
+        );
+        tokio::spawn(
+            async move {
+                let event = match service
+                    .invite_user_to_room(user_id, room_id, &target_username)
+                    .await
+                {
+                    Ok((room_slug, username)) => ChatEvent::InviteSucceeded {
+                        user_id,
+                        room_id,
+                        room_slug,
+                        username,
+                    },
+                    Err(e) => ChatEvent::InviteFailed {
+                        user_id,
+                        message: e.to_string(),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn invite_user_to_room(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        target_username: &str,
+    ) -> Result<(String, String)> {
+        let client = &self.db.get().await?;
+        let room = ChatRoom::get(client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
+        if room.kind == "dm" {
+            anyhow::bail!("Cannot invite users to a DM");
+        }
+        let is_member = ChatRoomMember::is_member(client, room_id, user_id).await?;
+        if !is_member {
+            anyhow::bail!("You are not a member of this room");
+        }
+
+        let target = User::find_by_username(client, target_username)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
+        if target.id == user_id {
+            anyhow::bail!("Cannot invite yourself");
+        }
+
+        ChatRoomMember::join(client, room_id, target.id).await?;
+        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        Ok((room_slug, target.username))
     }
 
     pub fn delete_permanent_room_task(&self, user_id: Uuid, slug: String) {

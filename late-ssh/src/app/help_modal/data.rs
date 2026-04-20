@@ -94,15 +94,18 @@ pub fn bot_app_context() -> String {
 pub fn chat_help_lines() -> Vec<String> {
     [
         "Commands",
-        "  /join #room        join a room (creates it if new, solo)",
-        "  /create #room      create a room and add everyone",
+        "  /public #room      open or create a public room",
+        "  /private #room     create a private room",
+        "  /invite @user      add a user to the current room",
         "  /leave             leave the current room",
         "  /dm @user          open a direct message",
         "  /active            list active users",
-        "  /list              list users in this private room",
+        "  /members           list users in this room",
+        "  /list              list public rooms",
         "  /ignore [@user]    ignore a user, or list ignored users",
         "  /unignore [@user]  remove a user from your ignore list",
         "  /music             explain how music works",
+        "  /profile           open your profile/settings modal",
         "  /help              open this guide",
         "",
         "Messages",
@@ -150,7 +153,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  Esc                close",
         "",
         "Overlay windows",
-        "  q / Esc            close overlay",
+        "  Esc / q            close overlay",
         "  j / k              scroll overlay",
     ]
     .into_iter()
@@ -301,7 +304,7 @@ fn profile_help_lines() -> Vec<String> {
     [
         "Profile and identity",
         "",
-        "Profile is now intentionally lightweight in-page: the page shows your public identity, and editing happens in the welcome/profile modal.",
+        "Profile is now intentionally lightweight in-page: the page shows your public identity, and editing happens in the profile/settings modal.",
         "",
         "What you can set",
         "  username",
@@ -312,7 +315,7 @@ fn profile_help_lines() -> Vec<String> {
         "  timezone via picker",
         "",
         "How to open it",
-        "  on login, the welcome/profile modal opens automatically",
+        "  on login, the profile/settings modal opens automatically",
         "  from Profile, use the edit action to reopen it",
         "",
         "Why country matters",

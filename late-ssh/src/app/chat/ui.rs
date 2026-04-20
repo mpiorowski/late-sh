@@ -6,6 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
+use ratatui_textarea::TextArea;
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
@@ -14,10 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use crate::app::common::{
-    composer::{
-        ComposerRow, build_composer_lines, build_composer_lines_from_rows,
-        composer_cursor_scroll_for_rows, composer_line_count, composer_line_count_for_rows,
-    },
+    composer::composer_line_count,
     overlay::{Overlay, draw_overlay},
     theme,
 };
@@ -44,11 +42,8 @@ pub struct DashboardChatView<'a> {
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
-    pub composer: &'a str,
-    pub composer_rows: &'a [ComposerRow],
-    pub composer_cursor: usize,
+    pub composer: &'a TextArea<'static>,
     pub composing: bool,
-    pub cursor_visible: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
     pub mention_active: bool,
@@ -60,12 +55,9 @@ pub struct DashboardChatView<'a> {
 /// Shared composer block rendering for both the dashboard card and the chat
 /// page. New composer states (editing, replying, …) wire here once.
 pub(super) struct ComposerBlockView<'a> {
-    pub composer: &'a str,
-    pub composer_rows: &'a [ComposerRow],
-    pub composer_cursor: usize,
+    pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub selected_message: bool,
-    pub cursor_visible: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub mention_active: bool,
@@ -178,37 +170,43 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
         .borders(Borders::ALL)
         .border_style(composer_style);
     let composer_inner = composer_block.inner(area);
-    let composer_lines = build_composer_lines_from_rows(
-        view.composer,
-        view.composer_rows,
-        view.composer_cursor,
-        view.composing,
-        view.cursor_visible,
-    );
-    let scroll = composer_cursor_scroll_for_rows(view.composer_rows, view.composer_cursor, 5);
-    frame.render_widget(
-        Paragraph::new(composer_lines)
-            .block(composer_block)
-            .scroll((scroll, 0)),
-        area,
-    );
+    frame.render_widget(composer_block, area);
+
+    let text_area = horizontal_inset(composer_inner, 1);
 
     if !view.composing && view.composer.is_empty() && !view.mention_active {
         let placeholder_text = if view.selected_message {
-            " r reply · e edit · d delete · p profile · c copy · i compose"
+            "r reply · e edit · d delete · p profile · c copy · i compose"
         } else {
-            " Type a message · j/k select · /help"
+            "Type a message · j/k select · /help"
         };
         let placeholder = Paragraph::new(Line::from(Span::styled(
             placeholder_text,
             Style::default().fg(theme::TEXT_DIM()),
         )));
-        frame.render_widget(placeholder, composer_inner);
+        frame.render_widget(placeholder, text_area);
+    } else {
+        frame.render_widget(view.composer, text_area);
     }
 
     if view.mention_active {
         draw_mention_autocomplete(frame, area, view.mention_matches, view.mention_selected);
     }
+}
+
+fn horizontal_inset(rect: Rect, pad: u16) -> Rect {
+    let pad = pad.min(rect.width / 2);
+    Rect {
+        x: rect.x + pad,
+        y: rect.y,
+        width: rect.width.saturating_sub(pad * 2),
+        height: rect.height,
+    }
+}
+
+fn chat_composer_lines_for_height(textarea: &TextArea<'static>, width: usize) -> usize {
+    let text = textarea.lines().join("\n");
+    composer_line_count(&text, width)
 }
 
 pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
@@ -219,7 +217,8 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let total_composer_lines = composer_line_count_for_rows(view.composer, view.composer_rows);
+    let composer_text_width = inner.width.saturating_sub(4).max(1) as usize;
+    let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width);
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
     let layout = Layout::vertical([
@@ -266,11 +265,8 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
             area,
             &ComposerBlockView {
                 composer: view.composer,
-                composer_rows: view.composer_rows,
-                composer_cursor: view.composer_cursor,
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
-                cursor_visible: view.cursor_visible,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
                 mention_active: view.mention_active,
@@ -643,9 +639,7 @@ pub struct ChatRenderInput<'a> {
     pub room_jump_active: bool,
     pub selected_message_id: Option<Uuid>,
     pub highlighted_message_id: Option<Uuid>,
-    pub composer: &'a str,
-    pub composer_rows: &'a [ComposerRow],
-    pub composer_cursor: usize,
+    pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub current_user_id: Uuid,
     pub cursor_visible: bool,
@@ -655,7 +649,7 @@ pub struct ChatRenderInput<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
-    pub news_composer: &'a str,
+    pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
     pub notifications_selected: bool,
@@ -701,13 +695,13 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         return;
     }
 
-    let composer_text_width = inner.width.saturating_sub(3).max(1) as usize;
+    let composer_text_width = inner.width.saturating_sub(4).max(1) as usize;
     let total_composer_lines = if view.notifications_selected {
         1
     } else if news_selected {
-        composer_line_count(view.news_composer, composer_text_width)
+        chat_composer_lines_for_height(view.news_composer, composer_text_width)
     } else {
-        composer_line_count_for_rows(composer, view.composer_rows)
+        chat_composer_lines_for_height(composer, composer_text_width)
     };
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
@@ -848,15 +842,15 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         }
     }
 
-    // ── Rooms (public, via /create, alpha sorted) ──
+    // ── Rooms (public visibility, alpha sorted) ──
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.auto_join)
+        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
         .collect();
     public_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !public_rooms.is_empty() {
         room_lines.push(Line::from(""));
-        room_lines.push(section_divider("Rooms", rooms_width));
+        room_lines.push(section_divider("Public", rooms_width));
         for (room, _) in &public_rooms {
             let label = room
                 .slug
@@ -877,10 +871,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         }
     }
 
-    // ── Private (via /join, alpha sorted) ──
+    // ── Private (private visibility, alpha sorted) ──
     let mut private_rooms: Vec<_> = chat_rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && !r.auto_join)
+        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
         .collect();
     private_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !private_rooms.is_empty() {
@@ -1074,15 +1068,10 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .title(title.as_str())
                 .borders(Borders::ALL)
                 .border_style(border_style);
-            let news_composer_lines = build_composer_lines(
-                view.news_composer,
-                view.news_composer.len(),
-                true,
-                view.cursor_visible && !view.news_processing,
-                composer_text_width,
-            );
-            let news_paragraph = Paragraph::new(news_composer_lines).block(news_block);
-            frame.render_widget(news_paragraph, composer_area);
+            let news_inner = news_block.inner(composer_area);
+            frame.render_widget(news_block, composer_area);
+            let text_area = horizontal_inset(news_inner, 1);
+            frame.render_widget(view.news_composer, text_area);
         } else {
             let hint_block = Block::default()
                 .title(" Share URL ")
@@ -1101,11 +1090,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             composer_area,
             &ComposerBlockView {
                 composer,
-                composer_rows: view.composer_rows,
-                composer_cursor: view.composer_cursor,
                 composing,
                 selected_message: view.selected_message_id.is_some(),
-                cursor_visible: view.cursor_visible,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
                 mention_active: view.mention_active,
@@ -1145,14 +1131,11 @@ mod tests {
         assert_eq!(scroll, 3);
     }
 
-    fn composer_view() -> ComposerBlockView<'static> {
+    fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         ComposerBlockView {
-            composer: "",
-            composer_rows: &[],
-            composer_cursor: 0,
+            composer: textarea,
             composing: true,
             selected_message: false,
-            cursor_visible: false,
             reply_author: None,
             is_editing: false,
             mention_active: false,
@@ -1180,7 +1163,8 @@ mod tests {
 
     #[test]
     fn composer_title_collapses_across_block_widths() {
-        let view = composer_view();
+        let ta = TextArea::default();
+        let view = composer_view(&ta);
         let full = " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
         let long = " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
         let short = " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ";
@@ -1210,7 +1194,8 @@ mod tests {
 
     #[test]
     fn composer_title_reply_state_degrades_through_name_only_and_label() {
-        let mut view = composer_view();
+        let ta = TextArea::default();
+        let mut view = composer_view(&ta);
         view.reply_author = Some("alice");
         assert_eq!(
             composer_title(&view, 100),
@@ -1228,7 +1213,8 @@ mod tests {
 
     #[test]
     fn composer_title_when_not_composing_shows_press_i_prompt() {
-        let mut view = composer_view();
+        let ta = TextArea::default();
+        let mut view = composer_view(&ta);
         view.composing = false;
         assert_eq!(composer_title(&view, 30), " Compose (press i) ");
         assert_eq!(composer_title(&view, 13), " (press i) ");
@@ -1243,7 +1229,8 @@ mod tests {
         // Render the composer block at every block width where a non-empty
         // title is expected (≥7 for the " Esc " fallback). At each width,
         // confirm the picked title survives intact in the top border row.
-        let view = composer_view();
+        let ta = TextArea::default();
+        let view = composer_view(&ta);
         for block_w in 7u16..=120 {
             let backend = TestBackend::new(block_w, 3);
             let mut terminal = Terminal::new(backend).expect("term");

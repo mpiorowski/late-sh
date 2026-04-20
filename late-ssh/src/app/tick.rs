@@ -28,8 +28,8 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
-        if self.chat.pending_dm_screen_switch {
-            self.chat.pending_dm_screen_switch = false;
+        if self.chat.pending_chat_screen_switch {
+            self.chat.pending_chat_screen_switch = false;
             self.screen = Screen::Chat;
         }
         if let Some(b) = self.vote.tick() {
@@ -42,13 +42,13 @@ impl App {
         if self.show_profile_modal {
             self.profile_modal_state.tick();
         }
-        if self.show_welcome
-            && self.welcome_modal_state.draft().username.is_empty()
+        if self.show_settings
+            && self.settings_modal_state.draft().username.is_empty()
             && !self.profile_state.profile().username.is_empty()
         {
-            self.welcome_modal_state.open_from_profile(
+            self.settings_modal_state.open_from_profile(
                 self.profile_state.profile(),
-                crate::app::welcome_modal::ui::MODAL_WIDTH,
+                crate::app::settings_modal::ui::MODAL_WIDTH,
             );
         }
 

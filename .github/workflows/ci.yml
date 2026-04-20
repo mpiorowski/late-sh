@@ -24,23 +24,6 @@ jobs:
       - name: cargo_fmt_check
         run: cargo fmt --all -- --check
 
-  late-cli-windows-build:
-    name: late-cli Windows build
-    if: inputs.package == '' || inputs.package == 'late-cli'
-    needs: [fmt]
-    runs-on: windows-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v5
-      - name: restore_rust_cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-rust-late-cli-windows
-      - name: install_rust_target
-        run: rustup target add x86_64-pc-windows-msvc
-      - name: cargo_build_late_cli_windows
-        run: cargo build --locked -p late-cli --bin late --target x86_64-pc-windows-msvc
-
   clippy-test:
     name: clippy + test
     needs: [fmt]

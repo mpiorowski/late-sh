@@ -35,10 +35,23 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
             if let Some(topic) = app.chat.take_requested_help_topic() {
                 open_help_modal(app, topic);
             }
+            if app.chat.take_requested_settings_modal() {
+                open_settings_modal(app);
+            }
         }
         0x15 => {
             // Ctrl-U: clear composer
             app.chat.composer_clear();
+            app.chat.update_autocomplete();
+        }
+        0x19 => {
+            // Ctrl-Y: yank from kill-ring (filled by Alt-D / Ctrl-W word deletes)
+            app.chat.composer_paste();
+            app.chat.update_autocomplete();
+        }
+        0x1F => {
+            // Ctrl-/ (same byte as Ctrl-_): undo
+            app.chat.composer_undo();
             app.chat.update_autocomplete();
         }
         0x7F => {
@@ -52,6 +65,14 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
 fn open_help_modal(app: &mut App, topic: HelpTopic) {
     app.help_modal_state.open(topic);
     app.show_help = true;
+}
+
+fn open_settings_modal(app: &mut App) {
+    app.settings_modal_state.open_from_profile(
+        app.profile_state.profile(),
+        crate::app::settings_modal::ui::MODAL_WIDTH,
+    );
+    app.show_settings = true;
 }
 
 pub fn handle_compose_char(app: &mut App, ch: char) {

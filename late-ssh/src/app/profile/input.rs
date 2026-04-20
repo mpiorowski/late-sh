@@ -3,11 +3,11 @@ use crate::app::state::App;
 pub fn handle_byte(app: &mut App, byte: u8) {
     match byte {
         b'e' | b'E' | b' ' | b'\r' => {
-            app.welcome_modal_state.open_from_profile(
+            app.settings_modal_state.open_from_profile(
                 app.profile_state.profile(),
-                crate::app::welcome_modal::ui::MODAL_WIDTH,
+                crate::app::settings_modal::ui::MODAL_WIDTH,
             );
-            app.show_welcome = true;
+            app.show_settings = true;
         }
         b'j' | b'J' => app.profile_state.scroll_by(1),
         b'k' | b'K' => app.profile_state.scroll_by(-1),
@@ -28,5 +28,3 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
         _ => false,
     }
 }
-
-pub fn handle_composer_input(_app: &mut App, _byte: u8) {}

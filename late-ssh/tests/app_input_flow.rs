@@ -201,20 +201,22 @@ async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
     app.handle_input(b"\x7f");
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("one"),
-        "expected split Alt+Backspace to keep the preceding word; frame={frame:?}"
+        frame.contains("│one │"),
+        "expected split Alt+Backspace to leave the composer in the explicit intermediate state `one `; frame={frame:?}"
     );
     assert!(
         !frame.contains("two"),
         "expected split Alt+Backspace to delete the previous word; frame={frame:?}"
     );
 
-    // Plain Backspace must still work after the word-delete chord.
-    app.handle_input(b"\x7f!");
+    // Plain Backspace must still work after the word-delete chord. Insert a
+    // fresh sentinel byte first so we can verify backspace removed it without
+    // depending on whether delete-word keeps the separating space.
+    app.handle_input(b"x\x7f!");
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("on!"),
-        "expected composer to keep accepting backspace and text after Alt+Backspace split; frame={frame:?}"
+        frame.contains("one!") && !frame.contains("x"),
+        "expected composer to keep accepting backspace and text after Alt+Backspace split from the intermediate `one ` state; frame={frame:?}"
     );
     assert!(
         !frame.contains("two"),
@@ -274,7 +276,7 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
 }
 
 #[tokio::test]
-async fn list_command_shows_private_room_members_without_persisting_message() {
+async fn members_command_shows_room_members_without_persisting_message() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "list-flow-viewer").await;
     let target = create_test_user(&test_db.db, "list-flow-target").await;
@@ -286,7 +288,7 @@ async fn list_command_shows_private_room_members_without_persisting_message() {
         .await
         .expect("join viewer to general");
 
-    let private_room = ChatRoom::get_or_create_room(&client, "side")
+    let private_room = ChatRoom::create_private_room(&client, "side")
         .await
         .expect("create room");
     ChatRoomMember::join(&client, private_room.id, viewer.id)
@@ -300,11 +302,16 @@ async fn list_command_shows_private_room_members_without_persisting_message() {
 
     app.handle_input(b"2");
     wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, "> general").await;
+    wait_for_render_contains(&mut app, " Private ").await;
+    wait_for_render_contains(&mut app, " side").await;
 
-    app.handle_input(b"i/join side\r");
-    wait_for_render_contains(&mut app, "Joined #side").await;
+    app.handle_input(b" ");
+    wait_for_render_contains(&mut app, "[f] side").await;
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "> side").await;
 
-    app.handle_input(b"i/list\r");
+    app.handle_input(b"i/members\r");
     wait_for_render_contains(&mut app, "#side Members").await;
     wait_for_render_contains(&mut app, "@list-flow-viewer").await;
     wait_for_render_contains(&mut app, "@list-flow-target").await;
@@ -312,7 +319,7 @@ async fn list_command_shows_private_room_members_without_persisting_message() {
     let messages = ChatMessage::list_recent(&client, private_room.id, 20)
         .await
         .expect("list recent messages");
-    assert!(messages.is_empty(), "expected /list to stay client-side");
+    assert!(messages.is_empty(), "expected /members to stay client-side");
 }
 
 #[tokio::test]

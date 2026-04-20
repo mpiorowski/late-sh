@@ -28,6 +28,7 @@ tokio = { workspace = true }
 tokio-postgres = { workspace = true }
 crossterm.workspace = true
 ratatui.workspace = true
+ratatui-textarea = { version = "0.9.1", default-features = false }
 unicode-width.workspace = true
 emojis.workspace = true
 rand_core = { workspace = true, features = ["std"] }

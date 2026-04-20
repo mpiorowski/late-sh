@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-19
+- Last updated: 2026-04-20
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -525,7 +525,7 @@ late-sh/
 - **Open access:** `LATE_SSH_OPEN=true` enables auth, but only public-key auth is accepted; password and keyboard-interactive are always rejected
 - **User scoping:** Votes are scoped to `user_id` (FK to `users.id`)
 - **Chat scoping:** Rooms visible via membership (`ChatRoom::list_for_user`, `ChatRoomMember`)
-- **Auto-join:** Public rooms with `auto_join=true` are joined on first connection (`auto_join_public_rooms`); `/create` makes auto-join rooms everyone can leave, `/create-room` (admin) makes permanent rooms nobody can leave
+- **Auto-join:** Public rooms with `auto_join=true` are seeded for a user only when the user record is first created; reconnecting does not re-add rooms the user already left. Permanent/admin room creation still bulk-adds all existing users when the room is created/promoted.
 - **Multi-tenant isolation:** All user data queries filter by `user_id`; no cross-user reads
 
 ### 4.3 Data model and key enums
@@ -776,11 +776,11 @@ Currently the SSH app assumes a single process. These in-memory structures would
 6. Failure: `IgnoreFailed { user_id, message }` for self-target, unknown username, already-ignored, or not-currently-ignored — surfaced as a red banner.
 
 **Chat roster/help overlay flow:**
-1. Trigger: User submits `/help`, `/active`, or `/list` in the composer
-2. Processing: `ChatState::submit_composer()` intercepts these before any message send. `/help` opens a static overlay, `/active` snapshots the shared in-memory `active_users` registry, and `/list` spawns `ChatService::list_room_members_task` for the selected non-auto-join room.
-3. Side effects: `/active` renders usernames in an overlay immediately and annotates repeated SSH sessions as `(<n> sessions)`. `/list` resolves `chat_room_members` to `users.username` and opens a room-member overlay when the async event arrives.
-4. Guardrail: `/list` is only allowed for the product's "private" rooms, defined in the TUI as `auto_join = false` and `kind != 'dm'`; it is rejected in `general`, permanent/public auto-join rooms, and DMs.
-5. Failure: `/list` on the wrong room shows a red banner; DB/service errors surface via `RoomMembersListFailed`.
+1. Trigger: User submits `/help`, `/active`, `/members`, or `/list` in the composer
+2. Processing: `ChatState::submit_composer()` intercepts these before any message send. `/help` opens a static overlay, `/active` snapshots the shared in-memory `active_users` registry, `/members` spawns `ChatService::list_room_members_task` for the selected room, and `/list` spawns `ChatService::list_public_rooms_task`.
+3. Side effects: `/active` renders usernames in an overlay immediately and annotates repeated SSH sessions as `(<n> sessions)`. `/members` resolves `chat_room_members` to `users.username` and opens a room-member overlay when the async event arrives. `/list` opens a simple public-room overlay with member counts.
+4. Guardrail: `/members` still requires a real selected room; DMs are allowed and render a generic `DM Members` title.
+5. Failure: Missing room selection or DB/service errors surface as chat banners via `RoomMembersListFailed` / `PublicRoomsListFailed`.
 
 **Chat reply flow:**
 1. Trigger: User selects a message (`j`/`k`) and presses `r`
@@ -814,7 +814,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Chat message navigation is selection-first:** `selected_message_id` is the source of truth on both the dashboard general card and the chat screen (they share one storage). Mouse wheel, arrows, paging, and `j/k` all move selection; when no message is selected, the viewport falls back to newest-at-bottom.
 - **Chat display names are intentionally plain:** transcript author labels, DM labels, and member labels render the stored username without a leading `@` and without an appended country badge. `@` still exists in composer mentions, mention autocomplete, and command syntax (`/dm @user`, `/ignore @user`, etc.), so display formatting and mention syntax are deliberately different.
 - **Chat wrapping is word-aware:** Shared wrapping prefers breaking on whitespace for regular messages, reply quote lines, news-card text, and the composer. Hard splits are only valid for single words longer than the available width.
-- **Chat room list order is UI-defined:** The chat sidebar order is hardcoded as `core` (`general`, `announcements`, `suggestions`, any other permanent rooms, then synthetic `news`) → `public` → `private` → `dm`, with divider rows rendered in the UI. Here, "private" is a UI/product label for non-auto-join rooms (`auto_join = false`), not necessarily DB `visibility = 'private'`. The synthetic `news` row now carries its own unread badge sourced from `article_feed_reads`, not `chat_room_members`.
+- **Chat room list order is UI-defined:** The chat sidebar order is hardcoded as `core` (`general`, `announcements`, `suggestions`, any other permanent rooms, then synthetic `news`) → `public` → `private` → `dm`, with divider rows rendered in the UI. Public/private sections now map directly to DB `visibility = 'public' | 'private'` for non-permanent, non-DM rooms. The synthetic `news` row now carries its own unread badge sourced from `article_feed_reads`, not `chat_room_members`.
 - **Transcript render cost is cache-sensitive:** every member room keeps a warm tail (broadcast-driven, hard-capped at 1000 messages per room). The chat UI caches wrapped transcript rows for the dashboard general card and the active room; invalidation must track width, message content/order, usernames, badges, and bonsai glyphs. Only the selected room and general are fetched from DB on snapshot refresh — other rooms warm up from broadcasts and pull a one-shot backfill via `request_list` on first open per session.
 - **Composer render cost is cache-sensitive:** The chat composer caches wrapped `ComposerRow`s in `ChatState`; any change to composer text or width must invalidate that cache before render/cursor-up/down.
 - **Icon picker is chat-composer-only:** `Ctrl+]` (byte `0x1D`) opens `app::icon_picker` as a modal overlay, lazy-loads the catalog on first open (two sections each for Emoji and Nerd Font — no Unicode tab, no `unicode_names2` dep), and auto-starts `ChatState::start_composing` if the user isn't already composing. Selected icons are only ever pushed into `app.chat.composer`; Profile and news composers are intentionally not targets. The picker intercepts all input via an early return in `handle_parsed_input`, so while it is open nothing else on screen receives keys.
@@ -1015,9 +1015,9 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/join #room`, `/create #room`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/help`) with grouped room sections and a synthetic `news` entry in the room list |
+| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/profile`, `/help`) with grouped room sections and a synthetic `news` entry in the room list |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Profile** | 4 | Active | Read-only public identity card: username, country, timezone, optional `Current time` (derived from timezone when parseable), bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. Bio is wrapped at the same width the modal editor uses (`welcome_modal::ui::bio_text_width(MODAL_WIDTH)`) via `build_composer_rows`, so pasted URLs fold instead of running off-screen. All editing happens in the **welcome/profile modal** (auto-opens on first login, reopen via Profile's edit action) — sectioned into Identity / Appearance / Notifications / Location, with a Save CTA and a `?` callout that opens the help modal on top. Bio is an inline full-width bordered editor under the Identity heading (encouraging people to share site / GitHub / socials); it accepts bracketed-paste so URLs drop in whole. Theme + background color preview live from the draft while the modal is open. Selecting a chat message and pressing `p` opens a separate read-only **profile modal** for that author; it shows the same public identity summary, supports `j/k` or arrows for scroll, and is slightly wider than the first revision. |
+| **Profile** | 4 | Active | Read-only public identity card: username, country, timezone, optional `Current time` (derived from timezone when parseable), bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. Bio is wrapped at the same width the modal editor uses (`settings_modal::ui::bio_text_width(MODAL_WIDTH)`) via `build_composer_rows`, so pasted URLs fold instead of running off-screen. All editing happens in the **profile/settings modal** (auto-opens on first login, reopen via Profile's edit action or `/profile`) — sectioned into Identity / Appearance / Notifications / Location, with a Save CTA and a `?` callout that opens the help modal on top. Bio is an inline full-width bordered editor under the Identity heading (encouraging people to share site / GitHub / socials); it accepts bracketed-paste so URLs drop in whole. Theme + background color preview live from the draft while the modal is open. Selecting a chat message and pressing `p` opens a separate read-only **profile modal** for that author; it shows the same public identity summary, supports `j/k` or arrows for scroll, and is slightly wider than the first revision. |
 
 ### Layout
 
@@ -1048,17 +1048,17 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-Toast notification is hidden by default (0 rows). When active, it appears as a 3-row bordered block (green for success, red for error) at the **top-right** of the content area. Welcome overlay renders on top of the toast.
+Toast notification is hidden by default (0 rows). When active, it appears as a 3-row bordered block (green for success, red for error) at the **top-right** of the content area. The profile/settings overlay renders on top of the toast.
 
 ### Keyboard shortcuts
 
 | Key | Context | Action |
 |-----|---------|--------|
 | `q` / `Q` / `Ctrl+C` | Global | Quit |
-| `?` | Global (not composing) | Open help modal (multi-slide guide). Also works inside the welcome/profile modal, which renders help on top while keeping the draft intact. |
+| `?` | Global (not composing) | Open help modal (multi-slide guide). Also works inside the profile/settings modal, which renders help on top while keeping the draft intact. |
 | `h` / `l` / `←` / `→` | Help modal | Switch slides (Overview / Chat / Music / News / Arcade / Bonsai / Profile / Architecture) |
 | `j` / `k` / `↑` / `↓` | Help modal | Scroll current slide (uncapped — past the last line is blank space) |
-| `?` / `q` / `Esc` | Help modal | Close (returns to underlying screen, including welcome modal if it was open) |
+| `?` / `q` / `Esc` | Help modal | Close (returns to underlying screen, including the profile/settings modal if it was open) |
 | `Tab` | Global | Cycle screens |
 | `1` | Global | Jump to Dashboard |
 | `2` | Global | Jump to Chat |
@@ -1118,16 +1118,17 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `/active` | Chat composer | List active SSH users from the in-memory session registry |
 | `/list` | Chat composer | List users in the selected non-auto-join ("private") room |
 | `/music` | Chat composer | Open music setup instructions in the same scrollable overlay flow as `/help` |
+| `/profile` | Chat composer | Open the profile/settings modal |
 | `/ignore [@user]` | Chat composer | Mute a user, or list muted users when no arg |
 | `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
 | `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
 | `q` / `Esc` | Chat overlay (`/help`, ignore list) | Close overlay |
-| `Enter` | Profile screen | Open the welcome/profile modal to edit |
-| `↑` / `↓` / `j` / `k` | Welcome/profile modal | Move between rows (Username, Bio, Theme, Background, DMs, @mentions, Game events, Bell, Cooldown, Country, Timezone, Save) |
-| `←` / `→` | Welcome/profile modal | Cycle the current row's setting (theme, toggles, cooldown) |
-| `Space` / `Enter` / `e` | Welcome/profile modal | Activate row — edit username/bio, cycle a setting, open country/timezone picker, or fire Save |
-| `Alt+Enter` | Welcome/profile modal (bio editing) | Insert newline |
-| `?` | Welcome/profile modal | Open help modal on top |
+| `Enter` | Profile screen | Open the profile/settings modal to edit |
+| `↑` / `↓` / `j` / `k` | Profile/settings modal | Move between rows (Username, Bio, Theme, Background, DMs, @mentions, Game events, Bell, Cooldown, Country, Timezone, Save) |
+| `←` / `→` | Profile/settings modal | Cycle the current row's setting (theme, toggles, cooldown) |
+| `Space` / `Enter` / `e` | Profile/settings modal | Activate row — edit username/bio, cycle a setting, open country/timezone picker, or fire Save |
+| `Alt+Enter` | Profile/settings modal (bio editing) | Insert newline |
+| `?` | Profile/settings modal | Open help modal on top |
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |
 | `q` / `Esc` | Read-only profile modal | Close |
 | `Esc` | Any modal | Close/cancel |
@@ -1147,7 +1148,7 @@ When modifying any keybinding, update **all** of the following:
 
 1. **Input handler** — the actual `match byte` in the relevant `input.rs` (screen-specific or `app/input.rs` for globals)
 2. **Help modal** — `app/help_modal/data.rs` (slide copy, e.g. Overview "This modal" section) and `app/help_modal/ui.rs` `draw_footer()` keybind line
-3. **Welcome modal** — `app/welcome_modal/ui.rs` `draw_footer()` keybind line and the bordered help callout in `draw_help_callout()`
+3. **Settings modal** — `app/settings_modal/ui.rs` `draw_footer()` keybind line and the bordered help callout in `draw_help_callout()`
 4. **Sidebar hints** — `app/common/sidebar.rs`, e.g. the volume/mute hint line in Now Playing
 5. **Game guard** — `app/input.rs` `handle_global_key()`, the `!matches!(byte, ...)` allowlist for keys that pass through during active games
 6. **This table** — the keyboard shortcuts table above in CONTEXT.md

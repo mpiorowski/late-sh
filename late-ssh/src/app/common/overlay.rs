@@ -58,7 +58,10 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
     );
 
     let block = Block::default()
-        .title(format!(" {} (j/k scroll · q/Esc close) ", overlay.title))
+        .title(format!(
+            " {} (↑/↓ j/k scroll · Esc/q close) ",
+            overlay.title
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 

@@ -133,9 +133,8 @@ impl Notification {
     /// Resolve @usernames to user IDs, excluding the actor.
     ///
     /// For DM rooms, only resolves usernames that belong to one of the two DM
-    /// participants — mentioning a third party in a DM is silently dropped.
-    /// For non-DM rooms (including private rooms), no membership check is
-    /// performed.
+    /// participants. For private rooms, only resolves usernames that are
+    /// members of the room. Public rooms resolve against all users.
     pub async fn resolve_mentioned_user_ids(
         client: &Client,
         usernames: &[String],
@@ -152,9 +151,15 @@ impl Notification {
                 "SELECT u.id \
                  FROM users u \
                  JOIN chat_rooms r ON r.id = $3 \
+                 LEFT JOIN chat_room_members m \
+                   ON m.room_id = r.id AND m.user_id = u.id \
                  WHERE LOWER(u.username) = ANY($1) \
                    AND u.id <> $2 \
-                   AND (r.kind <> 'dm' OR u.id IN (r.dm_user_a, r.dm_user_b))",
+                   AND (
+                        (r.kind = 'dm' AND u.id IN (r.dm_user_a, r.dm_user_b))
+                        OR (r.kind <> 'dm' AND r.visibility = 'private' AND m.user_id IS NOT NULL)
+                        OR (r.kind <> 'dm' AND r.visibility = 'public')
+                   )",
                 &[&lower, &exclude_user_id, &room_id],
             )
             .await?;
