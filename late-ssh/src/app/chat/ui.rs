@@ -850,7 +850,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     public_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !public_rooms.is_empty() {
         room_lines.push(Line::from(""));
-        room_lines.push(section_divider("Rooms", rooms_width));
+        room_lines.push(section_divider("Public", rooms_width));
         for (room, _) in &public_rooms {
             let label = room
                 .slug

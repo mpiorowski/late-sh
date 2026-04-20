@@ -718,14 +718,12 @@ impl ChatService {
                         COUNT(m.user_id)::bigint AS member_count
                  FROM chat_rooms r
                  LEFT JOIN chat_room_members m ON m.room_id = r.id
-                 WHERE r.kind <> 'dm' AND r.visibility = 'public'
-                 GROUP BY r.id, r.kind, r.slug, r.language_code, r.permanent, r.created
+                 WHERE r.kind <> 'dm'
+                   AND r.visibility = 'public'
+                   AND r.permanent = false
+                 GROUP BY r.id, r.kind, r.slug, r.language_code, r.created
                  ORDER BY
-                    CASE
-                        WHEN r.kind = 'general' AND r.slug = 'general' THEN 0
-                        WHEN r.permanent THEN 1
-                        ELSE 2
-                    END ASC,
+                    member_count DESC,
                     COALESCE(r.slug, COALESCE(r.language_code, '')) ASC,
                     r.created ASC,
                     r.id ASC",
