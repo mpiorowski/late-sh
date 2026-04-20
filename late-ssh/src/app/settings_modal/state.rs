@@ -62,7 +62,7 @@ pub struct PickerState {
     pub visible_height: Cell<usize>,
 }
 
-pub struct WelcomeModalState {
+pub struct SettingsModalState {
     profile_service: ProfileService,
     user_id: Uuid,
     draft: Profile,
@@ -74,7 +74,7 @@ pub struct WelcomeModalState {
     picker: PickerState,
 }
 
-impl WelcomeModalState {
+impl SettingsModalState {
     pub fn new(profile_service: ProfileService, user_id: Uuid) -> Self {
         Self {
             profile_service,
@@ -95,8 +95,7 @@ impl WelcomeModalState {
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
         self.editing_bio = false;
-        self.bio_input = new_bio_textarea(false);
-        self.bio_input.insert_str(&self.draft.bio);
+        self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
     }
 
@@ -306,7 +305,8 @@ impl WelcomeModalState {
     }
 
     pub fn username_paste(&mut self) {
-        self.username_input.paste();
+        let yank = self.username_input.yank_text();
+        insert_username_text_limited(&mut self.username_input, &yank);
     }
 
     pub fn username_undo(&mut self) {
@@ -320,13 +320,15 @@ impl WelcomeModalState {
 
     pub fn start_bio_edit(&mut self) {
         self.editing_bio = true;
+        move_bio_cursor_to_end(&mut self.bio_input);
         set_bio_cursor_visible(&mut self.bio_input, true);
     }
 
     pub fn stop_bio_edit(&mut self) {
         self.editing_bio = false;
-        set_bio_cursor_visible(&mut self.bio_input, false);
         self.draft.bio = self.bio_text().trim_end().to_string();
+        reset_bio_view_to_top(&mut self.bio_input);
+        set_bio_cursor_visible(&mut self.bio_input, false);
     }
 
     pub fn bio_push(&mut self, ch: char) {
@@ -380,7 +382,8 @@ impl WelcomeModalState {
     }
 
     pub fn bio_paste(&mut self) {
-        self.bio_input.paste();
+        let yank = self.bio_input.yank_text();
+        insert_bio_text_limited(&mut self.bio_input, &yank);
     }
 
     pub fn bio_undo(&mut self) {
@@ -457,6 +460,59 @@ fn cycle_cooldown_value(current: i32, forward: bool) -> i32 {
     OPTIONS[next]
 }
 
+fn bio_char_count_for_input(input: &TextArea<'static>) -> usize {
+    input
+        .lines()
+        .iter()
+        .map(|l| l.chars().count())
+        .sum::<usize>()
+        + input.lines().len().saturating_sub(1)
+}
+
+fn username_char_count_for_input(input: &TextArea<'static>) -> usize {
+    input.lines().iter().map(|l| l.chars().count()).sum()
+}
+
+fn insert_username_text_limited(input: &mut TextArea<'static>, text: &str) {
+    for ch in text.chars() {
+        if username_char_count_for_input(input) >= USERNAME_MAX_LEN {
+            break;
+        }
+        if !ch.is_control() && ch != '\n' && ch != '\r' {
+            input.insert_char(ch);
+        }
+    }
+}
+
+fn insert_bio_text_limited(input: &mut TextArea<'static>, text: &str) {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    for ch in normalized.chars() {
+        if bio_char_count_for_input(input) >= BIO_MAX_LEN {
+            break;
+        }
+        if ch == '\n' || (!ch.is_control() && ch != '\u{7f}') {
+            input.insert_char(ch);
+        }
+    }
+}
+
+fn reset_bio_view_to_top(input: &mut TextArea<'static>) {
+    input.move_cursor(CursorMove::Top);
+    input.move_cursor(CursorMove::Head);
+}
+
+fn move_bio_cursor_to_end(input: &mut TextArea<'static>) {
+    input.move_cursor(CursorMove::Bottom);
+    input.move_cursor(CursorMove::End);
+}
+
+fn bio_textarea_for_readonly_text(text: &str) -> TextArea<'static> {
+    let mut input = new_bio_textarea(false);
+    input.insert_str(text);
+    reset_bio_view_to_top(&mut input);
+    input
+}
+
 fn new_bio_textarea(editing: bool) -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_cursor_line_style(Style::default());
@@ -485,4 +541,53 @@ fn new_username_textarea(editing: bool) -> TextArea<'static> {
     };
     ta.set_cursor_style(style);
     ta
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn username_yank_respects_max_length() {
+        let mut input = new_username_textarea(true);
+        input.insert_str("abcdefghijk");
+        input.set_yank_text("xyz");
+        let yank = input.yank_text();
+
+        insert_username_text_limited(&mut input, &yank);
+
+        assert_eq!(input.lines().join(""), "abcdefghijkx");
+        assert_eq!(username_char_count_for_input(&input), USERNAME_MAX_LEN);
+    }
+
+    #[test]
+    fn bio_yank_respects_max_length() {
+        let mut input = new_bio_textarea(true);
+        input.insert_str("a".repeat(BIO_MAX_LEN - 1));
+        input.set_yank_text("xyz");
+        let yank = input.yank_text();
+
+        insert_bio_text_limited(&mut input, &yank);
+
+        assert_eq!(bio_char_count_for_input(&input), BIO_MAX_LEN);
+        assert_eq!(
+            input.lines().join(""),
+            format!("{}x", "a".repeat(BIO_MAX_LEN - 1))
+        );
+    }
+
+    #[test]
+    fn readonly_bio_textarea_resets_cursor_to_top() {
+        let input = bio_textarea_for_readonly_text("first line\nsecond line\nthird line");
+        assert_eq!(input.cursor(), (0usize, 0usize));
+    }
+
+    #[test]
+    fn move_bio_cursor_to_end_goes_to_last_line_end() {
+        let mut input = bio_textarea_for_readonly_text("first line\nsecond line\nthird line");
+
+        move_bio_cursor_to_end(&mut input);
+
+        assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
+    }
 }

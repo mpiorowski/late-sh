@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::{common::theme, welcome_modal::data::country_label};
+use crate::app::{common::theme, settings_modal::data::country_label};
 
 use super::state::ProfileModalState;
 use crate::app::profile::ui::timezone_current_time;

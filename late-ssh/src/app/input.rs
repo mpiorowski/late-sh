@@ -1,5 +1,5 @@
 use super::{
-    chat, dashboard, help_modal, icon_picker, profile, profile_modal, state::App, welcome_modal,
+    chat, dashboard, help_modal, icon_picker, profile, profile_modal, settings_modal, state::App,
 };
 use crate::app::common::primitives::Screen;
 use std::{mem, time::Duration};
@@ -520,8 +520,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_welcome {
-        welcome_modal::input::handle_input(app, event);
+    if app.show_settings {
+        settings_modal::input::handle_input(app, event);
         return;
     }
 
@@ -563,6 +563,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 if let Some(topic) = app.chat.take_requested_help_topic() {
                     app.help_modal_state.open(topic);
                     app.show_help = true;
+                }
+                if app.chat.take_requested_settings_modal() {
+                    app.settings_modal_state.open_from_profile(
+                        app.profile_state.profile(),
+                        crate::app::settings_modal::ui::MODAL_WIDTH,
+                    );
+                    app.show_settings = true;
                 }
             }
         }
@@ -783,8 +790,8 @@ fn dispatch_escape(app: &mut App) {
         help_modal::input::handle_escape(app);
         return;
     }
-    if app.show_welcome {
-        welcome_modal::input::handle_escape(app);
+    if app.show_settings {
+        settings_modal::input::handle_escape(app);
         return;
     }
     if app.show_profile_modal {
@@ -1635,6 +1642,15 @@ mod tests {
         assert_eq!(parser.feed(b"\n"), vec![ParsedInput::Byte(b'\n')]);
         assert_eq!(parser.feed(b"\x15"), vec![ParsedInput::Byte(0x15)]);
         assert_eq!(parser.feed(b"\x7f"), vec![ParsedInput::Byte(0x7f)]);
+    }
+
+    #[test]
+    fn vt_parser_preserves_del_when_adjacent_to_printable_bytes() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed(b"\x7f!"),
+            vec![ParsedInput::Byte(0x7f), ParsedInput::Char('!')]
+        );
     }
 
     #[test]

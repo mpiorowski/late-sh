@@ -13,7 +13,7 @@ use ratatui::{
 use crate::app::{
     ai::ghost::{GRAYBEARD_CHAT_INTERVAL, GRAYBEARD_MENTION_COOLDOWN},
     common::{composer::build_composer_rows, theme},
-    welcome_modal::{self, data::country_label},
+    settings_modal::{self, data::country_label},
 };
 
 pub struct ProfileRenderInput<'a> {
@@ -77,7 +77,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>) -> Vec<Line<'a>> {
     if view.profile.bio.trim().is_empty() {
         lines.push(Line::from(Span::styled("  Not set", dim)));
     } else {
-        let wrap_width = welcome_modal::ui::bio_text_width(welcome_modal::ui::MODAL_WIDTH);
+        let wrap_width = settings_modal::ui::bio_text_width(settings_modal::ui::MODAL_WIDTH);
         for row in build_composer_rows(&view.profile.bio, wrap_width) {
             lines.push(Line::from(Span::styled(
                 format!("  {}", row.text),

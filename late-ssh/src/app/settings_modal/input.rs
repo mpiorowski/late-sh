@@ -4,23 +4,23 @@ use crate::app::state::App;
 use super::state::{PickerKind, Row};
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
-    if app.welcome_modal_state.picker_open() {
+    if app.settings_modal_state.picker_open() {
         handle_picker_input(app, event);
         return;
     }
 
-    if app.welcome_modal_state.editing_username() {
+    if app.settings_modal_state.editing_username() {
         handle_username_input(app, event);
         return;
     }
 
-    if app.welcome_modal_state.editing_bio() {
+    if app.settings_modal_state.editing_bio() {
         handle_bio_input(app, event);
         return;
     }
 
     if is_close_event(&event) {
-        app.show_welcome = false;
+        app.show_settings = false;
         return;
     }
 
@@ -28,12 +28,12 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B') => app.welcome_modal_state.move_row(1),
+        | ParsedInput::Arrow(b'B') => app.settings_modal_state.move_row(1),
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A') => app.welcome_modal_state.move_row(-1),
-        ParsedInput::Arrow(b'C') => app.welcome_modal_state.cycle_setting(true),
-        ParsedInput::Arrow(b'D') => app.welcome_modal_state.cycle_setting(false),
+        | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_row(-1),
+        ParsedInput::Arrow(b'C') => app.settings_modal_state.cycle_setting(true),
+        ParsedInput::Arrow(b'D') => app.settings_modal_state.cycle_setting(false),
         ParsedInput::Byte(b' ') | ParsedInput::Byte(b'\r') => activate_selected_row(app),
         ParsedInput::Char('e') | ParsedInput::Char('E') => activate_selected_row(app),
         _ => {}
@@ -58,27 +58,27 @@ fn is_close_event(event: &ParsedInput) -> bool {
 }
 
 fn activate_selected_row(app: &mut App) {
-    match app.welcome_modal_state.selected_row() {
-        Row::Username => app.welcome_modal_state.start_username_edit(),
-        Row::Bio => app.welcome_modal_state.start_bio_edit(),
+    match app.settings_modal_state.selected_row() {
+        Row::Username => app.settings_modal_state.start_username_edit(),
+        Row::Bio => app.settings_modal_state.start_bio_edit(),
         Row::Theme
         | Row::BackgroundColor
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents
         | Row::Bell
-        | Row::Cooldown => app.welcome_modal_state.cycle_setting(true),
-        Row::Country => app.welcome_modal_state.open_picker(PickerKind::Country),
-        Row::Timezone => app.welcome_modal_state.open_picker(PickerKind::Timezone),
+        | Row::Cooldown => app.settings_modal_state.cycle_setting(true),
+        Row::Country => app.settings_modal_state.open_picker(PickerKind::Country),
+        Row::Timezone => app.settings_modal_state.open_picker(PickerKind::Timezone),
         Row::Save => {
-            app.welcome_modal_state.save();
-            app.show_welcome = false;
+            app.settings_modal_state.save();
+            app.show_settings = false;
         }
     }
 }
 
 fn handle_username_input(app: &mut App, event: ParsedInput) {
-    let state = &mut app.welcome_modal_state;
+    let state = &mut app.settings_modal_state;
     match event {
         ParsedInput::Byte(0x1B) => state.cancel_username_edit(),
         ParsedInput::Byte(b'\r') => state.submit_username(),
@@ -112,7 +112,7 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
 }
 
 fn handle_bio_input(app: &mut App, event: ParsedInput) {
-    let state = &mut app.welcome_modal_state;
+    let state = &mut app.settings_modal_state;
     match event {
         ParsedInput::Byte(0x1B) => state.stop_bio_edit(),
         ParsedInput::Byte(b'\r') => state.stop_bio_edit(),
@@ -147,27 +147,37 @@ fn handle_bio_input(app: &mut App, event: ParsedInput) {
 
 fn handle_picker_input(app: &mut App, event: ParsedInput) {
     match event {
-        ParsedInput::Byte(0x1B) => app.welcome_modal_state.close_picker(),
-        ParsedInput::Byte(b'\r') => app.welcome_modal_state.apply_picker_selection(),
-        ParsedInput::Byte(0x7F) => app.welcome_modal_state.picker_backspace(),
+        ParsedInput::Byte(0x1B) => app.settings_modal_state.close_picker(),
+        ParsedInput::Byte(b'\r') => app.settings_modal_state.apply_picker_selection(),
+        ParsedInput::Byte(0x7F) => app.settings_modal_state.picker_backspace(),
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B') => app.welcome_modal_state.picker_move(1),
+        | ParsedInput::Arrow(b'B') => app.settings_modal_state.picker_move(1),
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A') => app.welcome_modal_state.picker_move(-1),
+        | ParsedInput::Arrow(b'A') => app.settings_modal_state.picker_move(-1),
         ParsedInput::PageDown => {
-            let page = app.welcome_modal_state.picker().visible_height.get().max(1) as isize;
-            app.welcome_modal_state.picker_move(page);
+            let page = app
+                .settings_modal_state
+                .picker()
+                .visible_height
+                .get()
+                .max(1) as isize;
+            app.settings_modal_state.picker_move(page);
         }
         ParsedInput::PageUp => {
-            let page = app.welcome_modal_state.picker().visible_height.get().max(1) as isize;
-            app.welcome_modal_state.picker_move(-page);
+            let page = app
+                .settings_modal_state
+                .picker()
+                .visible_height
+                .get()
+                .max(1) as isize;
+            app.settings_modal_state.picker_move(-page);
         }
-        ParsedInput::Scroll(delta) => app.welcome_modal_state.picker_move(-delta * 3),
-        ParsedInput::Char(ch) if !ch.is_control() => app.welcome_modal_state.picker_push(ch),
+        ParsedInput::Scroll(delta) => app.settings_modal_state.picker_move(-delta * 3),
+        ParsedInput::Char(ch) if !ch.is_control() => app.settings_modal_state.picker_push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
-            app.welcome_modal_state.picker_push(byte as char)
+            app.settings_modal_state.picker_push(byte as char)
         }
         _ => {}
     }

@@ -95,6 +95,7 @@ pub struct ChatState {
     /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
     pub(crate) pending_notifications: Vec<PendingNotification>,
     requested_help_topic: Option<HelpTopic>,
+    requested_settings_modal: bool,
 }
 
 pub(crate) struct PendingNotification {
@@ -160,6 +161,7 @@ impl ChatState {
             notifications: notifications::state::State::new(notification_service, user_id),
             pending_notifications: Vec::new(),
             requested_help_topic: None,
+            requested_settings_modal: false,
         }
     }
 
@@ -247,6 +249,10 @@ impl ChatState {
 
     pub fn take_requested_help_topic(&mut self) -> Option<HelpTopic> {
         self.requested_help_topic.take()
+    }
+
+    pub fn take_requested_settings_modal(&mut self) -> bool {
+        std::mem::take(&mut self.requested_settings_modal)
     }
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
@@ -641,6 +647,12 @@ impl ChatState {
         if body.trim() == "/music" {
             self.clear_composer_after_submit();
             self.requested_help_topic = Some(HelpTopic::Music);
+            return None;
+        }
+
+        if body.trim() == "/profile" {
+            self.clear_composer_after_submit();
+            self.requested_settings_modal = true;
             return None;
         }
 

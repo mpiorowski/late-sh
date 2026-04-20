@@ -1,4 +1,5 @@
 target/
+music_new
 node_modules
 .env
 .claude

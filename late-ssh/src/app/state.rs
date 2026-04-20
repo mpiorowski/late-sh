@@ -26,11 +26,10 @@ use crate::{
         common::primitives::{Banner, Screen},
         help_modal, profile,
         profile::svc::ProfileService,
-        profile_modal,
+        profile_modal, settings_modal,
         visualizer::Visualizer,
         vote,
         vote::svc::{Genre, VoteService},
-        welcome_modal,
     },
     session::{
         ClientAudioState, PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry,
@@ -171,7 +170,7 @@ pub struct App {
     pub(super) size: (u16, u16),
     pub(crate) screen: Screen,
     pub(super) banner: Option<Banner>,
-    pub(crate) show_welcome: bool,
+    pub(crate) show_settings: bool,
     pub(crate) show_splash: bool,
     pub(crate) splash_ticks: usize,
     pub(crate) splash_hint: String,
@@ -216,7 +215,7 @@ pub struct App {
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
     pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
-    pub(crate) welcome_modal_state: welcome_modal::state::WelcomeModalState,
+    pub(crate) settings_modal_state: settings_modal::state::SettingsModalState,
 
     /// Leaderboard
     pub(super) leaderboard_rx: Option<watch::Receiver<Arc<LeaderboardData>>>,
@@ -268,12 +267,12 @@ pub struct App {
 impl App {
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
-        self.show_welcome = false;
+        self.show_settings = false;
     }
 
     pub fn show_splash_for_tests(&mut self, hint: impl Into<String>) {
         self.show_splash = true;
-        self.show_welcome = false;
+        self.show_settings = false;
         self.splash_ticks = 1;
         self.splash_hint = hint.into();
     }
@@ -402,18 +401,18 @@ impl App {
             theme_id: Some(config.initial_theme_id.clone()),
             ..Profile::default()
         };
-        let mut welcome_modal_state = welcome_modal::state::WelcomeModalState::new(
+        let mut settings_modal_state = settings_modal::state::SettingsModalState::new(
             config.profile_service.clone(),
             config.user_id,
         );
-        welcome_modal_state.open_from_profile(&initial_profile, welcome_modal::ui::MODAL_WIDTH);
+        settings_modal_state.open_from_profile(&initial_profile, settings_modal::ui::MODAL_WIDTH);
 
         Ok(Self {
             running: true,
             size: (cols, rows),
             screen: Screen::Dashboard,
             banner: None,
-            show_welcome: true,
+            show_settings: true,
             show_splash: true,
             splash_ticks: 0,
             splash_hint,
@@ -462,7 +461,7 @@ impl App {
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),
             ),
-            welcome_modal_state,
+            settings_modal_state,
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,

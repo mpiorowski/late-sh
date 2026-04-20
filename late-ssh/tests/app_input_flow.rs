@@ -209,11 +209,13 @@ async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
         "expected split Alt+Backspace to delete the previous word; frame={frame:?}"
     );
 
-    // Plain Backspace must still work after the word-delete chord.
-    app.handle_input(b"\x7f!");
+    // Plain Backspace must still work after the word-delete chord. Insert a
+    // fresh sentinel byte first so we can verify backspace removed it without
+    // depending on whether delete-word keeps the separating space.
+    app.handle_input(b"x\x7f!");
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("on!"),
+        frame.contains("one") && frame.contains('!') && !frame.contains("x"),
         "expected composer to keep accepting backspace and text after Alt+Backspace split; frame={frame:?}"
     );
     assert!(

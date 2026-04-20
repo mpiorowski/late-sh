@@ -4,7 +4,7 @@ use super::helpers::{make_app, new_test_db, render_plain, wait_for_render_contai
 use late_core::test_utils::create_test_user;
 
 #[tokio::test]
-async fn profile_page_opens_and_closes_welcome_modal() {
+async fn profile_page_opens_and_closes_settings_modal() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "modal-open-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "modal-open-flow-it");

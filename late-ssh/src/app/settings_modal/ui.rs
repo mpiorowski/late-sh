@@ -10,7 +10,7 @@ use crate::app::common::theme;
 
 use super::{
     data::country_label,
-    state::{BIO_MAX_LEN, PickerKind, Row, WelcomeModalState},
+    state::{BIO_MAX_LEN, PickerKind, Row, SettingsModalState},
 };
 
 pub const MODAL_WIDTH: u16 = 96;
@@ -31,12 +31,12 @@ pub fn bio_text_width(modal_width: u16) -> usize {
         .max(24) as usize
 }
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" late.sh ")
+        .title(" Settings ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -118,7 +118,7 @@ fn draw_help_callout(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(line), inner);
 }
 
-fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+fn draw_body(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let columns = Layout::horizontal([
         Constraint::Length(SETTINGS_COLUMN_WIDTH),
         Constraint::Length(BODY_COLUMN_GAP),
@@ -130,7 +130,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     draw_bio_pane(frame, columns[2], state);
 }
 
-fn draw_settings_column(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+fn draw_settings_column(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let sections = Layout::vertical([
         Constraint::Length(1), // Identity heading
         Constraint::Length(1), // Username row
@@ -305,7 +305,7 @@ fn draw_settings_column(frame: &mut Frame, area: Rect, state: &WelcomeModalState
     );
 }
 
-fn draw_bio_pane(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+fn draw_bio_pane(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let editing = state.editing_bio();
     let selected = state.selected_row() == Row::Bio && !state.editing_username();
 
@@ -342,7 +342,7 @@ fn draw_bio_pane(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     draw_bio_content(frame, sections[1], state);
 }
 
-fn draw_bio_intro(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+fn draw_bio_intro(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let bio = state.bio_input();
     let text = bio.lines().join("\n");
     let char_count = text.chars().count();
@@ -399,7 +399,7 @@ fn draw_bio_intro(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
     frame.render_widget(Paragraph::new(stats), rows[2]);
 }
 
-fn draw_bio_content(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+fn draw_bio_content(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let editing = state.editing_bio();
 
     let composer = state.bio_input();
@@ -434,7 +434,7 @@ fn bio_placeholder_lines(editing: bool) -> Vec<Line<'static>> {
     )])]
 }
 
-fn bio_summary_value(state: &WelcomeModalState) -> ValueSpan {
+fn bio_summary_value(state: &SettingsModalState) -> ValueSpan {
     let bio = state.bio_input();
     let text = bio.lines().join("\n");
     let char_count = text.chars().count();
@@ -457,7 +457,7 @@ fn bio_summary_value(state: &WelcomeModalState) -> ValueSpan {
     )
 }
 
-fn draw_save_cta(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+fn draw_save_cta(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let selected =
         state.selected_row() == Row::Save && !state.editing_username() && !state.editing_bio();
 
@@ -510,7 +510,7 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(footer), area);
 }
 
-fn draw_picker(frame: &mut Frame, area: Rect, state: &WelcomeModalState) {
+fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let popup = centered_rect(54, 20, area);
     frame.render_widget(Clear, popup);
 
@@ -660,7 +660,7 @@ fn value_with_picker_hint(text: String) -> ValueSpan {
 }
 
 fn row_line(
-    state: &WelcomeModalState,
+    state: &SettingsModalState,
     row: Row,
     width: usize,
     label: &str,
@@ -723,7 +723,7 @@ fn pad_to_width(text: &str, width: usize, _has_bg: bool) -> String {
     out
 }
 
-fn has_kind(state: &WelcomeModalState, kind: &str) -> bool {
+fn has_kind(state: &SettingsModalState, kind: &str) -> bool {
     state.draft().notify_kinds.iter().any(|value| value == kind)
 }
 
