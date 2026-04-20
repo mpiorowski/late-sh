@@ -4,7 +4,7 @@ use ratatui::{
 };
 
 use crate::app::common::theme;
-use late_core::models::article::NEWS_MARKER;
+use late_core::models::{article::NEWS_MARKER, chat_message_reaction::ChatMessageReactionSummary};
 
 use super::mentions::{is_mention_char, valid_mention_start};
 
@@ -13,6 +13,20 @@ const NEWS_SEPARATOR: &str = " || ";
 // ── Composer text processing ────────────────────────────────
 
 // ── Message wrapping ────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarkdownBlock<'a> {
+    Paragraph(&'a str),
+    Heading { level: u8, text: &'a str },
+    Quote(&'a str),
+    ListItem(&'a str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StyledChar {
+    ch: char,
+    style: Style,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn wrap_message_to_lines(
@@ -49,47 +63,317 @@ pub(super) fn wrap_message_to_lines(
         return lines;
     }
 
-    // Each rendered line is prefixed with a 1-column pad span, so the
-    // wrappable body width is the area width minus that pad.
-    let body_width = width.saturating_sub(1).max(1);
+    lines.extend(render_markdown_body_to_lines(body, width, pad, body_style));
 
-    let (reply_quote, body) = parse_reply_quote(body);
-    if let Some(reply_quote) = reply_quote {
-        for row in wrap_plain_line(&format!("> {reply_quote}"), body_width) {
-            lines.push(Line::from(vec![
-                pad.clone(),
-                Span::styled(row, Style::default().fg(theme::TEXT_FAINT())),
-            ]));
-        }
-    }
+    lines
+}
+
+fn render_markdown_body_to_lines(
+    body: &str,
+    width: usize,
+    pad: Span<'static>,
+    body_style: Style,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
 
     for paragraph in body.split('\n') {
         if paragraph.is_empty() {
             lines.push(Line::from(pad.clone()));
             continue;
         }
-        for chunk in wrap_plain_line(paragraph, body_width) {
-            let mut spans = vec![pad.clone()];
-            spans.extend(mention_spans(&chunk, body_style));
-            lines.push(Line::from(spans));
-        }
+
+        let block = parse_markdown_block(paragraph);
+        lines.extend(render_markdown_block(block, width, &pad, body_style));
     }
 
     lines
 }
 
-fn parse_reply_quote(body: &str) -> (Option<String>, &str) {
-    let Some((first_line, rest)) = body.split_once('\n') else {
-        return (None, body);
-    };
-    let quote = first_line.trim().strip_prefix("> ").map(str::trim);
-    let rest = rest.trim_start_matches('\n');
-    match quote {
-        Some(quote) if !quote.is_empty() && !rest.trim().is_empty() => {
-            (Some(quote.to_string()), rest)
-        }
-        _ => (None, body),
+fn parse_markdown_block(line: &str) -> MarkdownBlock<'_> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return MarkdownBlock::Paragraph(line);
     }
+
+    if let Some(text) = line.strip_prefix("> ")
+        && !text.trim().is_empty()
+    {
+        return MarkdownBlock::Quote(text);
+    }
+
+    if let Some(text) = line.strip_prefix("- ")
+        && !text.trim().is_empty()
+    {
+        return MarkdownBlock::ListItem(text);
+    }
+
+    let heading_level = line.chars().take_while(|ch| *ch == '#').count();
+    if (1..=3).contains(&heading_level) {
+        let rest = &line[heading_level..];
+        if let Some(text) = rest.strip_prefix(' ')
+            && !text.trim().is_empty()
+        {
+            return MarkdownBlock::Heading {
+                level: heading_level as u8,
+                text,
+            };
+        }
+    }
+
+    MarkdownBlock::Paragraph(line)
+}
+
+fn render_markdown_block(
+    block: MarkdownBlock<'_>,
+    width: usize,
+    pad: &Span<'static>,
+    body_style: Style,
+) -> Vec<Line<'static>> {
+    match block {
+        MarkdownBlock::Paragraph(text) => {
+            let content = markdown_spans(text, body_style);
+            render_wrapped_markdown(content, width, vec![pad.clone()], vec![pad.clone()])
+        }
+        MarkdownBlock::Heading { level, text } => {
+            let content = markdown_spans(text, heading_style(level, body_style));
+            render_wrapped_markdown(content, width, vec![pad.clone()], vec![pad.clone()])
+        }
+        MarkdownBlock::Quote(text) => {
+            let quote_style = Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::ITALIC);
+            let marker = Span::styled("> ", Style::default().fg(theme::AMBER_DIM()));
+            let content = vec![Span::styled(text.to_string(), quote_style)];
+            render_wrapped_markdown(
+                content,
+                width,
+                vec![pad.clone(), marker.clone()],
+                vec![pad.clone(), marker],
+            )
+        }
+        MarkdownBlock::ListItem(text) => {
+            let bullet_style = Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD);
+            let content = markdown_spans(text, body_style);
+            render_wrapped_markdown(
+                content,
+                width,
+                vec![pad.clone(), Span::styled("• ", bullet_style)],
+                vec![pad.clone(), Span::raw("  ")],
+            )
+        }
+    }
+}
+
+fn heading_style(level: u8, base: Style) -> Style {
+    match level {
+        1 => base
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        2 => base.fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+        3 => base.fg(theme::CHAT_AUTHOR()).add_modifier(Modifier::BOLD),
+        _ => base,
+    }
+}
+
+fn markdown_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut idx = 0;
+    let mut plain_start = 0;
+
+    while idx < text.len() {
+        let rest = &text[idx..];
+
+        if let Some(after_open) = rest.strip_prefix("**")
+            && let Some(end_rel) = after_open.find("**")
+            && end_rel > 0
+        {
+            push_markdown_plain(&mut spans, &text[plain_start..idx], base_style);
+            let inner_start = idx + 2;
+            let inner_end = inner_start + end_rel;
+            push_markdown_plain(
+                &mut spans,
+                &text[inner_start..inner_end],
+                base_style.add_modifier(Modifier::BOLD),
+            );
+            idx = inner_end + 2;
+            plain_start = idx;
+            continue;
+        }
+
+        if let Some(after_open) = rest.strip_prefix('`')
+            && let Some(end_rel) = after_open.find('`')
+            && end_rel > 0
+        {
+            push_markdown_plain(&mut spans, &text[plain_start..idx], base_style);
+            let inner_start = idx + 1;
+            let inner_end = inner_start + end_rel;
+            let code_style = base_style
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_HIGHLIGHT());
+            push_markdown_plain(&mut spans, &text[inner_start..inner_end], code_style);
+            idx = inner_end + 1;
+            plain_start = idx;
+            continue;
+        }
+
+        if let Some(after_open) = rest.strip_prefix('*')
+            && !rest.starts_with("**")
+            && let Some(end_rel) = after_open.find('*')
+            && end_rel > 0
+        {
+            push_markdown_plain(&mut spans, &text[plain_start..idx], base_style);
+            let inner_start = idx + 1;
+            let inner_end = inner_start + end_rel;
+            push_markdown_plain(
+                &mut spans,
+                &text[inner_start..inner_end],
+                base_style.add_modifier(Modifier::ITALIC),
+            );
+            idx = inner_end + 1;
+            plain_start = idx;
+            continue;
+        }
+
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        idx += ch.len_utf8();
+    }
+
+    push_markdown_plain(&mut spans, &text[plain_start..], base_style);
+    spans
+}
+
+fn push_markdown_plain(spans: &mut Vec<Span<'static>>, text: &str, style: Style) {
+    if text.is_empty() {
+        return;
+    }
+    spans.extend(mention_spans(text, style));
+}
+
+fn render_wrapped_markdown(
+    content: Vec<Span<'static>>,
+    width: usize,
+    first_prefix: Vec<Span<'static>>,
+    continuation_prefix: Vec<Span<'static>>,
+) -> Vec<Line<'static>> {
+    if !spans_have_visible_text(&content) {
+        return vec![Line::from(first_prefix)];
+    }
+
+    let first_width = width.saturating_sub(spans_width(&first_prefix)).max(1);
+    let continuation_width = width
+        .saturating_sub(spans_width(&continuation_prefix))
+        .max(1);
+    let rows = wrap_markdown_spans(&content, first_width, continuation_width);
+
+    rows.into_iter()
+        .enumerate()
+        .map(|(idx, row)| {
+            let mut spans = if idx == 0 {
+                first_prefix.clone()
+            } else {
+                continuation_prefix.clone()
+            };
+            spans.extend(row);
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn spans_have_visible_text(spans: &[Span<'static>]) -> bool {
+    spans
+        .iter()
+        .any(|span| span.content.chars().any(|ch| !ch.is_whitespace()))
+}
+
+fn spans_width(spans: &[Span<'static>]) -> usize {
+    spans
+        .iter()
+        .map(|span| span.content.chars().count())
+        .sum::<usize>()
+}
+
+fn wrap_markdown_spans(
+    spans: &[Span<'static>],
+    first_width: usize,
+    continuation_width: usize,
+) -> Vec<Vec<Span<'static>>> {
+    let chars = flatten_spans(spans);
+    if chars.is_empty() {
+        return Vec::new();
+    }
+
+    let mut rows = Vec::new();
+    let mut idx = 0;
+    while idx < chars.len() {
+        let row_width = if rows.is_empty() {
+            first_width
+        } else {
+            continuation_width
+        }
+        .max(1);
+        let end = (idx + row_width).min(chars.len());
+        let break_at = if end < chars.len() {
+            let mut pos = end;
+            while pos > idx && chars[pos - 1].ch != ' ' {
+                pos -= 1;
+            }
+            if pos > idx { pos } else { end }
+        } else {
+            end
+        };
+
+        rows.push(rebuild_spans(&chars[idx..break_at]));
+        idx = break_at;
+        while idx < chars.len() && chars[idx].ch == ' ' {
+            idx += 1;
+        }
+    }
+
+    rows
+}
+
+fn flatten_spans(spans: &[Span<'static>]) -> Vec<StyledChar> {
+    let mut chars = Vec::new();
+    for span in spans {
+        for ch in span.content.chars() {
+            chars.push(StyledChar {
+                ch,
+                style: span.style,
+            });
+        }
+    }
+    chars
+}
+
+fn rebuild_spans(chars: &[StyledChar]) -> Vec<Span<'static>> {
+    let Some(first) = chars.first() else {
+        return Vec::new();
+    };
+
+    let mut spans = Vec::new();
+    let mut current_style = first.style;
+    let mut current_text = String::new();
+
+    for styled in chars {
+        if styled.style != current_style && !current_text.is_empty() {
+            spans.push(Span::styled(
+                std::mem::take(&mut current_text),
+                current_style,
+            ));
+            current_style = styled.style;
+        }
+        current_text.push(styled.ch);
+    }
+
+    if !current_text.is_empty() {
+        spans.push(Span::styled(current_text, current_style));
+    }
+
+    spans
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -102,20 +386,29 @@ pub(super) fn wrap_chat_entry_to_lines(
     body_style: Style,
     mentions_us: bool,
     continuation: bool,
+    reactions: &[ChatMessageReactionSummary],
 ) -> Vec<Line<'static>> {
-    if let Some(news) = parse_news_payload(body) {
-        return wrap_news_to_lines(stamp, prefix, width, author_style, news);
-    }
-    wrap_message_to_lines(
-        body,
-        stamp,
-        prefix,
-        width,
-        author_style,
-        body_style,
-        mentions_us,
-        continuation,
-    )
+    let pad = if mentions_us {
+        Span::styled("│", Style::default().fg(theme::MENTION()))
+    } else {
+        Span::raw(" ")
+    };
+    let mut lines = if let Some(news) = parse_news_payload(body) {
+        wrap_news_to_lines(stamp, prefix, width, author_style, news)
+    } else {
+        wrap_message_to_lines(
+            body,
+            stamp,
+            prefix,
+            width,
+            author_style,
+            body_style,
+            mentions_us,
+            continuation,
+        )
+    };
+    lines.extend(render_reaction_footer_lines(reactions, width, pad));
+    lines
 }
 
 // ── News formatting ─────────────────────────────────────────
@@ -258,6 +551,52 @@ fn wrap_news_to_lines(
         border_style,
     )));
     lines
+}
+
+fn render_reaction_footer_lines(
+    reactions: &[ChatMessageReactionSummary],
+    width: usize,
+    pad: Span<'static>,
+) -> Vec<Line<'static>> {
+    if reactions.is_empty() {
+        return Vec::new();
+    }
+
+    let mut footer_lines: Vec<Line<'static>> = Vec::new();
+    let available_width = width.saturating_sub(1).max(1);
+    let mut current_width = 0usize;
+    let mut current_spans = vec![pad.clone()];
+
+    for reaction in reactions {
+        let text = format!("[{} {}]", reaction_label(reaction.kind), reaction.count);
+        let chip_width = text.chars().count();
+        let extra_space = usize::from(current_width > 0);
+        if current_width > 0 && current_width + extra_space + chip_width > available_width {
+            footer_lines.push(Line::from(current_spans));
+            current_spans = vec![pad.clone()];
+            current_width = 0;
+        }
+        if current_width > 0 {
+            current_spans.push(Span::raw(" "));
+            current_width += 1;
+        }
+        current_spans.push(Span::styled(text, Style::default().fg(theme::TEXT_DIM())));
+        current_width += chip_width;
+    }
+
+    footer_lines.push(Line::from(current_spans));
+    footer_lines
+}
+
+fn reaction_label(kind: i16) -> &'static str {
+    match kind {
+        1 => "👍",
+        2 => "🧡",
+        3 => "😂",
+        4 => "🤔",
+        5 => "🔥",
+        _ => "?",
+    }
 }
 
 // ── Text utilities ──────────────────────────────────────────
@@ -432,6 +771,7 @@ pub(super) fn mention_spans(text: &str, body_style: Style) -> Vec<Span<'static>>
 mod tests {
     use super::*;
     use crate::app::common::composer::build_composer_rows;
+    use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
     use ratatui::style::Color;
     use ratatui::style::Modifier;
 
@@ -526,6 +866,27 @@ mod tests {
         assert!(rendered.contains("Title"));
         assert!(rendered.contains("first bullet"));
         assert!(rendered.contains("https://example.com"));
+    }
+
+    #[test]
+    fn wrap_chat_entry_to_lines_appends_reaction_footer() {
+        let lines = wrap_chat_entry_to_lines(
+            "hello world",
+            "[1m]",
+            "alice",
+            80,
+            Style::default(),
+            Style::default(),
+            false,
+            false,
+            &[
+                ChatMessageReactionSummary { kind: 2, count: 3 },
+                ChatMessageReactionSummary { kind: 5, count: 1 },
+            ],
+        );
+        let rendered = lines_to_strings(&lines).join("\n");
+        assert!(rendered.contains("[🧡 3]"));
+        assert!(rendered.contains("[🔥 1]"));
     }
 
     // --- wrap_message_to_lines ---
@@ -635,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    fn wrap_message_renders_reply_quote_separately() {
+    fn wrap_message_renders_quotes_via_markdown_path() {
         let lines = wrap_message_to_lines(
             "> @alice: original text\nmy reply",
             "[1m]",
@@ -650,6 +1011,136 @@ mod tests {
         assert_eq!(strings.len(), 3);
         assert!(strings[1].contains("> @alice: original text"));
         assert!(strings[2].contains("my reply"));
+        assert_eq!(lines[1].spans[1].content.as_ref(), "> ");
+        assert_eq!(lines[1].spans[1].style.fg, Some(theme::AMBER_DIM()));
+    }
+
+    #[test]
+    fn wrap_message_renders_markdown_heading_styles() {
+        let lines = wrap_message_to_lines(
+            "# heading",
+            "[1m]",
+            "alice",
+            80,
+            Style::default(),
+            Style::default(),
+            false,
+            false,
+        );
+
+        assert_eq!(lines.len(), 2);
+        let heading = &lines[1].spans[1];
+        assert_eq!(heading.content.as_ref(), "heading");
+        assert_eq!(heading.style.fg, Some(theme::AMBER()));
+        assert!(heading.style.add_modifier.contains(Modifier::BOLD));
+        assert!(heading.style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn wrap_message_renders_markdown_inline_styles() {
+        let lines = wrap_message_to_lines(
+            "**bold** *italic* `code`",
+            "[1m]",
+            "alice",
+            80,
+            Style::default(),
+            Style::default(),
+            false,
+            false,
+        );
+
+        let body = &lines[1].spans;
+        assert!(body.iter().any(|span| {
+            span.content.as_ref() == "bold" && span.style.add_modifier.contains(Modifier::BOLD)
+        }));
+        assert!(body.iter().any(|span| {
+            span.content.as_ref() == "italic" && span.style.add_modifier.contains(Modifier::ITALIC)
+        }));
+        assert!(body.iter().any(|span| {
+            span.content.as_ref() == "code"
+                && span.style.fg == Some(theme::TEXT_BRIGHT())
+                && span.style.bg == Some(theme::BG_HIGHLIGHT())
+        }));
+    }
+
+    #[test]
+    fn wrap_message_renders_markdown_quotes_and_lists() {
+        let lines = wrap_message_to_lines(
+            "> quoted line\n- list item",
+            "[1m]",
+            "alice",
+            80,
+            Style::default(),
+            Style::default(),
+            false,
+            false,
+        );
+        let strings = lines_to_strings(&lines);
+        assert_eq!(strings.len(), 3);
+        assert!(strings[1].contains("> quoted line"));
+        assert!(strings[2].contains("• list item"));
+    }
+
+    #[test]
+    fn wrap_message_keeps_quote_text_single_color() {
+        let lines = wrap_message_to_lines(
+            "> hi @alice",
+            "[1m]",
+            "bob",
+            80,
+            Style::default(),
+            Style::default(),
+            false,
+            false,
+        );
+        let quote_text = lines[1]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "hi @alice")
+            .expect("quote text span");
+        assert_eq!(quote_text.style.fg, Some(theme::AMBER_DIM()));
+        assert!(!quote_text.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn wrap_message_preserves_mentions_inside_markdown() {
+        let lines = wrap_message_to_lines(
+            "**hi @alice**",
+            "[1m]",
+            "bob",
+            80,
+            Style::default(),
+            Style::default(),
+            false,
+            false,
+        );
+
+        let mention = lines[1]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "@alice")
+            .expect("mention span");
+        assert_eq!(mention.style.fg, Some(theme::MENTION()));
+        assert!(mention.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn wrap_message_wraps_markdown_list_continuations() {
+        let lines = wrap_message_to_lines(
+            "- hello wide world",
+            "[1m]",
+            "alice",
+            8,
+            Style::default(),
+            Style::default(),
+            false,
+            false,
+        );
+        let strings = lines_to_strings(&lines);
+        assert_eq!(strings.len(), 4);
+        assert!(strings[1].starts_with(" • "));
+        assert!(strings[2].starts_with("   "));
+        assert!(strings[3].starts_with("   "));
     }
 
     #[test]

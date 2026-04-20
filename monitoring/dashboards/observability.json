@@ -3,7 +3,7 @@
   "uid": "observability",
   "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 8,
+  "version": 10,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -253,77 +253,9 @@
       }
     },
     {
-      "type": "timeseries",
-      "title": "Log Volume",
-      "description": "Total log hits over time for the selected services.",
-      "datasource": {
-        "uid": "victorialogs",
-        "type": "victoriametrics-logs-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "{service.name=~\"$service\"}",
-          "queryType": "range"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "lineWidth": 2,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 40
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Error Volume",
-      "description": "Total ERROR log hits over time for the selected services.",
-      "datasource": {
-        "uid": "victorialogs",
-        "type": "victoriametrics-logs-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "{service.name=~\"$service\"} severity:ERROR",
-          "queryType": "range"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "lineWidth": 2,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 40
-      }
-    },
-    {
       "type": "bargauge",
-      "title": "Log Mix by Service + Severity",
-      "description": "Current distribution of logs by service and severity in the selected time range.",
+      "title": "Top INFO Messages",
+      "description": "Most frequent INFO messages - spot noisy logs worth silencing.",
       "datasource": {
         "uid": "victorialogs",
         "type": "victoriametrics-logs-datasource"
@@ -331,8 +263,9 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{service.name=~\"$service\"} | stats by (\"service.name\", severity) count() logs_total | sort by (logs_total desc) | limit 12",
-          "queryType": "instant"
+          "expr": "{service.name=~\"$service\"} severity:INFO | stats by (\"service.name\", _msg) count() info_logs_total | sort by (info_logs_total desc) | limit 8",
+          "queryType": "stats",
+          "legendFormat": "{{service.name}} - {{_msg}}"
         }
       ],
       "fieldConfig": {
@@ -342,16 +275,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 10
-              },
-              {
-                "color": "red",
-                "value": 50
               }
             ]
           },
@@ -365,6 +290,128 @@
         "showUnfilled": true,
         "minVizWidth": 0,
         "minVizHeight": 10
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Top WARN Messages",
+      "description": "Most frequent WARN messages - early warning signal before things escalate.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service.name=~\"$service\"} severity:WARN | stats by (\"service.name\", _msg) count() warn_logs_total | sort by (warn_logs_total desc) | limit 8",
+          "queryType": "stats",
+          "legendFormat": "{{service.name}} - {{_msg}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Log Volume by Severity",
+      "description": "Log count stacked by severity - red ERROR bursts are visible at a glance.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service.name=~\"$service\"} | stats by (severity) count() logs",
+          "queryType": "statsRange",
+          "legendFormat": "{{severity}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "ERROR" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "WARN" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "INFO" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "DEBUG" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "gray" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": ["sum"],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "gridPos": {
         "h": 8,
@@ -385,7 +432,8 @@
         {
           "refId": "A",
           "expr": "{service.name=~\"$service\"} severity:ERROR | stats by (\"service.name\", _msg) count() error_logs_total | sort by (error_logs_total desc) | limit 10",
-          "queryType": "instant"
+          "queryType": "stats",
+          "legendFormat": "{{service.name}} - {{_msg}}"
         }
       ],
       "fieldConfig": {

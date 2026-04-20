@@ -1,6 +1,7 @@
 use late_core::{
     models::{
         chat_message::{ChatMessage, ChatMessageParams},
+        chat_message_reaction::ChatMessageReaction,
         chat_room::ChatRoom,
         user::{User, UserParams},
     },
@@ -59,4 +60,69 @@ async fn test_chat_message() {
         .await
         .unwrap();
     assert!(msgs_after_delete.is_empty());
+}
+
+#[tokio::test]
+async fn chat_message_reactions_toggle_and_summarize() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general");
+
+    let author = User::create(
+        &client,
+        UserParams {
+            fingerprint: "reaction-author".to_string(),
+            username: "author".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    let viewer = User::create(
+        &client,
+        UserParams {
+            fingerprint: "reaction-viewer".to_string(),
+            username: "viewer".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: author.id,
+            body: "react to me".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    ChatMessageReaction::toggle(&client, message.id, author.id, 1)
+        .await
+        .unwrap();
+    ChatMessageReaction::toggle(&client, message.id, viewer.id, 3)
+        .await
+        .unwrap();
+    ChatMessageReaction::toggle(&client, message.id, viewer.id, 3)
+        .await
+        .unwrap();
+    ChatMessageReaction::toggle(&client, message.id, viewer.id, 5)
+        .await
+        .unwrap();
+
+    let summaries = ChatMessageReaction::list_summaries_for_messages(&client, &[message.id])
+        .await
+        .unwrap();
+    let reactions = summaries.get(&message.id).expect("reactions");
+    assert_eq!(reactions.len(), 2);
+    assert_eq!(reactions[0].kind, 1);
+    assert_eq!(reactions[0].count, 1);
+    assert_eq!(reactions[1].kind, 5);
+    assert_eq!(reactions[1].count, 1);
 }

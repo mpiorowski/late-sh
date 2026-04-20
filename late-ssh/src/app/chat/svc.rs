@@ -8,6 +8,7 @@ use late_core::{
     models::{
         bonsai::Tree,
         chat_message::{ChatMessage, ChatMessageParams},
+        chat_message_reaction::{ChatMessageReaction, ChatMessageReactionSummary},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         user::User,
@@ -35,6 +36,7 @@ pub struct ChatService {
 pub struct ChatSnapshot {
     pub user_id: Option<Uuid>,
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pub message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub general_room_id: Option<Uuid>,
     pub usernames: HashMap<Uuid, String>,
     pub countries: HashMap<Uuid, String>,
@@ -52,6 +54,12 @@ pub enum ChatEvent {
     },
     MessageEdited {
         message: ChatMessage,
+        target_user_ids: Option<Vec<Uuid>>,
+    },
+    MessageReactionsUpdated {
+        room_id: Uuid,
+        message_id: Uuid,
+        reactions: Vec<ChatMessageReactionSummary>,
         target_user_ids: Option<Vec<Uuid>>,
     },
     SendSucceeded {
@@ -223,6 +231,13 @@ impl ChatService {
         } else {
             Vec::new()
         };
+        let message_ids: Vec<Uuid> = selected_messages
+            .iter()
+            .chain(general_messages.iter())
+            .map(|message| message.id)
+            .collect();
+        let message_reactions =
+            ChatMessageReaction::list_summaries_for_messages(client, &message_ids).await?;
         // General is the dashboard's permanent room — it must always carry
         // its tail in the snapshot so the dashboard card stays warm even when
         // the chat page has another room selected. Other non-selected rooms
@@ -262,6 +277,7 @@ impl ChatService {
         self.publish_snapshot(ChatSnapshot {
             user_id: Some(user_id),
             chat_rooms: rooms,
+            message_reactions,
             general_room_id,
             usernames,
             countries,
@@ -583,6 +599,61 @@ impl ChatService {
             target_user_ids,
         });
         metrics::record_chat_message_edited();
+        Ok(())
+    }
+
+    pub fn toggle_message_reaction_task(&self, user_id: Uuid, message_id: Uuid, kind: i16) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service
+                    .toggle_message_reaction(user_id, message_id, kind)
+                    .await
+                {
+                    late_core::error_span!(
+                        "chat_toggle_reaction_failed",
+                        error = ?e,
+                        "failed to toggle message reaction"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.toggle_message_reaction_task",
+                user_id = %user_id,
+                message_id = %message_id,
+                kind = kind
+            )),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, kind = kind))]
+    async fn toggle_message_reaction(
+        &self,
+        user_id: Uuid,
+        message_id: Uuid,
+        kind: i16,
+    ) -> Result<()> {
+        let client = &self.db.get().await?;
+        let message = ChatMessage::get(client, message_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("message not found"))?;
+        let is_member = ChatRoomMember::is_member(client, message.room_id, user_id).await?;
+        if !is_member {
+            anyhow::bail!("user is not a member of room");
+        }
+
+        ChatMessageReaction::toggle(client, message_id, user_id, kind).await?;
+        let reactions = ChatMessageReaction::list_summaries_for_messages(client, &[message_id])
+            .await?
+            .remove(&message_id)
+            .unwrap_or_default();
+        let target_user_ids = ChatRoom::get_target_user_ids(client, message.room_id).await?;
+        let _ = self.evt_tx.send(ChatEvent::MessageReactionsUpdated {
+            room_id: message.room_id,
+            message_id,
+            reactions,
+            target_user_ids,
+        });
         Ok(())
     }
 

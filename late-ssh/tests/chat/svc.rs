@@ -113,6 +113,61 @@ async fn emits_message_created_and_send_succeeded_when_sender_is_member() {
 }
 
 #[tokio::test]
+async fn emits_message_reactions_updated_when_member_reacts() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let author = create_test_user(&test_db.db, "author").await;
+    let reactor = create_test_user(&test_db.db, "reactor").await;
+    let room = ChatRoom::get_or_create_language(&client, "en")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, author.id)
+        .await
+        .expect("join author");
+    ChatRoomMember::join(&client, room.id, reactor.id)
+        .await
+        .expect("join reactor");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: author.id,
+            body: "hello".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    service.toggle_message_reaction_task(reactor.id, message.id, 4);
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::MessageReactionsUpdated {
+            room_id,
+            message_id,
+            reactions,
+            ..
+        } => {
+            assert_eq!(room_id, room.id);
+            assert_eq!(message_id, message.id);
+            assert_eq!(reactions.len(), 1);
+            assert_eq!(reactions[0].kind, 4);
+            assert_eq!(reactions[0].count, 1);
+        }
+        _ => panic!("expected message reactions updated event"),
+    }
+}
+
+#[tokio::test]
 async fn emits_send_failed_event_when_non_admin_posts_to_announcements() {
     let test_db = new_test_db().await;
     let service = ChatService::new(

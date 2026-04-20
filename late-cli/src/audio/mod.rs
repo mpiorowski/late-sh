@@ -22,13 +22,14 @@ pub(super) struct VizSample {
 }
 
 pub(super) struct AudioRuntime {
-    _stream: cpal::Stream,
+    _stream: Option<cpal::Stream>,
     pub(super) analyzer_tx: broadcast::Sender<VizSample>,
     pub(super) played_samples: Arc<AtomicU64>,
     pub(super) sample_rate: u32,
     pub(super) stop: Arc<AtomicBool>,
     pub(super) muted: Arc<AtomicBool>,
     pub(super) volume_percent: Arc<AtomicU8>,
+    pub(super) enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +48,10 @@ use output::{PlaybackQueue, PlayedRing, build_output_stream, output_sample_rate_
 
 impl AudioRuntime {
     pub(super) async fn start(audio_base_url: String) -> Result<Self> {
+        if local_audio_disabled_on_this_platform() {
+            return Ok(Self::disabled());
+        }
+
         let probe_url = audio_base_url.clone();
         let source_spec = tokio::task::spawn_blocking(move || probe_stream_spec(&probe_url))
             .await
@@ -95,14 +100,29 @@ impl AudioRuntime {
             .context("failed to start audio output stream")?;
 
         Ok(Self {
-            _stream: stream,
+            _stream: Some(stream),
             analyzer_tx,
             played_samples,
             sample_rate: output_sample_rate,
             stop,
             muted,
             volume_percent,
+            enabled: true,
         })
+    }
+
+    fn disabled() -> Self {
+        let (analyzer_tx, _) = broadcast::channel(32);
+        Self {
+            _stream: None,
+            analyzer_tx,
+            played_samples: Arc::new(AtomicU64::new(0)),
+            sample_rate: 1,
+            stop: Arc::new(AtomicBool::new(false)),
+            muted: Arc::new(AtomicBool::new(false)),
+            volume_percent: Arc::new(AtomicU8::new(0)),
+            enabled: false,
+        }
     }
 }
 
@@ -142,6 +162,18 @@ fn env_var_missing_or_blank(key: &str) -> bool {
     env::var(key).map_or(true, |value| value.trim().is_empty())
 }
 
+const fn local_audio_disabled_on_this_platform() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        true
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        false
+    }
+}
+
 mod decoder_thread;
 
 use decoder_thread::spawn_decoder_thread;
@@ -168,5 +200,26 @@ mod tests {
         assert!(!env_var_missing_or_blank(key));
 
         unsafe { env::remove_var(key) };
+    }
+
+    #[test]
+    fn disabled_runtime_uses_zeroed_playback_state() {
+        let runtime = AudioRuntime::disabled();
+
+        assert!(!runtime.enabled);
+        assert_eq!(runtime.sample_rate, 1);
+        assert_eq!(
+            runtime
+                .played_samples
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            runtime
+                .volume_percent
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert!(!runtime.muted.load(std::sync::atomic::Ordering::Relaxed));
     }
 }

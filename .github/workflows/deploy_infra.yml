@@ -81,7 +81,10 @@ jobs:
 
           POD=$(kubectl get pod -l app=liquidsoap -o jsonpath='{.items[0].metadata.name}')
           for genre in music/*/; do
-            kubectl cp "${genre}" "${POD}:/music/$(basename "${genre}")/"
+            genre_name=$(basename "${genre}")
+            kubectl exec "${POD}" -- mkdir -p "/music/${genre_name}"
+            kubectl exec "${POD}" -- find "/music/${genre_name}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+            kubectl cp "${genre}/." "${POD}:/music/${genre_name}/"
           done
 
       - name: verify_music_sync
@@ -90,4 +93,3 @@ jobs:
           echo "Music files on pod:"
           kubectl exec "${POD}" -- find /music -name "*.mp3" | wc -l
           kubectl exec "${POD}" -- du -sh /music/
-

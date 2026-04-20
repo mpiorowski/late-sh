@@ -155,6 +155,7 @@ impl App {
         let chat_countries = self.chat.countries();
         let chat_badges = self.leaderboard.badges();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
+        let message_reactions = self.chat.message_reactions();
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             now_playing: now_playing_text.as_deref(),
             vote_counts: &vote_snapshot.counts,
@@ -168,6 +169,7 @@ impl App {
                 usernames: chat_usernames,
                 countries: chat_countries,
                 badges: &chat_badges,
+                message_reactions,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
                 composer: self.chat.composer(),
@@ -198,6 +200,7 @@ impl App {
             usernames: chat_usernames,
             countries: chat_countries,
             badges: &chat_badges,
+            message_reactions,
             unread_counts: &self.chat.unread_counts,
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,

@@ -29,6 +29,10 @@ is_wsl() {
   [[ -r /proc/sys/kernel/osrelease ]] && grep -qi microsoft /proc/sys/kernel/osrelease
 }
 
+is_termux() {
+  [[ -n "${TERMUX_VERSION:-}" ]] || [[ "${PREFIX:-}" == "/data/data/com.termux/files/usr" ]]
+}
+
 detect_target() {
   local os arch
 
@@ -49,7 +53,11 @@ detect_target() {
 
   case "$os" in
     Linux)
-      printf '%s\n' "${arch}-unknown-linux-gnu"
+      if is_termux; then
+        printf '%s\n' "${arch}-linux-android"
+      else
+        printf '%s\n' "${arch}-unknown-linux-gnu"
+      fi
       ;;
     Darwin)
       printf '%s\n' "${arch}-apple-darwin"
@@ -124,6 +132,16 @@ install_binary() {
   printf '%s\n' "$dest_path"
 }
 
+install_target_dir() {
+  if is_termux; then
+    printf '%s\n' "${PREFIX:-/data/data/com.termux/files/usr}/bin"
+  elif [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    printf '%s\n' "/usr/local/bin"
+  else
+    printf '%s\n' "${HOME}/.local/bin"
+  fi
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -167,6 +185,8 @@ main() {
 
   if is_wsl; then
     log "detected WSL; installing the Linux build"
+  elif is_termux; then
+    log "detected Termux; installing the Android build"
   fi
 
   case "$version" in
@@ -199,11 +219,7 @@ main() {
     log "warning: checksum file unavailable at ${checksum_url}; continuing without verification"
   fi
 
-  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-    target_dir="/usr/local/bin"
-  else
-    target_dir="${HOME}/.local/bin"
-  fi
+  target_dir="$(install_target_dir)"
 
   log_verbose "target_dir=${target_dir}"
   dest_path="$(install_binary "${tmp_dir}/${binary_name}" "$target_dir")"

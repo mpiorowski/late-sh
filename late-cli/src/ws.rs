@@ -153,11 +153,20 @@ pub(super) const fn client_platform_label() -> &'static str {
     {
         "windows"
     }
+    #[cfg(target_os = "android")]
+    {
+        "android"
+    }
     #[cfg(target_os = "linux")]
     {
         "linux"
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "android",
+        target_os = "linux"
+    )))]
     {
         "unknown"
     }

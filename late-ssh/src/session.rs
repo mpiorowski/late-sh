@@ -76,6 +76,7 @@ impl ClientSshMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientPlatform {
+    Android,
     Linux,
     Macos,
     Windows,
@@ -86,6 +87,7 @@ pub enum ClientPlatform {
 impl ClientPlatform {
     fn metric_label(self) -> Option<&'static str> {
         match self {
+            Self::Android => Some("android"),
             Self::Linux => Some("linux"),
             Self::Macos => Some("macos"),
             Self::Windows => Some("windows"),

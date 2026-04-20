@@ -38,7 +38,11 @@ async fn main() -> Result<()> {
             let hint = audio_startup_hint();
             anyhow::anyhow!("failed to start local audio: {err:#}\n\n{hint}")
         })?;
-    info!(sample_rate = audio.sample_rate, "audio runtime ready");
+    if audio.enabled {
+        info!(sample_rate = audio.sample_rate, "audio runtime ready");
+    } else {
+        info!("local audio disabled on this platform");
+    }
     info!("starting ssh session");
     let (token_tx, token_rx) = oneshot::channel();
     let SshProcess {

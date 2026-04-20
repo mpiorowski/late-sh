@@ -6,11 +6,13 @@ Connects to the SSH session and streams lofi audio locally with a live visualize
 
 ## Install
 
-macOS / Linux:
+macOS / Linux / Termux:
 
 ```bash
 curl -fsSL https://cli.late.sh/install.sh | bash
 ```
+
+On Termux, the installer detects the environment and downloads the Android build.
 
 Windows PowerShell (x64):
 

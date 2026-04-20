@@ -68,11 +68,13 @@ That's it. Postgres, Icecast, and Liquidsoap all come up automatically.
 
 Install the companion CLI for local audio playback and synced visualizer:
 
-macOS / Linux:
+macOS / Linux / Termux:
 
 ```bash
 curl -fsSL https://cli.late.sh/install.sh | bash
 ```
+
+On Termux, the installer fetches the Android CLI build instead of the GNU/Linux one.
 
 Windows PowerShell (x64):
 

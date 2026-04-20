@@ -1,4 +1,5 @@
 use late_core::models::chat_message::ChatMessage;
+use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -40,6 +41,7 @@ pub struct DashboardChatView<'a> {
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
+    pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
     pub composer: &'a TextArea<'static>,
@@ -158,6 +160,30 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     .to_string()
 }
 
+fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+
+    if view.composing {
+        return Paragraph::new(Line::from(vec![
+            Span::styled(
+                "T",
+                Style::default()
+                    .fg(theme::BG_CANVAS())
+                    .bg(theme::TEXT_DIM()),
+            ),
+            Span::styled("ype a message...", dim),
+        ]));
+    }
+
+    let placeholder_text = if view.selected_message {
+        "1-5 react · r reply · e edit · d delete · p profile · c copy · i compose"
+    } else {
+        "Type a message · j/k select · /help"
+    };
+
+    Paragraph::new(Line::from(Span::styled(placeholder_text, dim)))
+}
+
 pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &ComposerBlockView<'_>) {
     let composer_title = composer_title(view, area.width);
     let composer_style = if view.composing {
@@ -174,17 +200,8 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
 
     let text_area = horizontal_inset(composer_inner, 1);
 
-    if !view.composing && view.composer.is_empty() && !view.mention_active {
-        let placeholder_text = if view.selected_message {
-            "r reply · e edit · d delete · p profile · c copy · i compose"
-        } else {
-            "Type a message · j/k select · /help"
-        };
-        let placeholder = Paragraph::new(Line::from(Span::styled(
-            placeholder_text,
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-        frame.render_widget(placeholder, text_area);
+    if view.composer.is_empty() && !view.mention_active {
+        frame.render_widget(empty_composer_placeholder(view), text_area);
     } else {
         frame.render_widget(view.composer, text_area);
     }
@@ -249,6 +266,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 countries: view.countries,
                 badges: view.badges,
                 bonsai_glyphs: view.bonsai_glyphs,
+                message_reactions: view.message_reactions,
             },
         );
         lines = visible_chat_rows(view.rows_cache, view.selected_message_id, None, height);
@@ -285,6 +303,7 @@ struct ChatRowsContext<'a> {
     countries: &'a HashMap<Uuid, String>,
     badges: &'a HashMap<Uuid, BadgeTier>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
+    message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
 }
 
 #[derive(Default)]
@@ -319,6 +338,7 @@ fn chat_rows_fingerprint(
             .map(|badge| badge.label())
             .hash(&mut hasher);
         ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
+        ctx.message_reactions.get(&msg.id).hash(&mut hasher);
     }
 
     hasher.finish()
@@ -390,6 +410,11 @@ fn ensure_chat_rows_cache(
             .map(|g| format!(" {}", g))
             .unwrap_or_default();
         let prefix = format!("{author}{contributor_badge}{streak_badge}{bonsai_badge}");
+        let reactions = ctx
+            .message_reactions
+            .get(&msg.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
 
         let mentions_us = our_mention
             .as_ref()
@@ -410,6 +435,7 @@ fn ensure_chat_rows_cache(
             body_style,
             mentions_us,
             is_continuation,
+            reactions,
         );
         all_rows.extend(msg_lines);
 
@@ -634,6 +660,7 @@ pub struct ChatRenderInput<'a> {
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
+    pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
@@ -1002,6 +1029,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                         countries,
                         badges: view.badges,
                         bonsai_glyphs: view.bonsai_glyphs,
+                        message_reactions: view.message_reactions,
                     },
                 );
                 let mut lines = visible_chat_rows(
@@ -1247,6 +1275,53 @@ mod tests {
                 "title {expected_title:?} truncated at block_w={block_w}: rendered {row:?}",
             );
         }
+    }
+
+    #[test]
+    fn empty_composer_placeholder_is_dim_while_composing() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let ta = TextArea::default();
+        let view = composer_view(&ta);
+        let placeholder = empty_composer_placeholder(&view);
+        let width = 20u16;
+        let backend = TestBackend::new(width, 1);
+        let mut terminal = Terminal::new(backend).expect("term");
+
+        terminal
+            .draw(|f| f.render_widget(placeholder, Rect::new(0, 0, width, 1)))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let rendered: String = (0..17).map(|x| buf[(x, 0)].symbol()).collect();
+        assert_eq!(rendered, "Type a message...");
+        assert_eq!(buf[(0, 0)].fg, theme::BG_CANVAS());
+        assert_eq!(buf[(0, 0)].bg, theme::TEXT_DIM());
+        assert_eq!(buf[(1, 0)].fg, theme::TEXT_DIM());
+    }
+
+    #[test]
+    fn empty_composer_placeholder_uses_hint_text_when_not_composing() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let ta = TextArea::default();
+        let mut view = composer_view(&ta);
+        view.composing = false;
+
+        let placeholder = empty_composer_placeholder(&view);
+        let expected = "Type a message · j/k select · /help";
+        let width = expected.chars().count() as u16;
+        let backend = TestBackend::new(width, 1);
+        let mut terminal = Terminal::new(backend).expect("term");
+
+        terminal
+            .draw(|f| f.render_widget(placeholder, Rect::new(0, 0, width, 1)))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let rendered: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+        assert_eq!(rendered, expected);
+        assert_eq!(buf[(0, 0)].fg, theme::TEXT_DIM());
     }
 
     #[test]

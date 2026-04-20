@@ -34,6 +34,14 @@ jobs:
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             binary_name: late
+          - runner: ubuntu-latest
+            target: x86_64-linux-android
+            binary_name: late
+            android: true
+          - runner: ubuntu-latest
+            target: aarch64-linux-android
+            binary_name: late
+            android: true
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             binary_name: late
@@ -53,15 +61,59 @@ jobs:
           shared-key: cli-release-${{ matrix.target }}
 
       - name: install_linux_build_dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.android != true
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev pkg-config mold
+
+      - name: set_up_android_sdk
+        if: matrix.android == true
+        uses: android-actions/setup-android@v3
+
+      - name: install_android_ndk
+        if: matrix.android == true
+        env:
+          ANDROID_NDK_VERSION: 27.2.12479018
+        run: sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: configure_android_toolchain
+        if: matrix.android == true
+        env:
+          ANDROID_NDK_VERSION: 27.2.12479018
+        run: |
+          NDK_HOME="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+          TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          case "${{ matrix.target }}" in
+            aarch64-linux-android)
+              linker="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
+              echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
+              echo "CC_aarch64_linux_android=$linker" >> "$GITHUB_ENV"
+              echo "AR_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
+              echo "RANLIB_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ranlib" >> "$GITHUB_ENV"
+              ln -sf "$TOOLCHAIN/bin/llvm-ranlib" "$TOOLCHAIN/bin/aarch64-linux-android-ranlib"
+              ln -sf "$TOOLCHAIN/bin/llvm-ar" "$TOOLCHAIN/bin/aarch64-linux-android-ar"
+              ;;
+            x86_64-linux-android)
+              linker="$TOOLCHAIN/bin/x86_64-linux-android24-clang"
+              echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
+              echo "CC_x86_64_linux_android=$linker" >> "$GITHUB_ENV"
+              echo "AR_x86_64_linux_android=$TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
+              echo "RANLIB_x86_64_linux_android=$TOOLCHAIN/bin/llvm-ranlib" >> "$GITHUB_ENV"
+              ln -sf "$TOOLCHAIN/bin/llvm-ranlib" "$TOOLCHAIN/bin/x86_64-linux-android-ranlib"
+              ln -sf "$TOOLCHAIN/bin/llvm-ar" "$TOOLCHAIN/bin/x86_64-linux-android-ar"
+              ;;
+          esac
+          echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
 
       - name: install_rust_target
         run: rustup target add ${{ matrix.target }}
 
       - name: cargo_build_cli
+        if: matrix.android != true
+        run: cargo build --locked --release -p late-cli --bin late --target ${{ matrix.target }}
+
+      - name: cargo_build_cli_android
+        if: matrix.android == true
         run: cargo build --locked --release -p late-cli --bin late --target ${{ matrix.target }}
 
       - name: stage_cli_artifact
