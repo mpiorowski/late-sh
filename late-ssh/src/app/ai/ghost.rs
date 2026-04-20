@@ -43,7 +43,7 @@ const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
 pub const BOT_TIP_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
 const BOT_TIP_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
-pub const BOT_TIP_MIN_NEW_MESSAGES: usize = 3;
+pub const BOT_TIP_MIN_NEW_MESSAGES: usize = 10;
 const BOT_TIP_HISTORY_SIZE: i64 = 50;
 const GRAYBEARD_FINGERPRINT: &str = "graybeard-fp-000";
 const GRAYBEARD_USERNAME: &str = "graybeard";
@@ -87,7 +87,7 @@ pub const GRAYBEARD_CHAT_INTERVAL: Duration = Duration::from_secs(60 * 120); // 
 // Keep graybeard halfway between @bot's 2-hour tips.
 const GRAYBEARD_CHAT_PHASE_OFFSET: Duration = Duration::from_secs(60 * 60); // 1 hour
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
-const GRAYBEARD_MIN_NEW_MESSAGES: usize = 3;
+const GRAYBEARD_MIN_NEW_MESSAGES: usize = 10;
 
 impl GhostService {
     pub fn new(
@@ -505,7 +505,7 @@ impl GhostService {
         }
     }
 
-    /// 30-min tick: check #general for new messages not from graybeard, then comment.
+    /// 2-hour tick: check #general for new messages not from graybeard, then comment.
     async fn graybeard_chat_tick(&self, gb: BotUser) -> Result<()> {
         let (general_room, messages) = {
             let client = self.db.get().await?;
