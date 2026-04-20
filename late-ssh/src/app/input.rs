@@ -961,7 +961,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
 fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing {
-        chat::input::handle_compose_input(app, byte);
+        chat::input::handle_compose_input(app, byte, compose_room_switch_allowed(ctx.screen));
         return true;
     }
 
@@ -971,6 +971,10 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 
     false
+}
+
+fn compose_room_switch_allowed(screen: Screen) -> bool {
+    screen == Screen::Chat
 }
 
 fn reset_composers_for_page_change(app: &mut App) {
@@ -1408,6 +1412,13 @@ mod tests {
             news_composing: false,
         };
         assert!(!ctx.blocks_arrow_sequence());
+    }
+
+    #[test]
+    fn compose_room_switch_only_allowed_on_chat_screen() {
+        assert!(compose_room_switch_allowed(Screen::Chat));
+        assert!(!compose_room_switch_allowed(Screen::Dashboard));
+        assert!(!compose_room_switch_allowed(Screen::Profile));
     }
 
     #[test]

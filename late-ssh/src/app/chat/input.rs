@@ -12,7 +12,7 @@ fn is_prev_room_key(byte: u8) -> bool {
     matches!(byte, b'h' | b'H' | 0x10)
 }
 
-pub fn handle_compose_input(app: &mut App, byte: u8) {
+pub fn handle_compose_input(app: &mut App, byte: u8, allow_room_switch: bool) {
     if app.chat.is_autocomplete_active() {
         match byte {
             0x1B => {
@@ -60,11 +60,11 @@ pub fn handle_compose_input(app: &mut App, byte: u8) {
         // the jump (they point at a message in the prior room); composer
         // text and cursor survive. Shadows ratatui-textarea's cursor-
         // down/up, which is rarely useful in a chat composer.
-        0x0E => {
+        0x0E if allow_room_switch => {
             app.chat.switch_room_preserving_draft(1);
             app.chat.update_autocomplete();
         }
-        0x10 => {
+        0x10 if allow_room_switch => {
             app.chat.switch_room_preserving_draft(-1);
             app.chat.update_autocomplete();
         }

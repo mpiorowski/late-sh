@@ -514,6 +514,14 @@ impl ChatState {
             .collect()
     }
 
+    fn adjacent_composer_room(&self, delta: isize) -> Option<Uuid> {
+        adjacent_composer_room(
+            &self.visual_order(),
+            self.composer_room_id.or(self.selected_room_id),
+            delta,
+        )
+    }
+
     fn select_room_slot(&mut self, slot: RoomSlot) -> bool {
         self.selected_message_id = None;
         self.highlighted_message_id = None;
@@ -553,14 +561,15 @@ impl ChatState {
     ///
     /// Returns `true` if the selection actually changed.
     pub fn switch_room_preserving_draft(&mut self, delta: isize) -> bool {
-        if !self.move_selection(delta) {
+        let Some(next_room_id) = self.adjacent_composer_room(delta) else {
+            return false;
+        };
+        if !self.select_room_slot(RoomSlot::Room(next_room_id)) {
             return false;
         }
         self.reply_target = None;
         self.edited_message_id = None;
-        if let Some(room_id) = self.selected_room_id {
-            self.composer_room_id = Some(room_id);
-        }
+        self.composer_room_id = Some(next_room_id);
         self.mark_selected_room_read();
         self.request_list();
         true
@@ -1607,6 +1616,28 @@ fn wrapped_index(current: isize, delta: isize, len: usize) -> usize {
     (current + delta).rem_euclid(len as isize) as usize
 }
 
+fn adjacent_composer_room(
+    order: &[RoomSlot],
+    current_room_id: Option<Uuid>,
+    delta: isize,
+) -> Option<Uuid> {
+    let rooms: Vec<Uuid> = order
+        .iter()
+        .filter_map(|slot| match slot {
+            RoomSlot::Room(room_id) => Some(*room_id),
+            RoomSlot::News | RoomSlot::Notifications => None,
+        })
+        .collect();
+    if rooms.is_empty() {
+        return None;
+    }
+
+    let current = current_room_id
+        .and_then(|room_id| rooms.iter().position(|candidate| *candidate == room_id))
+        .unwrap_or(0) as isize;
+    Some(rooms[wrapped_index(current, delta, rooms.len())])
+}
+
 fn resolve_room_jump_target(targets: &[(u8, RoomSlot)], byte: u8) -> Option<RoomSlot> {
     let byte = byte.to_ascii_lowercase();
     targets
@@ -1890,6 +1921,39 @@ mod tests {
     fn wrapped_index_wraps_backward() {
         assert_eq!(wrapped_index(0, -1, 3), 2);
         assert_eq!(wrapped_index(1, -5, 3), 2);
+    }
+
+    #[test]
+    fn adjacent_composer_room_skips_virtual_slots() {
+        let room_a = Uuid::from_u128(1);
+        let room_b = Uuid::from_u128(2);
+        let room_c = Uuid::from_u128(3);
+        let order = vec![
+            RoomSlot::Room(room_a),
+            RoomSlot::News,
+            RoomSlot::Notifications,
+            RoomSlot::Room(room_b),
+            RoomSlot::Room(room_c),
+        ];
+
+        assert_eq!(
+            adjacent_composer_room(&order, Some(room_a), 1),
+            Some(room_b)
+        );
+        assert_eq!(
+            adjacent_composer_room(&order, Some(room_b), -1),
+            Some(room_a)
+        );
+        assert_eq!(
+            adjacent_composer_room(&order, Some(room_c), 1),
+            Some(room_a)
+        );
+    }
+
+    #[test]
+    fn adjacent_composer_room_returns_none_without_real_rooms() {
+        let order = vec![RoomSlot::News, RoomSlot::Notifications];
+        assert_eq!(adjacent_composer_room(&order, None, 1), None);
     }
 
     #[test]
