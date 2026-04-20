@@ -6,7 +6,7 @@ use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
-use super::super::mentions;
+use crate::app::common::mentions;
 
 #[derive(Clone, Default)]
 pub struct NotificationSnapshot {

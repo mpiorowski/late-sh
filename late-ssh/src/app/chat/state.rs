@@ -1074,7 +1074,7 @@ impl ChatState {
                             });
                         } else if let Some(me) = self.usernames.get(&self.user_id) {
                             let me_lc = me.to_ascii_lowercase();
-                            if super::mentions::extract_mentions(&message.body)
+                            if crate::app::common::mentions::extract_mentions(&message.body)
                                 .iter()
                                 .any(|m| m == &me_lc)
                             {
