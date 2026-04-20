@@ -328,6 +328,9 @@ fn wrap_markdown_spans(
 
         rows.push(rebuild_spans(&chars[idx..break_at]));
         idx = break_at;
+        while idx < chars.len() && chars[idx].ch == ' ' {
+            idx += 1;
+        }
     }
 
     rows
@@ -1009,7 +1012,7 @@ mod tests {
         assert!(strings[1].contains("> @alice: original text"));
         assert!(strings[2].contains("my reply"));
         assert_eq!(lines[1].spans[1].content.as_ref(), "> ");
-        assert_eq!(lines[1].spans[1].style.fg, Some(theme::TEXT_DIM()));
+        assert_eq!(lines[1].spans[1].style.fg, Some(theme::AMBER_DIM()));
     }
 
     #[test]
