@@ -230,6 +230,20 @@ pub struct App {
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
 
+    /// Which favorite room the dashboard's chat card is currently showing,
+    /// when the user has 2+ favorites pinned. Clamped on read against the
+    /// current profile list so it stays valid after adds/removes. Session-
+    /// local — not persisted.
+    pub(crate) dashboard_favorite_index: usize,
+    /// Previously-active favorite index, so `,` can jump back to the last
+    /// pin Vim-alternate-buffer style. Session-local.
+    pub(crate) dashboard_previous_favorite_index: Option<usize>,
+    /// `true` while the user has pressed `g` on the dashboard and we're
+    /// waiting for a digit to complete a jump (Vim-style two-key prefix).
+    /// Any non-digit keystroke disarms and falls through to its normal
+    /// handling.
+    pub(crate) dashboard_g_prefix_armed: bool,
+
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
     pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
@@ -290,6 +304,114 @@ impl App {
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.show_settings = false;
+    }
+
+    /// Resolves which room the dashboard's chat card should display, given
+    /// the user's pinned favorites:
+    /// - 0 pins → `#general`
+    /// - 1 pin → that pin (or `#general` if it was left)
+    /// - 2+ pins → favorites[index], clamped against the current list
+    ///
+    /// The strip only renders in the 2+ case; see [`Self::dashboard_strip_pins`].
+    pub(crate) fn dashboard_active_room_id(&self) -> Option<uuid::Uuid> {
+        let pins = &self.profile_state.profile().favorite_room_ids;
+        let general = self.chat.general_room_id();
+        match pins.len() {
+            0 => general,
+            1 => self.resolve_joined_room(pins[0]).or(general),
+            len => {
+                let idx = self.dashboard_favorite_index.min(len - 1);
+                self.resolve_joined_room(pins[idx]).or(general)
+            }
+        }
+    }
+
+    /// Pins to render in the dashboard quick-switch strip. `None` when fewer
+    /// than two favorites are pinned — there's nothing to switch between, so
+    /// the strip is hidden entirely.
+    pub(crate) fn dashboard_strip_pins(&self) -> Option<Vec<(uuid::Uuid, String, bool)>> {
+        let pins = &self.profile_state.profile().favorite_room_ids;
+        if pins.len() < 2 {
+            return None;
+        }
+        let catalog = self.chat.favorite_room_options();
+        let active = self.dashboard_active_room_id();
+        let pills: Vec<(uuid::Uuid, String, bool)> = pins
+            .iter()
+            .filter_map(|id| {
+                catalog
+                    .iter()
+                    .find(|option| option.id == *id)
+                    .map(|option| (option.id, option.label.clone(), Some(option.id) == active))
+            })
+            .collect();
+        // If membership churn leaves <2 resolvable pins, hide the strip
+        // rather than show a lonely pill.
+        if pills.len() < 2 { None } else { Some(pills) }
+    }
+
+    /// Cycle the dashboard's active favorite. Wraps both directions. No-op
+    /// when fewer than two pins are present.
+    pub(crate) fn cycle_dashboard_favorite(&mut self, delta: isize) {
+        let len = self.profile_state.profile().favorite_room_ids.len();
+        if len < 2 {
+            return;
+        }
+        let len_isize = len as isize;
+        let current = self.dashboard_favorite_index.min(len - 1) as isize;
+        let next = ((current + delta).rem_euclid(len_isize)) as usize;
+        if next != current as usize {
+            self.dashboard_previous_favorite_index = Some(current as usize);
+        }
+        self.dashboard_favorite_index = next;
+    }
+
+    /// Jump directly to `slot` (0-indexed) in the favorites list. Used by
+    /// the `g<digit>` prefix. No-op when <2 pins or the slot is out of
+    /// range. Records the current pin as the "last" target so `,` bounces
+    /// back afterward.
+    pub(crate) fn jump_dashboard_favorite(&mut self, slot: usize) {
+        let len = self.profile_state.profile().favorite_room_ids.len();
+        if len < 2 || slot >= len {
+            return;
+        }
+        let current = self.dashboard_favorite_index.min(len - 1);
+        if slot == current {
+            return;
+        }
+        self.dashboard_previous_favorite_index = Some(current);
+        self.dashboard_favorite_index = slot;
+    }
+
+    /// Vim-alternate-buffer style jump: swap the current and previous
+    /// active pin. No-op when fewer than two pins are present or there's
+    /// no prior pin to jump back to (first tap of this session).
+    pub(crate) fn toggle_dashboard_last_favorite(&mut self) {
+        let len = self.profile_state.profile().favorite_room_ids.len();
+        if len < 2 {
+            return;
+        }
+        let Some(prev) = self.dashboard_previous_favorite_index else {
+            return;
+        };
+        let prev = prev.min(len - 1);
+        let current = self.dashboard_favorite_index.min(len - 1);
+        if prev == current {
+            return;
+        }
+        self.dashboard_previous_favorite_index = Some(current);
+        self.dashboard_favorite_index = prev;
+    }
+
+    /// Returns `room_id` if the user is currently a member of it; `None`
+    /// otherwise. Used to guard against a pin that survived in the profile
+    /// but vanished from the joined-rooms snapshot (left via `/leave`, etc).
+    fn resolve_joined_room(&self, room_id: uuid::Uuid) -> Option<uuid::Uuid> {
+        self.chat
+            .favorite_room_options()
+            .iter()
+            .any(|option| option.id == room_id)
+            .then_some(room_id)
     }
 
     pub fn show_splash_for_tests(&mut self, hint: impl Into<String>) {
@@ -429,7 +551,11 @@ impl App {
             config.profile_service.clone(),
             config.user_id,
         );
-        settings_modal_state.open_from_profile(&initial_profile, settings_modal::ui::MODAL_WIDTH);
+        settings_modal_state.open_from_profile(
+            &initial_profile,
+            Vec::new(),
+            settings_modal::ui::MODAL_WIDTH,
+        );
         let (screen, show_settings, show_splash, game_selection) = match config.devtest_jump {
             Some(jump) => (Screen::Games, false, false, jump.game_selection()),
             None => (Screen::Dashboard, true, true, DEFAULT_GAME_SELECTION),
@@ -480,6 +606,9 @@ impl App {
             ),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
+            dashboard_favorite_index: 0,
+            dashboard_previous_favorite_index: None,
+            dashboard_g_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,

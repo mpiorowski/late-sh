@@ -176,7 +176,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static
     }
 
     let placeholder_text = if view.selected_message {
-        "S+1-5 react · r reply · e edit · d delete · p profile · c copy · i compose"
+        "f+1-5 react · r reply · e edit · d delete · p profile · c copy · i compose"
     } else {
         "Type a message · j/k select · /binds · or just ask @bot about anything"
     };

@@ -40,8 +40,10 @@ async fn profile_page_renders_saved_country_timezone_and_bio() {
             notify_format: None,
             theme_id: Some("late".to_string()),
             enable_background_color: false,
+            show_dashboard_header: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            favorite_room_ids: Vec::new(),
         },
     )
     .await

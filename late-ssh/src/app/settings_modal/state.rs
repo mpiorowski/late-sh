@@ -18,6 +18,18 @@ pub const BIO_MAX_LEN: usize = 500;
 pub enum PickerKind {
     Country,
     Timezone,
+    Room,
+}
+
+/// Snapshot of one room the user is a member of, flattened to the minimum
+/// the modal needs to render + filter. Built by the caller (dashboard/chat
+/// code has access to slug/kind/DM peer usernames), so this module stays
+/// decoupled from `ChatRoom` and `usernames` lookups.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RoomOption {
+    pub id: Uuid,
+    /// Display label: e.g. `"#general"`, `"#rust-nerds"`, `"@alice"`.
+    pub label: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +37,7 @@ pub enum Row {
     Username,
     Theme,
     BackgroundColor,
+    DashboardHeader,
     RightSidebar,
     GamesSidebar,
     Country,
@@ -38,10 +51,11 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 13] = [
+    pub const ALL: [Row; 14] = [
         Row::Username,
         Row::Theme,
         Row::BackgroundColor,
+        Row::DashboardHeader,
         Row::RightSidebar,
         Row::GamesSidebar,
         Row::Country,
@@ -57,20 +71,23 @@ impl Row {
 
 /// Top-level tab in the settings modal. `Settings` holds every compact
 /// row (identity/appearance/location/notifications); `Bio` is a separate
-/// full-width pane with the markdown editor + preview.
+/// full-width pane with the markdown editor + preview; `Favorites` manages
+/// the dashboard quick-switch room list.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
     Bio,
+    Favorites,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 2] = [Tab::Settings, Tab::Bio];
+    pub const ALL: [Tab; 3] = [Tab::Settings, Tab::Bio, Tab::Favorites];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
             Tab::Bio => "Bio",
+            Tab::Favorites => "Favorites",
         }
     }
 }
@@ -95,6 +112,12 @@ pub struct SettingsModalState {
     editing_bio: bool,
     bio_input: TextArea<'static>,
     picker: PickerState,
+    /// Catalog of rooms the user can pick favorites from. Re-supplied on
+    /// every modal open so we always reflect current membership.
+    available_rooms: Vec<RoomOption>,
+    /// Cursor in the Favorites tab: 0..favorites.len() selects a favorite,
+    /// the final slot (favorites.len()) selects the "Add favorite…" row.
+    favorites_index: usize,
 }
 
 impl SettingsModalState {
@@ -110,11 +133,26 @@ impl SettingsModalState {
             editing_bio: false,
             bio_input: new_bio_textarea(false),
             picker: PickerState::default(),
+            available_rooms: Vec::new(),
+            favorites_index: 0,
         }
     }
 
-    pub fn open_from_profile(&mut self, profile: &Profile, _modal_width: u16) {
+    pub fn open_from_profile(
+        &mut self,
+        profile: &Profile,
+        available_rooms: Vec<RoomOption>,
+        _modal_width: u16,
+    ) {
         self.draft = profile.clone();
+        // Drop favorites the user is no longer a member of so the modal never
+        // shows ghost entries. Preserve order of the survivors.
+        let member_ids: std::collections::HashSet<Uuid> =
+            available_rooms.iter().map(|room| room.id).collect();
+        self.draft
+            .favorite_room_ids
+            .retain(|id| member_ids.contains(id));
+        self.available_rooms = available_rooms;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.editing_username = false;
@@ -122,6 +160,7 @@ impl SettingsModalState {
         self.editing_bio = false;
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
+        self.favorites_index = 0;
     }
 
     pub fn selected_tab(&self) -> Tab {
@@ -238,10 +277,25 @@ impl SettingsModalState {
         filter_timezones(&self.picker.query)
     }
 
+    /// Rooms the user is a member of but hasn't favorited yet, filtered by
+    /// the picker's current query. Returns references into `available_rooms`
+    /// so we don't clone the label on every keystroke.
+    pub fn filtered_rooms(&self) -> Vec<&RoomOption> {
+        let query = self.picker.query.trim().to_ascii_lowercase();
+        let favorited: std::collections::HashSet<&Uuid> =
+            self.draft.favorite_room_ids.iter().collect();
+        self.available_rooms
+            .iter()
+            .filter(|room| !favorited.contains(&room.id))
+            .filter(|room| query.is_empty() || room.label.to_ascii_lowercase().contains(&query))
+            .collect()
+    }
+
     pub fn picker_len(&self) -> usize {
         match self.picker.kind {
             Some(PickerKind::Country) => self.filtered_countries().len(),
             Some(PickerKind::Timezone) => self.filtered_timezones().len(),
+            Some(PickerKind::Room) => self.filtered_rooms().len(),
             None => 0,
         }
     }
@@ -282,6 +336,19 @@ impl SettingsModalState {
                 let options = self.filtered_countries();
                 if let Some(country) = options.get(self.picker.selected_index) {
                     self.draft.country = Some(country.code.to_string());
+                    mutated = true;
+                }
+            }
+            Some(PickerKind::Room) => {
+                let chosen_id = self
+                    .filtered_rooms()
+                    .get(self.picker.selected_index)
+                    .map(|room| room.id);
+                if let Some(id) = chosen_id {
+                    self.draft.favorite_room_ids.push(id);
+                    // Leave cursor on the freshly-added entry so follow-up
+                    // reorders feel continuous.
+                    self.favorites_index = self.draft.favorite_room_ids.len().saturating_sub(1);
                     mutated = true;
                 }
             }
@@ -452,6 +519,77 @@ impl SettingsModalState {
         self.bio_input = new_bio_textarea(self.editing_bio);
     }
 
+    pub fn favorites(&self) -> &[Uuid] {
+        &self.draft.favorite_room_ids
+    }
+
+    pub fn available_rooms(&self) -> &[RoomOption] {
+        &self.available_rooms
+    }
+
+    /// Number of navigable slots on the Favorites tab: every pinned room
+    /// plus the trailing "Add favorite…" row.
+    pub fn favorites_slot_count(&self) -> usize {
+        self.draft.favorite_room_ids.len() + 1
+    }
+
+    pub fn favorites_index(&self) -> usize {
+        self.favorites_index
+    }
+
+    pub fn favorites_index_is_add_row(&self) -> bool {
+        self.favorites_index == self.draft.favorite_room_ids.len()
+    }
+
+    pub fn room_label(&self, room_id: Uuid) -> Option<&str> {
+        self.available_rooms
+            .iter()
+            .find(|room| room.id == room_id)
+            .map(|room| room.label.as_str())
+    }
+
+    pub fn move_favorites_cursor(&mut self, delta: isize) {
+        let last = self.favorites_slot_count().saturating_sub(1) as isize;
+        self.favorites_index = (self.favorites_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    /// Swap the selected favorite with its neighbor (positive `delta` moves
+    /// toward the end of the list). No-op on the "Add favorite…" row.
+    pub fn reorder_selected_favorite(&mut self, delta: isize) {
+        if self.favorites_index_is_add_row() {
+            return;
+        }
+        let len = self.draft.favorite_room_ids.len();
+        if len < 2 {
+            return;
+        }
+        let from = self.favorites_index;
+        let to = (from as isize + delta).clamp(0, len as isize - 1) as usize;
+        if to == from {
+            return;
+        }
+        self.draft.favorite_room_ids.swap(from, to);
+        self.favorites_index = to;
+        self.save();
+    }
+
+    pub fn remove_selected_favorite(&mut self) {
+        if self.favorites_index_is_add_row() {
+            return;
+        }
+        let idx = self.favorites_index;
+        if idx >= self.draft.favorite_room_ids.len() {
+            return;
+        }
+        self.draft.favorite_room_ids.remove(idx);
+        // Keep the cursor stable: if the deleted entry was the last pinned
+        // room, fall back onto the "Add favorite…" row.
+        if idx >= self.draft.favorite_room_ids.len() {
+            self.favorites_index = self.draft.favorite_room_ids.len();
+        }
+        self.save();
+    }
+
     /// Cycle the value of the currently selected row and auto-persist.
     /// Username/Country/Timezone don't cycle here (they open editors/pickers);
     /// this only fires for the toggle/enum rows.
@@ -468,6 +606,10 @@ impl SettingsModalState {
             }
             Row::BackgroundColor => {
                 self.draft.enable_background_color ^= true;
+                true
+            }
+            Row::DashboardHeader => {
+                self.draft.show_dashboard_header ^= true;
                 true
             }
             Row::RightSidebar => {
@@ -531,8 +673,10 @@ impl SettingsModalState {
                         .unwrap_or_else(|| "late".to_string()),
                 ),
                 enable_background_color: self.draft.enable_background_color,
+                show_dashboard_header: self.draft.show_dashboard_header,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 show_games_sidebar: self.draft.show_games_sidebar,
+                favorite_room_ids: self.draft.favorite_room_ids.clone(),
             },
         );
     }

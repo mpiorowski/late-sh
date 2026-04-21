@@ -321,8 +321,8 @@ async fn chat_room_switch_ctrl_keys_wrap() {
 #[tokio::test]
 async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "v-react-viewer").await;
-    let author = create_test_user(&test_db.db, "v-react-author").await;
+    let viewer = create_test_user(&test_db.db, "f-react-viewer").await;
+    let author = create_test_user(&test_db.db, "f-react-author").await;
     let client = test_db.db.get().await.expect("db client");
     let general = ChatRoom::ensure_general(&client)
         .await
@@ -344,13 +344,13 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     .await
     .expect("create message");
 
-    let mut app = make_app(test_db.db.clone(), viewer.id, "v-react-flow-it");
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-react-flow-it");
     app.handle_input(b"2");
     wait_for_render_contains(&mut app, " Rooms ").await;
     wait_for_render_contains(&mut app, "reaction target").await;
 
     app.handle_input(b"j");
-    app.handle_input(b"v1");
+    app.handle_input(b"f1");
 
     wait_for_render_contains(&mut app, " Rooms ").await;
     wait_until(
@@ -360,7 +360,7 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
                 .expect("load reaction")
                 .is_some_and(|reaction| reaction.kind == 1)
         },
-        "v leader reaction to persist",
+        "f leader reaction to persist",
     )
     .await;
 }

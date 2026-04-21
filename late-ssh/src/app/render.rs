@@ -76,6 +76,18 @@ fn games_sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabl
     }
 }
 
+fn dashboard_header_enabled(
+    show_settings: bool,
+    draft_enabled: bool,
+    profile_enabled: bool,
+) -> bool {
+    if show_settings {
+        draft_enabled
+    } else {
+        profile_enabled
+    }
+}
+
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -163,6 +175,11 @@ impl App {
             self.settings_modal_state.draft().show_right_sidebar,
             self.profile_state.profile().show_right_sidebar,
         );
+        let show_dashboard_header = dashboard_header_enabled(
+            self.show_settings,
+            self.settings_modal_state.draft().show_dashboard_header,
+            self.profile_state.profile().show_dashboard_header,
+        );
         let show_games_sidebar = games_sidebar_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_games_sidebar,
@@ -187,14 +204,21 @@ impl App {
         let chat_badges = self.leaderboard.badges();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let message_reactions = self.chat.message_reactions();
+        let dashboard_active_room = self.dashboard_active_room_id();
+        let dashboard_strip_pins = self.dashboard_strip_pins();
+        let dashboard_messages = dashboard_active_room
+            .map(|room_id| self.chat.messages_for_room(room_id))
+            .unwrap_or(&[]);
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             now_playing: now_playing_text.as_deref(),
             vote_counts: &vote_snapshot.counts,
             current_genre: vote_snapshot.current_genre,
             next_switch_in: vote_next_switch_in,
             my_vote: vote_my_vote,
+            show_header: show_dashboard_header,
+            favorites_strip: dashboard_strip_pins.as_deref(),
             chat_view: chat::ui::DashboardChatView {
-                messages: self.chat.general_messages(),
+                messages: dashboard_messages,
                 overlay: self.chat.overlay(),
                 rows_cache: &mut self.dashboard_chat_rows_cache,
                 usernames: chat_usernames,

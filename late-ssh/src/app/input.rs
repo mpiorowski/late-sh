@@ -606,7 +606,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         ParsedInput::AltS => {
             if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
             {
-                if let Some(b) = app.chat.submit_composer(true) {
+                let from_dashboard = ctx.screen == Screen::Dashboard;
+                if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
                     app.banner = Some(b);
                 }
                 if let Some(topic) = app.chat.take_requested_help_topic() {
@@ -616,6 +617,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 if app.chat.take_requested_settings_modal() {
                     app.settings_modal_state.open_from_profile(
                         app.profile_state.profile(),
+                        app.chat.favorite_room_options(),
                         crate::app::settings_modal::ui::MODAL_WIDTH,
                     );
                     app.show_settings = true;
@@ -968,7 +970,7 @@ pub fn sanitize_paste_markers(s: &str) -> String {
 fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
     match screen {
         Screen::Dashboard => {
-            if let Some(room_id) = app.chat.general_room_id() {
+            if let Some(room_id) = app.dashboard_active_room_id() {
                 chat::input::handle_scroll_in_room(app, room_id, delta);
             }
         }
@@ -1008,7 +1010,12 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
 fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing {
-        chat::input::handle_compose_input(app, byte, compose_room_switch_allowed(ctx.screen));
+        chat::input::handle_compose_input(
+            app,
+            byte,
+            compose_room_switch_allowed(ctx.screen),
+            ctx.screen == Screen::Dashboard,
+        );
         return true;
     }
 
@@ -1038,6 +1045,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.chat.cancel_room_jump();
     app.settings_modal_state.open_from_profile(
         app.profile_state.profile(),
+        app.chat.favorite_room_options(),
         crate::app::settings_modal::ui::MODAL_WIDTH,
     );
     app.show_settings = true;
@@ -1055,6 +1063,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     if matches!(byte, b'1' | b'2' | b'3' | b'4' | b'5')
         && (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat)
         && app.chat.is_reaction_leader_active()
+    {
+        return false;
+    }
+
+    // When the dashboard's `g` favorite-jump prefix is armed, digits 1-9
+    // belong to the jump (`g3` → favorite slot 3), not the global screen
+    // switcher. Let them fall through to dashboard::input::handle_key.
+    if (b'1'..=b'9').contains(&byte)
+        && ctx.screen == Screen::Dashboard
+        && app.dashboard_g_prefix_armed
     {
         return false;
     }
@@ -1249,12 +1267,12 @@ fn try_open_icon_picker(app: &mut App) {
         return;
     }
     if !ctx.chat_composing {
-        // The dashboard card always posts to #general, regardless of whatever
-        // room was selected on the chat screen before. Pin general explicitly
-        // so opening the icon picker from the dashboard doesn't inherit a
-        // stale `selected_room_id`.
+        // The dashboard card posts to the currently-active favorite (or
+        // #general when no favorites are pinned). Pin it explicitly so
+        // opening the icon picker from the dashboard doesn't inherit a
+        // stale `selected_room_id` from the chat screen.
         if ctx.screen == Screen::Dashboard {
-            if let Some(room_id) = app.chat.general_room_id() {
+            if let Some(room_id) = app.dashboard_active_room_id() {
                 app.chat.start_composing_in_room(room_id);
             }
         } else {

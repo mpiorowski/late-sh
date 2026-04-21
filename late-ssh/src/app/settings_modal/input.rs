@@ -2,6 +2,7 @@ use crate::app::input::{MouseEventKind, ParsedInput, sanitize_paste_markers};
 use crate::app::state::App;
 
 use super::state::{PickerKind, Row, Tab};
+use crate::app::settings_modal::state::SettingsModalState;
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
     if app.settings_modal_state.picker_open() {
@@ -43,6 +44,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.settings_modal_state.selected_tab() == Tab::Favorites {
+        handle_favorites_tab_input(app, event);
+        return;
+    }
+
     match event {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'j' | b'J')
@@ -55,6 +61,40 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Arrow(b'D') => app.settings_modal_state.cycle_setting(false),
         ParsedInput::Byte(b' ') | ParsedInput::Byte(b'\r') => activate_selected_row(app),
         ParsedInput::Char('e') | ParsedInput::Char('E') => activate_selected_row(app),
+        _ => {}
+    }
+}
+
+/// Favorites tab:
+/// - j/k / ↑↓ move the cursor across favorites + the "Add…" row
+/// - J/K (shift) or Alt+↑↓ reorder the selected favorite (no-op on "Add…")
+/// - d / Backspace / Delete remove the selected favorite
+/// - Enter opens the room picker when on "Add…", no-op on a favorite row
+fn handle_favorites_tab_input(app: &mut App, event: ParsedInput) {
+    let state: &mut SettingsModalState = &mut app.settings_modal_state;
+    match event {
+        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
+        ParsedInput::Byte(b'j') | ParsedInput::Char('j') | ParsedInput::Arrow(b'B') => {
+            state.move_favorites_cursor(1)
+        }
+        ParsedInput::Byte(b'k') | ParsedInput::Char('k') | ParsedInput::Arrow(b'A') => {
+            state.move_favorites_cursor(-1)
+        }
+        ParsedInput::Byte(b'J') | ParsedInput::Char('J') | ParsedInput::AltArrow(b'B') => {
+            state.reorder_selected_favorite(1)
+        }
+        ParsedInput::Byte(b'K') | ParsedInput::Char('K') | ParsedInput::AltArrow(b'A') => {
+            state.reorder_selected_favorite(-1)
+        }
+        ParsedInput::Byte(b'd')
+        | ParsedInput::Char('d')
+        | ParsedInput::Byte(0x7F)
+        | ParsedInput::Delete => state.remove_selected_favorite(),
+        ParsedInput::Byte(b'\r') | ParsedInput::Char('a') | ParsedInput::Char('A')
+            if state.favorites_index_is_add_row() && !state.filtered_rooms().is_empty() =>
+        {
+            state.open_picker(PickerKind::Room);
+        }
         _ => {}
     }
 }
@@ -93,6 +133,7 @@ fn activate_selected_row(app: &mut App) {
         Row::Username => app.settings_modal_state.start_username_edit(),
         Row::Theme
         | Row::BackgroundColor
+        | Row::DashboardHeader
         | Row::RightSidebar
         | Row::GamesSidebar
         | Row::DirectMessages
