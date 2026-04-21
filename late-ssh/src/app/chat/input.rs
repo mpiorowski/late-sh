@@ -23,17 +23,6 @@ fn leader_reaction_kind(byte: u8) -> Option<i16> {
     }
 }
 
-fn direct_reaction_kind(byte: u8) -> Option<i16> {
-    match byte {
-        b'!' => Some(1),
-        b'@' => Some(2),
-        b'#' => Some(3),
-        b'$' => Some(4),
-        b'%' => Some(5),
-        _ => None,
-    }
-}
-
 pub fn handle_compose_input(app: &mut App, byte: u8, allow_room_switch: bool) {
     if app.chat.is_autocomplete_active() {
         match byte {
@@ -111,6 +100,7 @@ fn open_help_modal(app: &mut App, topic: HelpTopic) {
 fn open_settings_modal(app: &mut App) {
     app.settings_modal_state.open_from_profile(
         app.profile_state.profile(),
+        app.chat.favorite_room_options(),
         crate::app::settings_modal::ui::MODAL_WIDTH,
     );
     app.show_settings = true;
@@ -177,17 +167,7 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     // `e` enters edit mode and drops the selection.
     // `p` opens a read-only profile modal for the selected author.
     match byte {
-        // Shift+1..Shift+5 react with emote kinds 1..5. Shifted to free the
-        // bare number row for muscle-memory room-switching — users kept
-        // tripping the react path while navigating.
-        b'!' | b'@' | b'#' | b'$' | b'%' => {
-            let kind = direct_reaction_kind(byte).expect("matched direct reaction key");
-            if let Some(banner) = app.chat.react_to_selected_message_in_room(room_id, kind) {
-                app.banner = Some(banner);
-            }
-            return true;
-        }
-        b'v' | b'V' => {
+        b'f' | b'F' => {
             if app.chat.begin_reaction_leader() {
                 return true;
             }
@@ -422,7 +402,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{direct_reaction_kind, is_next_room_key, is_prev_room_key, leader_reaction_kind};
+    use super::{is_next_room_key, is_prev_room_key, leader_reaction_kind};
 
     #[test]
     fn next_room_keys_include_ctrl_n() {
@@ -445,12 +425,5 @@ mod tests {
         assert_eq!(leader_reaction_kind(b'1'), Some(1));
         assert_eq!(leader_reaction_kind(b'5'), Some(5));
         assert_eq!(leader_reaction_kind(b'!'), None);
-    }
-
-    #[test]
-    fn direct_reaction_keys_are_shifted_symbols() {
-        assert_eq!(direct_reaction_kind(b'!'), Some(1));
-        assert_eq!(direct_reaction_kind(b'%'), Some(5));
-        assert_eq!(direct_reaction_kind(b'1'), None);
     }
 }

@@ -467,6 +467,29 @@ impl ChatState {
         })
     }
 
+    /// Flatten joined rooms into the pick-list the settings modal shows in
+    /// its Favorites tab. Labels are pre-resolved here (DMs → `@peer`, rooms
+    /// → `#slug`, language rooms → `#lang-xx`) so the modal stays ignorant of
+    /// `ChatRoom` internals.
+    pub fn favorite_room_options(&self) -> Vec<crate::app::settings_modal::state::RoomOption> {
+        use crate::app::settings_modal::state::RoomOption;
+        self.rooms
+            .iter()
+            .map(|(room, _)| {
+                let label = if room.kind == "dm" {
+                    format!("@{}", self.dm_display_name(room))
+                } else if let Some(slug) = room.slug.as_deref().filter(|s| !s.is_empty()) {
+                    format!("#{slug}")
+                } else if let Some(code) = room.language_code.as_deref() {
+                    format!("#lang-{code}")
+                } else {
+                    format!("#{}", room.kind)
+                };
+                RoomOption { id: room.id, label }
+            })
+            .collect()
+    }
+
     fn dm_display_name(&self, room: &ChatRoom) -> String {
         dm_sort_key(room, self.user_id, &self.usernames)
     }
@@ -1103,9 +1126,15 @@ impl ChatState {
         let Some(general_id) = self.general_room_id else {
             return &[];
         };
+        self.messages_for_room(general_id)
+    }
+
+    /// Messages for any joined room — used by the dashboard chat card when
+    /// the user pins favorites and cycles between them.
+    pub fn messages_for_room(&self, room_id: Uuid) -> &[ChatMessage] {
         self.rooms
             .iter()
-            .find(|(room, _)| room.id == general_id)
+            .find(|(room, _)| room.id == room_id)
             .map(|(_, msgs)| msgs.as_slice())
             .unwrap_or(&[])
     }

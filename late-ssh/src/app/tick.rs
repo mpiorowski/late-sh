@@ -48,6 +48,7 @@ impl App {
         {
             self.settings_modal_state.open_from_profile(
                 self.profile_state.profile(),
+                self.chat.favorite_room_options(),
                 crate::app::settings_modal::ui::MODAL_WIDTH,
             );
         }

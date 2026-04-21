@@ -37,10 +37,20 @@ pub struct DashboardRenderInput<'a> {
     pub current_genre: Genre,
     pub next_switch_in: Duration,
     pub my_vote: Option<Genre>,
+    pub show_header: bool,
+    /// When `Some`, the user has 2+ favorites pinned and we render a
+    /// quick-switch strip directly above the chat card. Each entry is
+    /// `(room_id, label, is_active)`. `None` hides the strip.
+    pub favorites_strip: Option<&'a [(uuid::Uuid, String, bool)]>,
     pub chat_view: DashboardChatView<'a>,
 }
 
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
+    if !view.show_header {
+        draw_chat_section(frame, area, view.favorites_strip, view.chat_view);
+        return;
+    }
+
     let stream_props = StreamCardProps {
         now_playing: view.now_playing.unwrap_or("Waiting for stream..."),
         current_genre: view.current_genre,
@@ -48,7 +58,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         next_switch_in: view.next_switch_in,
     };
     if area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH || area.height < DASHBOARD_MIN_FULL_HEIGHT {
-        draw_dashboard_chat_card(frame, area, view.chat_view);
+        draw_chat_section(frame, area, view.favorites_strip, view.chat_view);
         return;
     }
 
@@ -69,7 +79,54 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         );
     }
 
-    draw_dashboard_chat_card(frame, sections[1], view.chat_view);
+    draw_chat_section(frame, sections[1], view.favorites_strip, view.chat_view);
+}
+
+/// Draws the chat card, with an optional pill strip above it. When the user
+/// has 2+ favorites pinned, we carve one row off the top for the strip;
+/// otherwise the chat card takes the whole area.
+fn draw_chat_section(
+    frame: &mut Frame,
+    area: Rect,
+    favorites_strip: Option<&[(uuid::Uuid, String, bool)]>,
+    chat_view: DashboardChatView<'_>,
+) {
+    let Some(pins) = favorites_strip else {
+        draw_dashboard_chat_card(frame, area, chat_view);
+        return;
+    };
+    // Need enough vertical room for the strip + a useful chat card; if the
+    // dashboard is squeezed below that, drop the strip rather than squash chat.
+    if area.height < 6 {
+        draw_dashboard_chat_card(frame, area, chat_view);
+        return;
+    }
+    let split = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
+    draw_favorites_strip(frame, split[0], pins);
+    draw_dashboard_chat_card(frame, split[1], chat_view);
+}
+
+fn draw_favorites_strip(frame: &mut Frame, area: Rect, pins: &[(uuid::Uuid, String, bool)]) {
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+    for (idx, (_, label, active)) in pins.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let style = if *active {
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .bg(theme::BG_HIGHLIGHT())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        spans.push(Span::styled(format!(" {label} "), style));
+    }
+    spans.push(Span::styled(
+        "   [] cycle · , last · g_ jump",
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 pub struct StreamCardProps<'a> {
@@ -167,6 +224,8 @@ mod tests {
                         current_genre: Genre::Lofi,
                         next_switch_in: Duration::from_secs(95),
                         my_vote: Some(Genre::Ambient),
+                        show_header: true,
+                        favorites_strip: None,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,
@@ -249,6 +308,78 @@ mod tests {
         let lines = render_dashboard_with_size(100, DASHBOARD_MIN_FULL_HEIGHT);
         let rendered = lines.join("\n");
         assert!(rendered.contains("Stream"));
+        assert!(rendered.contains("Chat"));
+    }
+
+    #[test]
+    fn dashboard_hides_stream_and_vote_when_header_setting_disabled() {
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let vote_counts = VoteCount {
+            lofi: 3,
+            ambient: 2,
+            classic: 1,
+            jazz: 0,
+        };
+        let mut rows_cache = ChatRowsCache::default();
+        let usernames: HashMap<Uuid, String> = HashMap::new();
+        let countries: HashMap<Uuid, String> = HashMap::new();
+        let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
+        let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let message_reactions = HashMap::new();
+        let composer = ratatui_textarea::TextArea::default();
+
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, 100, 20);
+                draw_dashboard(
+                    frame,
+                    area,
+                    DashboardRenderInput {
+                        now_playing: Some("Boards of Canada"),
+                        vote_counts: &vote_counts,
+                        current_genre: Genre::Lofi,
+                        next_switch_in: Duration::from_secs(95),
+                        my_vote: Some(Genre::Ambient),
+                        show_header: false,
+                        favorites_strip: None,
+                        chat_view: DashboardChatView {
+                            messages: &[],
+                            overlay: None,
+                            rows_cache: &mut rows_cache,
+                            usernames: &usernames,
+                            countries: &countries,
+                            badges: &badges,
+                            message_reactions: &message_reactions,
+                            current_user_id: Uuid::nil(),
+                            selected_message_id: None,
+                            composer: &composer,
+                            composing: false,
+                            mention_matches: &[],
+                            mention_selected: 0,
+                            mention_active: false,
+                            reply_author: None,
+                            is_editing: false,
+                            bonsai_glyphs: &bonsai_glyphs,
+                        },
+                    },
+                );
+            })
+            .expect("draw");
+
+        let rendered = (0..20)
+            .map(|y| {
+                let mut out = String::new();
+                for x in 0..100 {
+                    out.push_str(terminal.backend().buffer()[(x, y)].symbol());
+                }
+                out
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains("Stream"));
+        assert!(!rendered.contains("Vote Next"));
         assert!(rendered.contains("Chat"));
     }
 }

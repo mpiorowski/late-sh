@@ -170,8 +170,10 @@ impl ProfileState {
                 notify_format: self.profile.notify_format.clone(),
                 theme_id: Some(self.theme_id().to_string()),
                 enable_background_color: self.profile.enable_background_color,
+                show_dashboard_header: self.profile.show_dashboard_header,
                 show_right_sidebar: self.profile.show_right_sidebar,
                 show_games_sidebar: self.profile.show_games_sidebar,
+                favorite_room_ids: self.profile.favorite_room_ids.clone(),
             },
         );
     }
