@@ -893,7 +893,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.chat.composer_push('\n');
             app.chat.update_autocomplete();
         }
-        ParsedInput::Byte(0x1D) => try_open_icon_picker(app),
+        // 0x1D (Ctrl+] / Ctrl+5 / raw GS) opens the chat icon picker on
+        // chat-bearing screens, but when Artboard is the active game it owns
+        // this keystroke as the glyph-picker open key — let it fall through
+        // to the byte dispatch below.
+        ParsedInput::Byte(0x1D) if !(ctx.screen == Screen::Games && app.is_playing_game) => {
+            try_open_icon_picker(app)
+        }
         ParsedInput::Byte(byte) => handle_byte_event(app, ctx, byte),
         ParsedInput::Char(ch) => {
             if route_char_to_composer(app, ctx, ch) {

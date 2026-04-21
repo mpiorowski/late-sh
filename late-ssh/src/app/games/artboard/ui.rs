@@ -44,6 +44,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
     if state.is_help_open() {
         draw_help(frame, area, state);
     }
+    if state.is_glyph_picker_open()
+        && let Some(catalog) = state.glyph_catalog()
+    {
+        super::glyph_picker::render(frame, area, state.glyph_picker_state(), catalog);
+    }
 }
 
 pub fn canvas_area_for_screen(screen_size: (u16, u16)) -> Rect {

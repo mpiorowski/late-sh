@@ -16,6 +16,9 @@ pub enum InputAction {
 
 pub fn handle_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> InputAction {
     state.set_viewport_for_screen(screen_size);
+    if state.is_glyph_picker_open() {
+        return handle_picker_byte(state, screen_size, byte);
+    }
     if byte == 0x10 {
         state.toggle_help();
         state.clear_pending_canvas_click();
@@ -26,6 +29,11 @@ pub fn handle_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> Inpu
     }
     match byte {
         0x11 => InputAction::Leave, // Ctrl+Q
+        // Ctrl+] / Ctrl+5 / raw GS — open the glyph picker.
+        0x1D => {
+            state.open_glyph_picker();
+            InputAction::Handled
+        }
         0x1B => handle_app_key(
             state,
             AppKey {
@@ -76,6 +84,133 @@ fn handle_help_byte(state: &mut State, byte: u8) -> InputAction {
     InputAction::Handled
 }
 
+fn handle_picker_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> InputAction {
+    match byte {
+        // Ctrl+Q always leaves the game, regardless of picker state. Picker
+        // contents are discarded along with the rest of game state.
+        0x11 => return InputAction::Leave,
+        0x1B => {
+            // Esc closes the picker without inserting.
+            state.close_glyph_picker();
+        }
+        b'\r' => {
+            state.glyph_picker_insert(false, screen_size);
+        }
+        b'\t' => state.glyph_picker_next_tab(),
+        0x7f => state.glyph_picker_state_mut().search_delete_char(),
+        0x01 => state.glyph_picker_state_mut().search_cursor_home(),
+        0x05 => state.glyph_picker_state_mut().search_cursor_end(),
+        0x19 => state.glyph_picker_state_mut().search_paste(),
+        0x1F => state.glyph_picker_state_mut().search_undo(),
+        // Ctrl+] / Ctrl+5 again while open closes it (toggle).
+        0x1D => state.close_glyph_picker(),
+        _ => {
+            if byte.is_ascii_graphic() || byte == b' ' {
+                state
+                    .glyph_picker_state_mut()
+                    .search_insert_char(byte as char);
+            } else {
+                return InputAction::Ignored;
+            }
+        }
+    }
+    InputAction::Handled
+}
+
+fn handle_picker_arrow(state: &mut State, key: u8) -> bool {
+    match key {
+        b'A' => state.glyph_picker_move_selection(-1),
+        b'B' => state.glyph_picker_move_selection(1),
+        b'C' => state.glyph_picker_state_mut().search_cursor_right(),
+        b'D' => state.glyph_picker_state_mut().search_cursor_left(),
+        _ => return false,
+    }
+    true
+}
+
+fn handle_picker_event(
+    state: &mut State,
+    screen_size: (u16, u16),
+    event: &ParsedInput,
+) -> InputAction {
+    match event {
+        ParsedInput::BackTab => state.glyph_picker_prev_tab(),
+        ParsedInput::PageUp => {
+            let page = state.glyph_picker_state().visible_height.get().max(1) as isize;
+            state.glyph_picker_move_selection(-page);
+        }
+        ParsedInput::PageDown => {
+            let page = state.glyph_picker_state().visible_height.get().max(1) as isize;
+            state.glyph_picker_move_selection(page);
+        }
+        ParsedInput::Home => state.glyph_picker_state_mut().search_cursor_home(),
+        ParsedInput::End => state.glyph_picker_state_mut().search_cursor_end(),
+        ParsedInput::Delete => state.glyph_picker_state_mut().search_delete_next_char(),
+        ParsedInput::CtrlDelete => state.glyph_picker_state_mut().search_delete_word_right(),
+        ParsedInput::ShiftArrow(key) => match key {
+            b'A' => {
+                let half = (state.glyph_picker_state().visible_height.get() / 2).max(1) as isize;
+                state.glyph_picker_move_selection(-half);
+            }
+            b'B' => {
+                let half = (state.glyph_picker_state().visible_height.get() / 2).max(1) as isize;
+                state.glyph_picker_move_selection(half);
+            }
+            _ => return InputAction::Ignored,
+        },
+        ParsedInput::CtrlArrow(key) => match key {
+            b'A' => state.glyph_picker_move_selection(-1),
+            b'B' => state.glyph_picker_move_selection(1),
+            b'C' => state.glyph_picker_state_mut().search_cursor_word_right(),
+            b'D' => state.glyph_picker_state_mut().search_cursor_word_left(),
+            _ => return InputAction::Ignored,
+        },
+        ParsedInput::AltEnter => {
+            state.glyph_picker_insert(true, screen_size);
+        }
+        ParsedInput::Mouse(mouse) => return handle_picker_mouse(state, screen_size, mouse),
+        ParsedInput::Paste(bytes) => {
+            if let Ok(text) = std::str::from_utf8(bytes) {
+                for ch in text.chars() {
+                    if !ch.is_control() {
+                        state.glyph_picker_state_mut().search_insert_char(ch);
+                    }
+                }
+            }
+        }
+        _ => return InputAction::Ignored,
+    }
+    InputAction::Handled
+}
+
+fn handle_picker_mouse(
+    state: &mut State,
+    screen_size: (u16, u16),
+    mouse: &MouseEvent,
+) -> InputAction {
+    match mouse.kind {
+        MouseEventKind::ScrollUp => state.glyph_picker_move_selection(-3),
+        MouseEventKind::ScrollDown => state.glyph_picker_move_selection(3),
+        MouseEventKind::Down if matches!(mouse.button, Some(MouseButton::Left)) => {
+            // SGR coords are 1-based; glyph_picker hit-testing uses 0-based.
+            let Some(col) = mouse.x.checked_sub(1) else {
+                return InputAction::Handled;
+            };
+            let Some(row) = mouse.y.checked_sub(1) else {
+                return InputAction::Handled;
+            };
+            if state.glyph_picker_click_tab(col, row) {
+                return InputAction::Handled;
+            }
+            if state.glyph_picker_click_list(col, row) {
+                state.glyph_picker_insert(true, screen_size);
+            }
+        }
+        _ => {}
+    }
+    InputAction::Handled
+}
+
 fn app_key_from_raw_control_byte(byte: u8) -> Option<AppKey> {
     let ctrl = AppModifiers {
         ctrl: true,
@@ -98,6 +233,9 @@ fn app_key_from_raw_control_byte(byte: u8) -> Option<AppKey> {
 
 pub fn handle_arrow(state: &mut State, screen_size: (u16, u16), key: u8) -> bool {
     state.set_viewport_for_screen(screen_size);
+    if state.is_glyph_picker_open() {
+        return handle_picker_arrow(state, key);
+    }
     if state.is_help_open() {
         return handle_help_arrow(state, key);
     }
@@ -133,6 +271,9 @@ pub(crate) fn handle_event(
     event: &ParsedInput,
 ) -> InputAction {
     state.set_viewport_for_screen(screen_size);
+    if state.is_glyph_picker_open() {
+        return handle_picker_event(state, screen_size, event);
+    }
     if state.is_help_open() {
         return handle_help_event(state, screen_size, event);
     }

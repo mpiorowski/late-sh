@@ -18,6 +18,9 @@ use tokio::sync::{
     watch,
 };
 
+use dartboard_picker_core::IconCatalogData;
+
+use super::glyph_picker;
 use super::svc::{DartboardEvent, DartboardService, DartboardSnapshot};
 
 const DOUBLE_CLICK_WINDOW_MS: u128 = 400;
@@ -36,6 +39,9 @@ pub struct State {
     help_open: bool,
     help_tab: HelpTab,
     help_scroll: u16,
+    glyph_picker: glyph_picker::State,
+    glyph_picker_open: bool,
+    glyph_catalog: Option<IconCatalogData>,
     snapshot_rx: watch::Receiver<DartboardSnapshot>,
     event_rx: broadcast::Receiver<DartboardEvent>,
 }
@@ -58,6 +64,9 @@ impl State {
             help_open: false,
             help_tab: HelpTab::default(),
             help_scroll: 0,
+            glyph_picker: glyph_picker::State::default(),
+            glyph_picker_open: false,
+            glyph_catalog: None,
             snapshot_rx,
             event_rx,
         }
@@ -573,6 +582,115 @@ impl State {
 
     pub fn reset_help_scroll(&mut self) {
         self.help_scroll = 0;
+    }
+
+    pub fn is_glyph_picker_open(&self) -> bool {
+        self.glyph_picker_open
+    }
+
+    pub fn glyph_picker_state(&self) -> &glyph_picker::State {
+        &self.glyph_picker
+    }
+
+    pub fn glyph_picker_state_mut(&mut self) -> &mut glyph_picker::State {
+        &mut self.glyph_picker
+    }
+
+    pub fn glyph_catalog(&self) -> Option<&IconCatalogData> {
+        self.glyph_catalog.as_ref()
+    }
+
+    pub fn open_glyph_picker(&mut self) {
+        // Enforce the "at most one of {selection, floating, picker}" invariant:
+        // opening dismisses any floating preview and clears any selection.
+        let _ = self.dismiss_floating();
+        self.editor.clear_selection();
+        self.active_brush = None;
+        self.drag_brush = None;
+        self.last_canvas_click = None;
+        self.suppress_swatch_preview = false;
+
+        if self.glyph_catalog.is_none() {
+            self.glyph_catalog = Some(glyph_picker::load_catalog());
+        }
+        self.glyph_picker = glyph_picker::State::default();
+        self.glyph_picker_open = true;
+    }
+
+    pub fn close_glyph_picker(&mut self) {
+        self.glyph_picker_open = false;
+    }
+
+    pub fn glyph_picker_next_tab(&mut self) {
+        self.glyph_picker.next_tab();
+    }
+
+    pub fn glyph_picker_prev_tab(&mut self) {
+        self.glyph_picker.prev_tab();
+    }
+
+    pub fn glyph_picker_move_selection(&mut self, delta: isize) {
+        let Some(catalog) = self.glyph_catalog.as_ref() else {
+            return;
+        };
+        glyph_picker::move_selection(&mut self.glyph_picker, catalog, delta);
+    }
+
+    /// Handle a left-down in the picker list at screen coords (column, row),
+    /// 0-based. Returns `true` if this was a double-click (caller should
+    /// treat as confirm).
+    pub fn glyph_picker_click_list(&mut self, column: u16, row: u16) -> bool {
+        let Some(catalog) = self.glyph_catalog.as_ref() else {
+            return false;
+        };
+        glyph_picker::click_list(&mut self.glyph_picker, catalog, column, row)
+    }
+
+    /// Handle a left-down in the tab strip at screen column `column`.
+    /// Returns `true` if a tab was hit.
+    pub fn glyph_picker_click_tab(&mut self, column: u16, row: u16) -> bool {
+        let tabs = self.glyph_picker.tabs_inner.get();
+        if tabs.height == 0 || row < tabs.y || row >= tabs.y + tabs.height {
+            return false;
+        }
+        if let Some(tab) = glyph_picker::tab_at_x(tabs, column) {
+            self.glyph_picker.set_tab(tab);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Confirm the selection: paint the leading scalar of the selected glyph
+    /// at the cursor using `insert_char` semantics, and close the picker
+    /// unless `keep_open` is set. Returns `true` if a glyph was inserted.
+    pub fn glyph_picker_insert(&mut self, keep_open: bool, screen_size: (u16, u16)) -> bool {
+        let Some(catalog) = self.glyph_catalog.as_ref() else {
+            self.glyph_picker_open = false;
+            return false;
+        };
+        let Some(icon) = glyph_picker::selected_glyph(&self.glyph_picker, catalog) else {
+            if !keep_open {
+                self.glyph_picker_open = false;
+            }
+            return false;
+        };
+        let Some(ch) = icon.chars().next() else {
+            if !keep_open {
+                self.glyph_picker_open = false;
+            }
+            return false;
+        };
+        if !keep_open {
+            self.glyph_picker_open = false;
+        }
+        self.set_viewport_for_screen(screen_size);
+        if ch.is_control() {
+            return false;
+        }
+        let _ =
+            self.edit_canvas(|editor, canvas, color| editor_insert_char(editor, canvas, ch, color));
+        true
     }
 
     pub fn activate_temp_glyph_brush_at(&mut self, pos: Pos) -> bool {
@@ -1224,6 +1342,51 @@ mod tests {
         assert_eq!(selection.anchor, Pos { x: 1, y: 0 });
         assert_eq!(selection.cursor, Pos { x: 2, y: 0 });
         assert_eq!(state.cursor(), Pos { x: 2, y: 0 });
+    }
+
+    #[test]
+    fn glyph_picker_opens_closes_and_inserts_selected_glyph() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(10, 3);
+        state.editor.cursor = Pos { x: 0, y: 0 };
+
+        state.open_glyph_picker();
+        assert!(state.is_glyph_picker_open());
+        assert!(state.glyph_catalog().is_some());
+
+        // First selectable entry on the emoji tab is the first COMMON_EMOJI
+        // ("👍" thumbs up). Confirm insertion paints its leading scalar at
+        // the cursor and closes the picker.
+        assert!(state.glyph_picker_insert(false, (80, 24)));
+        assert!(!state.is_glyph_picker_open());
+        assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), '👍');
+    }
+
+    #[test]
+    fn glyph_picker_keep_open_leaves_picker_visible_after_insert() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(10, 3);
+        state.editor.cursor = Pos { x: 0, y: 0 };
+        state.open_glyph_picker();
+        assert!(state.glyph_picker_insert(true, (80, 24)));
+        assert!(state.is_glyph_picker_open());
+    }
+
+    #[test]
+    fn glyph_picker_open_dismisses_floating_and_selection() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(4, 2);
+        state.editor.cursor = Pos { x: 0, y: 0 };
+        state.begin_selection_from_cursor();
+        state.move_right((80, 24));
+        assert!(state.lift_selection_to_floating());
+        assert!(state.has_floating());
+
+        state.open_glyph_picker();
+
+        assert!(state.is_glyph_picker_open());
+        assert!(!state.has_floating());
+        assert!(state.selection_view().is_none());
     }
 
     #[test]
