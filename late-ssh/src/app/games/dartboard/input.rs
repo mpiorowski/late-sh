@@ -99,8 +99,6 @@ pub fn handle_arrow(state: &mut State, screen_size: (u16, u16), key: u8) -> bool
     )
 }
 
-const BIG_STEP: usize = 10;
-
 pub(crate) fn handle_event(
     state: &mut State,
     screen_size: (u16, u16),
@@ -153,12 +151,19 @@ pub(crate) fn handle_event(
                 modifiers: AppModifiers::default(),
             },
         ),
-        ParsedInput::ShiftArrow(key) => {
-            for _ in 0..BIG_STEP {
-                move_arrow(state, screen_size, *key);
-            }
-            InputAction::Handled
-        }
+        ParsedInput::ShiftArrow(key) => handle_app_key(
+            state,
+            AppKey {
+                code: match arrow_key_code(*key) {
+                    Some(code) => code,
+                    None => return InputAction::Ignored,
+                },
+                modifiers: AppModifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
+        ),
         ParsedInput::AltArrow(key) => {
             jump_to_edge(state, screen_size, *key);
             InputAction::Handled
@@ -199,16 +204,6 @@ fn arrow_key_code(key: u8) -> Option<AppKeyCode> {
     })
 }
 
-fn move_arrow(state: &mut State, screen_size: (u16, u16), key: u8) {
-    match key {
-        b'A' => state.move_up(screen_size),
-        b'B' => state.move_down(screen_size),
-        b'C' => state.move_right(screen_size),
-        b'D' => state.move_left(screen_size),
-        _ => {}
-    }
-}
-
 fn jump_to_edge(state: &mut State, screen_size: (u16, u16), key: u8) {
     match key {
         b'A' => state.move_page_up(screen_size),
@@ -221,15 +216,42 @@ fn jump_to_edge(state: &mut State, screen_size: (u16, u16), key: u8) {
 
 fn handle_mouse(state: &mut State, screen_size: (u16, u16), mouse: &MouseEvent) -> InputAction {
     if let Some(hit) = swatch_hit(screen_size, state, mouse.x, mouse.y) {
+        state.clear_pending_canvas_click();
         if matches!(mouse.kind, MouseEventKind::Down)
             && matches!(mouse.button, Some(MouseButton::Left))
         {
             match hit {
-                SwatchHit::Body(idx) => state.activate_swatch(idx),
+                SwatchHit::Body(idx) => {
+                    if mouse.modifiers.ctrl {
+                        state.clear_swatch(idx);
+                    } else {
+                        state.activate_swatch(idx);
+                    }
+                }
                 SwatchHit::Pin(idx) => state.toggle_swatch_pin(idx),
             }
         }
         return InputAction::Handled;
+    }
+
+    if matches!(mouse.kind, MouseEventKind::Down)
+        && matches!(mouse.button, Some(MouseButton::Left))
+        && !mouse.modifiers.shift
+        && !mouse.modifiers.alt
+        && !mouse.modifiers.ctrl
+    {
+        if let Some(pos) = state.canvas_pos_for_screen_point(screen_size, mouse.x, mouse.y) {
+            if state.is_in_normal_brush_mode()
+                && state.register_canvas_click(pos)
+                && state.activate_temp_glyph_brush_at(pos)
+            {
+                return InputAction::Handled;
+            }
+        } else {
+            state.clear_pending_canvas_click();
+        }
+    } else if matches!(mouse.kind, MouseEventKind::Down | MouseEventKind::Drag) {
+        state.clear_pending_canvas_click();
     }
 
     if state.has_floating() {
@@ -417,6 +439,126 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_click_swatch_body_clears_slot() {
+        let mut state = test_state();
+        state.editor.swatches[0] = Some(dartboard_editor::Swatch {
+            clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
+            pinned: false,
+        });
+
+        let action = handle_mouse(
+            &mut state,
+            (80, 24),
+            &MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 11,
+                y: 17,
+                modifiers: crate::app::input::MouseModifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            },
+        );
+
+        assert!(matches!(action, InputAction::Handled));
+        assert!(state.swatches()[0].is_none());
+    }
+
+    #[test]
+    fn ctrl_click_active_swatch_clears_slot_and_dismisses_floating() {
+        let mut state = test_state();
+        state.editor.swatches[0] = Some(dartboard_editor::Swatch {
+            clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
+            pinned: false,
+        });
+        state.activate_swatch(0);
+        assert!(state.has_floating());
+
+        let action = handle_mouse(
+            &mut state,
+            (80, 24),
+            &MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 11,
+                y: 17,
+                modifiers: crate::app::input::MouseModifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            },
+        );
+
+        assert!(matches!(action, InputAction::Handled));
+        assert!(state.swatches()[0].is_none());
+        assert!(!state.has_floating());
+    }
+
+    #[test]
+    fn double_click_canvas_glyph_arms_temp_brush() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(10, 4);
+        state
+            .snapshot
+            .canvas
+            .set(dartboard_core::Pos { x: 0, y: 0 }, 'x');
+
+        let first_down = handle_mouse(
+            &mut state,
+            (80, 24),
+            &MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 2,
+                y: 2,
+                modifiers: Default::default(),
+            },
+        );
+        let first_up = handle_mouse(
+            &mut state,
+            (80, 24),
+            &MouseEvent {
+                kind: MouseEventKind::Up,
+                button: Some(MouseButton::Left),
+                x: 2,
+                y: 2,
+                modifiers: Default::default(),
+            },
+        );
+        assert!(matches!(
+            first_up,
+            InputAction::Handled | InputAction::Ignored
+        ));
+
+        let second_down = handle_mouse(
+            &mut state,
+            (80, 24),
+            &MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 2,
+                y: 2,
+                modifiers: Default::default(),
+            },
+        );
+
+        assert!(matches!(
+            first_down,
+            InputAction::Handled | InputAction::Ignored
+        ));
+        assert!(matches!(second_down, InputAction::Handled));
+        assert_eq!(
+            state.brush_mode(),
+            crate::app::games::dartboard::state::BrushMode::Glyph('x')
+        );
+        let floating = state
+            .floating_view()
+            .expect("temp brush floating preview shown");
+        assert_eq!(floating.anchor, dartboard_core::Pos { x: 0, y: 0 });
+    }
+
+    #[test]
     fn raw_ctrl_b_draws_selection_border() {
         let mut state = test_state();
         state.snapshot.canvas = Canvas::with_size(4, 3);
@@ -496,6 +638,50 @@ mod tests {
                 .get(dartboard_core::Pos { x: 0, y: 0 }),
             ' '
         );
+    }
+
+    #[test]
+    fn shift_arrow_starts_selection_and_moves_once() {
+        let mut state = test_state();
+
+        let action = handle_event(&mut state, (80, 24), &ParsedInput::ShiftArrow(b'C'));
+
+        assert!(matches!(action, InputAction::Handled));
+        let selection = state.selection_view().expect("selection started");
+        assert_eq!(selection.anchor, dartboard_core::Pos { x: 0, y: 0 });
+        assert_eq!(selection.cursor, dartboard_core::Pos { x: 1, y: 0 });
+    }
+
+    #[test]
+    fn shift_arrow_extends_existing_selection_anchor() {
+        let mut state = test_state();
+
+        assert!(matches!(
+            handle_event(&mut state, (80, 24), &ParsedInput::ShiftArrow(b'C')),
+            InputAction::Handled
+        ));
+        assert!(matches!(
+            handle_event(&mut state, (80, 24), &ParsedInput::ShiftArrow(b'B')),
+            InputAction::Handled
+        ));
+
+        let selection = state.selection_view().expect("selection extended");
+        assert_eq!(selection.anchor, dartboard_core::Pos { x: 0, y: 0 });
+        assert_eq!(selection.cursor, dartboard_core::Pos { x: 1, y: 1 });
+    }
+
+    #[test]
+    fn page_down_scrolls_half_screen_after_reaching_bottom_edge() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(80, 60);
+
+        let first = handle_event(&mut state, (80, 24), &ParsedInput::PageDown);
+        let second = handle_event(&mut state, (80, 24), &ParsedInput::PageDown);
+
+        assert!(matches!(first, InputAction::Handled));
+        assert!(matches!(second, InputAction::Handled));
+        assert_eq!(state.cursor(), dartboard_core::Pos { x: 0, y: 32 });
+        assert_eq!(state.viewport_origin(), dartboard_core::Pos { x: 0, y: 11 });
     }
 
     fn test_state() -> State {

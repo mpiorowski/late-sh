@@ -12,11 +12,12 @@ use ratatui::{
 
 use crate::app::{common::theme, games::ui::info_label_value};
 
-use super::state::{Brush, State};
+use super::state::{BrushMode, State};
 
 const INFO_WIDTH: u16 = 28;
 const SWATCH_BOX_WIDTH: u16 = 16;
 const SWATCH_BOX_HEIGHT: u16 = 8;
+const SWATCH_BOTTOM_CLEARANCE: u16 = 1;
 const SWATCH_NOTICE_CLEARANCE: u16 = 1;
 const PIN_UNPINNED: char = '📌';
 const PIN_PINNED: char = '📍';
@@ -31,7 +32,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
     let info = artboard_info_lines(state);
     let layout = artboard_layout(area);
     let info_area = info_block_area(layout.sidebar, info.len());
-    draw_artboard_sidebar(frame, info_area, layout.canvas, state, &info);
+    draw_artboard_sidebar(frame, info_area, &info);
     draw_canvas(frame, area, layout.canvas, info_area, state);
 }
 
@@ -54,13 +55,7 @@ fn dartboard_canvas_style() -> CanvasStyle {
     }
 }
 
-fn draw_artboard_sidebar(
-    frame: &mut Frame,
-    info_area: Option<Rect>,
-    canvas_area: Rect,
-    state: &State,
-    info_lines: &[Line<'_>],
-) {
+fn draw_artboard_sidebar(frame: &mut Frame, info_area: Option<Rect>, info_lines: &[Line<'_>]) {
     if let Some(info_area) = info_area {
         let info_block = Block::default()
             .title(" Info ")
@@ -71,7 +66,6 @@ fn draw_artboard_sidebar(
         if info_inner.width > 0 && info_inner.height > 0 {
             frame.render_widget(Paragraph::new(info_lines.to_vec()), info_inner);
         }
-        render_info_pan_indicator(frame.buffer_mut(), info_area, canvas_area, state);
     }
 }
 
@@ -81,12 +75,14 @@ fn artboard_info_lines(state: &State) -> Vec<Line<'static>> {
         format!("{},{}", state.cursor().x, state.cursor().y),
         theme::AMBER(),
     )];
+    lines.push(pan_indicator_line(state));
 
-    let brush = state
-        .active_brush()
-        .map(Brush::label)
-        .unwrap_or_else(|| "sample".to_string());
-    lines.push(info_label_value("Brush", brush, theme::TEXT_BRIGHT()));
+    let (brush, brush_color) = match state.brush_mode() {
+        BrushMode::None => ("none".to_string(), theme::TEXT_FAINT()),
+        BrushMode::Swatch => ("swatch".to_string(), theme::TEXT_BRIGHT()),
+        BrushMode::Glyph(ch) => (ch.to_string(), theme::TEXT_BRIGHT()),
+    };
+    lines.push(info_label_value("Brush", brush, brush_color));
     let (selection_value, selection_color) = if let Some(selection) = state.selection_view() {
         (
             format!(
@@ -103,17 +99,6 @@ fn artboard_info_lines(state: &State) -> Vec<Line<'static>> {
         selection_value,
         selection_color,
     ));
-    if let Some(floating) = state.floating_view() {
-        lines.push(info_label_value(
-            "Floating",
-            format!(
-                "{}x{} @ {},{}",
-                floating.width, floating.height, floating.anchor.x, floating.anchor.y
-            ),
-            theme::AMBER_GLOW(),
-        ));
-    }
-
     let mut peers = state.snapshot.peers.clone();
     peers.sort_by_key(|peer| {
         (
@@ -141,6 +126,34 @@ fn artboard_info_lines(state: &State) -> Vec<Line<'static>> {
     lines
 }
 
+fn pan_indicator_line(state: &State) -> Line<'static> {
+    let [can_left, can_up, can_down, can_right] = pan_indicator_enabled(state);
+    Line::from(vec![
+        Span::styled(
+            format!("{:<11}", "Pan"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        pan_indicator_span('◀', can_left),
+        Span::raw(" "),
+        pan_indicator_span('▲', can_up),
+        Span::raw(" "),
+        pan_indicator_span('▼', can_down),
+        Span::raw(" "),
+        pan_indicator_span('▶', can_right),
+    ])
+}
+
+fn pan_indicator_span(ch: char, enabled: bool) -> Span<'static> {
+    let style = if enabled {
+        Style::default()
+            .fg(theme::AMBER_DIM())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::BORDER_DIM())
+    };
+    Span::styled(ch.to_string(), style)
+}
+
 fn info_block_height(line_count: usize) -> u16 {
     line_count.max(1).saturating_add(2) as u16
 }
@@ -159,44 +172,16 @@ fn info_block_area(sidebar_area: Rect, line_count: usize) -> Option<Rect> {
     )
 }
 
-fn render_info_pan_indicator(buf: &mut Buffer, info_area: Rect, canvas_area: Rect, state: &State) {
-    if info_area.width < 9 || info_area.height < 2 {
-        return;
-    }
-    let indicator = pan_indicator_chars(info_area, canvas_area, state);
-    let start_x = info_area.x + info_area.width.saturating_sub(indicator.len() as u16) / 2;
-    let y = info_area.bottom() - 1;
-
-    for (idx, ch) in indicator.iter().enumerate() {
-        let style = if matches!(ch, '◀' | '▲' | '▼' | '▶') {
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::BORDER())
-        };
-        buf[(start_x + idx as u16, y)]
-            .set_char(*ch)
-            .set_style(style);
-    }
-}
-
-fn pan_indicator_chars(_info_area: Rect, canvas_area: Rect, state: &State) -> [char; 7] {
+fn pan_indicator_enabled(state: &State) -> [bool; 4] {
     let viewport = state.viewport_origin();
+    let viewport_width = state.editor.viewport.width as usize;
+    let viewport_height = state.editor.viewport.height as usize;
     let can_left = viewport.x > 0;
     let can_up = viewport.y > 0;
-    let can_right = viewport.x + (canvas_area.width as usize) < state.snapshot.canvas.width;
-    let can_down = viewport.y + (canvas_area.height as usize) < state.snapshot.canvas.height;
+    let can_right = viewport.x + viewport_width < state.snapshot.canvas.width;
+    let can_down = viewport.y + viewport_height < state.snapshot.canvas.height;
 
-    [
-        if can_left { '◀' } else { '─' },
-        '─',
-        if can_up { '▲' } else { '─' },
-        '─',
-        if can_down { '▼' } else { '─' },
-        '─',
-        if can_right { '▶' } else { '─' },
-    ]
+    [can_left, can_up, can_down, can_right]
 }
 
 fn section_label(text: &str) -> Line<'static> {
@@ -426,20 +411,32 @@ fn render_swatch_strip_frame(
             continue;
         };
         let style = swatch_border_style(state.swatches()[idx].as_ref(), active_idx == Some(idx));
+        let divider_style = if idx == 0 {
+            style
+        } else {
+            swatch_divider_style(
+                state.swatches()[idx - 1].as_ref(),
+                state.swatches()[idx].as_ref(),
+                active_idx == Some(idx - 1),
+                active_idx == Some(idx),
+            )
+        };
         let left = rect.x;
         let right = rect.right() - 1;
         let top_left = if idx == 0 { '┌' } else { '┬' };
         let bottom_left = if idx == 0 { '└' } else { '┴' };
-        buf[(left, top_row)].set_char(top_left).set_style(style);
+        buf[(left, top_row)]
+            .set_char(top_left)
+            .set_style(divider_style);
         buf[(left, bottom_row)]
             .set_char(bottom_left)
-            .set_style(style);
+            .set_style(divider_style);
         for x in (left + 1)..right {
             buf[(x, top_row)].set_char('─').set_style(style);
             buf[(x, bottom_row)].set_char('─').set_style(style);
         }
         for y in (top_row + 1)..bottom_row {
-            buf[(left, y)].set_char('│').set_style(style);
+            buf[(left, y)].set_char('│').set_style(divider_style);
         }
         if idx == last_idx {
             buf[(right, top_row)].set_char('┐').set_style(style);
@@ -504,6 +501,21 @@ fn swatch_border_style(swatch: Option<&Swatch>, is_active: bool) -> Style {
     if is_active {
         Style::default().fg(theme::BORDER_ACTIVE())
     } else if swatch.is_some() {
+        Style::default().fg(theme::AMBER_DIM())
+    } else {
+        Style::default().fg(theme::BORDER_DIM())
+    }
+}
+
+fn swatch_divider_style(
+    left_swatch: Option<&Swatch>,
+    right_swatch: Option<&Swatch>,
+    left_active: bool,
+    right_active: bool,
+) -> Style {
+    if left_active || right_active {
+        Style::default().fg(theme::BORDER_ACTIVE())
+    } else if left_swatch.is_some() || right_swatch.is_some() {
         Style::default().fg(theme::AMBER_DIM())
     } else {
         Style::default().fg(theme::BORDER_DIM())
@@ -603,11 +615,12 @@ fn swatch_body_rect(rect: Rect) -> Rect {
 }
 
 fn swatch_margin_bottom(has_notice: bool) -> u16 {
-    if has_notice {
-        SWATCH_NOTICE_CLEARANCE
-    } else {
-        0
-    }
+    SWATCH_BOTTOM_CLEARANCE
+        + if has_notice {
+            SWATCH_NOTICE_CLEARANCE
+        } else {
+            0
+        }
 }
 
 fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
@@ -648,6 +661,7 @@ mod tests {
     use dartboard_core::{CellValue, RgbColor};
     use dartboard_editor::Clipboard;
     use dartboard_server::InMemStore;
+    use ratatui::buffer::Buffer;
     use uuid::Uuid;
 
     use super::super::svc::DartboardService;
@@ -665,12 +679,23 @@ mod tests {
     }
 
     #[test]
+    fn info_lines_include_pan_row_before_brush() {
+        let state = test_state();
+        let lines = artboard_info_lines(&state);
+
+        assert_eq!(lines[0].to_string(), "Cursor     0,0");
+        assert_eq!(lines[1].to_string(), "Pan        ◀ ▲ ▼ ▶");
+        assert_eq!(lines[2].to_string(), "Brush      none");
+        assert_eq!(lines[3].to_string(), "Selection  None");
+    }
+
+    #[test]
     fn swatch_boxes_use_full_artboard_width_below_short_info_block() {
         let state = test_state();
         let rects = swatch_box_rects((80, 24), &state);
-        assert_eq!(rects[0], Some(Rect::new(9, 15, 16, 8)));
-        assert_eq!(rects[1], Some(Rect::new(24, 15, 16, 8)));
-        assert_eq!(rects[2], Some(Rect::new(39, 15, 16, 8)));
+        assert_eq!(rects[0], Some(Rect::new(9, 14, 16, 8)));
+        assert_eq!(rects[1], Some(Rect::new(24, 14, 16, 8)));
+        assert_eq!(rects[2], Some(Rect::new(39, 14, 16, 8)));
         assert!(rects[3].is_none());
     }
 
@@ -685,7 +710,7 @@ mod tests {
             })
             .collect();
         let rects = swatch_box_rects((80, 24), &state);
-        assert_eq!(rects[0], Some(Rect::new(11, 15, 16, 8)));
+        assert_eq!(rects[0], Some(Rect::new(11, 14, 16, 8)));
         assert!(rects[1].is_none());
     }
 
@@ -694,7 +719,21 @@ mod tests {
         let mut state = test_state();
         state.private_notice = Some("Heads up".to_string());
         let rects = swatch_box_rects((80, 24), &state);
-        assert_eq!(rects[0], Some(Rect::new(9, 14, 16, 8)));
+        assert_eq!(rects[0], Some(Rect::new(9, 13, 16, 8)));
+    }
+
+    #[test]
+    fn swatch_boxes_leave_bottom_canvas_row_visible() {
+        let state = test_state();
+        let rects = swatch_box_rects((80, 24), &state);
+        let canvas = canvas_area_for_screen((80, 24));
+
+        assert!(
+            !rects
+                .iter()
+                .flatten()
+                .any(|rect| rect_contains(*rect, 10, canvas.bottom() - 1))
+        );
     }
 
     #[test]
@@ -706,27 +745,102 @@ mod tests {
         });
 
         assert_eq!(
-            swatch_hit((80, 24), &state, 11, 17),
+            swatch_hit((80, 24), &state, 11, 16),
             Some(SwatchHit::Body(0))
         );
         assert_eq!(
-            swatch_hit((80, 24), &state, 23, 22),
+            swatch_hit((80, 24), &state, 23, 21),
             Some(SwatchHit::Pin(0))
         );
+    }
+
+    #[test]
+    fn active_swatch_brightens_both_shared_dividers() {
+        let mut state = test_state();
+        for swatch in state.editor.swatches.iter_mut().take(3) {
+            *swatch = Some(dartboard_editor::Swatch {
+                clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
+                pinned: false,
+            });
+        }
+        state.activate_swatch(1);
+
+        let rects = swatch_box_rects((120, 24), &state);
+        let area = Rect::new(0, 0, 120, 24);
+        let mut buf = Buffer::empty(area);
+        render_swatch_strip_frame(&mut buf, &rects, &state, state.active_swatch_index());
+
+        let middle = rects[1].expect("middle swatch visible");
+        let right = rects[2].expect("right swatch visible");
+        let divider_y = middle.y + 1;
+        let top_y = middle.y;
+
+        assert_eq!(buf[(middle.x, divider_y)].fg, theme::BORDER_ACTIVE());
+        assert_eq!(buf[(right.x, divider_y)].fg, theme::BORDER_ACTIVE());
+        assert_eq!(buf[(middle.x, top_y)].symbol(), "┬");
+        assert_eq!(buf[(right.x, top_y)].symbol(), "┬");
+    }
+
+    #[test]
+    fn filled_swatch_divider_beats_empty_neighbor() {
+        let mut state = test_state();
+        state.editor.swatches[0] = Some(dartboard_editor::Swatch {
+            clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
+            pinned: false,
+        });
+
+        let rects = swatch_box_rects((120, 24), &state);
+        let area = Rect::new(0, 0, 120, 24);
+        let mut buf = Buffer::empty(area);
+        render_swatch_strip_frame(&mut buf, &rects, &state, state.active_swatch_index());
+
+        let divider_x = rects[1].expect("second swatch visible").x;
+        let divider_y = rects[1].expect("second swatch visible").y + 1;
+
+        assert_eq!(buf[(divider_x, divider_y)].fg, theme::AMBER_DIM());
+    }
+
+    #[test]
+    fn divider_priority_is_selected_then_filled_then_empty() {
+        let mut state = test_state();
+        for swatch in state.editor.swatches.iter_mut().take(2) {
+            *swatch = Some(dartboard_editor::Swatch {
+                clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
+                pinned: false,
+            });
+        }
+        state.activate_swatch(0);
+
+        let rects = swatch_box_rects((160, 24), &state);
+        let area = Rect::new(0, 0, 160, 24);
+        let mut buf = Buffer::empty(area);
+        render_swatch_strip_frame(&mut buf, &rects, &state, state.active_swatch_index());
+
+        let divider_12_x = rects[1].expect("second swatch visible").x;
+        let divider_23_x = rects[2].expect("third swatch visible").x;
+        let divider_34_x = rects[3].expect("fourth swatch visible").x;
+        let _divider_45_x = rects[4].expect("fifth swatch visible").x;
+        let divider_y = rects[1].expect("second swatch visible").y + 1;
+
+        assert_eq!(buf[(divider_12_x, divider_y)].fg, theme::BORDER_ACTIVE());
+        assert_eq!(buf[(divider_23_x, divider_y)].fg, theme::AMBER_DIM());
+        assert_eq!(buf[(divider_34_x, divider_y)].fg, theme::BORDER_DIM());
     }
 
     #[test]
     fn pan_indicator_reflects_available_viewport_directions() {
         let mut state = test_state();
         state.snapshot.canvas = dartboard_core::Canvas::with_size(80, 60);
+        state.editor.viewport.width = 26;
+        state.editor.viewport.height = 22;
         state.editor.viewport_origin = dartboard_core::Pos { x: 5, y: 7 };
-        let chars = pan_indicator_chars(Rect::new(55, 1, 28, 8), Rect::new(1, 1, 26, 22), &state);
-        assert_eq!(chars, ['◀', '─', '▲', '─', '▼', '─', '▶']);
+        let enabled = pan_indicator_enabled(&state);
+        assert_eq!(enabled, [true, true, true, true]);
 
         state.editor.viewport_origin = dartboard_core::Pos { x: 0, y: 0 };
         state.snapshot.canvas = dartboard_core::Canvas::with_size(26, 22);
-        let chars = pan_indicator_chars(Rect::new(55, 1, 28, 8), Rect::new(1, 1, 26, 22), &state);
-        assert_eq!(chars, ['─', '─', '─', '─', '─', '─', '─']);
+        let enabled = pan_indicator_enabled(&state);
+        assert_eq!(enabled, [false, false, false, false]);
     }
 
     fn test_state() -> State {

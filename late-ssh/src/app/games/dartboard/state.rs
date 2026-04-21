@@ -1,24 +1,26 @@
 use dartboard_core::{Canvas, Pos, RgbColor};
 use dartboard_editor::{
-    AppKey, AppPointerEvent, Bounds, EditorAction, EditorContext, EditorKeyDispatch,
+    AppKey, AppModifiers, AppPointerEvent, Bounds, EditorAction, EditorContext, EditorKeyDispatch,
     EditorPointerDispatch, EditorSession, FloatingSelection as EditorFloatingSelection, KeyMap,
-    Mode as EditorMode, SWATCH_CAPACITY, Selection as EditorSelection,
+    Mode as EditorMode, MoveDir, SWATCH_CAPACITY, Selection as EditorSelection,
     SelectionShape as EditorSelectionShape, Swatch, SwatchActivation, Viewport,
-    backspace as editor_backspace, capture_selection, delete_at_cursor, diff_canvas_op,
-    dismiss_floating as editor_dismiss_floating,
+    backspace as editor_backspace, capture_bounds, capture_selection, delete_at_cursor,
+    diff_canvas_op, dismiss_floating as editor_dismiss_floating,
     export_system_clipboard_text as editor_export_system_clipboard_text,
     handle_editor_action as editor_handle_action, handle_editor_pointer as editor_handle_pointer,
     insert_char as editor_insert_char, paste_text_block, stamp_floating as editor_stamp_floating,
 };
 use dartboard_tui::{FloatingView, SelectionShape as TuiSelectionShape, SelectionView};
 use ratatui::layout::Rect;
-use std::collections::VecDeque;
+use std::time::Instant;
 use tokio::sync::{
     broadcast::{self, error::TryRecvError},
     watch,
 };
 
 use super::svc::{DartboardEvent, DartboardService, DartboardSnapshot};
+
+const DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 
 pub struct State {
     pub snapshot: DartboardSnapshot,
@@ -27,10 +29,10 @@ pub struct State {
     pub(crate) svc: DartboardService,
     pub(crate) editor: EditorSession,
     active_brush: Option<Brush>,
-    recent_brushes: VecDeque<Brush>,
     drag_brush: Option<Brush>,
     floating_source_selection: Option<EditorSelection>,
     suppress_swatch_preview: bool,
+    last_canvas_click: Option<(Instant, Pos)>,
     snapshot_rx: watch::Receiver<DartboardSnapshot>,
     event_rx: broadcast::Receiver<DartboardEvent>,
 }
@@ -46,10 +48,10 @@ impl State {
             svc,
             editor: EditorSession::default(),
             active_brush: None,
-            recent_brushes: VecDeque::new(),
             drag_brush: None,
             floating_source_selection: None,
             suppress_swatch_preview: false,
+            last_canvas_click: None,
             snapshot_rx,
             event_rx,
         }
@@ -119,22 +121,25 @@ impl State {
 
     pub fn move_home(&mut self, screen_size: (u16, u16)) {
         self.set_viewport_for_screen(screen_size);
-        self.editor.cursor.x = self.editor.visible_bounds(&self.snapshot.canvas).min_x;
+        self.editor
+            .move_dir(&self.snapshot.canvas, MoveDir::LineStart);
     }
 
     pub fn move_end(&mut self, screen_size: (u16, u16)) {
         self.set_viewport_for_screen(screen_size);
-        self.editor.cursor.x = self.editor.visible_bounds(&self.snapshot.canvas).max_x;
+        self.editor
+            .move_dir(&self.snapshot.canvas, MoveDir::LineEnd);
     }
 
     pub fn move_page_up(&mut self, screen_size: (u16, u16)) {
         self.set_viewport_for_screen(screen_size);
-        self.editor.cursor.y = self.editor.visible_bounds(&self.snapshot.canvas).min_y;
+        self.editor.move_dir(&self.snapshot.canvas, MoveDir::PageUp);
     }
 
     pub fn move_page_down(&mut self, screen_size: (u16, u16)) {
         self.set_viewport_for_screen(screen_size);
-        self.editor.cursor.y = self.editor.visible_bounds(&self.snapshot.canvas).max_y;
+        self.editor
+            .move_dir(&self.snapshot.canvas, MoveDir::PageDown);
     }
 
     pub fn paint_char(&mut self, ch: char) {
@@ -155,7 +160,6 @@ impl State {
                 self.editor.move_right(&self.snapshot.canvas);
             }
         }
-        self.set_active_brush(brush);
     }
 
     pub fn clear_at_cursor(&mut self) {
@@ -163,6 +167,15 @@ impl State {
     }
 
     pub fn handle_app_key(&mut self, key: AppKey) -> EditorKeyDispatch {
+        if key.code == dartboard_editor::AppKeyCode::Esc
+            && key.modifiers == AppModifiers::default()
+            && self.dismiss_active_brush()
+        {
+            return EditorKeyDispatch {
+                handled: true,
+                effects: Vec::new(),
+            };
+        }
         let action = KeyMap::default_standalone().resolve(
             key,
             EditorContext {
@@ -193,18 +206,6 @@ impl State {
         let dispatch =
             editor_handle_action(&mut self.editor, &mut self.snapshot.canvas, action, color);
         self.sync_floating_source_selection();
-
-        if matches!(
-            action,
-            EditorAction::InsertChar(ch) | EditorAction::FillSelectionOrCell(ch)
-                if !ch.is_control()
-        ) {
-            let ch = match action {
-                EditorAction::InsertChar(ch) | EditorAction::FillSelectionOrCell(ch) => ch,
-                _ => unreachable!(),
-            };
-            self.set_active_brush(Brush::for_typed_char(ch));
-        }
 
         if self.snapshot.canvas != before {
             let _ = self.submit_canvas_diff(before);
@@ -263,15 +264,7 @@ impl State {
 
     pub fn move_to_screen_point(&mut self, screen_size: (u16, u16), x: u16, y: u16) -> bool {
         self.set_viewport_for_screen(screen_size);
-        let viewport = super::ui::canvas_area_for_screen(screen_size);
-        let Some(next) = canvas_pos_for_screen_point(
-            viewport,
-            self.editor.viewport_origin,
-            self.snapshot.canvas.width,
-            self.snapshot.canvas.height,
-            x,
-            y,
-        ) else {
+        let Some(next) = self.canvas_pos_for_screen_point(screen_size, x, y) else {
             return false;
         };
         if next.x >= self.snapshot.canvas.width || next.y >= self.snapshot.canvas.height {
@@ -281,13 +274,25 @@ impl State {
         true
     }
 
+    pub fn canvas_pos_for_screen_point(
+        &self,
+        screen_size: (u16, u16),
+        x: u16,
+        y: u16,
+    ) -> Option<Pos> {
+        let viewport = super::ui::canvas_area_for_screen(screen_size);
+        canvas_pos_for_screen_point(
+            viewport,
+            self.editor.viewport_origin,
+            self.snapshot.canvas.width,
+            self.snapshot.canvas.height,
+            x,
+            y,
+        )
+    }
+
     pub fn begin_drag_brush_from_cursor(&mut self) {
-        self.drag_brush = self.active_brush.or_else(|| {
-            self.snapshot
-                .canvas
-                .glyph_at(self.editor.cursor)
-                .map(|glyph| Brush::Glyph(glyph.ch))
-        });
+        self.drag_brush = self.active_brush;
     }
 
     pub fn paint_drag_brush(&mut self) -> bool {
@@ -384,6 +389,8 @@ impl State {
         let Some(floating) = self.editor.floating.clone() else {
             return false;
         };
+        let was_temp_brush =
+            self.active_brush.is_some() && self.floating_source_selection.is_none();
 
         let before = self.snapshot.canvas.clone();
         if let Some(selection) = self.floating_source_selection {
@@ -403,6 +410,9 @@ impl State {
         let _ = self.submit_canvas_diff(before);
         editor_dismiss_floating(&mut self.editor);
         self.floating_source_selection = None;
+        if was_temp_brush {
+            self.active_brush = None;
+        }
         self.suppress_swatch_preview = false;
         true
     }
@@ -412,12 +422,17 @@ impl State {
             return false;
         }
 
+        let was_temp_brush =
+            self.active_brush.is_some() && self.floating_source_selection.is_none();
         editor_dismiss_floating(&mut self.editor);
         if let Some(selection) = self.floating_source_selection.take() {
             self.editor.selection_anchor = Some(selection.anchor);
             self.editor.selection_shape = selection.shape;
             self.editor.mode = EditorMode::Select;
             self.editor.cursor = selection.cursor;
+        }
+        if was_temp_brush {
+            self.active_brush = None;
         }
         self.suppress_swatch_preview = false;
         true
@@ -434,10 +449,21 @@ impl State {
         editor_dismiss_floating(&mut self.editor);
         self.floating_source_selection = None;
         self.suppress_swatch_preview = false;
+        self.last_canvas_click = None;
     }
 
     pub fn active_brush(&self) -> Option<Brush> {
         self.active_brush
+    }
+
+    pub fn brush_mode(&self) -> BrushMode {
+        if self.active_swatch_index().is_some() {
+            BrushMode::Swatch
+        } else if let Some(Brush::Glyph(ch)) = self.active_brush {
+            BrushMode::Glyph(ch)
+        } else {
+            BrushMode::None
+        }
     }
 
     pub fn swatches(&self) -> &[Option<Swatch>; SWATCH_CAPACITY] {
@@ -461,6 +487,7 @@ impl State {
 
     pub fn activate_swatch(&mut self, idx: usize) {
         let activation = self.editor.activate_swatch(idx);
+        self.active_brush = None;
         if activation == SwatchActivation::ActivatedFloating {
             self.suppress_swatch_preview = true;
         }
@@ -471,8 +498,49 @@ impl State {
         self.editor.toggle_pin(idx);
     }
 
-    pub fn recent_brushes(&self) -> impl Iterator<Item = Brush> + '_ {
-        self.recent_brushes.iter().copied()
+    pub fn clear_swatch(&mut self, idx: usize) {
+        self.editor.clear_swatch(idx);
+        self.suppress_swatch_preview = false;
+    }
+
+    pub fn is_in_normal_brush_mode(&self) -> bool {
+        self.editor.floating.is_none() && self.active_brush.is_none()
+    }
+
+    pub fn register_canvas_click(&mut self, pos: Pos) -> bool {
+        let now = Instant::now();
+        let is_double = match self.last_canvas_click {
+            Some((prev, prev_pos)) => {
+                prev_pos == pos && now.duration_since(prev).as_millis() <= DOUBLE_CLICK_WINDOW_MS
+            }
+            None => false,
+        };
+        self.last_canvas_click = if is_double { None } else { Some((now, pos)) };
+        is_double
+    }
+
+    pub fn clear_pending_canvas_click(&mut self) {
+        self.last_canvas_click = None;
+    }
+
+    pub fn activate_temp_glyph_brush_at(&mut self, pos: Pos) -> bool {
+        let Some(glyph) = self.snapshot.canvas.glyph_at(pos) else {
+            return false;
+        };
+        if glyph.ch == ' ' {
+            return false;
+        }
+        self.editor.cursor = pos;
+        self.editor.clear_selection();
+        self.editor.floating = Some(EditorFloatingSelection {
+            clipboard: capture_bounds(&self.snapshot.canvas, Bounds::single(pos)),
+            transparent: false,
+            source_index: None,
+        });
+        self.floating_source_selection = None;
+        self.active_brush = Some(Brush::Glyph(glyph.ch));
+        self.suppress_swatch_preview = false;
+        true
     }
 
     fn active_user_color(&self) -> RgbColor {
@@ -537,9 +605,16 @@ impl State {
         }
     }
 
-    fn set_active_brush(&mut self, brush: Brush) {
-        self.active_brush = Some(brush);
-        self.remember_brush(brush);
+    fn dismiss_active_brush(&mut self) -> bool {
+        if self.editor.floating.is_some() {
+            return self.dismiss_floating();
+        }
+        if self.active_brush.is_some() {
+            self.active_brush = None;
+            self.drag_brush = None;
+            return true;
+        }
+        false
     }
 
     fn apply_floating_override(&mut self, action: Option<EditorAction>) -> FloatingOverride {
@@ -570,20 +645,6 @@ impl State {
             Some(EditorAction::Move { .. }) => FloatingOverride::PassThrough,
             Some(EditorAction::ActivateSwatch(_)) => FloatingOverride::PassThrough,
             _ => FloatingOverride::DismissAndContinue,
-        }
-    }
-
-    fn remember_brush(&mut self, brush: Brush) {
-        if let Some(idx) = self
-            .recent_brushes
-            .iter()
-            .position(|existing| *existing == brush)
-        {
-            self.recent_brushes.remove(idx);
-        }
-        self.recent_brushes.push_front(brush);
-        while self.recent_brushes.len() > 6 {
-            self.recent_brushes.pop_back();
         }
     }
 
@@ -624,13 +685,13 @@ impl Brush {
             Self::Glyph(ch)
         }
     }
+}
 
-    pub fn label(self) -> String {
-        match self {
-            Self::Glyph(ch) => format!("'{ch}'"),
-            Self::Erase => "erase".to_string(),
-        }
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrushMode {
+    None,
+    Swatch,
+    Glyph(char),
 }
 
 enum FloatingOverride {
@@ -793,9 +854,10 @@ mod tests {
     }
 
     #[test]
-    fn drag_brush_samples_clicked_glyph_and_paints_without_advancing() {
+    fn drag_brush_requires_temp_brush_and_paints_without_advancing() {
         let mut state = test_state();
         state.paint_char('B');
+        assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
         state.begin_drag_brush_from_cursor();
         state.move_right((80, 24));
         assert!(state.paint_drag_brush());
@@ -808,20 +870,20 @@ mod tests {
     }
 
     #[test]
-    fn active_brush_overrides_sampled_drag_brush() {
+    fn drag_brush_no_longer_samples_canvas_without_temp_brush() {
         let mut state = test_state();
-        state.type_char('A', (80, 24));
-        state.move_right((80, 24));
         state.paint_char('Z');
         state.begin_drag_brush_from_cursor();
-        assert!(state.paint_drag_brush());
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 0 }), 'A');
+        state.move_right((80, 24));
+        assert!(!state.paint_drag_brush());
+        assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 0 }), ' ');
     }
 
     #[test]
     fn escape_clears_active_and_drag_brushes() {
         let mut state = test_state();
         state.type_char('Q', (80, 24));
+        assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
         state.begin_drag_brush_from_cursor();
         state.begin_selection_from_cursor();
         state.clear_local_state();
@@ -860,7 +922,7 @@ mod tests {
         assert!(dispatch.handled);
         assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'x');
         assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 1 }), 'x');
-        assert_eq!(state.active_brush(), Some(Brush::Glyph('x')));
+        assert_eq!(state.brush_mode(), BrushMode::None);
     }
 
     #[test]
@@ -886,14 +948,10 @@ mod tests {
     }
 
     #[test]
-    fn app_key_escape_dismisses_floating_without_clearing_active_brush() {
+    fn app_key_escape_dismisses_temp_brush_back_to_none() {
         let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(4, 2);
         state.type_char('Q', (80, 24));
-        state.editor.cursor = Pos { x: 1, y: 0 };
-        state.begin_selection_from_cursor();
-        state.move_right((80, 24));
-        assert!(state.lift_selection_to_floating());
+        assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
 
         let dispatch = state.handle_app_key(AppKey {
             code: dartboard_editor::AppKeyCode::Esc,
@@ -902,7 +960,31 @@ mod tests {
 
         assert!(dispatch.handled);
         assert!(!state.has_floating());
-        assert_eq!(state.active_brush(), Some(Brush::Glyph('Q')));
+        assert_eq!(state.brush_mode(), BrushMode::None);
+    }
+
+    #[test]
+    fn swatch_brush_mode_reports_swatch() {
+        let mut state = test_state();
+        state.editor.swatches[0] = Some(Swatch {
+            clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
+            pinned: false,
+        });
+
+        state.activate_swatch(0);
+
+        assert_eq!(state.brush_mode(), BrushMode::Swatch);
+    }
+
+    #[test]
+    fn temp_glyph_brush_mode_reports_canvas_glyph() {
+        let mut state = test_state();
+        state.type_char('🔥', (80, 24));
+
+        assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
+
+        assert_eq!(state.brush_mode(), BrushMode::Glyph('🔥'));
+        assert!(state.has_floating());
     }
 
     #[test]
