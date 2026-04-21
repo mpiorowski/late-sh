@@ -99,6 +99,26 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// Create a public room or promote an existing public topic room to
+    /// auto-join so future users are joined on connect.
+    pub async fn get_or_create_auto_join_public_room(client: &Client, slug: &str) -> Result<Self> {
+        let slug = normalize_topic_slug(slug)?;
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, permanent, slug)
+                 VALUES ('topic', 'public', true, false, $1)
+                 ON CONFLICT (visibility, slug) WHERE kind = 'topic'
+                 DO UPDATE
+                    SET visibility = 'public',
+                        auto_join = true,
+                        updated = current_timestamp
+                 RETURNING *",
+                &[&slug],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     pub async fn create_private_room(client: &Client, slug: &str) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 

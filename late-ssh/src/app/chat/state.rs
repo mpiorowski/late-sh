@@ -19,7 +19,7 @@ use crate::app::help_modal::data::HelpTopic;
 use crate::state::{ActiveUser, ActiveUsers};
 
 use super::{
-    news, notifications,
+    discover, news, notifications,
     notifications::svc::NotificationService,
     svc::{ChatEvent, ChatService, ChatSnapshot},
 };
@@ -52,6 +52,7 @@ pub(crate) enum RoomSlot {
     Room(Uuid),
     News,
     Notifications,
+    Discover,
 }
 
 pub struct ChatState {
@@ -94,6 +95,8 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
+    pub(crate) discover_selected: bool,
+    pub(crate) discover: discover::state::State,
 
     /// Pending desktop notifications drained on render. `kind` matches the
     /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
@@ -164,6 +167,8 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, is_admin),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
+            discover_selected: false,
+            discover: discover::state::State::new(),
             pending_notifications: Vec::new(),
             requested_help_topic: None,
             requested_settings_modal: false,
@@ -476,6 +481,9 @@ impl ChatState {
         // Mentions / notifications
         order.push(RoomSlot::Notifications);
 
+        // Discover
+        order.push(RoomSlot::Discover);
+
         // Public rooms (non-DM, non-permanent, alpha by slug)
         let mut public: Vec<_> = self
             .rooms
@@ -541,12 +549,21 @@ impl ChatState {
                 }
                 changed
             }
+            RoomSlot::Discover => {
+                let changed = !self.discover_selected;
+                if changed {
+                    self.select_discover();
+                }
+                changed
+            }
             RoomSlot::Room(next_id) => {
                 let changed = self.news_selected
                     || self.notifications_selected
+                    || self.discover_selected
                     || self.selected_room_id != Some(next_id);
                 self.news_selected = false;
                 self.notifications_selected = false;
+                self.discover_selected = false;
                 self.selected_room_id = Some(next_id);
                 changed
             }
@@ -583,6 +600,8 @@ impl ChatState {
 
         let current_item = if self.notifications_selected {
             RoomSlot::Notifications
+        } else if self.discover_selected {
+            RoomSlot::Discover
         } else if self.news_selected {
             RoomSlot::News
         } else {
@@ -685,7 +704,7 @@ impl ChatState {
     pub fn submit_composer(&mut self, keep_open: bool) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
 
-        if body.trim() == "/help" {
+        if body.trim() == "/binds" {
             self.clear_composer_after_submit();
             self.requested_help_topic = Some(HelpTopic::Chat);
             return None;
@@ -697,7 +716,7 @@ impl ChatState {
             return None;
         }
 
-        if body.trim() == "/profile" {
+        if body.trim() == "/settings" {
             self.clear_composer_after_submit();
             self.requested_settings_modal = true;
             return None;
@@ -931,6 +950,7 @@ impl ChatState {
         self.room_jump_active = false;
         self.news_selected = true;
         self.notifications_selected = false;
+        self.discover_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.news.list_articles();
@@ -945,10 +965,27 @@ impl ChatState {
         self.room_jump_active = false;
         self.notifications_selected = true;
         self.news_selected = false;
+        self.discover_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.notifications.list();
         self.notifications.mark_read();
+    }
+
+    pub fn select_discover(&mut self) {
+        self.room_jump_active = false;
+        self.discover_selected = true;
+        self.notifications_selected = false;
+        self.news_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+    }
+
+    pub fn join_selected_discover_room(&mut self) -> Option<Banner> {
+        let item = self.discover.selected_item()?.clone();
+        self.service
+            .join_public_room_task(self.user_id, item.room_id, item.slug.clone());
+        Some(Banner::success(&format!("Joining #{}...", item.slug)))
     }
 
     pub fn cursor_visible(&self) -> bool {
@@ -1075,6 +1112,7 @@ impl ChatState {
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
+        self.discover.set_items(snapshot.discover_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
         self.all_usernames = snapshot.all_usernames;
@@ -1158,6 +1196,9 @@ impl ChatState {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::DmOpened { user_id, room_id } if self.user_id == user_id => {
+                    self.news_selected = false;
+                    self.notifications_selected = false;
+                    self.discover_selected = false;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -1171,6 +1212,9 @@ impl ChatState {
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
+                    self.news_selected = false;
+                    self.notifications_selected = false;
+                    self.discover_selected = false;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -1192,6 +1236,9 @@ impl ChatState {
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
+                    self.news_selected = false;
+                    self.notifications_selected = false;
+                    self.discover_selected = false;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -1625,7 +1672,7 @@ fn adjacent_composer_room(
         .iter()
         .filter_map(|slot| match slot {
             RoomSlot::Room(room_id) => Some(*room_id),
-            RoomSlot::News | RoomSlot::Notifications => None,
+            RoomSlot::News | RoomSlot::Notifications | RoomSlot::Discover => None,
         })
         .collect();
     if rooms.is_empty() {
@@ -1932,6 +1979,7 @@ mod tests {
             RoomSlot::Room(room_a),
             RoomSlot::News,
             RoomSlot::Notifications,
+            RoomSlot::Discover,
             RoomSlot::Room(room_b),
             RoomSlot::Room(room_c),
         ];
@@ -1952,7 +2000,7 @@ mod tests {
 
     #[test]
     fn adjacent_composer_room_returns_none_without_real_rooms() {
-        let order = vec![RoomSlot::News, RoomSlot::Notifications];
+        let order = vec![RoomSlot::News, RoomSlot::Notifications, RoomSlot::Discover];
         assert_eq!(adjacent_composer_room(&order, None, 1), None);
     }
 
@@ -1963,6 +2011,7 @@ mod tests {
             (b'a', RoomSlot::Room(room_id)),
             (b's', RoomSlot::News),
             (b'd', RoomSlot::Notifications),
+            (b'f', RoomSlot::Discover),
         ];
 
         assert_eq!(
@@ -1976,6 +2025,10 @@ mod tests {
         assert_eq!(
             resolve_room_jump_target(&targets, b'D'),
             Some(RoomSlot::Notifications)
+        );
+        assert_eq!(
+            resolve_room_jump_target(&targets, b'f'),
+            Some(RoomSlot::Discover)
         );
         assert_eq!(resolve_room_jump_target(&targets, b'x'), None);
     }

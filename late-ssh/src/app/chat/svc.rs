@@ -32,10 +32,20 @@ pub struct ChatService {
     notification_svc: super::notifications::svc::NotificationService,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoverRoomItem {
+    pub room_id: Uuid,
+    pub slug: String,
+    pub member_count: i64,
+    pub message_count: i64,
+    pub last_message_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Clone, Default)]
 pub struct ChatSnapshot {
     pub user_id: Option<Uuid>,
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pub discover_rooms: Vec<DiscoverRoomItem>,
     pub message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub general_room_id: Option<Uuid>,
     pub usernames: HashMap<Uuid, String>,
@@ -208,6 +218,7 @@ impl ChatService {
     async fn list_chat_rooms(&self, user_id: Uuid, selected_room_id: Option<Uuid>) -> Result<()> {
         let client = &self.db.get().await?;
         let rooms = ChatRoom::list_for_user(client, user_id).await?;
+        let discover_rooms = self.list_discover_rooms(client, user_id).await?;
         let unread_counts = ChatRoomMember::unread_counts_for_user(client, user_id).await?;
         let general_room_id = rooms
             .iter()
@@ -277,6 +288,7 @@ impl ChatService {
         self.publish_snapshot(ChatSnapshot {
             user_id: Some(user_id),
             chat_rooms: rooms,
+            discover_rooms,
             message_reactions,
             general_room_id,
             usernames,
@@ -286,6 +298,55 @@ impl ChatService {
             bonsai_glyphs,
             ignored_user_ids,
         })
+    }
+
+    async fn list_discover_rooms(
+        &self,
+        client: &tokio_postgres::Client,
+        user_id: Uuid,
+    ) -> Result<Vec<DiscoverRoomItem>> {
+        let rows = client
+            .query(
+                "SELECT r.id,
+                        r.slug,
+                        COUNT(DISTINCT m.user_id)::bigint AS member_count,
+                        COUNT(DISTINCT msg.id)::bigint AS message_count,
+                        MAX(msg.created) AS last_message_at
+                 FROM chat_rooms r
+                 LEFT JOIN chat_room_members m ON m.room_id = r.id
+                 LEFT JOIN chat_messages msg ON msg.room_id = r.id
+                 WHERE r.kind = 'topic'
+                   AND r.visibility = 'public'
+                   AND r.permanent = false
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM chat_room_members self_member
+                       WHERE self_member.room_id = r.id
+                         AND self_member.user_id = $1
+                   )
+                 GROUP BY r.id, r.slug
+                 ORDER BY
+                    member_count DESC,
+                    message_count DESC,
+                    last_message_at DESC NULLS LAST,
+                    r.slug ASC",
+                &[&user_id],
+            )
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let slug: Option<String> = row.get("slug");
+                slug.map(|slug| DiscoverRoomItem {
+                    room_id: row.get("id"),
+                    slug,
+                    member_count: row.get("member_count"),
+                    message_count: row.get("message_count"),
+                    last_message_at: row.get("last_message_at"),
+                })
+            })
+            .collect())
     }
 
     pub fn start_user_refresh_task(
@@ -939,12 +1000,53 @@ impl ChatService {
         );
     }
 
+    pub fn join_public_room_task(&self, user_id: Uuid, room_id: Uuid, slug: String) {
+        let service = self.clone();
+        let span = info_span!("chat.join_public_room_task", user_id = %user_id, room_id = %room_id, slug = %slug);
+        tokio::spawn(
+            async move {
+                match service.join_public_room(user_id, room_id).await {
+                    Ok(room_id) => {
+                        let _ = service.evt_tx.send(ChatEvent::RoomJoined {
+                            user_id,
+                            room_id,
+                            slug,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::RoomFailed {
+                            user_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn join_public_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
+        let client = &self.db.get().await?;
+        let room = ChatRoom::get(client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
+        if room.kind != "topic" || room.visibility != "public" {
+            anyhow::bail!("Only public rooms can be joined from discover");
+        }
+        ChatRoomMember::join(client, room.id, user_id).await?;
+        Ok(room.id)
+    }
+
     async fn open_public_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
         let client = &self.db.get().await?;
-        let room = match ChatRoom::find_topic_room(client, "public", slug).await? {
-            Some(room) => room,
-            None => ChatRoom::get_or_create_public_room(client, slug).await?,
-        };
+        let room = ChatRoom::get_or_create_auto_join_public_room(client, slug).await?;
+        let added = ChatRoom::add_all_users(client, room.id).await?;
+        tracing::info!(
+            slug = %slug,
+            room_id = %room.id,
+            users_added = added,
+            "public room opened as auto-join"
+        );
         ChatRoomMember::join(client, room.id, user_id).await?;
         Ok(room.id)
     }

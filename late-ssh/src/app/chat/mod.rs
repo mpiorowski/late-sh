@@ -1,3 +1,4 @@
+pub mod discover;
 pub mod input;
 pub mod news;
 pub mod notifications;

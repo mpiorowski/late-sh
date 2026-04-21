@@ -145,8 +145,18 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     // `e` enters edit mode and drops the selection.
     // `p` opens a read-only profile modal for the selected author.
     match byte {
-        b'1'..=b'5' => {
-            let kind = (byte - b'0') as i16;
+        // Shift+1..Shift+5 react with emote kinds 1..5. Shifted to free the
+        // bare number row for muscle-memory room-switching — users kept
+        // tripping the react path while navigating.
+        b'!' | b'@' | b'#' | b'$' | b'%' => {
+            let kind = match byte {
+                b'!' => 1,
+                b'@' => 2,
+                b'#' => 3,
+                b'$' => 4,
+                b'%' => 5,
+                _ => unreachable!(),
+            };
             if let Some(banner) = app.chat.react_to_selected_message_in_room(room_id, kind) {
                 app.banner = Some(banner);
             }
@@ -258,8 +268,24 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
         app.chat.cancel_room_jump();
         return true;
     }
+    // Left/Right switch rooms (mirrors h/l). Up/Down stay room-local for
+    // message selection.
+    match key {
+        b'C' => {
+            switch_room(app, 1);
+            return true;
+        }
+        b'D' => {
+            switch_room(app, -1);
+            return true;
+        }
+        _ => {}
+    }
     if app.chat.notifications_selected {
         return super::notifications::input::handle_arrow(app, key);
+    }
+    if app.chat.discover_selected {
+        return super::discover::input::handle_arrow(app, key);
     }
     if app.chat.news_selected {
         return super::news::input::handle_arrow(app, key);
@@ -301,6 +327,18 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::notifications::input::handle_byte(app, byte);
+    }
+
+    if app.chat.discover_selected {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        return super::discover::input::handle_byte(app, byte);
     }
 
     if app.chat.news_selected {

@@ -271,6 +271,7 @@ def download_bandcamp(genre: str, urls: list[str]):
             "--extract-audio",
             "--audio-format", "mp3",
             "--audio-quality", "128K",
+            "--trim-filenames", "120",
             "--output", str(out_dir / "%(artist)s---%(title)s.%(ext)s"),
             "--no-overwrites",
             "--ignore-errors",

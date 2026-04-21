@@ -8,65 +8,70 @@ This file tracks the local music catalog used by `late.sh` radio.
 
 ## Library Status
 
-- `lofi`: done, 50 tracks, mixed `CC0` and `CC-BY 4.0`
+- `lofi`: done, 100-track manifest, mixed `CC0` and `CC-BY 4.0`
 - `ambient`: done, 93 tracks, mixed `CC0` and `CC-BY 4.0`
 - `classic`: done, 40 tracks, public domain via Musopen / Internet Archive
 - `jazz`: pending
 
 ## Lofi
 
-| # | Artist | Title | License | Source URL |
-|---|--------|-------|---------|------------|
-| 1 | HoliznaCC0 | A Little Shade | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 2 | HoliznaCC0 | All The Way Sad | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 3 | HoliznaCC0 | Autumn | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 4 | HoliznaCC0 | Cellar Door | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 5 | HoliznaCC0 | Everything You Ever Dreamed | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 6 | HoliznaCC0 | Foggy Headed | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 7 | HoliznaCC0 | Ghosts | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 8 | HoliznaCC0 | Glad To Be Stuck Inside | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 9 | HoliznaCC0 | Laundry Day | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 10 | HoliznaCC0 | Letting Go Of The Past | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 11 | HoliznaCC0 | Lighter Than Air | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 12 | HoliznaCC0 | Limbo | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 13 | HoliznaCC0 | Lofi Forever | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 14 | HoliznaCC0 | Morning Coffee | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 15 | HoliznaCC0 | Mundane | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 16 | HoliznaCC0 | Pretty Little Lies | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 17 | HoliznaCC0 | Seasons Change | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 18 | HoliznaCC0 | Shut Up Or Shut In | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 19 | HoliznaCC0 | Small Towns, Smaller Lives | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 20 | HoliznaCC0 | Something In The Air | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 21 | HoliznaCC0 | Static | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 22 | HoliznaCC0 | Vintage | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 23 | HoliznaCC0 | Whatever... | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 24 | HoliznaCC0 | Yesterday | CC0 | https://holiznacc0.bandcamp.com/album/lofi-and-chill |
-| 25 | JMHBM | Mirrors | CC-BY 4.0 | https://freemusicarchive.org/music/beat-mekanik/single/mirrors-2/ |
-| 26 | Ketsa | Deep Waves | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-downtempo/deep-waves/ |
-| 27 | Ketsa | Lofi Chill Hop - 20 Min Mix | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-hip-hop-mixes/lofi-chill-hop-20-min-mix/ |
-| 28 | Ketsa | Lofi Soul Hip Hop Mix 3 | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-hip-hop-mixes/lofi-soul-hip-hop-mix-3/ |
-| 29 | Ketsa | Shining Still | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-downtempo/shining-still/ |
-| 30 | Pufino | Vibing | CC-BY 4.0 | https://freemusicarchive.org/music/pufino/single/vibing-chill-lofi-royalty-free-music/ |
-| 31 | snoozy beats | lofi mood | CC-BY 4.0 | https://freemusicarchive.org/music/snoozy-beats/single/lofi-mood-chill-lofi/ |
-| 32 | snoozy beats | lovely days | CC-BY 4.0 | https://freemusicarchive.org/music/snoozy-beats/single/lovely-days-lofi/ |
-| 33 | snoozy beats | moon beat | CC-BY 4.0 | https://freemusicarchive.org/music/snoozy-beats/single/moon-beat-lofi/ |
-| 34 | snoozy beats | morning dew | CC-BY 4.0 | https://freemusicarchive.org/music/snoozy-beats/single/morning-dew-chill-lofi/ |
-| 35 | snoozy beats | pink ocean | CC-BY 4.0 | https://freemusicarchive.org/music/snoozy-beats/single/pink-ocean-chill-lofi-beatmp3/ |
-| 36 | YuraSoop | Chill Lo-Fi | CC-BY 4.0 | https://freemusicarchive.org/music/yurasoop/single/chill-lo-fi/ |
-| 37 | Ketsa | I Dream Of You | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-downtempo/i-dream-of-you/ |
-| 38 | Ketsa | Black Screen | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-downtempo/black-screen/ |
-| 39 | Ketsa | Slow Dance | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-downtempo/slow-dance/ |
-| 40 | Ketsa | Seconds Left | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-downtempo/seconds-left/ |
-| 41 | Ketsa | Lowest Sun | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-downtempo/lowest-sun/ |
-| 42 | Ketsa | Reclaimed | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-downtempo/reclaimed/ |
-| 43 | Ketsa | The Time It Takes | CC-BY 4.0 | https://freemusicarchive.org/music/Ketsa/lofi-downtempo/the-time-it-takes/ |
-| 44 | JMHBM | One More | CC-BY 4.0 | https://freemusicarchive.org/music/beat-mekanik/single/one-more/ |
-| 45 | JMHBM | Night City | CC-BY 4.0 | https://freemusicarchive.org/music/beat-mekanik/single/night-city/ |
-| 46 | JMHBM | New New | CC-BY 4.0 | https://freemusicarchive.org/music/beat-mekanik/single/new-new/ |
-| 47 | JMHBM | Do Me Right | CC-BY 4.0 | https://freemusicarchive.org/music/beat-mekanik/single/do-me-right/ |
-| 48 | JMHBM | Heavyweights | CC-BY 4.0 | https://freemusicarchive.org/index.php/music/beat-mekanik/single/heavyweights/ |
-| 49 | JMHBM | Footsteps | CC-BY 4.0 | https://freemusicarchive.org/music/beat-mekanik/single/footsteps/ |
-| 50 | legacyAlli | RF - LoFi Funky and Chunky | CC-BY 4.0 | https://freemusicarchive.org/music/legacyalli/instrumental-by-legacyalli-2024/rf-lofi-funky-and-chunky/ |
+This section documents the current 100-track lofi manifest used by the regenerated playlist files. The dev Liquidsoap stack now mounts `tmp/music/lofi` onto `/music/lofi`, so the local runtime playlist resolves against the refreshed temp library.
+
+### HoliznaCC0 - Lofi And Chill
+
+- Count: 24
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/lofi-and-chill
+- Tracks: A Little Shade; All The Way Sad; Autumn; Cellar Door; Everything You Ever Dreamed; Foggy Headed; Ghosts; Glad To Be Stuck Inside; Laundry Day; Letting Go Of The Past; Lighter Than Air; Limbo; Lofi Forever; Morning Coffee; Mundane; Pretty Little Lies; Seasons Change; Shut Up Or Shut In; Small Towns, Smaller Lives; Something In The Air; Static; Vintage; Whatever...; Yesterday
+
+### HoliznaCC0 - Public Domain Lo-fi
+
+- Count: 29
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/public-domain-lo-fi
+- Tracks: Bubbles; Calm Current; Color Of A Soul; Complicated Feelings; Dream shifter; Dreamy Reverie; Ease Into Night; Infinite Echoes; Into The Mist; Lucid; Never Sleeping; Ode To Forgetting; Peaceful Drift; Reminders; Saturation; Walking Away; Wave Maker; Wetlands; Canon Event; Moon Unit; One Night In France; Still Life; Theta Frequency; Tokyo Sunset; Tranquil Mindset; Blue Skies; laundry On The Wire; Waves; Windows Down
+
+### HoliznaCC0 - Winter Lo-Fi
+
+- Count: 5
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/winter-lo-fi-2
+- Tracks: First Snow; Snow Drift; 2 Hour Delay; Fire Place; Winter Blues
+
+### HoliznaCC0 - City Slacker
+
+- Count: 4
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/city-slacker
+- Tracks: Busking In The SunLight; Bus Stop; Busted Ac Unit; Nowhere To Be, Nothing To Do
+
+### Ketsa - Lofi Downtempo
+
+- Count: 13
+- License: CC-BY 4.0
+- Source: https://freemusicarchive.org/music/Ketsa/lofi-downtempo
+- Tracks: Tetra; I Dream Of You; Black Screen; Slow Dance; Seconds Left; Lowest Sun; Down Pitch; Reclaimed; The Time It Takes; Deep Waves; Shining Still; The Winter Months; Folded
+
+### Ketsa - Vintage Beats
+
+- Count: 18
+- License: CC-BY 4.0
+- Source: https://freemusicarchive.org/music/Ketsa/vintage-beats
+- Tracks: Home Sigh; Take Me Up; Appointments; Jazz Daze; Bring Dat; Make Me Sad; In Trouble; World's A Stage; Smoothness; Journal; My Biz; Aligning Frequencies; Therapy; Sun Slides; To do; Grand Rising; The Cure; Keep Hold
+
+### Beat Mekanik - Singles
+
+- Count: 6
+- License: CC-BY 4.0
+- Source: https://freemusicarchive.org/music/beat-mekanik/single/
+- Tracks: One More; Night City; New New; Do Me Right; Heavyweights; Footsteps
+
+### legacyAlli - Single
+
+- Count: 1
+- License: CC-BY 4.0
+- Source: https://freemusicarchive.org/music/legacyalli/instrumental-by-legacyalli-2024/rf-lofi-funky-and-chunky/
+- Tracks: RF - LoFi Funky and Chunky
 
 ## Ambient
 

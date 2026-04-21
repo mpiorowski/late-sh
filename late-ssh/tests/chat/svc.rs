@@ -438,6 +438,133 @@ async fn publishes_snapshot_with_persisted_ignored_user_ids() {
     assert_eq!(snapshot.ignored_user_ids, vec![ignored_user.id]);
 }
 
+#[tokio::test]
+async fn publishes_snapshot_with_discover_rooms_for_public_rooms_user_has_not_joined() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut state_rx = service.subscribe_state();
+    let client = test_db.db.get().await.expect("db client");
+
+    let target_user = create_test_user(&test_db.db, "discover_target").await;
+    let author_user = create_test_user(&test_db.db, "discover_author").await;
+
+    let general_room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    let discover_room = ChatRoom::get_or_create_public_room(&client, "rust")
+        .await
+        .expect("create discover room");
+    let joined_room = ChatRoom::get_or_create_public_room(&client, "elixir")
+        .await
+        .expect("create joined room");
+
+    ChatRoomMember::join(&client, general_room.id, target_user.id)
+        .await
+        .expect("join target general");
+    ChatRoomMember::join(&client, general_room.id, author_user.id)
+        .await
+        .expect("join author general");
+    ChatRoomMember::join(&client, discover_room.id, author_user.id)
+        .await
+        .expect("join author discover room");
+    ChatRoomMember::join(&client, joined_room.id, target_user.id)
+        .await
+        .expect("join target joined room");
+    ChatRoomMember::join(&client, joined_room.id, author_user.id)
+        .await
+        .expect("join author joined room");
+
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: discover_room.id,
+            user_id: author_user.id,
+            body: "discover-msg".to_string(),
+        },
+    )
+    .await
+    .expect("discover message");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: joined_room.id,
+            user_id: author_user.id,
+            body: "joined-msg".to_string(),
+        },
+    )
+    .await
+    .expect("joined message");
+
+    service.list_chats_task(target_user.id, Some(general_room.id));
+
+    timeout(Duration::from_secs(2), state_rx.changed())
+        .await
+        .expect("state timeout")
+        .expect("watch changed");
+    let snapshot = state_rx.borrow_and_update().clone();
+
+    assert_eq!(snapshot.discover_rooms.len(), 1);
+    assert_eq!(snapshot.discover_rooms[0].room_id, discover_room.id);
+    assert_eq!(snapshot.discover_rooms[0].slug, "rust");
+    assert_eq!(snapshot.discover_rooms[0].member_count, 1);
+    assert_eq!(snapshot.discover_rooms[0].message_count, 1);
+}
+
+#[tokio::test]
+async fn join_public_room_task_only_adds_requesting_user() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let target_user = create_test_user(&test_db.db, "discover_join_target").await;
+    let existing_member = create_test_user(&test_db.db, "discover_join_existing").await;
+    let untouched_user = create_test_user(&test_db.db, "discover_join_untouched").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "zig")
+        .await
+        .expect("create room");
+
+    ChatRoomMember::join(&client, room.id, existing_member.id)
+        .await
+        .expect("join existing member");
+
+    service.join_public_room_task(target_user.id, room.id, "zig".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::RoomJoined {
+            user_id,
+            room_id,
+            slug,
+        } => {
+            assert_eq!(user_id, target_user.id);
+            assert_eq!(room_id, room.id);
+            assert_eq!(slug, "zig");
+        }
+        other => panic!("expected RoomJoined, got {other:?}"),
+    }
+
+    assert!(
+        ChatRoomMember::is_member(&client, room.id, target_user.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !ChatRoomMember::is_member(&client, room.id, untouched_user.id)
+            .await
+            .unwrap()
+    );
+}
+
 // --- delete message: regression tests for user_id on MessageDeleted ---
 
 #[tokio::test]

@@ -84,6 +84,7 @@ services:
       - ./infra/liquidsoap/dev/ambient.m3u:/etc/liquidsoap/ambient.m3u:ro
       - ./infra/liquidsoap/dev/jazz.m3u:/etc/liquidsoap/jazz.m3u:ro
       - ./music:/music:ro
+      - ./tmp/music/lofi:/music/lofi:ro
     command: ["liquidsoap", "/etc/liquidsoap/radio.liq"]
     ports:
       - "1234:1234"

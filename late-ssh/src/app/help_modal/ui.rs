@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -11,37 +11,33 @@ use crate::app::common::theme;
 use super::{data::HelpTopic, state::HelpModalState};
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
-    let popup = centered_rect(92, 28, area);
+    let popup = centered_rect(96, 34, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
         .title(" Guide ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
     let layout = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(8),
-        Constraint::Length(1),
+        Constraint::Length(1), // breathing room
+        Constraint::Length(1), // tabs
+        Constraint::Length(1), // breathing room
+        Constraint::Min(8),    // body
+        Constraint::Length(1), // footer
     ])
     .split(inner);
 
-    draw_tabs(frame, layout[0], state.selected_topic());
+    draw_tabs(frame, layout[1], state.selected_topic());
 
-    let body_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let body_inner = body_block.inner(layout[1]);
-    frame.render_widget(body_block, layout[1]);
-    let body_content = Rect {
-        x: body_inner.x.saturating_add(1),
-        y: body_inner.y,
-        width: body_inner.width.saturating_sub(2),
-        height: body_inner.height,
-    };
-
+    let body = layout[3].inner(Margin::new(2, 0));
     let lines: Vec<Line> = state
         .current_lines()
         .into_iter()
@@ -51,18 +47,18 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((state.current_scroll(), 0)),
-        body_content,
+        body,
     );
 
     let footer = Line::from(vec![
         Span::styled("  ←/→ h/l", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" switch slides  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("↑/↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
-    frame.render_widget(Paragraph::new(footer), layout[2]);
+    frame.render_widget(Paragraph::new(footer), layout[4]);
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTopic) {
