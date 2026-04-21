@@ -5,8 +5,8 @@ use std::{
 
 use dartboard_core::{CanvasOp, Pos, RgbColor};
 use dartboard_server::{InMemStore, MAX_PLAYERS, ServerHandle};
-use late_ssh::app::games::dartboard::state::State;
-use late_ssh::app::games::dartboard::svc::{DartboardEvent, DartboardService};
+use late_ssh::app::games::artboard::state::State;
+use late_ssh::app::games::artboard::svc::{DartboardEvent, DartboardService};
 use uuid::Uuid;
 
 fn wait_for<T>(mut check: impl FnMut() -> Option<T>) -> T {

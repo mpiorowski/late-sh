@@ -130,7 +130,7 @@ pub struct GamesHubView<'a> {
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
     pub blackjack_state: &'a super::blackjack::state::State,
-    pub dartboard_state: Option<&'a super::dartboard::state::State>,
+    pub dartboard_state: Option<&'a super::artboard::state::State>,
     pub dartboard_peer_count: usize,
     pub is_admin: bool,
     pub leaderboard: &'a Arc<LeaderboardData>,
@@ -140,7 +140,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     if view.is_playing_game {
         if view.game_selection == GAME_SELECTION_ARTBOARD {
             if let Some(state) = view.dartboard_state {
-                super::dartboard::ui::draw_game(frame, area, state);
+                super::artboard::ui::draw_game(frame, area, state);
             }
             return;
         } else if view.game_selection == GAME_SELECTION_2048 {

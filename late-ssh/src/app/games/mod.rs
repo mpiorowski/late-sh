@@ -1,7 +1,7 @@
+pub mod artboard;
 pub mod blackjack;
 pub mod cards;
 pub mod chips;
-pub mod dartboard;
 pub mod input;
 pub mod leaderboard;
 pub mod minesweeper;

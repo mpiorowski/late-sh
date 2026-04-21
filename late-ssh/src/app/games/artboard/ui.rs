@@ -657,7 +657,7 @@ fn artboard_info_area_for_screen(screen_size: (u16, u16), state: &State) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::games::dartboard::state::State;
+    use crate::app::games::artboard::state::State;
     use dartboard_core::{CellValue, RgbColor};
     use dartboard_editor::Clipboard;
     use dartboard_server::InMemStore;

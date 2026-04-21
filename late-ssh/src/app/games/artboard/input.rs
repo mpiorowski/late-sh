@@ -314,7 +314,7 @@ fn map_button(button: MouseButton) -> Option<AppPointerButton> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::games::dartboard::svc::DartboardService;
+    use crate::app::games::artboard::svc::DartboardService;
     use dartboard_core::{Canvas, CellValue, RgbColor};
     use dartboard_editor::Clipboard;
     use dartboard_server::{InMemStore, ServerHandle};
@@ -550,7 +550,7 @@ mod tests {
         assert!(matches!(second_down, InputAction::Handled));
         assert_eq!(
             state.brush_mode(),
-            crate::app::games::dartboard::state::BrushMode::Glyph('x')
+            crate::app::games::artboard::state::BrushMode::Glyph('x')
         );
         let floating = state
             .floating_view()

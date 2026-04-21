@@ -15,15 +15,15 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 app.is_playing_game = false;
                 return true;
             };
-            let action = super::dartboard::input::handle_byte(state, app.size, byte);
+            let action = super::artboard::input::handle_byte(state, app.size, byte);
             match action {
-                super::dartboard::input::InputAction::Ignored => return false,
-                super::dartboard::input::InputAction::Handled => return true,
-                super::dartboard::input::InputAction::Copy(text) => {
+                super::artboard::input::InputAction::Ignored => return false,
+                super::artboard::input::InputAction::Handled => return true,
+                super::artboard::input::InputAction::Copy(text) => {
                     app.pending_clipboard = Some(text);
                     return true;
                 }
-                super::dartboard::input::InputAction::Leave => {
+                super::artboard::input::InputAction::Leave => {
                     app.is_playing_game = false;
                     app.leave_dartboard();
                     return true;
@@ -141,7 +141,7 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
             let Some(state) = app.dartboard_state.as_mut() else {
                 return false;
             };
-            return super::dartboard::input::handle_arrow(state, app.size, key);
+            return super::artboard::input::handle_arrow(state, app.size, key);
         }
         return false;
     }
@@ -171,15 +171,15 @@ pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput
         return false;
     };
 
-    let action = super::dartboard::input::handle_event(state, app.size, event);
+    let action = super::artboard::input::handle_event(state, app.size, event);
     match action {
-        super::dartboard::input::InputAction::Ignored => false,
-        super::dartboard::input::InputAction::Handled => true,
-        super::dartboard::input::InputAction::Copy(text) => {
+        super::artboard::input::InputAction::Ignored => false,
+        super::artboard::input::InputAction::Handled => true,
+        super::artboard::input::InputAction::Copy(text) => {
             app.pending_clipboard = Some(text);
             true
         }
-        super::dartboard::input::InputAction::Leave => {
+        super::artboard::input::InputAction::Leave => {
             app.is_playing_game = false;
             app.leave_dartboard();
             true

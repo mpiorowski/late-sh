@@ -274,7 +274,7 @@ pub struct App {
     /// `Drop` impl). A full SSH-session drop cascades through `App` → this
     /// `Option` → the underlying client, so the seat is released on logout
     /// or connection loss.
-    pub(crate) dartboard_state: Option<crate::app::games::dartboard::state::State>,
+    pub(crate) dartboard_state: Option<crate::app::games::artboard::state::State>,
     pub(crate) dartboard_server: dartboard_server::ServerHandle,
     pub(crate) username: String,
 
@@ -547,12 +547,12 @@ impl App {
         if self.dartboard_state.is_some() {
             return;
         }
-        let svc = crate::app::games::dartboard::svc::DartboardService::new(
+        let svc = crate::app::games::artboard::svc::DartboardService::new(
             self.dartboard_server.clone(),
             self.user_id,
             &self.username,
         );
-        self.dartboard_state = Some(crate::app::games::dartboard::state::State::new(svc));
+        self.dartboard_state = Some(crate::app::games::artboard::state::State::new(svc));
         self.set_cursor_shape(CURSOR_SHAPE_STEADY_UNDERLINE);
     }
 

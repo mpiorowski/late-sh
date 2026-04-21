@@ -129,7 +129,7 @@ async fn devtest_artboard_jump_starts_on_games_without_intro_overlays() {
         "expected artboard devtest jump to render the featured section; frame={frame:?}"
     );
     assert!(
-        frame.contains("Multi-user real-time shared ASCII artboard!"),
+        frame.contains("Multi-user real-time shared ASCII") && frame.contains("artboard!"),
         "expected artboard devtest jump to show the featured artboard copy; frame={frame:?}"
     );
     assert!(

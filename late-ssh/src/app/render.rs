@@ -74,7 +74,7 @@ struct DrawContext<'a> {
     solitaire_state: &'a crate::app::games::solitaire::state::State,
     minesweeper_state: &'a crate::app::games::minesweeper::state::State,
     blackjack_state: &'a crate::app::games::blackjack::state::State,
-    dartboard_state: Option<&'a crate::app::games::dartboard::state::State>,
+    dartboard_state: Option<&'a crate::app::games::artboard::state::State>,
     dartboard_peer_count: usize,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
