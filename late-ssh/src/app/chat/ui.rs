@@ -176,7 +176,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static
     }
 
     let placeholder_text = if view.selected_message {
-        "1-5 react · r reply · e edit · d delete · p profile · c copy · i compose"
+        "S+1-5 react · r reply · e edit · d delete · p profile · c copy · i compose"
     } else {
         "Type a message · j/k select · /binds · or just ask @bot about anything"
     };
@@ -725,9 +725,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     }
 
     let composer_text_width = inner.width.saturating_sub(4).max(1) as usize;
-    let total_composer_lines = if view.notifications_selected {
-        1
-    } else if view.discover_selected {
+    let total_composer_lines = if view.notifications_selected || view.discover_selected {
         1
     } else if news_selected {
         chat_composer_lines_for_height(view.news_composer, composer_text_width)

@@ -1,7 +1,6 @@
 use late_core::{
     models::{
         chat_room::ChatRoom,
-        chat_room_member::ChatRoomMember,
         user::{User, UserParams},
     },
     test_utils::test_db,
@@ -76,81 +75,6 @@ async fn test_chat_room_topic_slug_normalization() {
 
     assert_eq!(public_room.slug.as_deref(), Some("rust-nerds"));
     assert_eq!(private_room.slug.as_deref(), Some("vps-d9d0"));
-}
-
-#[tokio::test]
-async fn test_chat_room_public_room_can_be_promoted_to_auto_join() {
-    let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-
-    let user1 = User::create(
-        &client,
-        UserParams {
-            fingerprint: "public-room-user-1".to_string(),
-            username: "pr1".to_string(),
-            settings: serde_json::json!({}),
-        },
-    )
-    .await
-    .unwrap();
-    let user2 = User::create(
-        &client,
-        UserParams {
-            fingerprint: "public-room-user-2".to_string(),
-            username: "pr2".to_string(),
-            settings: serde_json::json!({}),
-        },
-    )
-    .await
-    .unwrap();
-
-    let opt_in_room = ChatRoom::get_or_create_public_room(&client, "Rust Nerds")
-        .await
-        .expect("create opt-in public room");
-    ChatRoomMember::join(&client, opt_in_room.id, user1.id)
-        .await
-        .expect("join creator");
-
-    let promoted_room = ChatRoom::get_or_create_auto_join_public_room(&client, "rust nerds")
-        .await
-        .expect("promote room to auto-join");
-    assert_eq!(promoted_room.id, opt_in_room.id);
-    assert!(promoted_room.auto_join);
-
-    ChatRoom::add_all_users(&client, promoted_room.id)
-        .await
-        .expect("add all existing users");
-
-    assert!(
-        ChatRoomMember::is_member(&client, promoted_room.id, user1.id)
-            .await
-            .unwrap()
-    );
-    assert!(
-        ChatRoomMember::is_member(&client, promoted_room.id, user2.id)
-            .await
-            .unwrap()
-    );
-
-    let user3 = User::create(
-        &client,
-        UserParams {
-            fingerprint: "public-room-user-3".to_string(),
-            username: "pr3".to_string(),
-            settings: serde_json::json!({}),
-        },
-    )
-    .await
-    .unwrap();
-    ChatRoomMember::auto_join_public_rooms(&client, user3.id)
-        .await
-        .expect("auto-join future user");
-
-    assert!(
-        ChatRoomMember::is_member(&client, promoted_room.id, user3.id)
-            .await
-            .unwrap()
-    );
 }
 
 #[tokio::test]

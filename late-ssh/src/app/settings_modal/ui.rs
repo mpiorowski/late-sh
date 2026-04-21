@@ -364,10 +364,7 @@ fn draw_bio_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Span::raw(""),
         Style::default().fg(theme::TEXT()),
     );
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        padded,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), padded);
 }
 
 fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {

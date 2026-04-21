@@ -64,7 +64,7 @@ async fn screen_number_keys_switch_between_dashboard_games_and_chat() {
     let mut app = make_app(test_db.db.clone(), user.id, "screen-flow-it");
 
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, " Rooms ").await;
 
     app.handle_input(b"3");
     wait_for_render_contains(&mut app, " The Arcade ").await;
@@ -93,7 +93,7 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, " Rooms ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Dashboard ").await;
@@ -155,7 +155,7 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-compose-flow-it");
 
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, " Rooms ").await;
 
     app.handle_input(b"i2hey");
     wait_for_render_contains(&mut app, "2hey").await;
@@ -238,11 +238,11 @@ async fn chat_room_switch_ctrl_keys_wrap() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-switch-flow-it");
 
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, " Rooms ").await;
     wait_for_render_contains(&mut app, "> general").await;
 
     app.handle_input(b"\x10");
-    wait_for_render_contains(&mut app, "> mentions").await;
+    wait_for_render_contains(&mut app, "> discover").await;
 
     app.handle_input(b"\x0e");
     wait_for_render_contains(&mut app, "> general").await;
@@ -262,9 +262,9 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     let mut app = make_app(test_db.db.clone(), user.id, "help-notice-flow-it");
 
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, " Rooms ").await;
 
-    app.handle_input(b"i/help\r");
+    app.handle_input(b"i/binds\r");
     wait_for_render_contains(&mut app, " Guide ").await;
     wait_for_render_contains(&mut app, " Chat ").await;
     wait_for_render_contains(&mut app, "/ignore [@user]").await;
@@ -272,7 +272,7 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     let messages = ChatMessage::list_recent(&client, general.id, 20)
         .await
         .expect("list recent messages");
-    assert!(messages.is_empty(), "expected /help to stay client-side");
+    assert!(messages.is_empty(), "expected /binds to stay client-side");
 }
 
 #[tokio::test]
@@ -301,14 +301,14 @@ async fn members_command_shows_room_members_without_persisting_message() {
     let mut app = make_app(test_db.db.clone(), viewer.id, "list-room-members-flow-it");
 
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, " Rooms ").await;
     wait_for_render_contains(&mut app, "> general").await;
     wait_for_render_contains(&mut app, " Private ").await;
     wait_for_render_contains(&mut app, " side").await;
 
     app.handle_input(b" ");
-    wait_for_render_contains(&mut app, "[f] side").await;
-    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "[g] side").await;
+    app.handle_input(b"g");
     wait_for_render_contains(&mut app, "> side").await;
 
     app.handle_input(b"i/members\r");
@@ -351,7 +351,7 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     let (mut app, chat_service) =
         make_app_with_chat_service(test_db.db.clone(), viewer.id, "ignore-command-flow-it");
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut app, " Rooms ").await;
     wait_for_render_contains(&mut app, "message from ignored user").await;
 
     app.handle_input(b"i");
@@ -389,7 +389,7 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
 
     let mut refreshed_app = make_app(test_db.db.clone(), viewer.id, "ignore-command-refresh-it");
     refreshed_app.handle_input(b"2");
-    wait_for_render_contains(&mut refreshed_app, " Rooms (h/l)").await;
+    wait_for_render_contains(&mut refreshed_app, " Rooms ").await;
     helpers::assert_render_not_contains_for(
         &mut refreshed_app,
         post_ignore_body,

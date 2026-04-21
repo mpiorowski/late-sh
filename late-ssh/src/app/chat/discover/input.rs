@@ -1,4 +1,3 @@
-use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {

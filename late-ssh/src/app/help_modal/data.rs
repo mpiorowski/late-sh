@@ -95,7 +95,7 @@ pub fn chat_help_lines() -> Vec<String> {
     [
         "Commands",
         "  /binds             open this guide",
-        "  /public #room      open or create an auto-join public room",
+        "  /public #room      open or create a public room",
         "  /private #room     create a private room",
         "  /invite @user      add a user to the current room",
         "  /leave             leave the current room",

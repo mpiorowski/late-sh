@@ -13,7 +13,8 @@ async fn profile_page_opens_and_closes_settings_modal() {
     wait_for_render_contains(&mut app, "Press Enter or e to edit profile settings").await;
 
     app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, "Tune your identity").await;
+    wait_for_render_contains(&mut app, " Settings ").await;
+    wait_for_render_contains(&mut app, "Identity").await;
 
     app.handle_input(&[0x1B]);
     wait_for_render_contains(&mut app, "Press Enter or e to edit profile settings").await;

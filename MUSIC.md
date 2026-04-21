@@ -10,7 +10,7 @@ This file tracks the local music catalog used by `late.sh` radio.
 
 - `lofi`: done, 100-track manifest, mixed `CC0` and `CC-BY 4.0`
 - `ambient`: done, 93 tracks, mixed `CC0` and `CC-BY 4.0`
-- `classic`: done, 40 tracks, public domain via Musopen / Internet Archive
+- `classic`: done, 100-track calm-first manifest, public domain via Musopen / Internet Archive
 - `jazz`: pending
 
 ## Lofi
@@ -173,48 +173,203 @@ This section documents the current 100-track lofi manifest used by the regenerat
 
 ## Classic
 
-| # | Artist | Title | License | Source URL |
-|---|--------|-------|---------|------------|
-| 1 | Johann Sebastian Bach | Goldberg Variations, BWV 988 - Aria | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 2 | Johann Sebastian Bach | Goldberg Variations, BWV 988 - Variation 5 | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 3 | Johann Sebastian Bach | Goldberg Variations, BWV 988 - Variation 13 | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 4 | Johann Sebastian Bach | Goldberg Variations, BWV 988 - Aria Da Capo | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 5 | Ludwig van Beethoven | String Quartet No. 6 in B-flat Major, Op. 18 No. 6 - I. Allegro con brio | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 6 | Ludwig van Beethoven | String Quartet No. 6 in B-flat Major, Op. 18 No. 6 - II. Adagio ma non troppo | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 7 | Ludwig van Beethoven | String Quartet No. 6 in B-flat Major, Op. 18 No. 6 - III. Scherzo Allegro | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 8 | Ludwig van Beethoven | String Quartet No. 6 in B-flat Major, Op. 18 No. 6 - IV. La Malinconia | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 9 | Alexander Borodin | String Quartet No. 2 in D Major - I. Allegro moderato | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 10 | Alexander Borodin | String Quartet No. 2 in D Major - II. Scherzo Allegro | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 11 | Alexander Borodin | String Quartet No. 2 in D Major - III. Nocturne Andante | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 12 | Alexander Borodin | String Quartet No. 2 in D Major - IV. Finale Andante - Vivace | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 13 | Antonin Dvorak | String Quartet No. 12 in F Major, Op. 96 'American' - I. Allegro ma non troppo | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 14 | Antonin Dvorak | String Quartet No. 12 in F Major, Op. 96 'American' - II. Lento | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 15 | Antonin Dvorak | String Quartet No. 12 in F Major, Op. 96 'American' - III. Molto Vivace | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 16 | Antonin Dvorak | String Quartet No. 12 in F Major, Op. 96 'American' - IV. Finale Vivace ma non troppo | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 17 | Joseph Haydn | String Quartet in D Major, Op. 64 No. 5 'Lark' - I. Allegro moderato | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 18 | Joseph Haydn | String Quartet in D Major, Op. 64 No. 5 'Lark' - II. Adagio cantabile | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 19 | Joseph Haydn | String Quartet in D Major, Op. 64 No. 5 'Lark' - III. Menuetto Allegretto | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 20 | Joseph Haydn | String Quartet in D Major, Op. 64 No. 5 'Lark' - IV. Finale Vivace | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 21 | Wolfgang Amadeus Mozart | String Quartet No. 19 in C Major, K. 465 'Dissonance' - I. Adagio Allegro | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 22 | Wolfgang Amadeus Mozart | String Quartet No. 19 in C Major, K. 465 'Dissonance' - II. Andante cantabile | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 23 | Wolfgang Amadeus Mozart | String Quartet No. 19 in C Major, K. 465 'Dissonance' - III. Minuetto Allegretto | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 24 | Wolfgang Amadeus Mozart | String Quartet No. 19 in C Major, K. 465 'Dissonance' - IV. Allegro molto | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 25 | Franz Schubert | Sonata in A Major, D. 664 - I. Allegro moderato | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 26 | Franz Schubert | Sonata in A Major, D. 664 - II. Andante | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 27 | Franz Schubert | Sonata in A Major, D. 664 - III. Allegro | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 28 | Franz Schubert | Sonata in E-flat Major, D. 568 - I. Allegro moderato | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 29 | Franz Schubert | Sonata in E-flat Major, D. 568 - II. Andante molto | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 30 | Franz Schubert | Sonata in E-flat Major, D. 568 - III. Menuetto Allegretto | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 31 | Franz Schubert | Sonata in E-flat Major, D. 568 - IV. Allegro moderato | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 32 | Johannes Brahms | Symphony No. 2 in D Major, Op. 73 - I. Allegro non troppo | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 33 | Johannes Brahms | Symphony No. 2 in D Major, Op. 73 - II. Adagio non troppo | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 34 | Johannes Brahms | Symphony No. 2 in D Major, Op. 73 - III. Allegretto grazioso | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 35 | Josef Suk | Meditation | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 36 | Alexander Borodin | In the Steppes of Central Asia | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 37 | Felix Mendelssohn | Hebrides Overture 'Fingal's Cave' | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 38 | Bedrich Smetana | Ma Vlast - Vltava | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 39 | Wolfgang Amadeus Mozart | Magic Flute Overture | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
-| 40 | Ludwig van Beethoven | Egmont Overture, Op. 84 | Public Domain | https://archive.org/details/MusopenCollectionAsFlac |
+This section documents the current 100-track calm-first classical manifest used by the regenerated playlist files. The dev Liquidsoap stack mounts `tmp/music/classic` onto `/music/classic`, so the local runtime playlist resolves against the refreshed temp library.
+
+### Johann Sebastian Bach - Goldberg Variations, BWV 988
+
+- Count: 32
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: Aria; Variation 1; Variation 2; Variation 3. Canon on the unison; Variation 4; Variation 5; Variation 6. Canon on the second; Variation 7; Variation 8; Variation 9. Canon on the third; Variation 10. Fughetta; Variation 11; Variation 12. Canon on the fourth; Variation 13; Variation 14; Variation 15. Canon on the fifth; Variation 16. Overture; Variation 17; Variation 18. Canon on the sixth; Variation 19; Variation 20; Variation 21. Canon on the seventh; Variation 22; Variation 23; Variation 24. Canon on the octave; Variation 25; Variation 26; Variation 27. Canon on the ninth; Variation 28; Variation 29; Variation 30. Quodlibet; Aria Da Capo
+
+### Ludwig van Beethoven - String Quartet No. 6 in B-flat Major, Op. 18 No. 6
+
+- Count: 4
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Allegro con brio; II. Adagio ma non troppo; III. Scherzo Allegro; IV. La Malinconia
+
+### Wolfgang Amadeus Mozart - String Quartet No. 15 in D Minor, K. 421
+
+- Count: 4
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Allegro moderato; II. Andante; III. Minuetto; IV. Allegro ma non troppo
+
+### Ludwig van Beethoven - Symphony No. 3 in E Flat Major "Eroica", Op. 55
+
+- Count: 1
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: 02 - Marcia funebre Adagio assai
+
+### Alexander Borodin - String Quartet No. 1 in A Major
+
+- Count: 3
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: 01 - Moderato - Allegro; 02 - Andante con moto; 04 - Andante - Allegro risoluto
+
+### Alexander Borodin - String Quartet No. 2 in D Major
+
+- Count: 4
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Allegro moderato; II. Scherzo Allegro; III. Nocturne Andante; IV. Finale Andante - Vivace
+
+### Franz Schubert - Sonata in A Minor, D. 845
+
+- Count: 2
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Moderato; II. Andante poco mosso
+
+### Johannes Brahms - Symphony No. 1 in C Minor, Op. 68
+
+- Count: 2
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: 02 - Andante sostenuto; 03 - Un poco allegretto e grazioso
+
+### Johannes Brahms - Symphony No. 3 in F Major, Op. 90
+
+- Count: 4
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: 01 - Allegro con brio; 02 - Andante; 03 - Poco allegretto; 04 - Allegro
+
+### Johannes Brahms - Symphony No. 4 in E Minor, Op. 98
+
+- Count: 2
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: 01 - Allegro Non Troppo; 02 - Andante Moderato
+
+### Franz Schubert - Sonata in A Minor, D. 959
+
+- Count: 2
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: II. Andantino; IV. Rondo Allegretto
+
+### Antonin Dvorak - String Quartet No. 12 in F Major, Op. 96 'American'
+
+- Count: 3
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Allegro ma non troppo; II. Lento; IV. Finale Vivace ma non troppo
+
+### Franz Schubert - Sonata in C Minor, D. 958
+
+- Count: 1
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: II. Adagio
+
+### Antonin Dvorak - String Quartet No. 10 in E Flat, Op. 51
+
+- Count: 3
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: 01 - Allegro Ma Non Troppo; 02 - Dumka; 03 - Romanza
+
+### Franz Schubert - Sonata in A Minor, D. 784
+
+- Count: 1
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: II. Andante
+
+### Edvard Grieg - Peer Gynt Suite No. 1, Op. 46
+
+- Count: 3
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: 01 - Morning; 02 - Aase's Death; 03 - Anitra's Dream
+
+### Felix Mendelssohn - Symphony No. 3 in A Minor 'Scottish', Op. 56
+
+- Count: 2
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Andante con moto; III. Adagio
+
+### Joseph Haydn - String Quartet in D Major, Op. 64 No. 5 'Lark'
+
+- Count: 4
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Allegro moderato; II. Adagio cantabile; III. Menuetto Allegretto; IV. Finale Vivace
+
+### Felix Mendelssohn - Symphony No. 4 in A Major, Op. 90 'Italian'
+
+- Count: 3
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: 01 - Allegro vivace; 02 - Andante con moto; 03 - Con moto moderato
+
+### Wolfgang Amadeus Mozart - String Quartet No. 19 in C Major, K. 465 'Dissonance'
+
+- Count: 4
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Adagio Allegro; II. Andante cantabile; III. Minuetto Allegretto; IV. Allegro molto
+
+### Franz Schubert - Sonata in A Major, D. 664
+
+- Count: 3
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Allegro moderato; II. Andante; III. Allegro
+
+### Franz Schubert - Sonata in E-flat Major, D. 568
+
+- Count: 4
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Allegro moderato; II. Andante molto; III. Menuetto Allegretto; IV. Allegro moderato
+
+### Johannes Brahms - Symphony No. 2 in D Major, Op. 73
+
+- Count: 3
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: I. Allegro non troppo; II. Adagio non troppo; III. Allegretto grazioso
+
+### Josef Suk - Meditation
+
+- Count: 1
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: Meditation
+
+### Alexander Borodin - In the Steppes of Central Asia
+
+- Count: 1
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: In the Steppes of Central Asia
+
+### Felix Mendelssohn - Hebrides Overture 'Fingal's Cave'
+
+- Count: 1
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: Hebrides Overture 'Fingal's Cave'
+
+### Bedrich Smetana - Ma Vlast - Vltava
+
+- Count: 1
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: Ma Vlast - Vltava
+
+### Wolfgang Amadeus Mozart - Symphony No. 40 in G Minor, K. 550
+
+- Count: 2
+- License: Public Domain
+- Source: https://archive.org/details/MusopenCollectionAsFlac
+- Tracks: II. Andante; III. Menuetto Allegretto
 
 ## Planned Sources
 
