@@ -96,15 +96,11 @@ fn artboard_info_lines(state: &State) -> Vec<Line<'static>> {
     };
     lines.push(info_label_value("Brush", brush, brush_color));
     let (selection_value, selection_color) = if let Some(selection) = state.selection_view() {
-        (
-            format!(
-                "{},{} → {},{}",
-                selection.anchor.x, selection.anchor.y, selection.cursor.x, selection.cursor.y
-            ),
-            theme::SUCCESS(),
-        )
+        let width = selection.anchor.x.abs_diff(selection.cursor.x) + 1;
+        let height = selection.anchor.y.abs_diff(selection.cursor.y) + 1;
+        (format!("{width}x{height}"), theme::SUCCESS())
     } else {
-        ("None".to_string(), theme::TEXT_FAINT())
+        ("none".to_string(), theme::TEXT_FAINT())
     };
     lines.push(info_label_value(
         "Selection",
@@ -989,7 +985,6 @@ mod tests {
     use crate::app::games::artboard::state::State;
     use dartboard_core::{CellValue, RgbColor};
     use dartboard_editor::Clipboard;
-    use dartboard_local::InMemStore;
     use ratatui::buffer::Buffer;
     use uuid::Uuid;
 
@@ -1048,7 +1043,20 @@ mod tests {
         assert_eq!(lines[0].to_string(), "Cursor     0,0");
         assert_eq!(lines[1].to_string(), "Pan        ◀ ▲ ▼ ▶");
         assert_eq!(lines[2].to_string(), "Brush      none");
-        assert_eq!(lines[3].to_string(), "Selection  None");
+        assert_eq!(lines[3].to_string(), "Selection  none");
+    }
+
+    #[test]
+    fn info_lines_show_selection_dimensions() {
+        let mut state = test_state();
+        state.begin_selection_from_cursor();
+        state.move_right((80, 24));
+        state.move_right((80, 24));
+        state.move_down((80, 24));
+        assert!(state.update_selection_to_cursor());
+
+        let lines = artboard_info_lines(&state);
+        assert_eq!(lines[3].to_string(), "Selection  3x2");
     }
 
     #[test]
@@ -1206,7 +1214,7 @@ mod tests {
     }
 
     fn test_state() -> State {
-        let server = dartboard_local::ServerHandle::spawn_local(InMemStore);
+        let server = crate::dartboard::spawn_server();
         let svc = DartboardService::new(server, Uuid::now_v7(), "painter");
         let mut state = State::new(svc);
         state.snapshot.your_color = Some(RgbColor::new(255, 196, 64));

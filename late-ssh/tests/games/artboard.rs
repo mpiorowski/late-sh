@@ -4,9 +4,10 @@ use std::{
 };
 
 use dartboard_core::{CanvasOp, Pos, RgbColor};
-use dartboard_local::{InMemStore, MAX_PLAYERS, ServerHandle};
+use dartboard_local::MAX_PLAYERS;
 use late_ssh::app::games::artboard::state::State;
 use late_ssh::app::games::artboard::svc::{DartboardEvent, DartboardService};
+use late_ssh::dartboard;
 use uuid::Uuid;
 
 fn wait_for<T>(mut check: impl FnMut() -> Option<T>) -> T {
@@ -29,7 +30,7 @@ fn test_color() -> RgbColor {
 
 #[test]
 fn dartboard_services_share_canvas_updates() {
-    let server = ServerHandle::spawn_local(InMemStore);
+    let server = dartboard::spawn_server();
     let alice = DartboardService::new(server.clone(), Uuid::now_v7(), "alice");
     let bob = DartboardService::new(server, Uuid::now_v7(), "bob");
 
@@ -59,7 +60,7 @@ fn dartboard_services_share_canvas_updates() {
 
 #[test]
 fn dartboard_service_emits_peer_join_and_left() {
-    let server = ServerHandle::spawn_local(InMemStore);
+    let server = dartboard::spawn_server();
     let alice = DartboardService::new(server.clone(), Uuid::now_v7(), "alice");
     let mut alice_events = alice.subscribe_events();
 
@@ -95,7 +96,7 @@ fn dartboard_service_emits_peer_join_and_left() {
 
 #[test]
 fn dartboard_eleventh_service_reports_connect_rejected() {
-    let server = ServerHandle::spawn_local(InMemStore);
+    let server = dartboard::spawn_server();
 
     let mut clients = Vec::new();
     for i in 0..MAX_PLAYERS {
@@ -114,7 +115,7 @@ fn dartboard_eleventh_service_reports_connect_rejected() {
 
 #[test]
 fn dartboard_paste_bytes_lays_out_multiline_text_with_wrap() {
-    let server = ServerHandle::spawn_local(InMemStore);
+    let server = dartboard::spawn_server();
     let svc = DartboardService::new(server, Uuid::now_v7(), "painter");
 
     // Wait for Welcome so the snapshot carries the server's canvas + our color.

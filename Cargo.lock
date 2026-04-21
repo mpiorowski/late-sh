@@ -1152,7 +1152,9 @@ dependencies = [
 
 [[package]]
 name = "dartboard-core"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b43f65e30afa66e93884ea0e53c6c289791081cfdb67c6baca3dc5607613858"
 dependencies = [
  "serde",
  "unicode-width",
@@ -1160,21 +1162,27 @@ dependencies = [
 
 [[package]]
 name = "dartboard-editor"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "492fd4b9408d10819dad3488673d5152fc4e3282b0b283a3f82bdde0e5a89ef4"
 dependencies = [
  "dartboard-core",
 ]
 
 [[package]]
 name = "dartboard-local"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5733f98e637d89003d55123b95074ea479b925678c1d99076bb165e8ecbaff2f"
 dependencies = [
  "dartboard-core",
 ]
 
 [[package]]
 name = "dartboard-picker-core"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d0a716114c887524d7c21b08c93fdd80eec3090f39e1318b983f6d5d0661081"
 dependencies = [
  "emojis",
  "serde_json",
@@ -1183,7 +1191,9 @@ dependencies = [
 
 [[package]]
 name = "dartboard-tui"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23411a0442d0da99feafc482c072ea8a406597aa891788dd634b14a00b2d4ed4"
 dependencies = [
  "dartboard-core",
  "ratatui",

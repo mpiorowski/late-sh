@@ -45,11 +45,11 @@ base64 = "0.22"
 bytes = "1"
 cpal = "0.16"
 crossterm = "0.29"
-dartboard-core = { path = "../dartboard/dartboard-core" }
-dartboard-editor = { path = "../dartboard/dartboard-editor" }
-dartboard-local = { path = "../dartboard/dartboard-local" }
-dartboard-picker-core = { path = "../dartboard/dartboard-picker-core" }
-dartboard-tui = { path = "../dartboard/dartboard-tui" }
+dartboard-core = "0.1.1"
+dartboard-editor = "0.1.1"
+dartboard-local = "0.1.1"
+dartboard-picker-core = "0.1.1"
+dartboard-tui = "0.1.1"
 deadpool-postgres = "0.14"
 emojis = "0.7"
 futures-util = "0.3"

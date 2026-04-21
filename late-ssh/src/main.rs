@@ -134,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());
-    let dartboard_server = dartboard_local::ServerHandle::spawn_local(dartboard_local::InMemStore);
+    let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service =
         late_ssh::app::games::leaderboard::svc::LeaderboardService::new(db.clone());
     let nonogram_library = match late_ssh::app::games::nonogram::state::load_default_library() {

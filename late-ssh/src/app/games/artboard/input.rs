@@ -542,7 +542,6 @@ mod tests {
     use crate::app::games::artboard::svc::DartboardService;
     use dartboard_core::{Canvas, CellValue, RgbColor};
     use dartboard_editor::Clipboard;
-    use dartboard_local::{InMemStore, ServerHandle};
     use uuid::Uuid;
 
     #[test]
@@ -1060,7 +1059,7 @@ mod tests {
     }
 
     fn test_state() -> State {
-        let server = ServerHandle::spawn_local(InMemStore);
+        let server = crate::dartboard::spawn_server();
         let svc = DartboardService::new(server, Uuid::now_v7(), "painter");
         let mut state = State::new(svc);
         state.snapshot.your_color = Some(RgbColor::new(255, 196, 64));
