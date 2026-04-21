@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use super::user::{
     User, extract_bio, extract_country, extract_enable_background_color, extract_notify_bell,
-    extract_notify_cooldown_mins, extract_notify_kinds, extract_theme_id, extract_timezone,
+    extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_theme_id,
+    extract_timezone,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -16,6 +17,8 @@ pub struct Profile {
     pub notify_kinds: Vec<String>,
     pub notify_bell: bool,
     pub notify_cooldown_mins: i32,
+    /// One of `"both"`, `"osc777"`, `"osc9"`. `None` falls back to `"both"`.
+    pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
 }
@@ -29,6 +32,7 @@ pub struct ProfileParams {
     pub notify_kinds: Vec<String>,
     pub notify_bell: bool,
     pub notify_cooldown_mins: i32,
+    pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
 }
@@ -72,6 +76,14 @@ impl Profile {
             .map(ToString::to_string)
             .or_else(|| extract_theme_id(&current_user.settings))
             .unwrap_or_else(|| "late".to_string());
+        let notify_format = params
+            .notify_format
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| matches!(*value, "both" | "osc777" | "osc9"))
+            .map(ToString::to_string)
+            .or_else(|| extract_notify_format(&current_user.settings))
+            .unwrap_or_else(|| "both".to_string());
 
         let row = client
             .query_opt(
@@ -85,10 +97,11 @@ impl Profile {
                          'notify_bell', $6::bool,
                          'notify_cooldown_mins', $7::int,
                          'theme_id', $8::text,
-                         'enable_background_color', $9::bool
+                         'enable_background_color', $9::bool,
+                         'notify_format', $10::text
                      ),
                      updated = current_timestamp
-                 WHERE id = $10
+                 WHERE id = $11
                  RETURNING *",
                 &[
                     &params.username,
@@ -100,6 +113,7 @@ impl Profile {
                     &cooldown,
                     &theme_id,
                     &params.enable_background_color,
+                    &notify_format,
                     &user_id,
                 ],
             )
@@ -117,6 +131,7 @@ impl Profile {
             notify_kinds: extract_notify_kinds(&user.settings),
             notify_bell: extract_notify_bell(&user.settings),
             notify_cooldown_mins: extract_notify_cooldown_mins(&user.settings),
+            notify_format: extract_notify_format(&user.settings),
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
         }

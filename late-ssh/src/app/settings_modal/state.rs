@@ -23,7 +23,6 @@ pub enum PickerKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Row {
     Username,
-    Bio,
     Theme,
     BackgroundColor,
     Country,
@@ -33,13 +32,12 @@ pub enum Row {
     GameEvents,
     Bell,
     Cooldown,
-    Save,
+    NotifyFormat,
 }
 
 impl Row {
-    pub const ALL: [Row; 12] = [
+    pub const ALL: [Row; 11] = [
         Row::Username,
-        Row::Bio,
         Row::Theme,
         Row::BackgroundColor,
         Row::Country,
@@ -49,8 +47,28 @@ impl Row {
         Row::GameEvents,
         Row::Bell,
         Row::Cooldown,
-        Row::Save,
+        Row::NotifyFormat,
     ];
+}
+
+/// Top-level tab in the settings modal. `Settings` holds every compact
+/// row (identity/appearance/location/notifications); `Bio` is a separate
+/// full-width pane with the markdown editor + preview.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Tab {
+    Settings,
+    Bio,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 2] = [Tab::Settings, Tab::Bio];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Settings => "Settings",
+            Tab::Bio => "Bio",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -66,6 +84,7 @@ pub struct SettingsModalState {
     profile_service: ProfileService,
     user_id: Uuid,
     draft: Profile,
+    selected_tab: Tab,
     row_index: usize,
     editing_username: bool,
     username_input: TextArea<'static>,
@@ -80,6 +99,7 @@ impl SettingsModalState {
             profile_service,
             user_id,
             draft: Profile::default(),
+            selected_tab: Tab::Settings,
             row_index: 0,
             editing_username: false,
             username_input: new_username_textarea(false),
@@ -91,12 +111,42 @@ impl SettingsModalState {
 
     pub fn open_from_profile(&mut self, profile: &Profile, _modal_width: u16) {
         self.draft = profile.clone();
+        self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
         self.editing_bio = false;
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
+    }
+
+    pub fn selected_tab(&self) -> Tab {
+        self.selected_tab
+    }
+
+    /// Switch to the neighboring tab. Auto-saves + ends any in-flight bio
+    /// edit when leaving the Bio tab so the preview reflects the draft.
+    pub fn cycle_tab(&mut self, forward: bool) {
+        let idx = Tab::ALL
+            .iter()
+            .position(|t| *t == self.selected_tab)
+            .unwrap_or(0);
+        let next_idx = if forward {
+            (idx + 1) % Tab::ALL.len()
+        } else {
+            (idx + Tab::ALL.len() - 1) % Tab::ALL.len()
+        };
+        let next = Tab::ALL[next_idx];
+        if self.selected_tab == Tab::Bio && next != Tab::Bio && self.editing_bio {
+            self.stop_bio_edit();
+            self.save();
+        }
+        if self.selected_tab == Tab::Settings && self.editing_username {
+            // Leaving the Settings tab mid-username-edit → commit what's typed.
+            self.submit_username();
+            self.save();
+        }
+        self.selected_tab = next;
     }
 
     pub fn set_modal_width(&mut self, _modal_width: u16) {
@@ -222,22 +272,28 @@ impl SettingsModalState {
     }
 
     pub fn apply_picker_selection(&mut self) {
+        let mut mutated = false;
         match self.picker.kind {
             Some(PickerKind::Country) => {
                 let options = self.filtered_countries();
                 if let Some(country) = options.get(self.picker.selected_index) {
                     self.draft.country = Some(country.code.to_string());
+                    mutated = true;
                 }
             }
             Some(PickerKind::Timezone) => {
                 let options = self.filtered_timezones();
                 if let Some(timezone) = options.get(self.picker.selected_index) {
                     self.draft.timezone = Some((*timezone).to_string());
+                    mutated = true;
                 }
             }
             None => {}
         }
         self.close_picker();
+        if mutated {
+            self.save();
+        }
     }
 
     pub fn start_username_edit(&mut self) {
@@ -256,6 +312,7 @@ impl SettingsModalState {
         let normalized = sanitize_username_input(self.username_text().trim());
         self.username_input = new_username_textarea(false);
         self.draft.username = normalized;
+        self.save();
     }
 
     pub fn username_push(&mut self, ch: char) {
@@ -329,6 +386,7 @@ impl SettingsModalState {
         self.draft.bio = self.bio_text().trim_end().to_string();
         reset_bio_view_to_top(&mut self.bio_input);
         set_bio_cursor_visible(&mut self.bio_input, false);
+        self.save();
     }
 
     pub fn bio_push(&mut self, ch: char) {
@@ -390,8 +448,11 @@ impl SettingsModalState {
         self.bio_input = new_bio_textarea(self.editing_bio);
     }
 
+    /// Cycle the value of the currently selected row and auto-persist.
+    /// Username/Country/Timezone don't cycle here (they open editors/pickers);
+    /// this only fires for the toggle/enum rows.
     pub fn cycle_setting(&mut self, forward: bool) {
-        match self.selected_row() {
+        let mutated = match self.selected_row() {
             Row::Theme => {
                 let current = self
                     .draft
@@ -399,19 +460,43 @@ impl SettingsModalState {
                     .as_deref()
                     .unwrap_or_else(|| theme::normalize_id(""));
                 self.draft.theme_id = Some(theme::cycle_id(current, forward).to_string());
+                true
             }
             Row::BackgroundColor => {
                 self.draft.enable_background_color ^= true;
+                true
             }
-            Row::DirectMessages => toggle_kind(&mut self.draft.notify_kinds, "dms"),
-            Row::Mentions => toggle_kind(&mut self.draft.notify_kinds, "mentions"),
-            Row::GameEvents => toggle_kind(&mut self.draft.notify_kinds, "game_events"),
-            Row::Bell => self.draft.notify_bell ^= true,
+            Row::DirectMessages => {
+                toggle_kind(&mut self.draft.notify_kinds, "dms");
+                true
+            }
+            Row::Mentions => {
+                toggle_kind(&mut self.draft.notify_kinds, "mentions");
+                true
+            }
+            Row::GameEvents => {
+                toggle_kind(&mut self.draft.notify_kinds, "game_events");
+                true
+            }
+            Row::Bell => {
+                self.draft.notify_bell ^= true;
+                true
+            }
             Row::Cooldown => {
                 self.draft.notify_cooldown_mins =
                     cycle_cooldown_value(self.draft.notify_cooldown_mins, forward);
+                true
             }
-            _ => {}
+            Row::NotifyFormat => {
+                self.draft.notify_format = Some(
+                    cycle_notify_format(self.draft.notify_format.as_deref(), forward).to_string(),
+                );
+                true
+            }
+            _ => false,
+        };
+        if mutated {
+            self.save();
         }
     }
 
@@ -426,6 +511,7 @@ impl SettingsModalState {
                 notify_kinds: self.draft.notify_kinds.clone(),
                 notify_bell: self.draft.notify_bell,
                 notify_cooldown_mins: self.draft.notify_cooldown_mins,
+                notify_format: self.draft.notify_format.clone(),
                 theme_id: Some(
                     self.draft
                         .theme_id
@@ -436,6 +522,20 @@ impl SettingsModalState {
             },
         );
     }
+}
+
+fn cycle_notify_format(current: Option<&str>, forward: bool) -> &'static str {
+    const OPTIONS: &[&str] = &["both", "osc777", "osc9"];
+    let idx = OPTIONS
+        .iter()
+        .position(|value| Some(*value) == current)
+        .unwrap_or(0);
+    let next = if forward {
+        (idx + 1) % OPTIONS.len()
+    } else {
+        (idx + OPTIONS.len() - 1) % OPTIONS.len()
+    };
+    OPTIONS[next]
 }
 
 fn toggle_kind(kinds: &mut Vec<String>, kind: &str) {

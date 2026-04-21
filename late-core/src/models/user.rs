@@ -27,6 +27,7 @@ const THEME_ID_KEY: &str = "theme_id";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
+const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
@@ -314,6 +315,17 @@ pub fn extract_notify_cooldown_mins(settings: &Value) -> i32 {
         .and_then(Value::as_i64)
         .unwrap_or(0)
         .max(0) as i32
+}
+
+/// Valid values: `"both"` (default), `"osc777"`, `"osc9"`. Returns `None`
+/// for missing, empty, or unrecognized values so the caller can fall back
+/// to the default.
+pub fn extract_notify_format(settings: &Value) -> Option<String> {
+    let raw = settings.get(NOTIFY_FORMAT_KEY).and_then(Value::as_str)?;
+    match raw.trim() {
+        "both" | "osc777" | "osc9" => Some(raw.trim().to_string()),
+        _ => None,
+    }
 }
 
 pub fn extract_enable_background_color(settings: &Value) -> bool {

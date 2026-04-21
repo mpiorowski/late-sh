@@ -15,8 +15,8 @@ use crate::app::{
 use super::state::ProfileModalState;
 use crate::app::profile::ui::timezone_current_time;
 
-const MODAL_WIDTH: u16 = 80;
-const MODAL_HEIGHT: u16 = 22;
+const MODAL_WIDTH: u16 = 92;
+const MODAL_HEIGHT: u16 = 28;
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
@@ -49,9 +49,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     );
 
     let footer = Line::from(vec![
-        Span::styled("j/k", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),

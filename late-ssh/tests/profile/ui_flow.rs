@@ -36,6 +36,7 @@ async fn profile_page_renders_saved_country_timezone_and_bio() {
             notify_kinds: vec!["dms".to_string()],
             notify_bell: true,
             notify_cooldown_mins: 5,
+            notify_format: None,
             theme_id: Some("late".to_string()),
             enable_background_color: false,
         },

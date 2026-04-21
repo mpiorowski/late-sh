@@ -38,8 +38,8 @@ use crate::{
     web::WebChatRegistry,
 };
 
-/// Which desktop-notification OSC sequence(s) to emit. Defaults to `Both`
-/// until the client answers an XTVERSION probe with a known terminal name.
+/// Which desktop-notification OSC sequence(s) to emit. Chosen by the user
+/// in profile settings; stored as a string key and mapped here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NotificationMode {
     Both,
@@ -47,31 +47,16 @@ pub(crate) enum NotificationMode {
     Osc9,
 }
 
-/// Map an XTVERSION payload (the bytes between `ESC P > |` and `ESC \`,
-/// e.g. `kitty(0.31.0)`) to the preferred notification mode. Returns
-/// `None` when the terminal is unknown, so callers leave the session on
-/// `Both`.
-pub(crate) fn notification_mode_for_terminal(payload: &str) -> Option<NotificationMode> {
-    let name_end = payload.find('(').unwrap_or(payload.len());
-    let name = payload[..name_end].trim();
-
-    // Case-insensitive match so e.g. `WezTerm` and `wezterm` both hit.
-    // Prefixes keep us working across version suffixes and minor rebrands.
-    let lower = name.to_ascii_lowercase();
-    if lower.starts_with("iterm2") {
-        Some(NotificationMode::Osc9)
-    } else if lower.starts_with("kitty")
-        || lower.starts_with("wezterm")
-        || lower.starts_with("ghostty")
-        || lower.starts_with("foot")
-        || lower.starts_with("konsole")
-        || lower.starts_with("rxvt-unicode")
-        || lower.starts_with("urxvt")
-        || lower.starts_with("mlterm")
-    {
-        Some(NotificationMode::Osc777)
-    } else {
-        None
+impl NotificationMode {
+    /// Map the `notify_format` profile field to a concrete mode. Unknown
+    /// or missing values fall back to `Both`, matching the on-read
+    /// default in `late_core::models::user::extract_notify_format`.
+    pub(crate) fn from_format(format: Option<&str>) -> Self {
+        match format.unwrap_or("both") {
+            "osc777" => Self::Osc777,
+            "osc9" => Self::Osc9,
+            _ => Self::Both,
+        }
     }
 }
 
@@ -249,11 +234,6 @@ pub struct App {
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
-
-    /// Which OSC sequence(s) to emit for desktop notifications. Starts at
-    /// `Both` and narrows when an XTVERSION (`CSI > q`) reply identifies
-    /// the client terminal. See `set_terminal_version`.
-    pub(crate) notification_mode: NotificationMode,
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -483,7 +463,6 @@ impl App {
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
             last_terminal_bg: None,
-            notification_mode: NotificationMode::Both,
         })
     }
 
@@ -495,27 +474,6 @@ impl App {
 
     pub fn handle_input(&mut self, data: &[u8]) {
         crate::app::input::handle(self, data)
-    }
-
-    /// Called when an XTVERSION DCS reply has been parsed. `payload` is the
-    /// raw string between `ESC P > |` and `ESC \`, e.g. `kitty(0.31.0)`.
-    pub(crate) fn set_terminal_version(&mut self, payload: &str) {
-        match notification_mode_for_terminal(payload) {
-            Some(mode) => {
-                tracing::info!(
-                    payload,
-                    ?mode,
-                    "narrowed notification mode from XTVERSION reply"
-                );
-                self.notification_mode = mode;
-            }
-            None => {
-                tracing::info!(
-                    payload,
-                    "unknown terminal from XTVERSION reply; staying on Both"
-                );
-            }
-        }
     }
 
     pub fn toggle_paired_client_mute(&mut self) -> bool {
@@ -565,11 +523,7 @@ impl App {
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
         // 1006h = SGR extended encoding (ESC[< sequences instead of legacy X11)
         // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~)
-        // CSI > q = XTVERSION query. Reply is a DCS sequence
-        // (`ESC P > | <name>(<version>) ESC \`) parsed in input.rs; the
-        // session starts in NotificationMode::Both and narrows once it
-        // arrives. Terminals that don't implement XTVERSION stay on Both.
-        buf.extend_from_slice(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[>q");
+        buf.extend_from_slice(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h");
         buf
     }
 
@@ -650,38 +604,31 @@ mod tests {
     }
 
     #[test]
-    fn notification_mode_for_terminal_maps_known_terminals() {
+    fn notification_mode_from_format_maps_known_values() {
         assert_eq!(
-            notification_mode_for_terminal("kitty(0.31.0)"),
-            Some(NotificationMode::Osc777)
+            NotificationMode::from_format(Some("both")),
+            NotificationMode::Both
         );
         assert_eq!(
-            notification_mode_for_terminal("WezTerm(20240127)"),
-            Some(NotificationMode::Osc777)
+            NotificationMode::from_format(Some("osc777")),
+            NotificationMode::Osc777
         );
         assert_eq!(
-            notification_mode_for_terminal("ghostty(1.0.0)"),
-            Some(NotificationMode::Osc777)
-        );
-        assert_eq!(
-            notification_mode_for_terminal("iTerm2(3.5.0)"),
-            Some(NotificationMode::Osc9)
+            NotificationMode::from_format(Some("osc9")),
+            NotificationMode::Osc9
         );
     }
 
     #[test]
-    fn notification_mode_for_terminal_unknown_returns_none() {
-        assert_eq!(notification_mode_for_terminal("xterm(390)"), None);
-        assert_eq!(notification_mode_for_terminal(""), None);
-        assert_eq!(notification_mode_for_terminal("something-weird"), None);
-    }
-
-    #[test]
-    fn enter_alt_screen_includes_xtversion_probe() {
-        let bytes = App::enter_alt_screen();
-        assert!(
-            bytes.windows(4).any(|w| w == b"\x1b[>q"),
-            "expected CSI > q in startup bytes, got: {bytes:?}"
+    fn notification_mode_from_format_defaults_to_both() {
+        assert_eq!(NotificationMode::from_format(None), NotificationMode::Both);
+        assert_eq!(
+            NotificationMode::from_format(Some("")),
+            NotificationMode::Both
+        );
+        assert_eq!(
+            NotificationMode::from_format(Some("garbage")),
+            NotificationMode::Both
         );
     }
 }

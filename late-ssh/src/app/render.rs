@@ -335,7 +335,7 @@ impl App {
                 let payload = desktop_notification_bytes(
                     &notif.title,
                     &notif.body,
-                    self.notification_mode,
+                    NotificationMode::from_format(profile.notify_format.as_deref()),
                     profile.notify_bell,
                 );
                 self.pending_terminal_commands.push(payload);

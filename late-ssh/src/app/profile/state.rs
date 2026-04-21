@@ -167,6 +167,7 @@ impl ProfileState {
                 notify_kinds: self.profile.notify_kinds.clone(),
                 notify_bell: self.profile.notify_bell,
                 notify_cooldown_mins: self.profile.notify_cooldown_mins,
+                notify_format: self.profile.notify_format.clone(),
                 theme_id: Some(self.theme_id().to_string()),
                 enable_background_color: self.profile.enable_background_color,
             },

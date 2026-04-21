@@ -9,14 +9,16 @@ Sources:
   Jazz:      Kevin MacLeod (CC-BY) via Internet Archive + HoliznaCC0 (CC0) via Bandcamp
 
 Dependencies: yt-dlp, ffmpeg, python3
-Usage: python3 scripts/fetch_cc_music.py [--genre lofi|ambient|classic|jazz|all]
+Usage: python3 scripts/fetch_cc_music.py [--genre lofi|ambient|classic|jazz|all] [--music-dir PATH] [--skip-m3u]
 """
 
 import subprocess, json, os, sys, re, urllib.request, glob, argparse
 from pathlib import Path
 
-MUSIC_DIR = Path(__file__).resolve().parent.parent / "music"
-LIQUIDSOAP_DIR = Path(__file__).resolve().parent.parent / "infra" / "liquidsoap"
+DEFAULT_MUSIC_DIR = Path(__file__).resolve().parent.parent / "music"
+DEFAULT_LIQUIDSOAP_DIR = Path(__file__).resolve().parent.parent / "infra" / "liquidsoap"
+MUSIC_DIR = DEFAULT_MUSIC_DIR
+LIQUIDSOAP_DIR = DEFAULT_LIQUIDSOAP_DIR
 
 # ---------------------------------------------------------------------------
 # Source definitions
@@ -25,9 +27,9 @@ LIQUIDSOAP_DIR = Path(__file__).resolve().parent.parent / "infra" / "liquidsoap"
 BANDCAMP_ALBUMS = {
     "lofi": [
         "https://holiznacc0.bandcamp.com/album/lofi-and-chill",
-        "https://holiznacc0.bandcamp.com/album/public-domain-lofi",
-        "https://holiznacc0.bandcamp.com/album/winter-lofi",
-        "https://holiznacc0.bandcamp.com/album/lazy-summer-lofi",
+        "https://holiznacc0.bandcamp.com/album/public-domain-lo-fi",
+        "https://holiznacc0.bandcamp.com/album/winter-lo-fi-2",
+        "https://holiznacc0.bandcamp.com/album/city-slacker",
     ],
     "jazz": [
         "https://holiznacc0.bandcamp.com/album/lofi-jazz-guitar",
@@ -62,13 +64,37 @@ FMA_TRACKS = {
 
 FMA_EXTRA_TRACKS = {
     "lofi": [
+        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/tetra/", "Ketsa", "Tetra"),
         ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/i-dream-of-you/", "Ketsa", "I Dream Of You"),
         ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/black-screen/", "Ketsa", "Black Screen"),
         ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/slow-dance/", "Ketsa", "Slow Dance"),
         ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/seconds-left/", "Ketsa", "Seconds Left"),
         ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/lowest-sun/", "Ketsa", "Lowest Sun"),
+        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/down-pitch/", "Ketsa", "Down Pitch"),
         ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/reclaimed/", "Ketsa", "Reclaimed"),
         ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/the-time-it-takes/", "Ketsa", "The Time It Takes"),
+        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/deep-waves/", "Ketsa", "Deep Waves"),
+        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/shining-still/", "Ketsa", "Shining Still"),
+        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/the-winter-months/", "Ketsa", "The Winter Months"),
+        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/folded/", "Ketsa", "Folded"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/home-sigh/", "Ketsa", "Home Sigh"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/take-me-up/", "Ketsa", "Take Me Up"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/appointments/", "Ketsa", "Appointments"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/jazz-daze/", "Ketsa", "Jazz Daze"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/bring-dat/", "Ketsa", "Bring Dat"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/make-me-sad/", "Ketsa", "Make Me Sad"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/in-trouble/", "Ketsa", "In Trouble"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/worlds-a-stage/", "Ketsa", "World's A Stage"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/smoothness/", "Ketsa", "Smoothness"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/journal/", "Ketsa", "Journal"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/my-biz/", "Ketsa", "My Biz"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/aligning-frequencies/", "Ketsa", "Aligning Frequencies"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/therapy-1/", "Ketsa", "Therapy"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/sun-slides/", "Ketsa", "Sun Slides"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/to-do/", "Ketsa", "To do"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/grand-rising/", "Ketsa", "Grand Rising"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/the-cure/", "Ketsa", "The Cure"),
+        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/keep-hold/", "Ketsa", "Keep Hold"),
         ("https://freemusicarchive.org/music/beat-mekanik/single/one-more/", "JMHBM", "One More"),
         ("https://freemusicarchive.org/music/beat-mekanik/single/night-city/", "JMHBM", "Night City"),
         ("https://freemusicarchive.org/music/beat-mekanik/single/new-new/", "JMHBM", "New New"),
@@ -422,13 +448,24 @@ def generate_m3u(genre: str):
 
 
 def main():
+    global MUSIC_DIR, LIQUIDSOAP_DIR
+
     parser = argparse.ArgumentParser(description="Fetch CC music for late.sh radio")
     parser.add_argument("--genre", default="all",
                         choices=["lofi", "ambient", "classic", "jazz", "all"],
                         help="Which genre to download (default: all)")
+    parser.add_argument("--music-dir", type=Path, default=DEFAULT_MUSIC_DIR,
+                        help="Where to store downloaded music (default: repo music/)")
+    parser.add_argument("--liquidsoap-dir", type=Path, default=DEFAULT_LIQUIDSOAP_DIR,
+                        help="Where to write generated .m3u files (default: repo infra/liquidsoap/)")
     parser.add_argument("--m3u-only", action="store_true",
                         help="Only regenerate .m3u files from existing downloads")
+    parser.add_argument("--skip-m3u", action="store_true",
+                        help="Skip generating .m3u files")
     args = parser.parse_args()
+
+    MUSIC_DIR = args.music_dir.resolve()
+    LIQUIDSOAP_DIR = args.liquidsoap_dir.resolve()
 
     genres = ["lofi", "ambient", "classic", "jazz"] if args.genre == "all" else [args.genre]
 
@@ -451,17 +488,19 @@ def main():
             if genre in genres:
                 download_ia(identifier, genre, max_tracks)
 
-    # Generate .m3u playlists
-    print(f"\n{'='*60}")
-    print("  Generating .m3u playlists")
-    print(f"{'='*60}")
-    for genre in genres:
-        generate_m3u(genre)
+    if not args.skip_m3u:
+        print(f"\n{'='*60}")
+        print("  Generating .m3u playlists")
+        print(f"{'='*60}")
+        for genre in genres:
+            generate_m3u(genre)
 
-    print("\nDone! Next steps:")
-    print("  1. Review the generated .m3u files in infra/liquidsoap/")
-    print("  2. Update radio.liq to remove input.http() streams")
-    print("  3. Restart liquidsoap: docker compose restart liquidsoap")
+        print("\nDone! Next steps:")
+        print(f"  1. Review the generated .m3u files in {LIQUIDSOAP_DIR}/")
+        print("  2. Update radio.liq to remove input.http() streams")
+        print("  3. Restart liquidsoap: docker compose restart liquidsoap")
+    else:
+        print("\nDone! Skipped .m3u generation.")
 
 
 if __name__ == "__main__":
