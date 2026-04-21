@@ -4,11 +4,11 @@ use uuid::Uuid;
 
 use super::user::{
     User, extract_bio, extract_country, extract_enable_background_color, extract_notify_bell,
-    extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_theme_id,
-    extract_timezone,
+    extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
+    extract_show_right_sidebar, extract_theme_id, extract_timezone,
 };
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Profile {
     pub username: String,
     pub bio: String,
@@ -21,6 +21,25 @@ pub struct Profile {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
+    pub show_right_sidebar: bool,
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        Self {
+            username: String::new(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            notify_kinds: Vec::new(),
+            notify_bell: false,
+            notify_cooldown_mins: 0,
+            notify_format: None,
+            theme_id: None,
+            enable_background_color: false,
+            show_right_sidebar: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -35,6 +54,7 @@ pub struct ProfileParams {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
+    pub show_right_sidebar: bool,
 }
 
 impl Profile {
@@ -47,8 +67,9 @@ impl Profile {
 
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
-    /// enable_background_color into settings via `settings || jsonb_build_object(...)`, so
-    /// concurrent writes to unrelated keys (ignored_user_ids) are preserved.
+    /// enable_background_color/show_right_sidebar into settings via
+    /// `settings || jsonb_build_object(...)`, so concurrent writes to unrelated keys
+    /// (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
         let kinds_json = serde_json::to_value(&params.notify_kinds)?;
         let cooldown = params.notify_cooldown_mins.max(0);
@@ -98,10 +119,11 @@ impl Profile {
                          'notify_cooldown_mins', $7::int,
                          'theme_id', $8::text,
                          'enable_background_color', $9::bool,
-                         'notify_format', $10::text
+                         'notify_format', $10::text,
+                         'show_right_sidebar', $11::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $11
+                 WHERE id = $12
                  RETURNING *",
                 &[
                     &params.username,
@@ -114,6 +136,7 @@ impl Profile {
                     &theme_id,
                     &params.enable_background_color,
                     &notify_format,
+                    &params.show_right_sidebar,
                     &user_id,
                 ],
             )
@@ -134,6 +157,7 @@ impl Profile {
             notify_format: extract_notify_format(&user.settings),
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
+            show_right_sidebar: extract_show_right_sidebar(&user.settings),
         }
     }
 }

@@ -59,6 +59,14 @@ fn desktop_notification_bytes(
     }
 }
 
+fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
+    if show_settings {
+        draft_enabled
+    } else {
+        profile_enabled
+    }
+}
+
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -82,6 +90,7 @@ struct DrawContext<'a> {
     activity: &'a std::collections::VecDeque<crate::state::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
+    show_right_sidebar: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_profile_modal: bool,
@@ -137,6 +146,11 @@ impl App {
         }
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
+        let show_right_sidebar = sidebar_enabled(
+            self.show_settings,
+            self.settings_modal_state.draft().show_right_sidebar,
+            self.profile_state.profile().show_right_sidebar,
+        );
         let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
@@ -285,6 +299,7 @@ impl App {
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
+                        show_right_sidebar,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_profile_modal: self.show_profile_modal,
@@ -444,10 +459,13 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let main_layout =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
-        let content_area = main_layout[0];
-        let sidebar_area = main_layout[1];
+        let (content_area, sidebar_area) = if ctx.show_right_sidebar {
+            let main_layout =
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
+            (main_layout[0], Some(main_layout[1]))
+        } else {
+            (inner, None)
+        };
         let connect_url = ctx.connect_url;
 
         match screen {
@@ -475,23 +493,25 @@ impl App {
             ),
         }
 
-        draw_sidebar(
-            frame,
-            sidebar_area,
-            &SidebarProps {
-                screen,
-                game_selection: ctx.game_selection,
-                is_playing_game: ctx.is_playing_game,
-                visualizer: ctx.visualizer,
-                now_playing: ctx.now_playing,
-                paired_client: ctx.paired_client,
-                online_count: ctx.online_count,
-                bonsai: ctx.bonsai,
-                audio_beat: ctx.visualizer.beat(),
-                connect_url,
-                activity: ctx.activity,
-            },
-        );
+        if let Some(sidebar_area) = sidebar_area {
+            draw_sidebar(
+                frame,
+                sidebar_area,
+                &SidebarProps {
+                    screen,
+                    game_selection: ctx.game_selection,
+                    is_playing_game: ctx.is_playing_game,
+                    visualizer: ctx.visualizer,
+                    now_playing: ctx.now_playing,
+                    paired_client: ctx.paired_client,
+                    online_count: ctx.online_count,
+                    bonsai: ctx.bonsai,
+                    audio_beat: ctx.visualizer.beat(),
+                    connect_url,
+                    activity: ctx.activity,
+                },
+            );
+        }
 
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
@@ -558,7 +578,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{NotificationMode, desktop_notification_bytes};
+    use super::{NotificationMode, desktop_notification_bytes, sidebar_enabled};
 
     #[test]
     fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
@@ -612,5 +632,17 @@ mod tests {
             got,
             "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\"
         );
+    }
+
+    #[test]
+    fn sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
+        assert!(!sidebar_enabled(true, false, true));
+        assert!(sidebar_enabled(true, true, false));
+    }
+
+    #[test]
+    fn sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
+        assert!(sidebar_enabled(false, false, true));
+        assert!(!sidebar_enabled(false, true, false));
     }
 }

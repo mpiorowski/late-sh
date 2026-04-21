@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-20
+- Last updated: 2026-04-21
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, Profile, The Arcade), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..5` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), and a persistent bonsai tree in the sidebar.
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, Profile, The Arcade), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..5` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), and a configurable right sidebar (now playing, activity, visualizer, bonsai) that defaults to on.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -534,7 +534,7 @@ late-sh/
 
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
+| User | `users` | `fingerprint` UNIQUE; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
@@ -1018,7 +1018,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
 | **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/profile`, `/help`) with grouped room sections and synthetic `news`, `mentions`, and `discover` entries in the room list. `discover` shows public rooms you have not joined yet with member/message counts; Enter joins the selected room. `/public #room` opens or creates an opt-in public room and joins only the caller. |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Profile** | 4 | Active | Read-only public identity card: username, country, timezone, optional `Current time` (derived from timezone when parseable), bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. Bio is wrapped at the same width the modal editor uses (`settings_modal::ui::bio_text_width(MODAL_WIDTH)`) via `build_composer_rows`, so pasted URLs fold instead of running off-screen. All editing happens in the **profile/settings modal** (auto-opens on first login, reopen via Profile's edit action or `/profile`) — sectioned into Identity / Appearance / Notifications / Location, with a Save CTA and a `?` callout that opens the help modal on top. Bio is an inline full-width bordered editor under the Identity heading (encouraging people to share site / GitHub / socials); it accepts bracketed-paste so URLs drop in whole. Theme + background color preview live from the draft while the modal is open. Selecting a chat message and pressing `p` opens a separate read-only **profile modal** for that author; it shows the same public identity summary, supports `j/k` or arrows for scroll, and is slightly wider than the first revision. |
+| **Profile** | 4 | Active | Read-only public identity card: username, country, timezone, optional `Current time` (derived from timezone when parseable), bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. Bio is wrapped at the same width the modal editor uses (`settings_modal::ui::bio_text_width(MODAL_WIDTH)`) via `build_composer_rows`, so pasted URLs fold instead of running off-screen. All editing happens in the **profile/settings modal** (auto-opens on first login, reopen via Profile's edit action or `/profile`) — sectioned into Identity / Appearance / Notifications / Location. The Appearance section now includes theme, terminal background color, and a right-sidebar on/off toggle; theme/background/sidebar preview live from the draft while the modal is open. Bio is an inline full-width bordered editor under the Identity heading (encouraging people to share site / GitHub / socials); it accepts bracketed-paste so URLs drop in whole. Selecting a chat message and pressing `p` opens a separate read-only **profile modal** for that author; it shows the same public identity summary, supports `j/k` or arrows for scroll, and is slightly wider than the first revision. |
 
 ### Layout
 
@@ -1125,9 +1125,9 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
 | `q` / `Esc` | Chat overlay (`/help`, ignore list) | Close overlay |
 | `Enter` | Profile screen | Open the profile/settings modal to edit |
-| `↑` / `↓` / `j` / `k` | Profile/settings modal | Move between rows (Username, Bio, Theme, Background, DMs, @mentions, Game events, Bell, Cooldown, Country, Timezone, Save) |
-| `←` / `→` | Profile/settings modal | Cycle the current row's setting (theme, toggles, cooldown) |
-| `Space` / `Enter` / `e` | Profile/settings modal | Activate row — edit username/bio, cycle a setting, open country/timezone picker, or fire Save |
+| `↑` / `↓` / `j` / `k` | Profile/settings modal | Move between rows (Username, Theme, Background, Right sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
+| `←` / `→` | Profile/settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
+| `Space` / `Enter` / `e` | Profile/settings modal | Activate row — edit username/bio, cycle a setting, or open the country/timezone picker |
 | `Alt+Enter` | Profile/settings modal (bio editing) | Insert newline |
 | `?` | Profile/settings modal | Open help modal on top |
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |

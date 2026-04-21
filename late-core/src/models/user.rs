@@ -29,6 +29,7 @@ const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
+const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
 const TIMEZONE_KEY: &str = "timezone";
@@ -335,6 +336,13 @@ pub fn extract_enable_background_color(settings: &Value) -> bool {
         .unwrap_or(false)
 }
 
+pub fn extract_show_right_sidebar(settings: &Value) -> bool {
+    settings
+        .get(SHOW_RIGHT_SIDEBAR_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
 pub fn extract_bio(settings: &Value) -> String {
     settings
         .get(BIO_KEY)
@@ -423,6 +431,18 @@ mod tests {
     fn extract_bio_missing_returns_empty() {
         let settings = json!({});
         assert_eq!(extract_bio(&settings), "");
+    }
+
+    #[test]
+    fn extract_show_right_sidebar_defaults_to_true() {
+        let settings = json!({});
+        assert!(extract_show_right_sidebar(&settings));
+    }
+
+    #[test]
+    fn extract_show_right_sidebar_reads_explicit_false() {
+        let settings = json!({ "show_right_sidebar": false });
+        assert!(!extract_show_right_sidebar(&settings));
     }
 
     #[test]
