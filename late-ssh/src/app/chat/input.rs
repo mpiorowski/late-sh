@@ -23,7 +23,12 @@ fn leader_reaction_kind(byte: u8) -> Option<i16> {
     }
 }
 
-pub fn handle_compose_input(app: &mut App, byte: u8, allow_room_switch: bool) {
+pub fn handle_compose_input(
+    app: &mut App,
+    byte: u8,
+    allow_room_switch: bool,
+    from_dashboard: bool,
+) {
     if app.chat.is_autocomplete_active() {
         match byte {
             0x1B => {
@@ -41,7 +46,7 @@ pub fn handle_compose_input(app: &mut App, byte: u8, allow_room_switch: bool) {
     match byte {
         0x1B => app.chat.reset_composer(),
         b'\r' | b'\n' => {
-            if let Some(b) = app.chat.submit_composer(false) {
+            if let Some(b) = app.chat.submit_composer(false, from_dashboard) {
                 app.banner = Some(b);
             }
             if let Some(topic) = app.chat.take_requested_help_topic() {

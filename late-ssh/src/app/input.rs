@@ -498,7 +498,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         ParsedInput::AltS => {
             if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
             {
-                if let Some(b) = app.chat.submit_composer(true) {
+                let from_dashboard = ctx.screen == Screen::Dashboard;
+                if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
                     app.banner = Some(b);
                 }
                 if let Some(topic) = app.chat.take_requested_help_topic() {
@@ -877,7 +878,12 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
 fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing {
-        chat::input::handle_compose_input(app, byte, compose_room_switch_allowed(ctx.screen));
+        chat::input::handle_compose_input(
+            app,
+            byte,
+            compose_room_switch_allowed(ctx.screen),
+            ctx.screen == Screen::Dashboard,
+        );
         return true;
     }
 

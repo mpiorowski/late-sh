@@ -752,8 +752,25 @@ impl ChatState {
         format_active_user_lines(self.active_users.as_ref())
     }
 
-    pub fn submit_composer(&mut self, keep_open: bool) -> Option<Banner> {
+    pub fn submit_composer(&mut self, keep_open: bool, from_dashboard: bool) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
+
+        // Room-membership commands are intentionally chat-page-only: they
+        // operate on `selected_room_id`, which the dashboard never drives.
+        // Rather than silently target the wrong room, refuse here and point
+        // the user at page 2.
+        if from_dashboard && parse_leave_command(&body) {
+            self.clear_composer_after_submit();
+            return Some(Banner::error(
+                "open the chat page (press 2) to leave a room",
+            ));
+        }
+        if from_dashboard && parse_user_command(&body, "/invite").is_some() {
+            self.clear_composer_after_submit();
+            return Some(Banner::error(
+                "open the chat page (press 2) to invite a user",
+            ));
+        }
 
         if body.trim() == "/binds" {
             self.clear_composer_after_submit();
@@ -780,9 +797,14 @@ impl ChatState {
         }
 
         if body.trim() == "/members" {
+            // Resolve the target room BEFORE clearing the composer —
+            // `clear_composer_after_submit` nulls `composer_room_id`, so
+            // reading after would always fall back to the chat-page
+            // `selected_room_id` and miss the dashboard's active favorite.
+            let target = self.composer_room_id.or(self.selected_room_id);
             self.clear_composer_after_submit();
-            let Some(room_id) = self.selected_room_id else {
-                return Some(Banner::error("No room selected"));
+            let Some(room_id) = target else {
+                return Some(Banner::error("no room selected"));
             };
             self.service.list_room_members_task(self.user_id, room_id);
             return None;
