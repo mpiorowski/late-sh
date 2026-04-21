@@ -167,11 +167,7 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     // `e` enters edit mode and drops the selection.
     // `p` opens a read-only profile modal for the selected author.
     match byte {
-        b'f' | b'F' => {
-            if app.chat.begin_reaction_leader() {
-                return true;
-            }
-        }
+        b'f' | b'F' if app.chat.begin_reaction_leader() => return true,
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message_in_room(room_id) {
                 app.banner = Some(b);

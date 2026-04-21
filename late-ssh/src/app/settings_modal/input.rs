@@ -90,10 +90,10 @@ fn handle_favorites_tab_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Char('d')
         | ParsedInput::Byte(0x7F)
         | ParsedInput::Delete => state.remove_selected_favorite(),
-        ParsedInput::Byte(b'\r') | ParsedInput::Char('a') | ParsedInput::Char('A') => {
-            if state.favorites_index_is_add_row() && !state.filtered_rooms().is_empty() {
-                state.open_picker(PickerKind::Room);
-            }
+        ParsedInput::Byte(b'\r') | ParsedInput::Char('a') | ParsedInput::Char('A')
+            if state.favorites_index_is_add_row() && !state.filtered_rooms().is_empty() =>
+        {
+            state.open_picker(PickerKind::Room);
         }
         _ => {}
     }

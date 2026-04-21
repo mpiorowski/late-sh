@@ -85,7 +85,7 @@ impl Profile {
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
         let kinds_json = serde_json::to_value(&params.notify_kinds)?;
         let favorite_room_ids_json = serde_json::to_value(
-            &params
+            params
                 .favorite_room_ids
                 .iter()
                 .map(Uuid::to_string)
