@@ -8,6 +8,7 @@ use helpers::{
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
+    chat_message_reaction::ChatMessageReaction,
     chat_room::ChatRoom,
     chat_room_member::ChatRoomMember,
     user::User,
@@ -246,6 +247,53 @@ async fn chat_room_switch_ctrl_keys_wrap() {
 
     app.handle_input(b"\x0e");
     wait_for_render_contains(&mut app, "> general").await;
+}
+
+#[tokio::test]
+async fn chat_reaction_leader_uses_digits_without_switching_screens() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "v-react-viewer").await;
+    let author = create_test_user(&test_db.db, "v-react-author").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general.id, author.id)
+        .await
+        .expect("join author");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: author.id,
+            body: "reaction target".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "v-react-flow-it");
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "reaction target").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"v1");
+
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_until(
+        || async {
+            ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
+                .await
+                .expect("load reaction")
+                .is_some_and(|reaction| reaction.kind == 1)
+        },
+        "v leader reaction to persist",
+    )
+    .await;
 }
 
 #[tokio::test]

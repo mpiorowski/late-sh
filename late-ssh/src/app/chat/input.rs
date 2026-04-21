@@ -12,6 +12,28 @@ fn is_prev_room_key(byte: u8) -> bool {
     matches!(byte, b'h' | b'H' | 0x10)
 }
 
+fn leader_reaction_kind(byte: u8) -> Option<i16> {
+    match byte {
+        b'1' => Some(1),
+        b'2' => Some(2),
+        b'3' => Some(3),
+        b'4' => Some(4),
+        b'5' => Some(5),
+        _ => None,
+    }
+}
+
+fn direct_reaction_kind(byte: u8) -> Option<i16> {
+    match byte {
+        b'!' => Some(1),
+        b'@' => Some(2),
+        b'#' => Some(3),
+        b'$' => Some(4),
+        b'%' => Some(5),
+        _ => None,
+    }
+}
+
 pub fn handle_compose_input(app: &mut App, byte: u8, allow_room_switch: bool) {
     if app.chat.is_autocomplete_active() {
         match byte {
@@ -139,6 +161,16 @@ pub fn handle_message_action(app: &mut App, byte: u8) -> bool {
 }
 
 pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> bool {
+    if app.chat.is_reaction_leader_active() {
+        if let Some(kind) = leader_reaction_kind(byte) {
+            if let Some(banner) = app.chat.react_to_selected_message_in_room(room_id, kind) {
+                app.banner = Some(banner);
+            }
+            return true;
+        }
+        app.chat.cancel_reaction_leader();
+    }
+
     // `d` deletes and keeps the cursor on the adjacent message so you can
     // reap a run of your own messages with repeated presses.
     // `r` enters reply mode and drops the selection.
@@ -149,18 +181,16 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         // bare number row for muscle-memory room-switching — users kept
         // tripping the react path while navigating.
         b'!' | b'@' | b'#' | b'$' | b'%' => {
-            let kind = match byte {
-                b'!' => 1,
-                b'@' => 2,
-                b'#' => 3,
-                b'$' => 4,
-                b'%' => 5,
-                _ => unreachable!(),
-            };
+            let kind = direct_reaction_kind(byte).expect("matched direct reaction key");
             if let Some(banner) = app.chat.react_to_selected_message_in_room(room_id, kind) {
                 app.banner = Some(banner);
             }
             return true;
+        }
+        b'v' | b'V' => {
+            if app.chat.begin_reaction_leader() {
+                return true;
+            }
         }
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message_in_room(room_id) {
@@ -392,7 +422,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_next_room_key, is_prev_room_key};
+    use super::{direct_reaction_kind, is_next_room_key, is_prev_room_key, leader_reaction_kind};
 
     #[test]
     fn next_room_keys_include_ctrl_n() {
@@ -408,5 +438,19 @@ mod tests {
         assert!(is_prev_room_key(b'H'));
         assert!(is_prev_room_key(0x10));
         assert!(!is_prev_room_key(b'l'));
+    }
+
+    #[test]
+    fn leader_reaction_keys_are_plain_digits() {
+        assert_eq!(leader_reaction_kind(b'1'), Some(1));
+        assert_eq!(leader_reaction_kind(b'5'), Some(5));
+        assert_eq!(leader_reaction_kind(b'!'), None);
+    }
+
+    #[test]
+    fn direct_reaction_keys_are_shifted_symbols() {
+        assert_eq!(direct_reaction_kind(b'!'), Some(1));
+        assert_eq!(direct_reaction_kind(b'%'), Some(5));
+        assert_eq!(direct_reaction_kind(b'1'), None);
     }
 }

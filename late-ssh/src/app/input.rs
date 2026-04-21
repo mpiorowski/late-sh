@@ -755,6 +755,12 @@ fn dispatch_escape(app: &mut App) {
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
+    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+        && app.chat.is_reaction_leader_active()
+    {
+        app.chat.cancel_reaction_leader();
+        return;
+    }
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
         app.chat.close_overlay();
         return;
@@ -912,6 +918,13 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             .open(crate::app::help_modal::data::HelpTopic::Overview);
         app.show_help = true;
         return true;
+    }
+
+    if matches!(byte, b'1' | b'2' | b'3' | b'4' | b'5')
+        && (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat)
+        && app.chat.is_reaction_leader_active()
+    {
+        return false;
     }
 
     if ctx.screen == Screen::Games

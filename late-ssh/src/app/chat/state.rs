@@ -83,6 +83,7 @@ pub struct ChatState {
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub(crate) selected_message_id: Option<Uuid>,
+    pub(crate) reaction_leader_active: bool,
     pub(crate) highlighted_message_id: Option<Uuid>,
     pub(crate) edited_message_id: Option<Uuid>,
     pub(crate) reply_target: Option<ReplyTarget>,
@@ -159,6 +160,7 @@ impl ChatState {
             bonsai_glyphs: HashMap::new(),
             message_reactions: HashMap::new(),
             selected_message_id: None,
+            reaction_leader_active: false,
             highlighted_message_id: None,
             edited_message_id: None,
             reply_target: None,
@@ -266,6 +268,7 @@ impl ChatState {
     }
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
+        self.reaction_leader_active = false;
         if ids.is_empty() {
             self.selected_message_id = None;
             return;
@@ -298,10 +301,28 @@ impl ChatState {
     }
 
     pub fn clear_message_selection(&mut self) {
+        self.reaction_leader_active = false;
         self.selected_message_id = None;
     }
 
+    pub fn begin_reaction_leader(&mut self) -> bool {
+        if self.selected_message_id.is_none() {
+            return false;
+        }
+        self.reaction_leader_active = true;
+        true
+    }
+
+    pub fn cancel_reaction_leader(&mut self) {
+        self.reaction_leader_active = false;
+    }
+
+    pub fn is_reaction_leader_active(&self) -> bool {
+        self.reaction_leader_active
+    }
+
     pub fn begin_reply_to_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+        self.reaction_leader_active = false;
         let message = self.selected_message_in_room(room_id)?;
         let message_user_id = message.user_id;
         let message_body = message.body.clone();
@@ -324,6 +345,7 @@ impl ChatState {
     }
 
     pub fn begin_edit_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+        self.reaction_leader_active = false;
         let selected_id = self.selected_message_id?;
         let Some(message) = self.find_message_in_room(room_id, selected_id) else {
             return Some(Banner::error("Selected message not found"));
@@ -410,6 +432,7 @@ impl ChatState {
         room_id: Uuid,
         kind: i16,
     ) -> Option<Banner> {
+        self.reaction_leader_active = false;
         let message = self.selected_message_in_room(room_id)?;
         self.service
             .toggle_message_reaction_task(self.user_id, message.id, kind);
@@ -532,6 +555,7 @@ impl ChatState {
 
     fn select_room_slot(&mut self, slot: RoomSlot) -> bool {
         self.selected_message_id = None;
+        self.reaction_leader_active = false;
         self.highlighted_message_id = None;
 
         match slot {
@@ -640,6 +664,7 @@ impl ChatState {
         self.composing = false;
         self.room_jump_active = false;
         self.composer_room_id = None;
+        self.reaction_leader_active = false;
         self.reply_target = None;
         set_composer_cursor_visible(&mut self.composer, false);
     }
@@ -649,6 +674,7 @@ impl ChatState {
         self.composing = false;
         self.room_jump_active = false;
         self.composer_room_id = None;
+        self.reaction_leader_active = false;
         self.reply_target = None;
         self.edited_message_id = None;
         self.mention_ac = MentionAutocomplete::default();
@@ -659,6 +685,7 @@ impl ChatState {
         self.composing = false;
         self.room_jump_active = false;
         self.composer_room_id = None;
+        self.reaction_leader_active = false;
         self.reply_target = None;
         self.edited_message_id = None;
     }
@@ -667,6 +694,7 @@ impl ChatState {
         self.composer = new_chat_textarea();
         set_composer_cursor_visible(&mut self.composer, self.composing);
         self.room_jump_active = false;
+        self.reaction_leader_active = false;
         self.reply_target = None;
         self.edited_message_id = None;
     }

@@ -212,7 +212,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::GamesSidebar,
             width,
-            "Games right sidebar",
+            "Games sidebar",
             toggle_span(state.draft().show_games_sidebar),
         )),
         sections[7],
