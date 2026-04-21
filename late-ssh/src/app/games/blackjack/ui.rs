@@ -15,12 +15,17 @@ use crate::app::{
     },
 };
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
     let snapshot = state.snapshot();
-    draw_game_snapshot(frame, area, &snapshot);
+    draw_game_snapshot(frame, area, &snapshot, show_sidebar);
 }
 
-fn draw_game_snapshot(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapshot) {
+fn draw_game_snapshot(
+    frame: &mut Frame,
+    area: Rect,
+    snapshot: &BlackjackSnapshot,
+    show_sidebar: bool,
+) {
     let info_lines = vec![
         info_tagline("Single-player blackjack. Bet, draw, settle, repeat."),
         Line::from(""),
@@ -48,7 +53,7 @@ fn draw_game_snapshot(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapsho
         key_line(snapshot.phase),
     ];
 
-    let inner = draw_game_frame(frame, area, "Blackjack", info_lines);
+    let inner = draw_game_frame(frame, area, "Blackjack", info_lines, show_sidebar);
     let rows = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(1),

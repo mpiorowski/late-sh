@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::user::{
     User, extract_bio, extract_country, extract_enable_background_color, extract_notify_bell,
     extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_show_right_sidebar, extract_theme_id, extract_timezone,
+    extract_show_games_sidebar, extract_show_right_sidebar, extract_theme_id, extract_timezone,
 };
 
 #[derive(Clone, Debug)]
@@ -22,6 +22,7 @@ pub struct Profile {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub show_right_sidebar: bool,
+    pub show_games_sidebar: bool,
 }
 
 impl Default for Profile {
@@ -38,6 +39,7 @@ impl Default for Profile {
             theme_id: None,
             enable_background_color: false,
             show_right_sidebar: true,
+            show_games_sidebar: true,
         }
     }
 }
@@ -55,6 +57,7 @@ pub struct ProfileParams {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub show_right_sidebar: bool,
+    pub show_games_sidebar: bool,
 }
 
 impl Profile {
@@ -67,7 +70,7 @@ impl Profile {
 
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
-    /// enable_background_color/show_right_sidebar into settings via
+    /// enable_background_color/show_right_sidebar/show_games_sidebar into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to unrelated keys
     /// (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
@@ -120,10 +123,11 @@ impl Profile {
                          'theme_id', $8::text,
                          'enable_background_color', $9::bool,
                          'notify_format', $10::text,
-                         'show_right_sidebar', $11::bool
+                         'show_right_sidebar', $11::bool,
+                         'show_games_sidebar', $12::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $12
+                 WHERE id = $13
                  RETURNING *",
                 &[
                     &params.username,
@@ -137,6 +141,7 @@ impl Profile {
                     &params.enable_background_color,
                     &notify_format,
                     &params.show_right_sidebar,
+                    &params.show_games_sidebar,
                     &user_id,
                 ],
             )
@@ -158,6 +163,7 @@ impl Profile {
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),
+            show_games_sidebar: extract_show_games_sidebar(&user.settings),
         }
     }
 }

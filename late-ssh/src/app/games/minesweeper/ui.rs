@@ -18,7 +18,7 @@ const CELL_REVEALED: u8 = 1;
 const CELL_FLAGGED: u8 = 2;
 const CELL_MINE_HIT: u8 = 3;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
     let diff = state.difficulty();
     let mode_str = match state.mode {
         Mode::Daily => "daily",
@@ -68,7 +68,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
         info_tagline("all adjacent unflagged cells."),
     ];
 
-    let board_area = draw_game_frame(frame, area, "Minesweeper", info_lines);
+    let board_area = draw_game_frame(frame, area, "Minesweeper", info_lines, show_sidebar);
 
     let board_w = (diff.cols as u16) * 4 + 4; // row labels + borders
     let board_h = diff.rows as u16 + 3; // col headers + top/bottom borders

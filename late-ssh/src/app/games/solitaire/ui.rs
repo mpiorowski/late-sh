@@ -19,7 +19,7 @@ const SOLITAIRE_CARD_THEME: AsciiCardTheme = AsciiCardTheme::Outline;
 const FACE_DOWN_PEEK_LINES: usize = 1;
 const FACE_UP_PEEK_LINES: usize = 2;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
     let info_lines = vec![
         info_tagline("Klondike solitaire."),
         Line::from(""),
@@ -83,7 +83,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
         info_tagline("to place on that column."),
     ];
 
-    let board_area = draw_game_frame(frame, area, "Solitaire", info_lines);
+    let board_area = draw_game_frame(frame, area, "Solitaire", info_lines, show_sidebar);
     let board_width = 78.min(board_area.width);
     let board_height = 44.min(board_area.height);
     let board_rect = Rect {

@@ -22,10 +22,14 @@ impl ChatRoom {
     pub async fn ensure_general(client: &Client) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
-                 VALUES ('general', 'public', true, 'general')
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, permanent, slug)
+                 VALUES ('general', 'public', true, true, 'general')
                  ON CONFLICT (slug) WHERE kind = 'general'
-                 DO UPDATE SET visibility = 'public', auto_join = true, updated = current_timestamp
+                 DO UPDATE
+                    SET visibility = 'public',
+                        auto_join = true,
+                        permanent = true,
+                        updated = current_timestamp
                  RETURNING *",
                 &[],
             )

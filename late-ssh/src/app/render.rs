@@ -67,6 +67,14 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
     }
 }
 
+fn games_sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
+    if show_settings {
+        draft_enabled
+    } else {
+        profile_enabled
+    }
+}
+
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -91,6 +99,7 @@ struct DrawContext<'a> {
     banner: Option<&'a Banner>,
     is_admin: bool,
     show_right_sidebar: bool,
+    show_games_sidebar: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_profile_modal: bool,
@@ -150,6 +159,11 @@ impl App {
             self.show_settings,
             self.settings_modal_state.draft().show_right_sidebar,
             self.profile_state.profile().show_right_sidebar,
+        );
+        let show_games_sidebar = games_sidebar_enabled(
+            self.show_settings,
+            self.settings_modal_state.draft().show_games_sidebar,
+            self.profile_state.profile().show_games_sidebar,
         );
         let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
@@ -300,6 +314,7 @@ impl App {
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
                         show_right_sidebar,
+                        show_games_sidebar,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_profile_modal: self.show_profile_modal,
@@ -489,6 +504,7 @@ impl App {
                     blackjack_state: ctx.blackjack_state,
                     is_admin: ctx.is_admin,
                     leaderboard: ctx.leaderboard,
+                    show_sidebar: ctx.show_games_sidebar,
                 },
             ),
         }
@@ -578,7 +594,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{NotificationMode, desktop_notification_bytes, sidebar_enabled};
+    use super::{
+        NotificationMode, desktop_notification_bytes, games_sidebar_enabled, sidebar_enabled,
+    };
 
     #[test]
     fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
@@ -644,5 +662,17 @@ mod tests {
     fn sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
         assert!(sidebar_enabled(false, false, true));
         assert!(!sidebar_enabled(false, true, false));
+    }
+
+    #[test]
+    fn games_sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
+        assert!(!games_sidebar_enabled(true, false, true));
+        assert!(games_sidebar_enabled(true, true, false));
+    }
+
+    #[test]
+    fn games_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
+        assert!(games_sidebar_enabled(false, false, true));
+        assert!(!games_sidebar_enabled(false, true, false));
     }
 }

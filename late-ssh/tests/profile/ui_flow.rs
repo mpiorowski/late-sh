@@ -10,14 +10,14 @@ async fn profile_page_opens_and_closes_settings_modal() {
     let mut app = make_app(test_db.db.clone(), user.id, "modal-open-flow-it");
 
     app.handle_input(b"4");
-    wait_for_render_contains(&mut app, "Press Enter or e to edit profile settings").await;
+    wait_for_render_contains(&mut app, "Press Ctrl+O or use /settings to open settings").await;
 
-    app.handle_input(b"\r");
+    app.handle_input(&[0x0F]);
     wait_for_render_contains(&mut app, " Settings ").await;
     wait_for_render_contains(&mut app, "Identity").await;
 
     app.handle_input(&[0x1B]);
-    wait_for_render_contains(&mut app, "Press Enter or e to edit profile settings").await;
+    wait_for_render_contains(&mut app, "Press Ctrl+O or use /settings to open settings").await;
 }
 
 #[tokio::test]
@@ -40,6 +40,8 @@ async fn profile_page_renders_saved_country_timezone_and_bio() {
             notify_format: None,
             theme_id: Some("late".to_string()),
             enable_background_color: false,
+            show_right_sidebar: true,
+            show_games_sidebar: true,
         },
     )
     .await
@@ -59,7 +61,7 @@ async fn profile_page_renders_saved_country_timezone_and_bio() {
         "profile page should show bio:\n{plain}"
     );
     assert!(
-        plain.contains("Press Enter or e to edit profile settings"),
+        plain.contains("Press Ctrl+O or use /settings to open settings"),
         "profile page should expose edit action:\n{plain}"
     );
 }

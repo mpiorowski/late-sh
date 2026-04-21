@@ -13,11 +13,17 @@ use late_core::models::leaderboard::{BadgeTier, LeaderboardData};
 
 // ── Shared game frame ──────────────────────────────────────────
 
+enum GamesSidebarContent<'a> {
+    Info(Vec<Line<'a>>),
+    Leaderboard(&'a Arc<LeaderboardData>),
+}
+
 pub fn draw_game_frame<'a>(
     frame: &mut Frame,
     area: Rect,
     title: &str,
     info_lines: Vec<Line<'a>>,
+    show_sidebar: bool,
 ) -> Rect {
     let block = Block::default()
         .title(format!(" {title} "))
@@ -26,17 +32,54 @@ pub fn draw_game_frame<'a>(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let layout = Layout::horizontal([Constraint::Fill(1), Constraint::Length(28)]).split(inner);
+    let (content_area, sidebar_area) = games_sidebar_layout(inner, show_sidebar);
 
-    let info_block = Block::default()
-        .title(" Info ")
+    if let Some(sidebar_area) = sidebar_area {
+        draw_games_sidebar(frame, sidebar_area, GamesSidebarContent::Info(info_lines));
+    }
+
+    content_area
+}
+
+fn games_sidebar_layout(area: Rect, show_sidebar: bool) -> (Rect, Option<Rect>) {
+    if show_sidebar {
+        let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(28)]).split(area);
+        (cols[0], Some(cols[1]))
+    } else {
+        (area, None)
+    }
+}
+
+fn draw_games_sidebar(frame: &mut Frame, area: Rect, content: GamesSidebarContent<'_>) {
+    let title = match &content {
+        GamesSidebarContent::Info(_) => " Info ",
+        GamesSidebarContent::Leaderboard(_) => " Leaderboard (🗘 30s) ",
+    };
+    let block = Block::default()
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
-    let info_inner = info_block.inner(layout[1]);
-    frame.render_widget(info_block, layout[1]);
-    frame.render_widget(Paragraph::new(info_lines), info_inner);
+    let block_inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    layout[0]
+    if block_inner.height < 4 || block_inner.width < 10 {
+        return;
+    }
+
+    let inner = match content {
+        GamesSidebarContent::Info(_) => block_inner,
+        GamesSidebarContent::Leaderboard(_) => Rect {
+            x: block_inner.x + 1,
+            y: block_inner.y,
+            width: block_inner.width.saturating_sub(2),
+            height: block_inner.height,
+        },
+    };
+
+    match content {
+        GamesSidebarContent::Info(lines) => frame.render_widget(Paragraph::new(lines), inner),
+        GamesSidebarContent::Leaderboard(data) => draw_leaderboard_sidebar_body(frame, inner, data),
+    }
 }
 
 pub fn draw_game_overlay(
@@ -125,30 +168,41 @@ pub struct GamesHubView<'a> {
     pub blackjack_state: &'a super::blackjack::state::State,
     pub is_admin: bool,
     pub leaderboard: &'a Arc<LeaderboardData>,
+    pub show_sidebar: bool,
 }
 
 pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     if view.is_playing_game {
         if view.game_selection == 0 {
-            super::twenty_forty_eight::ui::draw_game(frame, area, view.twenty_forty_eight_state);
+            super::twenty_forty_eight::ui::draw_game(
+                frame,
+                area,
+                view.twenty_forty_eight_state,
+                view.show_sidebar,
+            );
             return;
         } else if view.game_selection == 1 {
-            super::tetris::ui::draw_game(frame, area, view.tetris_state);
+            super::tetris::ui::draw_game(frame, area, view.tetris_state, view.show_sidebar);
             return;
         } else if view.game_selection == 2 {
-            super::sudoku::ui::draw_game(frame, area, view.sudoku_state);
+            super::sudoku::ui::draw_game(frame, area, view.sudoku_state, view.show_sidebar);
             return;
         } else if view.game_selection == 3 {
-            super::nonogram::ui::draw_game(frame, area, view.nonogram_state);
+            super::nonogram::ui::draw_game(frame, area, view.nonogram_state, view.show_sidebar);
             return;
         } else if view.game_selection == 4 {
-            super::minesweeper::ui::draw_game(frame, area, view.minesweeper_state);
+            super::minesweeper::ui::draw_game(
+                frame,
+                area,
+                view.minesweeper_state,
+                view.show_sidebar,
+            );
             return;
         } else if view.game_selection == 5 {
-            super::solitaire::ui::draw_game(frame, area, view.solitaire_state);
+            super::solitaire::ui::draw_game(frame, area, view.solitaire_state, view.show_sidebar);
             return;
         } else if view.game_selection == 6 && view.is_admin {
-            super::blackjack::ui::draw_game(frame, area, view.blackjack_state);
+            super::blackjack::ui::draw_game(frame, area, view.blackjack_state, view.show_sidebar);
             return;
         }
     }
@@ -170,9 +224,9 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     }
 
     // Two-column layout: game list (left) + leaderboard (right)
-    let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(28)]).split(inner);
+    let (content_area, sidebar_area) = games_sidebar_layout(inner, view.show_sidebar);
 
-    let show_header = cols[0].height >= 25;
+    let show_header = content_area.height >= 25;
     let layout = if show_header {
         Layout::default()
             .direction(Direction::Vertical)
@@ -181,12 +235,12 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
                 Constraint::Length(1), // Spacer
                 Constraint::Min(0),    // Content
             ])
-            .split(cols[0])
+            .split(content_area)
     } else {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0)])
-            .split(cols[0])
+            .split(content_area)
     };
 
     if show_header {
@@ -195,7 +249,13 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     } else {
         draw_game_list(frame, layout[0], view);
     }
-    draw_leaderboard_sidebar(frame, cols[1], view.leaderboard);
+    if let Some(sidebar_area) = sidebar_area {
+        draw_games_sidebar(
+            frame,
+            sidebar_area,
+            GamesSidebarContent::Leaderboard(view.leaderboard),
+        );
+    }
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
@@ -682,26 +742,7 @@ fn draw_coming_soon_entry<'a>(lines: &mut Vec<Line<'a>>, name: &'a str, desc: &'
 
 // ── Leaderboard sidebar (right panel in arcade lobby) ──────────
 
-fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<LeaderboardData>) {
-    let block = Block::default()
-        .title(" Leaderboard (🗘 30s) ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let block_inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if block_inner.height < 4 || block_inner.width < 10 {
-        return;
-    }
-
-    // 1-col padding on each side
-    let inner = Rect {
-        x: block_inner.x + 1,
-        y: block_inner.y,
-        width: block_inner.width.saturating_sub(2),
-        height: block_inner.height,
-    };
-
+fn draw_leaderboard_sidebar_body(frame: &mut Frame, inner: Rect, data: &Arc<LeaderboardData>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // ── Chip Leaders ──
@@ -960,4 +1001,28 @@ fn draw_leaderboard_sidebar(frame: &mut Frame, area: Rect, data: &Arc<Leaderboar
     }
 
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn games_sidebar_layout_reserves_info_panel_when_enabled() {
+        let area = Rect::new(2, 3, 80, 24);
+        let (content, info) = games_sidebar_layout(area, true);
+        let info = info.expect("info panel should be present");
+
+        assert_eq!(content, Rect::new(2, 3, 52, 24));
+        assert_eq!(info, Rect::new(54, 3, 28, 24));
+    }
+
+    #[test]
+    fn games_sidebar_layout_returns_full_area_when_disabled() {
+        let area = Rect::new(2, 3, 80, 24);
+        let (content, info) = games_sidebar_layout(area, false);
+
+        assert_eq!(content, area);
+        assert!(info.is_none());
+    }
 }

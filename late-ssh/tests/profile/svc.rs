@@ -65,6 +65,8 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             notify_format: None,
             theme_id: None,
             enable_background_color: false,
+            show_right_sidebar: true,
+            show_games_sidebar: true,
         },
     );
 
@@ -121,6 +123,8 @@ async fn edit_profile_normalizes_username_before_persisting() {
             notify_format: None,
             theme_id: None,
             enable_background_color: false,
+            show_right_sidebar: true,
+            show_games_sidebar: true,
         },
     );
 
@@ -172,6 +176,8 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             notify_format: None,
             theme_id: None,
             enable_background_color: false,
+            show_right_sidebar: true,
+            show_games_sidebar: true,
         },
     );
 

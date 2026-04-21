@@ -449,6 +449,13 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    // Ctrl+O is a plain C0 control byte (0x0F) across terminals/tmux, so
+    // treat it as the global "open settings" chord before any local routing.
+    if matches!(event, ParsedInput::Byte(0x0F)) {
+        open_settings_modal_globally(app);
+        return;
+    }
+
     // Help is the topmost modal: when both are open it owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
@@ -882,6 +889,20 @@ fn compose_room_switch_allowed(screen: Screen) -> bool {
 fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.news.stop_composing();
+}
+
+fn open_settings_modal_globally(app: &mut App) {
+    app.show_help = false;
+    app.show_profile_modal = false;
+    app.show_web_chat_qr = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.cancel_room_jump();
+    app.settings_modal_state.open_from_profile(
+        app.profile_state.profile(),
+        crate::app::settings_modal::ui::MODAL_WIDTH,
+    );
+    app.show_settings = true;
 }
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {

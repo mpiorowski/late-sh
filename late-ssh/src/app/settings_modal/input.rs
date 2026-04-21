@@ -94,6 +94,7 @@ fn activate_selected_row(app: &mut App) {
         Row::Theme
         | Row::BackgroundColor
         | Row::RightSidebar
+        | Row::GamesSidebar
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents

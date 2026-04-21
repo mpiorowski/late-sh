@@ -12,7 +12,7 @@ use crate::app::games::ui::{
     centered_rect, draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint,
 };
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
     let filled = state
         .grid
         .iter()
@@ -50,7 +50,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
         key_hint("Esc", "exit"),
     ];
 
-    let board_area = draw_game_frame(frame, area, "Sudoku", info_lines);
+    let board_area = draw_game_frame(frame, area, "Sudoku", info_lines, show_sidebar);
 
     let board_rect = centered_rect(
         board_area,

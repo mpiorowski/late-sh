@@ -88,7 +88,7 @@ fn build_lines<'a>(view: &ProfileRenderInput<'a>) -> Vec<Line<'a>> {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Press Enter or e to edit profile settings",
+        "  Press Ctrl+O or use /settings to open settings",
         Style::default().fg(theme::AMBER_DIM()),
     )));
 
@@ -229,7 +229,7 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn build_lines_contains_profile_summary_and_edit_hint() {
+    fn build_lines_contains_profile_summary_and_settings_hint() {
         let profile = Profile::default();
         let view = ProfileRenderInput {
             profile: &profile,
@@ -253,7 +253,7 @@ mod tests {
             .join("\n");
 
         assert!(text.contains("Profile"));
-        assert!(text.contains("Press Enter or e to edit profile settings"));
+        assert!(text.contains("Press Ctrl+O or use /settings to open settings"));
         assert!(text.contains("Timezone"));
         assert!(text.contains("@graybeard"));
         assert!(text.contains("gemini-3-flash"));

@@ -13,13 +13,14 @@ use crate::app::games::ui::{
 
 use super::state::{Mode, State};
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
     if !state.has_puzzles() {
         let board_area = draw_game_frame(
             frame,
             area,
             "Nonograms",
             vec![info_tagline("Paint by logic.")],
+            show_sidebar,
         );
         frame.render_widget(
             Paragraph::new("No nonogram packs loaded. Run `gen_nonograms` first.")
@@ -38,6 +39,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
             area,
             "Nonograms",
             vec![info_tagline("Paint by logic.")],
+            show_sidebar,
         );
         frame.render_widget(
             Paragraph::new("Selected nonogram puzzle is missing from the loaded pack.")
@@ -79,7 +81,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State) {
         key_hint("Esc", "exit"),
     ];
 
-    let board_area = draw_game_frame(frame, area, "Nonograms", info_lines);
+    let board_area = draw_game_frame(frame, area, "Nonograms", info_lines, show_sidebar);
 
     let max_col_clues = puzzle.col_clues.iter().map(|c| c.len()).max().unwrap_or(0) as u16;
     let max_row_clues = puzzle.row_clues.iter().map(|c| c.len()).max().unwrap_or(0) as u16;
