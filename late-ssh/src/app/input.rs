@@ -1113,7 +1113,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    if ctx.screen == Screen::Artboard && app.artboard_interacting && byte != 0x03 {
+    if ctx.screen == Screen::Artboard && app.artboard_interacting {
         return false;
     }
 

@@ -632,12 +632,12 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             Style::default().fg(theme::TEXT_MUTED()),
         ));
         for (key, desc) in if ctx.artboard_interacting {
-            [("Esc", "View mode"), ("^P", "Help")]
+            &[("Esc", "View mode"), ("^E", "Drop brush"), ("^P", "Help")][..]
         } else {
-            [("i", "Interact"), ("Tab/1-4", "Switch")]
+            &[("i", "Interact"), ("Tab/1-4", "Switch")][..]
         } {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
-            spans.push(Span::styled(key, Style::default().fg(theme::AMBER_DIM())));
+            spans.push(Span::styled(*key, Style::default().fg(theme::AMBER_DIM())));
             spans.push(Span::styled(
                 format!(" {desc} "),
                 Style::default().fg(theme::TEXT_DIM()),

@@ -191,6 +191,19 @@ impl State {
                 effects: Vec::new(),
             };
         }
+        if key.code == dartboard_editor::AppKeyCode::Char('e')
+            && key.modifiers
+                == (AppModifiers {
+                    ctrl: true,
+                    ..Default::default()
+                })
+            && self.dismiss_active_brush()
+        {
+            return EditorKeyDispatch {
+                handled: true,
+                effects: Vec::new(),
+            };
+        }
         let action = KeyMap::default_standalone().resolve(
             key,
             EditorContext {
@@ -1165,6 +1178,30 @@ mod tests {
     }
 
     #[test]
+    fn app_key_ctrl_c_copies_into_primary_swatch() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(2, 1);
+        state.snapshot.canvas.set(Pos { x: 0, y: 0 }, 'A');
+
+        let dispatch = state.handle_app_key(AppKey {
+            code: dartboard_editor::AppKeyCode::Char('c'),
+            modifiers: dartboard_editor::AppModifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        });
+
+        assert!(dispatch.handled);
+        assert!(dispatch.effects.is_empty());
+        assert_eq!(
+            state.editor.swatches[0]
+                .as_ref()
+                .and_then(|swatch| swatch.clipboard.get(0, 0)),
+            Some(dartboard_core::CellValue::Narrow('A'))
+        );
+    }
+
+    #[test]
     fn app_key_escape_dismisses_temp_brush_back_to_none() {
         let mut state = test_state();
         state.type_char('Q', (80, 24));
@@ -1173,6 +1210,25 @@ mod tests {
         let dispatch = state.handle_app_key(AppKey {
             code: dartboard_editor::AppKeyCode::Esc,
             modifiers: Default::default(),
+        });
+
+        assert!(dispatch.handled);
+        assert!(!state.has_floating());
+        assert_eq!(state.brush_mode(), BrushMode::None);
+    }
+
+    #[test]
+    fn app_key_ctrl_e_dismisses_temp_brush_back_to_none() {
+        let mut state = test_state();
+        state.type_char('Q', (80, 24));
+        assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
+
+        let dispatch = state.handle_app_key(AppKey {
+            code: dartboard_editor::AppKeyCode::Char('e'),
+            modifiers: dartboard_editor::AppModifiers {
+                ctrl: true,
+                ..Default::default()
+            },
         });
 
         assert!(dispatch.handled);
