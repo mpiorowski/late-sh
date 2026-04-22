@@ -331,7 +331,7 @@ const PALETTE_LATTE: Palette = Palette {
 const PALETTE_EGG_COFFEE: Palette = Palette {
     bg_canvas: Color::Rgb(26, 15, 13),
     bg_selection: Color::Rgb(61, 38, 32),
-    bg_highlight: Color::Rgb(177, 140, 89),
+    bg_highlight: Color::Rgb(157, 110, 59),
     border_dim: Color::Rgb(64, 45, 40),
     border: Color::Rgb(92, 70, 64),
     border_active: Color::Rgb(236, 184, 84),
