@@ -164,6 +164,7 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         app.chat.cancel_reaction_leader();
+        return true;
     }
 
     // `d` deletes and keeps the cursor on the adjacent message so you can

@@ -3,8 +3,8 @@
 mod helpers;
 
 use helpers::{
-    chat_compose_app, make_app, make_app_with_chat_service, new_test_db, render_plain,
-    wait_for_render_contains, wait_until,
+    assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
+    new_test_db, render_plain, wait_for_render_contains, wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -281,7 +281,9 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     wait_for_render_contains(&mut app, "reaction target").await;
 
     app.handle_input(b"j");
-    app.handle_input(b"f1");
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "1 👍").await;
+    app.handle_input(b"1");
 
     wait_for_render_contains(&mut app, " Rooms ").await;
     wait_until(
@@ -294,6 +296,63 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
         "f leader reaction to persist",
     )
     .await;
+}
+
+#[tokio::test]
+async fn chat_reaction_leader_cancels_and_consumes_non_digit_input() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-cancel-viewer").await;
+    let author = create_test_user(&test_db.db, "f-cancel-author").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general.id, author.id)
+        .await
+        .expect("join author");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: author.id,
+            body: "cancel target".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-cancel-flow-it");
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, "cancel target").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "1 👍").await;
+
+    app.handle_input(b"r");
+    assert_render_not_contains_for(
+        &mut app,
+        "Reply to @f-cancel-author",
+        Duration::from_millis(250),
+    )
+    .await;
+
+    let plain = render_plain(&mut app);
+    assert!(!plain.contains("1 👍"), "picker should close: {plain:?}");
+    assert!(
+        plain.contains("cancel target"),
+        "message should remain selected: {plain:?}"
+    );
+    assert!(
+        ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
+            .await
+            .expect("load reaction")
+            .is_none(),
+        "non-digit input should not react",
+    );
 }
 
 #[tokio::test]
