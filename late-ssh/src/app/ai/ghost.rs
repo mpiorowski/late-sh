@@ -42,7 +42,7 @@ struct BotUser {
 const BOT_FINGERPRINT: &str = "bot-fp-000";
 const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
-const BOT_ACTIVE_ROOM_MEMBER_LIMIT: usize = 12;
+const BOT_ACTIVE_ROOM_MEMBER_LIMIT: usize = 20;
 const BOT_ACTIVE_ROOM_MEMBER_BIO_MAX_CHARS: usize = 96;
 pub const BOT_TIP_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
 const BOT_TIP_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
@@ -256,6 +256,17 @@ impl GhostService {
     async fn handle_bot_mention(&self, bot: BotUser, trigger_message: ChatMessage) -> Result<()> {
         let client = self.db.get().await?;
         ChatRoomMember::auto_join_public_rooms(&client, bot.id).await?;
+        let room = ChatRoom::get(&client, trigger_message.room_id)
+            .await?
+            .context("bot mention room not found")?;
+
+        if is_dm_room(&room.kind, &room.visibility) {
+            tracing::info!(
+                room_id = %trigger_message.room_id,
+                "skipping @bot mention in dm room"
+            );
+            return Ok(());
+        }
 
         if !ChatRoomMember::is_member(&client, trigger_message.room_id, bot.id).await? {
             ChatRoomMember::join(&client, trigger_message.room_id, bot.id).await?;
@@ -1003,6 +1014,10 @@ fn is_mention_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
 }
 
+fn is_dm_room(kind: &str, visibility: &str) -> bool {
+    kind == "dm" || visibility == "dm"
+}
+
 fn should_handle_bot_mention_event(
     body: &str,
     target_user_ids: Option<&[Uuid]>,
@@ -1132,6 +1147,15 @@ mod tests {
     #[test]
     fn contains_mention_ignores_email_like_tokens() {
         assert!(!contains_mention("mail me at hi@bot.dev", "bot"));
+    }
+
+    #[test]
+    fn is_dm_room_matches_kind_or_visibility() {
+        assert!(is_dm_room("dm", "dm"));
+        assert!(is_dm_room("topic", "dm"));
+        assert!(is_dm_room("dm", "private"));
+        assert!(!is_dm_room("topic", "private"));
+        assert!(!is_dm_room("topic", "public"));
     }
 
     #[test]
