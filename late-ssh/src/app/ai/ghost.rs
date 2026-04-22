@@ -982,7 +982,6 @@ impl TinyRng {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn merge_ghost_settings_preserves_existing_profile_fields() {
