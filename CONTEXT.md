@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-22
+- Last updated: 2026-04-22 (Artboard ownership provenance + Esc/view-mode fix)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -468,6 +468,7 @@ Only canvas mutations are shared. Editor affordances stay local to the current S
 - Assigned user color
 - Sequence number / ack progress
 - Connect rejection state
+- Per-cell authorship (provenance) — map of `Pos -> username`, kept in `late-ssh/src/app/artboard/provenance.rs`. Surfaces through the ownership overlay and the Info sidebar's `Owner` / `Cell` rows.
 
 **Local / session-private**
 - Cursor and viewport origin
@@ -484,12 +485,13 @@ This split is intentional: the multiplayer protocol syncs `CanvasOp`s, not full 
 #### Connection and service lifecycle
 
 1. `late-ssh/src/main.rs` loads the last persisted artboard snapshot from Postgres on server boot, then spawns the persistent in-proc dartboard server.
-2. `SessionConfig` carries that shared `dartboard_server` handle into each SSH app instance.
+2. `SessionConfig` carries the shared `dartboard_server` handle and shared provenance store into each SSH app instance.
 3. `App::set_screen(Screen::Artboard)` lazily calls `App::enter_dartboard()`, creating a per-user `DartboardService` and `artboard::state::State`, and switching the terminal cursor to steady underline.
 4. `DartboardService` calls `ServerHandle::try_connect_local(...)`. On success it spawns a dedicated OS thread that:
    - polls a local command channel every ~16ms
    - submits `CanvasOp`s to the shared server
    - drains `ServerMsg`s into a `watch` snapshot plus `broadcast` event stream
+   - resolves broadcast writers to usernames and updates the shared provenance map
 5. `App::tick()` calls `dartboard_state.tick()` when present, which refreshes the local snapshot, updates cursor clamping, and surfaces rejection/lag notices.
 6. `App::leave_dartboard()` drops the local state and restores the normal block cursor.
 
@@ -505,6 +507,7 @@ Important operational note:
 Persistence behavior:
 - The shared server boots from the last saved snapshot if one exists; otherwise it starts with a blank `384 x 192` canvas.
 - Canvas saves are coalesced and persisted in the background every 5 minutes while dirty.
+- Provenance is persisted alongside the canvas in `artboard_snapshots.provenance` as JSONB. The minimal schema is username-based (`Pos -> username`), not stable user UUIDs.
 - Shutdown/drain explicitly flushes the latest in-memory artboard snapshot before process exit.
 - Tests cover both periodic persistence and explicit flush-on-demand (`late-ssh/tests/games/artboard.rs`).
 
@@ -540,7 +543,9 @@ Key behaviors:
 - `Ctrl+]` opens the glyph picker for emoji / Unicode glyph insertion.
 - Double-clicking an existing non-space cell samples it into a temporary one-glyph brush.
 - `Ctrl+P` toggles the help overlay.
-- `Esc` closes transient Artboard overlays first, then returns from `active` mode to `view` mode.
+- `Ctrl+\` toggles the ownership overlay. When on, cells render as per-author initials tinted by a deterministic username color derived from the provenance map.
+- The Info sidebar always shows `Owner` and `Cell` for the current cursor/hover subject. The overlay only changes canvas rendering.
+- `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in `active` mode, and only falls back to `view` mode once there is no local editor state left to dismiss.
 
 Mouse-specific extras:
 - Click swatch pin icon to pin/unpin a swatch.
@@ -563,7 +568,8 @@ Mouse-specific extras:
 | Stroke floating brush | `Ctrl+Shift+arrows` | Repeated stamps while moving |
 | Toggle brush transparency | activate same swatch again | Floating preview shows transparency state |
 | Glyph picker | `Ctrl+]` | Searchable emoji / Unicode picker |
-| Help | `Ctrl+P` | Overlay with guide + upstream keymap rows |
+| Help | `Ctrl+P` | Four-tab overlay (Overview / Drawing / Brushes / Session), authored in-project under `artboard/data.rs`. `Tab` / `Shift+Tab` switches tabs, `j` / `k` / arrows scroll. |
+| Ownership overlay | `Ctrl+\` | Recolors cells by author initials; `Owner` / `Cell` rows stay visible in the Info sidebar either way. Backed by `provenance.rs`. |
 | Return to view mode | `Esc` | Also closes help / glyph-picker before exiting edit mode |
 | Leave Artboard page | `1-4`, `Tab`, `Shift+Tab` | Available from `view` mode |
 
@@ -572,7 +578,9 @@ Mouse-specific extras:
 - Artboard now lives under `late-ssh/src/app/artboard/`, not `app/games/artboard/`.
 - The Artboard screen has its own renderer and does **not** use the generic game frame/sidebar layout used by the arcade games.
 - The screen chrome exposes `view` vs `active` mode explicitly in both the frame title and the Artboard info sidebar.
-- The artboard info sidebar shows cursor position, pan availability, brush status, current selection size, and connected peers.
+- The artboard info sidebar shows cursor position, `Owner`, `Cell`, pan availability, brush status, current selection size, and connected peers.
+- The Artboard help overlay mirrors the global help modal style: single-row tabs, TitleCase labels, Amber active chip, `Tab` / `Shift+Tab` switches tabs, `j` / `k` / arrows scroll. Copy lives in `artboard/data.rs` (not pulled from upstream keymap).
+- Tab-switching keybindings were unified across modals: both the global help modal and the settings modal use `Tab` / `Shift+Tab` as the canonical tab switcher; arrow/hl routing was dropped from the help modals.
 - In `view` mode, global page switching stays live; in `active` mode, single-key global shortcuts are intentionally suppressed so the editor owns typing.
 - The global app quit-confirm still exists, but `Esc` is reserved for backing Artboard from overlay -> view mode before any screen change.
 - `LATE_DEVTEST_ENV=1` plus SSH login name `artboard` jumps directly into the Artboard screen in `view` mode (see `resolve_devtest_jump` in `late-ssh/src/ssh.rs`).
@@ -585,6 +593,8 @@ Mouse-specific extras:
 - `late-ssh/src/app/artboard/input.rs` — keyboard/mouse routing for active mode
 - `late-ssh/src/app/artboard/page.rs` — dedicated-screen routing for view vs active mode
 - `late-ssh/src/app/artboard/ui.rs` — canvas/sidebar/help/swatch rendering
+- `late-ssh/src/app/artboard/data.rs` — hand-authored help text for the 4 help tabs
+- `late-ssh/src/app/artboard/provenance.rs` — per-cell authorship map + ownership overlay source of truth
 - `late-ssh/tests/games/artboard.rs` — service + persistence integration tests
 - `late-ssh/src/app/input.rs`, `late-ssh/src/app/tick.rs`, `late-ssh/src/app/render.rs` — SSH app integration points
 

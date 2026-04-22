@@ -95,34 +95,17 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
         theme::AMBER(),
     ));
     let owner_pos = state.owner_subject_pos();
-    let owner_label = if state.hover_pos().is_some() {
-        "Hover"
-    } else {
-        "Owner"
-    };
-    let owner_value = state.owner_username().unwrap_or("unknown").to_string();
+    let owner_value = state.owner_username().unwrap_or("?").to_string();
     let owner_color = if state.owner_username().is_some() {
         theme::TEXT_BRIGHT()
     } else {
         theme::TEXT_FAINT()
     };
+    lines.push(info_label_value("Owner", owner_value, owner_color));
     lines.push(info_label_value(
-        owner_label,
-        format!("{owner_value} @ {},{}", owner_pos.x, owner_pos.y),
-        owner_color,
-    ));
-    lines.push(info_label_value(
-        "Owners",
-        if state.ownership_overlay_enabled() {
-            "shown".to_string()
-        } else {
-            "hidden".to_string()
-        },
-        if state.ownership_overlay_enabled() {
-            theme::SUCCESS()
-        } else {
-            theme::TEXT_FAINT()
-        },
+        "Cell",
+        format!("{},{}", owner_pos.x, owner_pos.y),
+        theme::AMBER(),
     ));
     lines.push(pan_indicator_line(state));
 
@@ -853,9 +836,8 @@ mod tests {
     use dartboard_core::{CellValue, RgbColor};
     use dartboard_editor::Clipboard;
     use ratatui::buffer::Buffer;
-    use uuid::Uuid;
 
-    use super::super::svc::DartboardService;
+    use super::super::svc::{DartboardService, DartboardSnapshot};
 
     #[test]
     fn canvas_area_matches_artboard_frame_layout() {
@@ -930,8 +912,8 @@ mod tests {
 
         assert_eq!(lines[0].to_string(), "Mode       view");
         assert_eq!(lines[1].to_string(), "Cursor     0,0");
-        assert_eq!(lines[2].to_string(), "Owner      unknown @ 0,0");
-        assert_eq!(lines[3].to_string(), "Owners     hidden");
+        assert_eq!(lines[2].to_string(), "Owner      ?");
+        assert_eq!(lines[3].to_string(), "Cell       0,0");
         assert_eq!(lines[4].to_string(), "Pan        ◀ ▲ ▼ ▶");
         assert_eq!(lines[5].to_string(), "Brush      none");
         assert_eq!(lines[6].to_string(), "Selection  none");
@@ -1106,12 +1088,15 @@ mod tests {
     }
 
     fn test_state() -> State {
-        let server = crate::dartboard::spawn_server();
         let shared_provenance = ArtboardProvenance::default().shared();
-        let svc =
-            DartboardService::new(server, Uuid::now_v7(), "painter", shared_provenance.clone());
+        let snapshot = DartboardSnapshot {
+            provenance: ArtboardProvenance::default(),
+            your_user_id: Some(1),
+            your_color: Some(RgbColor::new(255, 196, 64)),
+            ..Default::default()
+        };
+        let svc = DartboardService::disconnected_for_tests(snapshot);
         let mut state = State::new(svc, "painter".to_string(), shared_provenance);
-        state.snapshot.your_color = Some(RgbColor::new(255, 196, 64));
         state
     }
 }

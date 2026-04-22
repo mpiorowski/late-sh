@@ -129,6 +129,20 @@ impl DartboardService {
     pub fn submit_op(&self, op: CanvasOp) {
         let _ = self.command_tx.send(Command::SubmitOp(op));
     }
+
+    #[cfg(test)]
+    pub(crate) fn disconnected_for_tests(initial_snapshot: DartboardSnapshot) -> Self {
+        let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
+        let (event_tx, _) = broadcast::channel(128);
+        let (command_tx, command_rx) = mpsc::channel();
+        drop(snapshot_tx);
+        drop(command_rx);
+        Self {
+            command_tx,
+            snapshot_rx,
+            event_tx,
+        }
+    }
 }
 
 fn preferred_user_color(user_id: Uuid) -> RgbColor {

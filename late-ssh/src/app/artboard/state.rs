@@ -228,14 +228,17 @@ impl State {
     }
 
     pub fn handle_app_key(&mut self, key: AppKey) -> EditorKeyDispatch {
-        if key.code == dartboard_editor::AppKeyCode::Esc
-            && key.modifiers == AppModifiers::default()
-            && self.dismiss_active_brush()
+        if key.code == dartboard_editor::AppKeyCode::Esc && key.modifiers == AppModifiers::default()
         {
-            return EditorKeyDispatch {
-                handled: true,
-                effects: Vec::new(),
-            };
+            if self.dismiss_active_brush() {
+                return EditorKeyDispatch {
+                    handled: true,
+                    effects: Vec::new(),
+                };
+            }
+            if self.editor.selection_anchor.is_none() {
+                return EditorKeyDispatch::default();
+            }
         }
         let action = KeyMap::default_standalone().resolve(
             key,
@@ -1119,37 +1122,20 @@ fn canvas_pos_for_screen_point(
 mod tests {
     use super::*;
     use crate::app::artboard::provenance::ArtboardProvenance;
-    use dartboard_core::CellValue;
+    use crate::app::artboard::svc::{DartboardService, DartboardSnapshot};
+    use dartboard_core::{CellValue, RgbColor};
     use dartboard_editor::Clipboard;
-    use std::{
-        thread,
-        time::{Duration, Instant},
-    };
-    use uuid::Uuid;
-
-    fn wait_for<T>(mut check: impl FnMut() -> Option<T>) -> T {
-        let deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            if let Some(value) = check() {
-                return value;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "condition not met before timeout"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
 
     fn test_state() -> State {
-        let server = crate::dartboard::spawn_server();
         let shared_provenance = ArtboardProvenance::default().shared();
-        let svc =
-            DartboardService::new(server, Uuid::now_v7(), "painter", shared_provenance.clone());
-        let rx = svc.subscribe_state();
-        wait_for(|| rx.borrow().your_user_id.is_some().then_some(()));
+        let snapshot = DartboardSnapshot {
+            provenance: ArtboardProvenance::default(),
+            your_user_id: Some(1),
+            your_color: Some(RgbColor::new(255, 196, 64)),
+            ..Default::default()
+        };
+        let svc = DartboardService::disconnected_for_tests(snapshot);
         let mut state = State::new(svc, "painter".to_string(), shared_provenance);
-        state.tick();
         state.set_viewport_for_screen((80, 24));
         state
     }
@@ -1183,6 +1169,24 @@ mod tests {
         state.type_char('A', (80, 24));
         assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'A');
         assert_eq!(state.cursor(), Pos { x: 1, y: 0 });
+    }
+
+    #[test]
+    fn paste_bytes_lays_out_multiline_text_with_wrap() {
+        let mut state = test_state();
+
+        for _ in 0..2 {
+            state.move_right((80, 24));
+        }
+        state.move_down((80, 24));
+
+        state.paste_bytes(b"hello\nworld", (80, 24));
+
+        let canvas = &state.snapshot.canvas;
+        assert_eq!(canvas.get(Pos { x: 2, y: 1 }), 'h');
+        assert_eq!(canvas.get(Pos { x: 6, y: 1 }), 'o');
+        assert_eq!(canvas.get(Pos { x: 2, y: 2 }), 'w');
+        assert_eq!(canvas.get(Pos { x: 6, y: 2 }), 'd');
     }
 
     #[test]
@@ -1293,6 +1297,18 @@ mod tests {
         assert!(dispatch.handled);
         assert!(!state.has_floating());
         assert_eq!(state.brush_mode(), BrushMode::None);
+    }
+
+    #[test]
+    fn app_key_escape_without_selection_or_brush_falls_through() {
+        let mut state = test_state();
+
+        let dispatch = state.handle_app_key(AppKey {
+            code: dartboard_editor::AppKeyCode::Esc,
+            modifiers: Default::default(),
+        });
+
+        assert!(!dispatch.handled);
     }
 
     #[test]

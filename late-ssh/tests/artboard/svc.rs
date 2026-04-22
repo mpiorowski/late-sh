@@ -1,45 +1,19 @@
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
+//! Service integration tests for artboard flows against the in-proc server and DB.
 
-use dartboard_core::{CanvasOp, Pos, RgbColor};
+use dartboard_core::{CanvasOp, Pos};
 use dartboard_local::MAX_PLAYERS;
-use late_core::{models::artboard::Snapshot, test_utils::test_db};
-use late_ssh::app::artboard::provenance::ArtboardProvenance;
-use late_ssh::app::artboard::state::State;
-use late_ssh::app::artboard::svc::{DartboardEvent, DartboardService};
+use late_core::models::artboard::Snapshot;
+use late_ssh::app::artboard::svc::DartboardEvent;
 use late_ssh::dartboard;
-use uuid::Uuid;
 
-fn wait_for<T>(mut check: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(1);
-    loop {
-        if let Some(value) = check() {
-            return value;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "condition not met before timeout"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn test_color() -> RgbColor {
-    RgbColor::new(255, 110, 64)
-}
-
-fn shared_provenance() -> late_ssh::app::artboard::provenance::SharedArtboardProvenance {
-    ArtboardProvenance::default().shared()
-}
+use super::{connected_service, helpers::new_test_db, shared_provenance, test_color, wait_for};
 
 #[test]
-fn dartboard_services_share_canvas_updates() {
+fn services_share_canvas_updates() {
     let server = dartboard::spawn_server();
     let shared = shared_provenance();
-    let alice = DartboardService::new(server.clone(), Uuid::now_v7(), "alice", shared.clone());
-    let bob = DartboardService::new(server, Uuid::now_v7(), "bob", shared);
+    let alice = connected_service(server.clone(), "alice", shared.clone());
+    let bob = connected_service(server, "bob", shared);
 
     let alice_rx = alice.subscribe_state();
     let bob_rx = bob.subscribe_state();
@@ -66,16 +40,18 @@ fn dartboard_services_share_canvas_updates() {
 
     let snapshot = bob_rx.borrow().clone();
     assert_eq!(
-        snapshot.provenance.username_at(&snapshot.canvas, Pos { x: 3, y: 2 }),
+        snapshot
+            .provenance
+            .username_at(&snapshot.canvas, Pos { x: 3, y: 2 }),
         Some("alice")
     );
 }
 
 #[test]
-fn dartboard_service_emits_peer_join_and_left() {
+fn service_emits_peer_join_and_left() {
     let server = dartboard::spawn_server();
     let shared = shared_provenance();
-    let alice = DartboardService::new(server.clone(), Uuid::now_v7(), "alice", shared.clone());
+    let alice = connected_service(server.clone(), "alice", shared.clone());
     let mut alice_events = alice.subscribe_events();
 
     wait_for(|| {
@@ -87,7 +63,7 @@ fn dartboard_service_emits_peer_join_and_left() {
             .then_some(())
     });
 
-    let bob = DartboardService::new(server, Uuid::now_v7(), "bob", shared);
+    let bob = connected_service(server, "bob", shared);
 
     let joined_peer = wait_for(|| match alice_events.try_recv() {
         Ok(DartboardEvent::PeerJoined { peer }) => Some(peer),
@@ -109,70 +85,36 @@ fn dartboard_service_emits_peer_join_and_left() {
 }
 
 #[test]
-fn dartboard_eleventh_service_reports_connect_rejected() {
+fn eleventh_service_reports_connect_rejected() {
     let server = dartboard::spawn_server();
     let shared = shared_provenance();
 
     let mut clients = Vec::new();
     for i in 0..MAX_PLAYERS {
-        let svc = DartboardService::new(
-            server.clone(),
-            Uuid::now_v7(),
-            &format!("peer{i}"),
-            shared.clone(),
-        );
+        let svc = connected_service(server.clone(), &format!("peer{i}"), shared.clone());
         let rx = svc.subscribe_state();
         wait_for(|| rx.borrow().your_user_id.is_some().then_some(()));
         clients.push(svc);
     }
 
-    let overflow = DartboardService::new(server, Uuid::now_v7(), "overflow", shared);
+    let overflow = connected_service(server, "overflow", shared);
     let rx = overflow.subscribe_state();
     let reason = wait_for(|| rx.borrow().connect_rejected.clone());
     assert!(reason.to_lowercase().contains("full"), "reason: {reason}");
     assert!(rx.borrow().your_user_id.is_none());
 }
 
-#[test]
-fn dartboard_paste_bytes_lays_out_multiline_text_with_wrap() {
-    let server = dartboard::spawn_server();
-    let shared = shared_provenance();
-    let svc = DartboardService::new(server, Uuid::now_v7(), "painter", shared.clone());
-
-    // Wait for Welcome so the snapshot carries the server's canvas + our color.
-    let rx = svc.subscribe_state();
-    wait_for(|| rx.borrow().your_user_id.is_some().then_some(()));
-
-    let mut state = State::new(svc, "painter".to_string(), shared);
-    state.tick(); // drain the initial snapshot into local state
-
-    // Start paste from (2, 1) so the wrap column is x=2 on the second line.
-    state.set_viewport_for_screen((80, 24));
-    for _ in 0..2 {
-        state.move_right((80, 24));
-    }
-    state.move_down((80, 24));
-
-    state.paste_bytes(b"hello\nworld", (80, 24));
-
-    let canvas = &state.snapshot.canvas;
-    assert_eq!(canvas.get(Pos { x: 2, y: 1 }), 'h');
-    assert_eq!(canvas.get(Pos { x: 6, y: 1 }), 'o');
-    assert_eq!(canvas.get(Pos { x: 2, y: 2 }), 'w');
-    assert_eq!(canvas.get(Pos { x: 6, y: 2 }), 'd');
-}
-
 #[tokio::test]
-async fn dartboard_persistent_server_saves_and_restores_snapshot() {
-    let test_db = test_db().await;
+async fn persistent_server_saves_and_restores_snapshot() {
+    let test_db = new_test_db().await;
     let shared = shared_provenance();
     let server = dartboard::spawn_persistent_server_with_interval(
         test_db.db.clone(),
         None,
         shared.clone(),
-        Duration::from_millis(50),
+        std::time::Duration::from_millis(50),
     );
-    let painter = DartboardService::new(server, Uuid::now_v7(), "painter", shared.clone());
+    let painter = connected_service(server, "painter", shared.clone());
     let rx = painter.subscribe_state();
     wait_for(|| rx.borrow().your_user_id.is_some().then_some(()));
 
@@ -182,7 +124,7 @@ async fn dartboard_persistent_server_saves_and_restores_snapshot() {
         fg: test_color(),
     });
 
-    let persisted = tokio::time::timeout(Duration::from_secs(2), async {
+    let persisted = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             let client = test_db.db.get().await.expect("db client");
             if let Some(snapshot) = Snapshot::find_by_board_key(&client, Snapshot::MAIN_BOARD_KEY)
@@ -192,19 +134,21 @@ async fn dartboard_persistent_server_saves_and_restores_snapshot() {
                 let canvas: dartboard_core::Canvas =
                     serde_json::from_value(snapshot.canvas).expect("deserialize canvas");
                 let provenance: late_ssh::app::artboard::provenance::ArtboardProvenance =
-                    serde_json::from_value(snapshot.provenance)
-                        .expect("deserialize provenance");
+                    serde_json::from_value(snapshot.provenance).expect("deserialize provenance");
                 if canvas.get(Pos { x: 5, y: 4 }) == 'Z' {
                     break (canvas, provenance);
                 }
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     })
     .await
     .expect("timed out waiting for artboard snapshot");
     assert_eq!(persisted.0.get(Pos { x: 5, y: 4 }), 'Z');
-    assert_eq!(persisted.1.username_at(&persisted.0, Pos { x: 5, y: 4 }), Some("painter"));
+    assert_eq!(
+        persisted.1.username_at(&persisted.0, Pos { x: 5, y: 4 }),
+        Some("painter")
+    );
 
     let restored = dartboard::load_persisted_artboard(&test_db.db)
         .await
@@ -217,11 +161,10 @@ async fn dartboard_persistent_server_saves_and_restores_snapshot() {
             .map(|snapshot| snapshot.provenance.clone())
             .unwrap_or_default()
             .shared(),
-        Duration::from_millis(50),
+        std::time::Duration::from_millis(50),
     );
-    let restorer = DartboardService::new(
+    let restorer = connected_service(
         restored_server,
-        Uuid::now_v7(),
         "restorer",
         restored
             .map(|snapshot| snapshot.provenance)
@@ -238,16 +181,16 @@ async fn dartboard_persistent_server_saves_and_restores_snapshot() {
 }
 
 #[tokio::test]
-async fn dartboard_flush_server_snapshot_persists_immediately() {
-    let test_db = test_db().await;
+async fn flush_server_snapshot_persists_immediately() {
+    let test_db = new_test_db().await;
     let shared = shared_provenance();
     let server = dartboard::spawn_persistent_server_with_interval(
         test_db.db.clone(),
         None,
         shared.clone(),
-        Duration::from_secs(60 * 60),
+        std::time::Duration::from_secs(60 * 60),
     );
-    let painter = DartboardService::new(server.clone(), Uuid::now_v7(), "painter", shared.clone());
+    let painter = connected_service(server.clone(), "painter", shared.clone());
     let rx = painter.subscribe_state();
     wait_for(|| rx.borrow().your_user_id.is_some().then_some(()));
 
@@ -276,5 +219,8 @@ async fn dartboard_flush_server_snapshot_persists_immediately() {
     let provenance: late_ssh::app::artboard::provenance::ArtboardProvenance =
         serde_json::from_value(snapshot.provenance).expect("deserialize provenance");
     assert_eq!(canvas.get(Pos { x: 9, y: 6 }), 'Q');
-    assert_eq!(provenance.username_at(&canvas, Pos { x: 9, y: 6 }), Some("painter"));
+    assert_eq!(
+        provenance.username_at(&canvas, Pos { x: 9, y: 6 }),
+        Some("painter")
+    );
 }

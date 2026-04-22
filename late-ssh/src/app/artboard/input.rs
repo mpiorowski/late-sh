@@ -543,10 +543,9 @@ fn map_button(button: MouseButton) -> Option<AppPointerButton> {
 mod tests {
     use super::*;
     use crate::app::artboard::provenance::ArtboardProvenance;
-    use crate::app::artboard::svc::DartboardService;
+    use crate::app::artboard::svc::{DartboardService, DartboardSnapshot};
     use dartboard_core::{Canvas, CellValue, RgbColor};
     use dartboard_editor::Clipboard;
-    use uuid::Uuid;
 
     #[test]
     fn hover_motion_does_not_move_cursor() {
@@ -1066,12 +1065,15 @@ mod tests {
     }
 
     fn test_state() -> State {
-        let server = crate::dartboard::spawn_server();
         let shared_provenance = ArtboardProvenance::default().shared();
-        let svc =
-            DartboardService::new(server, Uuid::now_v7(), "painter", shared_provenance.clone());
+        let snapshot = DartboardSnapshot {
+            provenance: ArtboardProvenance::default(),
+            your_user_id: Some(1),
+            your_color: Some(RgbColor::new(255, 196, 64)),
+            ..Default::default()
+        };
+        let svc = DartboardService::disconnected_for_tests(snapshot);
         let mut state = State::new(svc, "painter".to_string(), shared_provenance);
-        state.snapshot.your_color = Some(RgbColor::new(255, 196, 64));
         state
     }
 }
