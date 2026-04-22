@@ -50,7 +50,6 @@ impl Banner {
 pub enum Screen {
     Dashboard,
     Chat,
-    Profile,
     Games,
 }
 
@@ -59,17 +58,15 @@ impl Screen {
         match self {
             Screen::Dashboard => Screen::Chat,
             Screen::Chat => Screen::Games,
-            Screen::Games => Screen::Profile,
-            Screen::Profile => Screen::Dashboard,
+            Screen::Games => Screen::Dashboard,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Profile,
+            Screen::Dashboard => Screen::Games,
             Screen::Chat => Screen::Dashboard,
             Screen::Games => Screen::Chat,
-            Screen::Profile => Screen::Games,
         }
     }
 }
@@ -94,7 +91,6 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     let label = match current {
         Screen::Dashboard => "Dashboard",
         Screen::Chat => "Chat",
-        Screen::Profile => "Profile",
         Screen::Games => "Games",
     };
 
@@ -152,16 +148,14 @@ mod tests {
     fn screen_next_cycles_all_screens() {
         assert_eq!(Screen::Dashboard.next(), Screen::Chat);
         assert_eq!(Screen::Chat.next(), Screen::Games);
-        assert_eq!(Screen::Games.next(), Screen::Profile);
-        assert_eq!(Screen::Profile.next(), Screen::Dashboard);
+        assert_eq!(Screen::Games.next(), Screen::Dashboard);
     }
 
     #[test]
     fn screen_prev_cycles_all_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::Profile);
+        assert_eq!(Screen::Dashboard.prev(), Screen::Games);
         assert_eq!(Screen::Chat.prev(), Screen::Dashboard);
         assert_eq!(Screen::Games.prev(), Screen::Chat);
-        assert_eq!(Screen::Profile.prev(), Screen::Games);
     }
 
     #[test]

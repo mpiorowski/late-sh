@@ -1,3 +1,5 @@
+use crate::app::ai::ghost::{GRAYBEARD_CHAT_INTERVAL, GRAYBEARD_MENTION_COOLDOWN};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HelpTopic {
     Overview,
@@ -7,7 +9,7 @@ pub enum HelpTopic {
     News,
     Arcade,
     Bonsai,
-    Profile,
+    Settings,
 }
 
 impl HelpTopic {
@@ -18,7 +20,7 @@ impl HelpTopic {
         HelpTopic::News,
         HelpTopic::Arcade,
         HelpTopic::Bonsai,
-        HelpTopic::Profile,
+        HelpTopic::Settings,
         HelpTopic::Architecture,
     ];
 
@@ -31,7 +33,7 @@ impl HelpTopic {
             HelpTopic::News => "News",
             HelpTopic::Arcade => "Arcade",
             HelpTopic::Bonsai => "Bonsai",
-            HelpTopic::Profile => "Profile",
+            HelpTopic::Settings => "Settings",
         }
     }
 
@@ -44,7 +46,7 @@ impl HelpTopic {
             HelpTopic::News => "News",
             HelpTopic::Arcade => "Arcade",
             HelpTopic::Bonsai => "Bonsai",
-            HelpTopic::Profile => "Profile",
+            HelpTopic::Settings => "Settings",
         }
     }
 
@@ -56,7 +58,7 @@ impl HelpTopic {
             HelpTopic::News => 3,
             HelpTopic::Arcade => 4,
             HelpTopic::Bonsai => 5,
-            HelpTopic::Profile => 6,
+            HelpTopic::Settings => 6,
             HelpTopic::Architecture => 7,
         }
     }
@@ -71,7 +73,7 @@ pub fn lines_for(topic: HelpTopic) -> Vec<String> {
         HelpTopic::News => news_help_lines(),
         HelpTopic::Arcade => arcade_help_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
-        HelpTopic::Profile => profile_help_lines(),
+        HelpTopic::Settings => settings_help_lines(),
     }
 }
 
@@ -185,21 +187,20 @@ fn overview_lines() -> Vec<String> {
     [
         "late.sh in one pass",
         "",
-        "late.sh is a terminal clubhouse over SSH: chat, music, news, games, profiles, and shared presence in one session.",
+        "late.sh is a terminal clubhouse over SSH: chat, music, news, games, settings, and shared presence in one session.",
         "",
         "Primary screens",
         "  1 Dashboard       stream status, voting, and chat snapshot",
         "  2 Chat            public rooms, DMs, mentions, web-chat links",
-        "  3 Profile         read-only identity card + edit settings modal",
-        "  4 The Arcade      daily puzzles, endless games, leaderboard",
+        "  3 The Arcade      daily puzzles, endless games, leaderboard",
         "",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  1-4               jump straight to a screen",
+        "  1-3               jump straight to a screen",
         "  ?                 open this guide",
-        "  q                 quit",
+        "  q                 open quit confirm (press q again to leave)",
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  P                 show browser pairing QR",
@@ -247,7 +248,7 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Dashboard, Chat, News, Profile, The Arcade, and the persistent bonsai sidebar",
+        "  Dashboard, Chat, News, The Arcade, and the persistent bonsai sidebar",
         "",
         "Important characteristics",
         "  terminal-first, always-on, social, and zero-signup",
@@ -324,33 +325,60 @@ fn arcade_help_lines() -> Vec<String> {
     .collect()
 }
 
-fn profile_help_lines() -> Vec<String> {
-    [
-        "Profile and identity",
-        "",
-        "Profile is now intentionally lightweight in-page: the page shows your public identity, and editing happens in the profile/settings modal.",
-        "",
-        "What you can set",
-        "  username",
-        "  theme",
-        "  notifications, bell, cooldown",
-        "  multiline bio",
-        "  country via picker, with Unicode flag rendering",
-        "  timezone via picker",
-        "  favorite rooms (dashboard quick-switch strip)",
-        "",
-        "How to open it",
-        "  on login, the profile/settings modal opens automatically",
-        "  press Ctrl+O anywhere in the app",
-        "  or use /settings from chat",
-        "",
-        "Why country matters",
-        "",
-        "The saved ISO country code can later render a flag in chat and other user surfaces.",
+fn settings_help_lines() -> Vec<String> {
+    let graybeard_interval_min = GRAYBEARD_CHAT_INTERVAL.as_secs() / 60;
+    let graybeard_mention_cooldown_sec = GRAYBEARD_MENTION_COOLDOWN.as_secs();
+
+    vec![
+        "Settings and identity".to_string(),
+        "".to_string(),
+        "Your identity and preferences live in the settings modal.".to_string(),
+        "".to_string(),
+        "What you can set".to_string(),
+        "  username".to_string(),
+        "  theme".to_string(),
+        "  notifications, bell, cooldown".to_string(),
+        "  multiline bio".to_string(),
+        "  country via picker, with Unicode flag rendering".to_string(),
+        "  timezone via picker".to_string(),
+        "  favorite rooms (dashboard quick-switch strip)".to_string(),
+        "".to_string(),
+        "How to open it".to_string(),
+        "  on login, the settings modal opens automatically".to_string(),
+        "  press Ctrl+O anywhere in the app".to_string(),
+        "  or use /settings from chat".to_string(),
+        "".to_string(),
+        "Why country matters".to_string(),
+        "".to_string(),
+        "The saved ISO country code can later render a flag in chat and other user surfaces."
+            .to_string(),
+        "".to_string(),
+        "Notifications".to_string(),
+        "".to_string(),
+        "Terminal notifications run through OSC 777 / OSC 9.".to_string(),
+        "Best support today: kitty, Ghostty, rxvt-unicode, foot, wezterm, konsole, and iTerm2."
+            .to_string(),
+        "tmux is not supported here, so notification escape sequences can get mangled or dropped."
+            .to_string(),
+        "Notifications can fire for DMs, mentions, and game events.".to_string(),
+        "Bell and cooldown decide how loud and how often they show up.".to_string(),
+        "".to_string(),
+        "@bot".to_string(),
+        "".to_string(),
+        "@bot is the app's AI helper in chat.".to_string(),
+        "Mention replies are rate-limited with a 30s cooldown per user.".to_string(),
+        "It answers questions about late.sh, product positioning, and high-level architecture."
+            .to_string(),
+        "It sees recent room history plus compact context about online non-bot members in the active room."
+            .to_string(),
+        "The exact model depends on the current server configuration.".to_string(),
+        "".to_string(),
+        "@graybeard".to_string(),
+        "".to_string(),
+        format!("Lurks in #general every ~{graybeard_interval_min}min."),
+        "Burned-out senior who still shows up to heckle modern software.".to_string(),
+        format!("Replies on mention with a {graybeard_mention_cooldown_sec}s cooldown."),
     ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
 }
 
 fn bonsai_help_lines() -> Vec<String> {

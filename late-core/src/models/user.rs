@@ -22,6 +22,15 @@ crate::model! {
 
 pub const USERNAME_MAX_LEN: usize = 32;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptProfileContext {
+    pub username: String,
+    pub bio: String,
+    pub country: Option<String>,
+    pub timezone: Option<String>,
+    pub is_bot: bool,
+}
+
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
@@ -127,6 +136,43 @@ impl User {
             }
         }
         Ok(map)
+    }
+
+    pub async fn list_prompt_profile_context_by_ids(
+        client: &Client,
+        user_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, PromptProfileContext>> {
+        if user_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query(
+                "SELECT id, username, settings
+                 FROM users
+                 WHERE id = ANY($1)",
+                &[&user_ids],
+            )
+            .await?;
+
+        let mut contexts = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let settings: Value = row.get("settings");
+            contexts.insert(
+                row.get("id"),
+                PromptProfileContext {
+                    username: row.get("username"),
+                    bio: extract_bio(&settings),
+                    country: extract_country(&settings),
+                    timezone: extract_timezone(&settings),
+                    is_bot: settings
+                        .get("bot")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                },
+            );
+        }
+        Ok(contexts)
     }
 
     pub async fn find_by_username(client: &Client, username: &str) -> Result<Option<Self>> {

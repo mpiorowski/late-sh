@@ -1,4 +1,4 @@
-use late_core::models::user::{User, UserParams};
+use late_core::models::user::{PromptProfileContext, User, UserParams};
 use late_core::test_utils::{TestDb, test_db};
 use serde_json::json;
 use tokio::time::{Duration, sleep};
@@ -296,4 +296,59 @@ async fn ignored_user_ids_require_existing_user() {
         .await
         .expect_err("expected missing user error");
     assert!(err.to_string().to_ascii_lowercase().contains("not found"));
+}
+
+#[tokio::test]
+async fn list_prompt_profile_context_by_ids_reads_profile_fields_from_settings() {
+    let (client, _test_db) = setup_db().await;
+
+    let alice = User::create(
+        &client,
+        UserParams {
+            fingerprint: "fp-prompt-alice".to_string(),
+            username: "alice".to_string(),
+            settings: json!({
+                "bio": "shipping rust + postgres",
+                "country": " pl ",
+                "timezone": " Europe/Warsaw ",
+            }),
+        },
+    )
+    .await
+    .expect("create alice");
+    let bob = User::create(
+        &client,
+        UserParams {
+            fingerprint: "fp-prompt-bob".to_string(),
+            username: "bob".to_string(),
+            settings: json!({}),
+        },
+    )
+    .await
+    .expect("create bob");
+
+    let contexts = User::list_prompt_profile_context_by_ids(&client, &[alice.id, bob.id])
+        .await
+        .expect("list prompt profile context");
+
+    assert_eq!(
+        contexts.get(&alice.id),
+        Some(&PromptProfileContext {
+            username: "alice".to_string(),
+            bio: "shipping rust + postgres".to_string(),
+            country: Some("PL".to_string()),
+            timezone: Some("Europe/Warsaw".to_string()),
+            is_bot: false,
+        })
+    );
+    assert_eq!(
+        contexts.get(&bob.id),
+        Some(&PromptProfileContext {
+            username: "bob".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            is_bot: false,
+        })
+    );
 }

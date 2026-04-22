@@ -70,7 +70,6 @@ pub struct ChatState {
     overlay: Option<Overlay>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
-    primed_room_ids: HashSet<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
     pub(crate) selected_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
@@ -148,7 +147,6 @@ impl ChatState {
             overlay: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
-            primed_room_ids: HashSet::new(),
             room_tx,
             selected_room_id: None,
             room_jump_active: false,
@@ -232,23 +230,6 @@ impl ChatState {
         self.pending_read_rooms.insert(room_id);
         self.unread_counts.insert(room_id, 0);
         self.service.mark_room_read_task(self.user_id, room_id);
-    }
-
-    /// Warm a room's history exactly once per session when some other UI
-    /// surface (the dashboard card) wants to render it without making it
-    /// the chat page's selected room.
-    pub fn prime_room_if_empty(&mut self, room_id: Uuid) {
-        let Some((_, messages)) = self.rooms.iter().find(|(room, _)| room.id == room_id) else {
-            return;
-        };
-        if !messages.is_empty() {
-            self.primed_room_ids.insert(room_id);
-            return;
-        }
-        if !self.primed_room_ids.insert(room_id) {
-            return;
-        }
-        self.service.list_chats_task(self.user_id, Some(room_id));
     }
 
     /// Returns visible messages for the given room.
@@ -463,6 +444,10 @@ impl ChatState {
             .iter()
             .find(|(room, _)| room.id == room_id)
             .and_then(|(_, msgs)| msgs.iter().find(|m| m.id == message_id))
+    }
+
+    fn room_slug(&self, room_id: Uuid) -> Option<String> {
+        room_slug_for(&self.rooms, room_id)
     }
 
     fn selected_room_slug(&self) -> Option<String> {
@@ -921,6 +906,11 @@ impl ChatState {
             return Some(Banner::success(&format!("Deleting #{slug}...")));
         }
 
+        if let Some(command) = unknown_slash_command(&body) {
+            self.clear_composer_after_submit();
+            return Some(Banner::error(&format!("Unknown command: {command}")));
+        }
+
         if let Some(room_id) = self.composer_room_id
             && !body.is_empty()
         {
@@ -942,7 +932,7 @@ impl ChatState {
                 self.service.send_message_task(
                     self.user_id,
                     room_id,
-                    self.selected_room_slug(),
+                    self.room_slug(room_id),
                     body,
                     request_id,
                     self.is_admin,
@@ -1681,6 +1671,27 @@ fn parse_delete_room_command(input: &str) -> Option<&str> {
     Some(slug)
 }
 
+fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Option<String> {
+    rooms
+        .iter()
+        .find(|(room, _)| room.id == room_id)
+        .and_then(|(room, _)| room.slug.clone())
+}
+
+fn unknown_slash_command(input: &str) -> Option<&str> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed.contains('\n') || !trimmed.starts_with('/') {
+        return None;
+    }
+
+    let command = trimmed.split_whitespace().next()?;
+    if command.len() <= 1 || command == "//" {
+        return None;
+    }
+
+    Some(command)
+}
+
 fn online_username_set(active_users: Option<&ActiveUsers>) -> HashSet<String> {
     let Some(active_users) = active_users else {
         return HashSet::new();
@@ -1846,10 +1857,12 @@ fn reply_preview_text(body: &str) -> String {
             (!trimmed.is_empty()).then_some(trimmed)
         })
         .unwrap_or("");
-    let preview = first_content_line
-        .strip_prefix("> ")
-        .unwrap_or(first_content_line)
-        .trim();
+    let preview = strip_markdown_preview_markers(
+        first_content_line
+            .strip_prefix("> ")
+            .unwrap_or(first_content_line)
+            .trim(),
+    );
     let preview: String = preview.chars().take(48).collect();
     if preview.chars().count() == 48 {
         format!("{}...", preview.trim_end())
@@ -1897,6 +1910,69 @@ fn news_reply_preview_text(body: &str) -> Option<String> {
     } else {
         preview
     })
+}
+
+fn strip_markdown_preview_markers(text: &str) -> String {
+    let mut text = text.trim();
+
+    if let Some(rest) = text.strip_prefix("> ") {
+        text = rest.trim();
+    }
+    if let Some(rest) = text.strip_prefix("- ") {
+        text = rest.trim();
+    }
+
+    let heading_level = text.chars().take_while(|ch| *ch == '#').count();
+    if (1..=3).contains(&heading_level)
+        && let Some(rest) = text[heading_level..].strip_prefix(' ')
+    {
+        text = rest.trim();
+    }
+
+    let digits = text.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits > 0
+        && let Some(rest) = text[digits..].strip_prefix(". ")
+    {
+        text = rest.trim();
+    }
+
+    let mut out = String::new();
+    let mut idx = 0;
+    while idx < text.len() {
+        let rest = &text[idx..];
+
+        if rest.starts_with('[')
+            && let Some(bracket_pos) = rest[1..].find(']')
+            && bracket_pos > 0
+            && let Some(paren_inner) = rest[1 + bracket_pos + 1..].strip_prefix('(')
+            && let Some(close_paren) = paren_inner.find(')')
+            && close_paren > 0
+        {
+            out.push_str(&rest[1..1 + bracket_pos]);
+            idx += 1 + bracket_pos + 2 + close_paren + 1;
+            continue;
+        }
+
+        let mut stripped_marker = false;
+        for marker in ["***", "**", "~~", "`", "*"] {
+            if rest.starts_with(marker) {
+                idx += marker.len();
+                stripped_marker = true;
+                break;
+            }
+        }
+        if stripped_marker {
+            continue;
+        }
+
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        out.push(ch);
+        idx += ch.len_utf8();
+    }
+
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 #[cfg(test)]
 mod tests {
@@ -2022,6 +2098,12 @@ mod tests {
     }
 
     #[test]
+    fn reply_preview_text_strips_markdown_markers() {
+        let preview = reply_preview_text("**bold** `@graybeard` [docs](https://late.sh)");
+        assert_eq!(preview, "bold @graybeard docs");
+    }
+
+    #[test]
     fn news_marker_detection_matches_announcement_messages() {
         assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
         assert!(news_reply_preview_text("regular chat message").is_none());
@@ -2100,6 +2182,55 @@ mod tests {
     fn adjacent_composer_room_returns_none_without_real_rooms() {
         let order = vec![RoomSlot::News, RoomSlot::Notifications, RoomSlot::Discover];
         assert_eq!(adjacent_composer_room(&order, None, 1), None);
+    }
+
+    #[test]
+    fn room_slug_for_uses_explicit_room_id() {
+        let general_id = Uuid::from_u128(11);
+        let announcements_id = Uuid::from_u128(12);
+        let rooms = vec![
+            (
+                ChatRoom {
+                    id: general_id,
+                    created: chrono::Utc::now(),
+                    updated: chrono::Utc::now(),
+                    kind: "general".to_string(),
+                    visibility: "public".to_string(),
+                    auto_join: true,
+                    permanent: true,
+                    slug: Some("general".to_string()),
+                    language_code: None,
+                    dm_user_a: None,
+                    dm_user_b: None,
+                },
+                vec![],
+            ),
+            (
+                ChatRoom {
+                    id: announcements_id,
+                    created: chrono::Utc::now(),
+                    updated: chrono::Utc::now(),
+                    kind: "topic".to_string(),
+                    visibility: "public".to_string(),
+                    auto_join: true,
+                    permanent: true,
+                    slug: Some("announcements".to_string()),
+                    language_code: None,
+                    dm_user_a: None,
+                    dm_user_b: None,
+                },
+                vec![],
+            ),
+        ];
+
+        assert_eq!(
+            room_slug_for(&rooms, general_id),
+            Some("general".to_string())
+        );
+        assert_eq!(
+            room_slug_for(&rooms, announcements_id),
+            Some("announcements".to_string())
+        );
     }
 
     #[test]
@@ -2246,6 +2377,19 @@ mod tests {
     #[test]
     fn parse_delete_room_not_command() {
         assert_eq!(parse_delete_room_command("hello"), None);
+    }
+
+    #[test]
+    fn unknown_slash_command_detects_typo() {
+        assert_eq!(unknown_slash_command("/lsit"), Some("/lsit"));
+        assert_eq!(unknown_slash_command("/lsit #general"), Some("/lsit"));
+    }
+
+    #[test]
+    fn unknown_slash_command_ignores_regular_messages_and_multiline_text() {
+        assert_eq!(unknown_slash_command("hello"), None);
+        assert_eq!(unknown_slash_command("// not a command"), None);
+        assert_eq!(unknown_slash_command("/bin/ls\nstill talking"), None);
     }
 
     #[test]

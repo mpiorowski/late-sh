@@ -16,14 +16,6 @@ use super::{
 pub const MODAL_WIDTH: u16 = 96;
 pub const MODAL_HEIGHT: u16 = 34;
 
-/// Width the bio markdown should wrap at, given the modal's rendered width.
-/// Used both by the bio tab here and by the profile screen preview so they
-/// line up.
-/// modal inner (-2 borders) - leading/trailing padding (-4).
-pub fn bio_text_width(modal_width: u16) -> usize {
-    modal_width.saturating_sub(2).saturating_sub(4).max(24) as usize
-}
-
 pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);

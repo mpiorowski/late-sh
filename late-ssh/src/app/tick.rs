@@ -39,11 +39,6 @@ impl App {
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
         }
-        if self.screen == Screen::Dashboard
-            && let Some(room_id) = self.dashboard_active_room_id()
-        {
-            self.chat.prime_room_if_empty(room_id);
-        }
         if self.show_profile_modal {
             self.profile_modal_state.tick();
         }

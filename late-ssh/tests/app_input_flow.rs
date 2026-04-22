@@ -52,6 +52,27 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
 }
 
 #[tokio::test]
+async fn q_opens_quit_confirm_and_escape_dismisses_it() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "quit-confirm-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "quit-confirm-flow-it");
+
+    app.handle_input(b"q");
+    wait_for_render_contains(&mut app, " Quit? ").await;
+    wait_for_render_contains(&mut app, "Clicked by mistake, right?").await;
+    wait_for_render_contains(&mut app, "bye, I'll be back").await;
+    wait_for_render_contains(&mut app, "yeah, my bad, stay").await;
+
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Clicked by mistake, right?"),
+        "expected quit confirm to dismiss after Esc; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn screen_number_keys_switch_between_dashboard_games_and_chat() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-it").await;
@@ -86,9 +107,6 @@ async fn shift_tab_cycles_screens_backwards() {
         .await
         .expect("join general room");
     let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
-
-    app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Profile ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " The Arcade ").await;
