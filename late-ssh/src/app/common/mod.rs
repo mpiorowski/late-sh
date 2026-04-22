@@ -7,3 +7,4 @@ pub mod readline;
 pub mod sidebar;
 pub mod splash_tips;
 pub mod theme;
+pub mod time;

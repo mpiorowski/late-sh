@@ -16,10 +16,10 @@ use super::{
     chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
-        sidebar::{SidebarProps, draw_sidebar},
+        sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
     },
-    dashboard, help_modal, icon_picker, profile, profile_modal, settings_modal,
+    dashboard, help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
     state::{App, NotificationMode},
     visualizer::Visualizer,
 };
@@ -91,7 +91,6 @@ struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
-    profile_view: profile::ui::ProfileRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
@@ -105,6 +104,7 @@ struct DrawContext<'a> {
     visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
+    sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     activity: &'a std::collections::VecDeque<crate::state::ActivityEvent>,
@@ -114,6 +114,7 @@ struct DrawContext<'a> {
     show_games_sidebar: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
+    show_quit_confirm: bool,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_help: bool,
@@ -190,6 +191,7 @@ impl App {
         let banner = self.active_banner().cloned();
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
+        let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let now_playing_text = now_playing.as_ref().map(|np| np.track.to_string());
         let vote_next_switch_in = vote_snapshot
             .next_switch_in
@@ -281,24 +283,6 @@ impl App {
             notifications_unread_count: self.chat.notifications.unread_count(),
             notifications_view,
         };
-        // Update viewport height for profile scroll (content area = total - borders)
-        let profile_viewport_h = area.height.saturating_sub(2);
-        self.profile_state.set_viewport_height(profile_viewport_h);
-        let user_streak = self
-            .leaderboard
-            .user_streaks
-            .get(&self.user_id)
-            .copied()
-            .unwrap_or(0);
-        let profile_view = profile::ui::ProfileRenderInput {
-            profile: self.profile_state.profile(),
-            ai_model: self.profile_state.ai_model(),
-            scroll_offset: self.profile_state.scroll_offset(),
-            current_streak: user_streak,
-            chip_balance: self.chip_balance,
-            tetris_best: self.tetris_state.best_score,
-            twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
-        };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
         let online_count = self
@@ -318,7 +302,6 @@ impl App {
                         connect_url: self.connect_url.as_str(),
                         dashboard_view,
                         chat_view,
-                        profile_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
@@ -332,6 +315,7 @@ impl App {
                         visualizer,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client_state.as_ref(),
+                        sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
                         activity: &self.activity,
@@ -341,6 +325,7 @@ impl App {
                         show_games_sidebar,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
+                        show_quit_confirm: self.show_quit_confirm,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
                         show_help: self.show_help,
@@ -512,7 +497,6 @@ impl App {
                 dashboard::ui::draw_dashboard(frame, content_area, ctx.dashboard_view)
             }
             Screen::Chat => chat::ui::draw_chat(frame, content_area, ctx.chat_view),
-            Screen::Profile => profile::ui::draw_profile(frame, content_area, &ctx.profile_view),
             Screen::Games => crate::app::games::ui::draw_games_hub(
                 frame,
                 content_area,
@@ -549,6 +533,7 @@ impl App {
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
+                    clock_text: ctx.sidebar_clock,
                 },
             );
         }
@@ -595,6 +580,10 @@ impl App {
 
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state);
+        }
+
+        if ctx.show_quit_confirm {
+            quit_confirm::ui::draw(frame, inner);
         }
 
         if ctx.show_web_chat_qr

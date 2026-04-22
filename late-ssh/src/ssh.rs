@@ -726,7 +726,6 @@ impl russh::server::Handler for ClientHandler {
             is_new_user: self.is_new_user,
 
             // Display config
-            ai_model: self.state.config.ai.model.clone(),
             initial_theme_id: late_ssh_theme_id(&user.settings),
 
             // Server state

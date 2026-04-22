@@ -138,8 +138,7 @@ pub struct SessionConfig {
     /// UI flags
     pub is_new_user: bool,
 
-    /// Display config (informational, shown on profile screen)
-    pub ai_model: String,
+    /// Display config
     pub initial_theme_id: String,
 
     /// Server state
@@ -159,6 +158,7 @@ pub struct App {
     pub(crate) show_splash: bool,
     pub(crate) splash_ticks: usize,
     pub(crate) splash_hint: String,
+    pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
@@ -262,6 +262,7 @@ impl App {
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.show_settings = false;
+        self.show_quit_confirm = false;
     }
 
     /// Resolves which room the dashboard's chat card should display, given
@@ -287,20 +288,33 @@ impl App {
     /// Pins to render in the dashboard quick-switch strip. `None` when fewer
     /// than two favorites are pinned — there's nothing to switch between, so
     /// the strip is hidden entirely.
-    pub(crate) fn dashboard_strip_pins(&self) -> Option<Vec<(uuid::Uuid, String, bool)>> {
+    pub(crate) fn dashboard_strip_pins(&self) -> Option<Vec<(uuid::Uuid, String, bool, i64)>> {
         let pins = &self.profile_state.profile().favorite_room_ids;
         if pins.len() < 2 {
             return None;
         }
         let catalog = self.chat.favorite_room_options();
         let active = self.dashboard_active_room_id();
-        let pills: Vec<(uuid::Uuid, String, bool)> = pins
+        let pills: Vec<(uuid::Uuid, String, bool, i64)> = pins
             .iter()
             .filter_map(|id| {
                 catalog
                     .iter()
                     .find(|option| option.id == *id)
-                    .map(|option| (option.id, option.label.clone(), Some(option.id) == active))
+                    .map(|option| {
+                        let unread = self
+                            .chat
+                            .unread_counts
+                            .get(&option.id)
+                            .copied()
+                            .unwrap_or(0);
+                        (
+                            option.id,
+                            option.label.clone(),
+                            Some(option.id) == active,
+                            unread,
+                        )
+                    })
             })
             .collect();
         // If membership churn leaves <2 resolvable pins, hide the strip
@@ -375,6 +389,7 @@ impl App {
     pub fn show_splash_for_tests(&mut self, hint: impl Into<String>) {
         self.show_splash = true;
         self.show_settings = false;
+        self.show_quit_confirm = false;
         self.splash_ticks = 1;
         self.splash_hint = hint.into();
     }
@@ -522,6 +537,7 @@ impl App {
             show_splash: true,
             splash_ticks: 0,
             splash_hint,
+            show_quit_confirm: false,
             show_help: false,
             show_profile_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -564,7 +580,6 @@ impl App {
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
-                config.ai_model,
                 config.initial_theme_id,
             ),
             profile_modal_state: profile_modal::state::ProfileModalState::new(
