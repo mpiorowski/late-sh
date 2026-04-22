@@ -14,8 +14,7 @@ use ratatui::{
 use late_core::models::leaderboard::LeaderboardData;
 
 use super::{
-    artboard,
-    chat,
+    artboard, chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},

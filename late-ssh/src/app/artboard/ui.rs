@@ -127,7 +127,10 @@ fn draw_artboard_sidebar(
     }
 }
 
-fn artboard_info_panel(state: &State, interacting: bool) -> (Vec<Line<'static>>, Vec<ArtboardUserRow>) {
+fn artboard_info_panel(
+    state: &State,
+    interacting: bool,
+) -> (Vec<Line<'static>>, Vec<ArtboardUserRow>) {
     let mut metrics = vec![
         artboard_info_label_value(
             "Mode",
@@ -797,11 +800,7 @@ fn help_tab_hits(area: Rect, active: HelpTab) -> Vec<(HelpTab, Rect)> {
         Constraint::Length(1),
     ])
     .split(inner);
-    render_help_tabs_in_buffer(
-        &mut Buffer::empty(popup),
-        layout[1],
-        active,
-    )
+    render_help_tabs_in_buffer(&mut Buffer::empty(popup), layout[1], active)
 }
 
 pub(crate) fn help_tab_hit(
