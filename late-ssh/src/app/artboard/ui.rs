@@ -8,13 +8,13 @@ use ratatui::{
     Frame,
     buffer::Buffer,
     layout::{Constraint, Flex, Layout, Margin, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{common::theme, games::ui::info_label_value};
+use crate::app::common::theme;
 
 use super::state::{BrushMode, HelpTab, State};
 
@@ -35,12 +35,21 @@ pub(crate) enum SwatchHit {
     Pin(usize),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ArtboardUserRow {
+    name: String,
+    color: Color,
+}
+
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool) {
-    let info = artboard_info_lines(state, interacting);
+    let (info_metrics, info_users) = artboard_info_panel(state, interacting);
     let layout = artboard_layout(area);
-    let info_area = info_block_area(layout.info_anchor, info.len());
+    let info_area = info_block_area(
+        layout.info_anchor,
+        info_content_row_count(info_metrics.len(), info_users.len()),
+    );
     draw_canvas(frame, area, layout.canvas, info_area, state);
-    draw_artboard_sidebar(frame, info_area, &info);
+    draw_artboard_sidebar(frame, info_area, &info_metrics, &info_users);
     if state.is_help_open() {
         draw_help(frame, area, state);
     }
@@ -66,7 +75,12 @@ fn dartboard_canvas_style() -> CanvasStyle {
     }
 }
 
-fn draw_artboard_sidebar(frame: &mut Frame, info_area: Option<Rect>, info_lines: &[Line<'_>]) {
+fn draw_artboard_sidebar(
+    frame: &mut Frame,
+    info_area: Option<Rect>,
+    info_metrics: &[Line<'_>],
+    info_users: &[ArtboardUserRow],
+) {
     if let Some(info_area) = info_area {
         let info_block = Block::default()
             .title(" Info ")
@@ -76,38 +90,72 @@ fn draw_artboard_sidebar(frame: &mut Frame, info_area: Option<Rect>, info_lines:
         frame.render_widget(Clear, info_area);
         frame.render_widget(info_block, info_area);
         if info_inner.width > 0 && info_inner.height > 0 {
-            frame.render_widget(Paragraph::new(info_lines.to_vec()), info_inner);
+            if !info_metrics.is_empty() {
+                frame.render_widget(
+                    Paragraph::new(info_metrics.to_vec()),
+                    Rect::new(
+                        info_inner.x,
+                        info_inner.y,
+                        info_inner.width,
+                        info_metrics.len() as u16,
+                    ),
+                );
+            }
+            if !info_users.is_empty() {
+                let divider_y = info_inner.y + info_metrics.len() as u16;
+                render_info_section_divider(frame.buffer_mut(), info_area, divider_y, "Users");
+                let user_lines: Vec<Line<'static>> = info_users
+                    .iter()
+                    .map(|user| {
+                        Line::from(Span::styled(
+                            format!("  {}", user.name),
+                            Style::default().fg(user.color).add_modifier(Modifier::BOLD),
+                        ))
+                    })
+                    .collect();
+                frame.render_widget(
+                    Paragraph::new(user_lines),
+                    Rect::new(
+                        info_inner.x,
+                        divider_y + 1,
+                        info_inner.width,
+                        info_users.len() as u16,
+                    ),
+                );
+            }
         }
     }
 }
 
-fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
-    let mut lines = vec![info_label_value(
-        "Mode",
-        if interacting {
-            "active".to_string()
-        } else {
-            "view".to_string()
-        },
-        if interacting {
-            theme::AMBER()
-        } else {
-            theme::TEXT_BRIGHT()
-        },
-    )];
-    lines.push(info_label_value(
-        "Cursor",
-        format!("{},{}", state.cursor().x, state.cursor().y),
-        theme::AMBER(),
-    ));
-    lines.push(pan_indicator_line(state));
+fn artboard_info_panel(state: &State, interacting: bool) -> (Vec<Line<'static>>, Vec<ArtboardUserRow>) {
+    let mut metrics = vec![
+        artboard_info_label_value(
+            "Mode",
+            if interacting {
+                "active".to_string()
+            } else {
+                "view".to_string()
+            },
+            if interacting {
+                theme::AMBER()
+            } else {
+                theme::TEXT_BRIGHT()
+            },
+        ),
+        artboard_info_label_value(
+            "Cursor",
+            format!("{},{}", state.cursor().x, state.cursor().y),
+            theme::AMBER(),
+        ),
+    ];
+    metrics.push(pan_indicator_line(state));
 
     let (brush, brush_color) = match state.brush_mode() {
         BrushMode::None => ("none".to_string(), theme::TEXT_FAINT()),
         BrushMode::Swatch => ("swatch".to_string(), theme::TEXT_BRIGHT()),
         BrushMode::Glyph(ch) => (ch.to_string(), theme::TEXT_BRIGHT()),
     };
-    lines.push(info_label_value("Brush", brush, brush_color));
+    metrics.push(artboard_info_label_value("Brush", brush, brush_color));
     let (selection_value, selection_color) = if let Some(selection) = state.selection_view() {
         let width = selection.anchor.x.abs_diff(selection.cursor.x) + 1;
         let height = selection.anchor.y.abs_diff(selection.cursor.y) + 1;
@@ -115,7 +163,7 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
     } else {
         ("none".to_string(), theme::TEXT_FAINT())
     };
-    lines.push(info_label_value(
+    metrics.push(artboard_info_label_value(
         "Selection",
         selection_value,
         selection_color,
@@ -127,31 +175,22 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
             peer.name.to_ascii_lowercase(),
         )
     });
-    if !peers.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(section_label("Peers"));
-        for peer in peers {
-            let suffix = if Some(peer.user_id) == state.snapshot.your_user_id {
-                " (you)"
-            } else {
-                ""
-            };
-            lines.push(Line::from(vec![
-                Span::styled("• ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled(peer.name, Style::default().fg(rgb(peer.color))),
-                Span::styled(suffix, Style::default().fg(theme::TEXT_FAINT())),
-            ]));
-        }
-    }
+    let users = peers
+        .into_iter()
+        .map(|peer| ArtboardUserRow {
+            name: peer.name,
+            color: rgb(peer.color),
+        })
+        .collect();
 
-    lines
+    (metrics, users)
 }
 
 fn pan_indicator_line(state: &State) -> Line<'static> {
     let [can_left, can_up, can_down, can_right] = pan_indicator_enabled(state);
     Line::from(vec![
         Span::styled(
-            format!("{:<11}", "Pan"),
+            format!("  {:<11}", "Pan"),
             Style::default().fg(theme::TEXT_DIM()),
         ),
         pan_indicator_span('◀', can_left),
@@ -164,6 +203,19 @@ fn pan_indicator_line(state: &State) -> Line<'static> {
     ])
 }
 
+fn artboard_info_label_value(label: &str, value: String, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {:<11}", label),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(
+            value,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
 fn pan_indicator_span(ch: char, enabled: bool) -> Span<'static> {
     let style = if enabled {
         Style::default()
@@ -173,6 +225,10 @@ fn pan_indicator_span(ch: char, enabled: bool) -> Span<'static> {
         Style::default().fg(theme::BORDER_DIM())
     };
     Span::styled(ch.to_string(), style)
+}
+
+fn info_content_row_count(metric_count: usize, user_count: usize) -> usize {
+    metric_count + usize::from(user_count > 0) + user_count
 }
 
 fn info_block_height(line_count: usize) -> u16 {
@@ -205,13 +261,33 @@ fn pan_indicator_enabled(state: &State) -> [bool; 4] {
     [can_left, can_up, can_down, can_right]
 }
 
-fn section_label(text: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        text.to_string(),
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD),
-    ))
+fn render_info_section_divider(buf: &mut Buffer, area: Rect, y: u16, title: &str) {
+    if area.width < 2 || y <= area.y || y >= area.bottom().saturating_sub(1) {
+        return;
+    }
+
+    let left = area.x;
+    let right = area.right() - 1;
+    let border_style = Style::default().fg(theme::BORDER());
+    let title_style = Style::default()
+        .fg(theme::TEXT_BRIGHT())
+        .add_modifier(Modifier::BOLD);
+
+    buf[(left, y)].set_char('┝').set_style(border_style);
+    buf[(right, y)].set_char('┤').set_style(border_style);
+    for x in (left + 1)..right {
+        buf[(x, y)].set_char('─').set_style(border_style);
+    }
+
+    let label = format!(" {} ", title);
+    let mut x = left + 1;
+    for ch in label.chars() {
+        if x >= right {
+            break;
+        }
+        buf[(x, y)].set_char(ch).set_style(title_style);
+        x += 1;
+    }
 }
 
 fn rgb(color: dartboard_core::RgbColor) -> ratatui::style::Color {
@@ -676,9 +752,12 @@ fn artboard_game_area_for_screen(screen_size: (u16, u16)) -> Rect {
 }
 
 fn artboard_info_area_for_screen(screen_size: (u16, u16), state: &State) -> Option<Rect> {
-    let info_lines = artboard_info_lines(state, false);
+    let (info_metrics, info_users) = artboard_info_panel(state, false);
     let layout = artboard_layout(artboard_game_area_for_screen(screen_size));
-    info_block_area(layout.info_anchor, info_lines.len())
+    info_block_area(
+        layout.info_anchor,
+        info_content_row_count(info_metrics.len(), info_users.len()),
+    )
 }
 
 fn help_popup_area(area: Rect) -> Rect {
@@ -1026,7 +1105,7 @@ mod tests {
         let state = test_state();
         assert_eq!(
             artboard_info_area_for_screen((80, 24), &state),
-            Some(Rect::new(27, 1, 28, 6))
+            Some(Rect::new(27, 1, 28, 7))
         );
     }
 
@@ -1064,13 +1143,14 @@ mod tests {
     #[test]
     fn info_lines_include_mode_and_pan_rows_before_brush() {
         let state = test_state();
-        let lines = artboard_info_lines(&state, false);
+        let (lines, users) = artboard_info_panel(&state, false);
 
-        assert_eq!(lines[0].to_string(), "Mode       view");
-        assert_eq!(lines[1].to_string(), "Cursor     0,0");
-        assert_eq!(lines[2].to_string(), "Pan        ◀ ▲ ▼ ▶");
-        assert_eq!(lines[3].to_string(), "Brush      none");
-        assert_eq!(lines[4].to_string(), "Selection  none");
+        assert!(users.is_empty());
+        assert_eq!(lines[0].to_string(), "  Mode       view");
+        assert_eq!(lines[1].to_string(), "  Cursor     0,0");
+        assert_eq!(lines[2].to_string(), "  Pan        ◀ ▲ ▼ ▶");
+        assert_eq!(lines[3].to_string(), "  Brush      none");
+        assert_eq!(lines[4].to_string(), "  Selection  none");
     }
 
     #[test]
@@ -1082,9 +1162,66 @@ mod tests {
         state.move_down((80, 24));
         assert!(state.update_selection_to_cursor());
 
-        let lines = artboard_info_lines(&state, true);
-        assert_eq!(lines[0].to_string(), "Mode       active");
-        assert_eq!(lines[4].to_string(), "Selection  3x2");
+        let (lines, _) = artboard_info_panel(&state, true);
+        assert_eq!(lines[0].to_string(), "  Mode       active");
+        assert_eq!(lines[4].to_string(), "  Selection  3x2");
+    }
+
+    #[test]
+    fn info_panel_users_are_sorted_and_keep_peer_colors() {
+        let mut state = test_state();
+        state.snapshot.your_user_id = Some(2);
+        state.snapshot.peers = vec![
+            dartboard_core::Peer {
+                user_id: 3,
+                name: "zed".to_string(),
+                color: RgbColor::new(1, 2, 3),
+            },
+            dartboard_core::Peer {
+                user_id: 2,
+                name: "me".to_string(),
+                color: RgbColor::new(4, 5, 6),
+            },
+            dartboard_core::Peer {
+                user_id: 1,
+                name: "amy".to_string(),
+                color: RgbColor::new(7, 8, 9),
+            },
+        ];
+
+        let (_, users) = artboard_info_panel(&state, false);
+
+        assert_eq!(
+            users,
+            vec![
+                ArtboardUserRow {
+                    name: "me".to_string(),
+                    color: Color::Rgb(4, 5, 6),
+                },
+                ArtboardUserRow {
+                    name: "amy".to_string(),
+                    color: Color::Rgb(7, 8, 9),
+                },
+                ArtboardUserRow {
+                    name: "zed".to_string(),
+                    color: Color::Rgb(1, 2, 3),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn users_divider_draws_across_info_panel_borders() {
+        let area = Rect::new(10, 4, 28, 8);
+        let mut buf = Buffer::empty(area);
+
+        render_info_section_divider(&mut buf, area, area.y + 3, "Users");
+
+        let y = area.y + 3;
+        assert_eq!(buf[(area.x, y)].symbol(), "┝");
+        assert_eq!(buf[(area.right() - 1, y)].symbol(), "┤");
+        assert_eq!(buf[(area.x + 2, y)].symbol(), "U");
+        assert_eq!(buf[(area.x + 8, y)].symbol(), "─");
     }
 
     #[test]
