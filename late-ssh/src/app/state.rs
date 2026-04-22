@@ -321,6 +321,23 @@ impl App {
         }
     }
 
+    fn current_visible_chat_room_id(&self) -> Option<Uuid> {
+        match self.screen {
+            Screen::Dashboard => self.dashboard_active_room_id(),
+            Screen::Chat => self.chat.selected_room_id,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn sync_visible_chat_room(&mut self) {
+        let visible_room_id = self.current_visible_chat_room_id();
+        let changed = self.chat.visible_room_id() != visible_room_id;
+        self.chat.set_visible_room_id(visible_room_id);
+        if changed && let Some(room_id) = visible_room_id {
+            self.chat.mark_room_read(room_id);
+        }
+    }
+
     /// Pins to render in the dashboard quick-switch strip. `None` when fewer
     /// than two favorites are pinned — there's nothing to switch between, so
     /// the strip is hidden entirely.
@@ -659,6 +676,7 @@ impl App {
         if app.screen == Screen::Artboard {
             app.enter_dartboard();
         }
+        app.sync_visible_chat_room();
         Ok(app)
     }
 
@@ -708,6 +726,7 @@ impl App {
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
+            self.sync_visible_chat_room();
             return;
         }
 
@@ -721,12 +740,12 @@ impl App {
         if self.screen == Screen::Chat {
             self.chat.request_list();
             self.chat.sync_selection();
-            self.chat.mark_selected_room_read();
         }
 
         if self.screen == Screen::Artboard {
             self.enter_dartboard();
         }
+        self.sync_visible_chat_room();
     }
 
     fn set_cursor_shape(&mut self, sequence: &[u8]) {

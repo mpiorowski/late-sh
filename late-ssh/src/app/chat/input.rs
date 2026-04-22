@@ -77,11 +77,15 @@ pub fn handle_compose_input(
         // text and cursor survive. Shadows ratatui-textarea's cursor-
         // down/up, which is rarely useful in a chat composer.
         0x0E if allow_room_switch => {
-            app.chat.switch_room_preserving_draft(1);
+            if app.chat.switch_room_preserving_draft(1) {
+                app.sync_visible_chat_room();
+            }
             app.chat.update_autocomplete();
         }
         0x10 if allow_room_switch => {
-            app.chat.switch_room_preserving_draft(-1);
+            if app.chat.switch_room_preserving_draft(-1) {
+                app.sync_visible_chat_room();
+            }
             app.chat.update_autocomplete();
         }
         b => {
@@ -138,7 +142,7 @@ pub fn handle_scroll_in_room(app: &mut App, room_id: Uuid, delta: isize) {
 fn switch_room(app: &mut App, delta: isize) {
     if app.chat.move_selection(delta) {
         app.chat.reset_composer();
-        app.chat.mark_selected_room_read();
+        app.sync_visible_chat_room();
         app.chat.request_list();
     }
 }
@@ -316,7 +320,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                 let changed = app.chat.handle_room_jump_key(byte);
                 if changed {
                     app.chat.reset_composer();
-                    app.chat.mark_selected_room_read();
+                    app.sync_visible_chat_room();
                     app.chat.request_list();
                 }
                 return true;

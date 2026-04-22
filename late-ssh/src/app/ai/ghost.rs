@@ -7,7 +7,7 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         profile::{Profile, ProfileParams},
-        user::{PromptProfileContext, User, UserParams},
+        user::{User, UserParams},
     },
 };
 use serde_json::json;
@@ -42,8 +42,6 @@ struct BotUser {
 const BOT_FINGERPRINT: &str = "bot-fp-000";
 const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
-const BOT_ACTIVE_ROOM_MEMBER_LIMIT: usize = 20;
-const BOT_ACTIVE_ROOM_MEMBER_BIO_MAX_CHARS: usize = 96;
 pub const BOT_TIP_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
 const BOT_TIP_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
 pub const BOT_TIP_MIN_NEW_MESSAGES: usize = 10;
@@ -285,9 +283,6 @@ impl GhostService {
         let mut author_ids: Vec<Uuid> = messages.iter().map(|m| m.user_id).collect();
         author_ids.push(trigger_message.user_id);
         let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
-        let active_room_members = self
-            .build_active_room_member_context(&client, trigger_message.room_id, bot.id)
-            .await?;
 
         let mut history_str = String::from("CHAT HISTORY:\n");
         for msg in messages.into_iter().rev() {
@@ -296,11 +291,6 @@ impl GhostService {
                 .map(String::as_str)
                 .unwrap_or("unknown");
             history_str.push_str(&format!("{author}: {}\n", msg.body));
-        }
-        if let Some(active_room_members) = active_room_members {
-            history_str.push('\n');
-            history_str.push_str(&active_room_members);
-            history_str.push('\n');
         }
         history_str.push_str(
             "---\nThe latest message explicitly mentioned @bot. Reply with only your message content.",
@@ -318,7 +308,6 @@ impl GhostService {
             Use the extra space when the question benefits from a clearer answer.\n\
             You can answer questions about late.sh features, product positioning, and high-level architecture.\n\
             Prefer concrete facts from the provided app context over generic guesses.\n\
-            Use the active room member context when it materially helps, but do not dump it back verbatim.\n\
             Do NOT use markdown code fences.\n\
             Do NOT prefix with your own username.\n\
             If unsure, ask exactly one short clarifying question.\n\
@@ -807,33 +796,6 @@ impl GhostService {
 
         Ok(())
     }
-
-    async fn build_active_room_member_context(
-        &self,
-        client: &tokio_postgres::Client,
-        room_id: Uuid,
-        bot_user_id: Uuid,
-    ) -> Result<Option<String>> {
-        let room_member_ids = ChatRoomMember::list_user_ids(client, room_id).await?;
-        let active_room_member_ids = {
-            let active_users = self.active_users.lock_recover();
-            room_member_ids
-                .into_iter()
-                .filter(|user_id| *user_id != bot_user_id && active_users.contains_key(user_id))
-                .collect::<Vec<_>>()
-        };
-
-        if active_room_member_ids.is_empty() {
-            return Ok(None);
-        }
-
-        let profiles =
-            User::list_prompt_profile_context_by_ids(client, &active_room_member_ids).await?;
-        Ok(format_active_room_member_context(
-            &active_room_member_ids,
-            &profiles,
-        ))
-    }
 }
 
 fn merge_ghost_settings(existing: &serde_json::Value) -> serde_json::Value {
@@ -892,71 +854,6 @@ fn sanitize_mention_handle(input: &str) -> String {
 fn short_user_id(user_id: Uuid) -> String {
     let id = user_id.to_string();
     id[..id.len().min(8)].to_string()
-}
-
-fn format_active_room_member_context(
-    ordered_user_ids: &[Uuid],
-    profiles: &HashMap<Uuid, PromptProfileContext>,
-) -> Option<String> {
-    let mut lines = Vec::new();
-    for user_id in ordered_user_ids
-        .iter()
-        .take(BOT_ACTIVE_ROOM_MEMBER_LIMIT)
-        .copied()
-    {
-        let Some(profile) = profiles.get(&user_id) else {
-            continue;
-        };
-        if profile.is_bot {
-            continue;
-        }
-
-        let handle = profile
-            .username
-            .trim()
-            .strip_prefix('@')
-            .unwrap_or(profile.username.trim());
-        let handle = if handle.is_empty() {
-            short_user_id(user_id)
-        } else {
-            handle.to_string()
-        };
-
-        let mut parts = vec![format!("@{handle}")];
-        if let Some(country) = profile.country.as_deref() {
-            parts.push(format!("country={country}"));
-        }
-        if let Some(timezone) = profile.timezone.as_deref() {
-            parts.push(format!("timezone={timezone}"));
-        }
-        if !profile.bio.is_empty() {
-            parts.push(format!(
-                "bio={}",
-                truncate_for_prompt(&profile.bio, BOT_ACTIVE_ROOM_MEMBER_BIO_MAX_CHARS)
-            ));
-        }
-
-        lines.push(format!("- {}", parts.join(" | ")));
-    }
-
-    if lines.is_empty() {
-        return None;
-    }
-
-    Some(format!(
-        "ROOM ACTIVE MEMBERS (online now):\n{}",
-        lines.join("\n")
-    ))
-}
-
-fn truncate_for_prompt(input: &str, max_chars: usize) -> String {
-    if input.chars().count() <= max_chars {
-        return input.to_string();
-    }
-
-    let mut truncated = input.chars().take(max_chars).collect::<String>();
-    truncated.push_str("...");
-    truncated
 }
 
 fn contains_mention(text: &str, target_handle: &str) -> bool {
@@ -1085,7 +982,6 @@ impl TinyRng {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn merge_ghost_settings_preserves_existing_profile_fields() {
@@ -1210,63 +1106,5 @@ mod tests {
         let user_id = Uuid::from_u128(0x0123_4567_89ab_cdef_1111_2222_3333_4444);
         assert_eq!(mention_target_for_user(Some(""), user_id), "@01234567");
         assert_eq!(mention_target_for_user(Some("!!!"), user_id), "@01234567");
-    }
-
-    #[test]
-    fn format_active_room_member_context_includes_profile_fields() {
-        let alice = Uuid::from_u128(1);
-        let bob = Uuid::from_u128(2);
-        let mut profiles = HashMap::new();
-        profiles.insert(
-            alice,
-            PromptProfileContext {
-                username: "alice".to_string(),
-                bio: "rust backend dev".to_string(),
-                country: Some("PL".to_string()),
-                timezone: Some("Europe/Warsaw".to_string()),
-                is_bot: false,
-            },
-        );
-        profiles.insert(
-            bob,
-            PromptProfileContext {
-                username: "bob".to_string(),
-                bio: String::new(),
-                country: None,
-                timezone: None,
-                is_bot: false,
-            },
-        );
-
-        let context = format_active_room_member_context(&[alice, bob], &profiles).expect("context");
-        assert!(context.contains("ROOM ACTIVE MEMBERS (online now):"));
-        assert!(
-            context.contains("@alice | country=PL | timezone=Europe/Warsaw | bio=rust backend dev")
-        );
-        assert!(context.contains("- @bob"));
-    }
-
-    #[test]
-    fn truncate_for_prompt_adds_ellipsis_when_needed() {
-        assert_eq!(truncate_for_prompt("short", 12), "short");
-        assert_eq!(truncate_for_prompt("123456", 5), "12345...");
-    }
-
-    #[test]
-    fn format_active_room_member_context_skips_bot_profiles() {
-        let bot = Uuid::from_u128(3);
-        let mut profiles = HashMap::new();
-        profiles.insert(
-            bot,
-            PromptProfileContext {
-                username: "graybeard".to_string(),
-                bio: "noisy".to_string(),
-                country: None,
-                timezone: None,
-                is_bot: true,
-            },
-        );
-
-        assert_eq!(format_active_room_member_context(&[bot], &profiles), None);
     }
 }

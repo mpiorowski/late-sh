@@ -24,10 +24,13 @@ impl App {
             }
         }
 
+        self.sync_visible_chat_room();
+
         // Services
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        self.sync_visible_chat_room();
         if self.chat.pending_chat_screen_switch {
             self.chat.pending_chat_screen_switch = false;
             self.set_screen(Screen::Chat);

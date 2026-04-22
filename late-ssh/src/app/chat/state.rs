@@ -70,6 +70,7 @@ pub struct ChatState {
     overlay: Option<Overlay>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
+    visible_room_id: Option<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
     pub(crate) selected_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
@@ -147,6 +148,7 @@ impl ChatState {
             overlay: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
+            visible_room_id: None,
             room_tx,
             selected_room_id: None,
             room_jump_active: false,
@@ -222,14 +224,26 @@ impl ChatState {
         self.selected_room_id = Some(self.rooms[0].0.id);
     }
 
+    pub fn mark_room_read(&mut self, room_id: Uuid) {
+        self.pending_read_rooms.insert(room_id);
+        self.unread_counts.insert(room_id, 0);
+        self.service.mark_room_read_task(self.user_id, room_id);
+    }
+
     pub fn mark_selected_room_read(&mut self) {
         let Some(room_id) = self.selected_room_id else {
             return;
         };
 
-        self.pending_read_rooms.insert(room_id);
-        self.unread_counts.insert(room_id, 0);
-        self.service.mark_room_read_task(self.user_id, room_id);
+        self.mark_room_read(room_id);
+    }
+
+    pub fn visible_room_id(&self) -> Option<Uuid> {
+        self.visible_room_id
+    }
+
+    pub fn set_visible_room_id(&mut self, room_id: Option<Uuid>) {
+        self.visible_room_id = room_id;
     }
 
     /// Returns visible messages for the given room.
@@ -638,7 +652,8 @@ impl ChatState {
         self.reply_target = None;
         self.edited_message_id = None;
         self.composer_room_id = Some(next_room_id);
-        self.mark_selected_room_read();
+        self.visible_room_id = Some(next_room_id);
+        self.mark_room_read(next_room_id);
         self.request_list();
         true
     }
@@ -1466,7 +1481,7 @@ impl ChatState {
             return;
         }
 
-        let is_viewing_room = Some(message.room_id) == self.selected_room_id;
+        let is_viewing_room = Some(message.room_id) == self.visible_room_id;
 
         let Some((_, messages)) = self
             .rooms
