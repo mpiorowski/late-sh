@@ -45,11 +45,11 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
     let available = inner.height as usize;
 
     let mut lines: Vec<Line<'_>> = Vec::new();
-    lines.push(Line::from(""));
 
-    // Center tree vertically in remaining space above status
+    // Anchor tree to the bottom — pot sits right above the status rows,
+    // empty sky fills above.
     let tree_space = available.saturating_sub(status_height);
-    let padding_top = tree_space.saturating_sub(tree_height) / 2;
+    let padding_top = tree_space.saturating_sub(tree_height);
     for _ in 0..padding_top {
         lines.push(Line::from(""));
     }
@@ -206,21 +206,47 @@ fn leaf_color_for_stage(stage: Stage) -> ratatui::style::Color {
 // ── ASCII Art per stage ──────────────────────────────────────
 
 pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'static str> {
-    // Use seed to pick variant when multiple exist
-    let variant = (seed.unsigned_abs() % 3) as usize;
+    // Seed → per-stage variant picker. Each stage applies its own modulo so we
+    // can add variants stage-by-stage without shifting the others around.
+    let v = seed.unsigned_abs() as usize;
 
     match stage {
-        Stage::Dead => vec!["   .  ", "  /|  ", " / |  ", "  .|. ", " [===]"],
-        Stage::Seed => vec!["      ", "      ", "   .  ", "  .|. ", " [===]"],
-        Stage::Sprout => match variant % 2 {
+        Stage::Dead => match v % 3 {
+            // bare stick
+            0 => vec!["   .  ", "  /|  ", " / |  ", "  .|. ", " [===]"],
+            // withered stump
+            1 => vec!["      ", "  ,.  ", "   \\  ", "  .|. ", " [===]"],
+            // snapped twig
+            _ => vec!["  .   ", "   `  ", "  .|  ", "  .|. ", " [===]"],
+        },
+        Stage::Seed => match v % 2 {
+            // buried seed
+            0 => vec!["      ", "      ", "   .  ", "  .|. ", " [===]"],
+            // tiny peek
+            _ => vec!["      ", "   .  ", "   ,  ", "  .|. ", " [===]"],
+        },
+        Stage::Sprout => match v % 4 {
+            // three-leaf crown
             0 => vec!["      ", "   ,  ", "  /|\\ ", "  .|. ", " [===]"],
-            _ => vec!["      ", "   .  ", "  '|, ", "  .|. ", " [===]"],
+            // paired leaves
+            1 => vec!["      ", "   .  ", "  '|, ", "  .|. ", " [===]"],
+            // upward shoots
+            2 => vec!["  ..  ", "   |  ", "   |, ", "  .|. ", " [===]"],
+            // hooked shoot
+            _ => vec!["   .  ", "   ,  ", "   |/ ", "  .|. ", " [===]"],
         },
-        Stage::Sapling => match variant % 2 {
+        Stage::Sapling => match v % 4 {
+            // formal upright
             0 => vec!["  ..  ", "  .'' ", "  /|\\ ", "   |  ", "  .|. ", " [===]"],
-            _ => vec!["   ., ", "  '., ", "   |/ ", "   |  ", "  .|. ", " [===]"],
+            // slanting
+            1 => vec!["   ., ", "  '., ", "   |/ ", "   |  ", "  .|. ", " [===]"],
+            // broom start
+            2 => vec![" .,., ", "  \\|/ ", "   |  ", "   |  ", "  .|. ", " [===]"],
+            // semi-cascade start
+            _ => vec!["      ", "  ., ,", "  '\\| ", "   |  ", "  .|. ", " [===]"],
         },
-        Stage::Young => match variant {
+        Stage::Young => match v % 5 {
+            // formal upright
             0 => vec![
                 "  .##.  ",
                 " .####. ",
@@ -230,6 +256,7 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "  .|.   ",
                 " [===]  ",
             ],
+            // informal upright
             1 => vec![
                 "   .#.  ",
                 " .####. ",
@@ -239,7 +266,8 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "  .|.   ",
                 " [===]  ",
             ],
-            _ => vec![
+            // twin-canopy
+            2 => vec![
                 "  ,##,  ",
                 " .####. ",
                 "  #/\\#  ",
@@ -248,8 +276,29 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "  .|.   ",
                 " [===]  ",
             ],
+            // slanting (Shakan)
+            3 => vec![
+                "   .##. ",
+                "  .####.",
+                "  ##/## ",
+                "    /\\  ",
+                "   / |  ",
+                "  .|.   ",
+                " [===]  ",
+            ],
+            // broom (Hokidachi)
+            _ => vec![
+                " .####. ",
+                " ###### ",
+                " ##/\\## ",
+                "   ||   ",
+                "   ||   ",
+                "  .|.   ",
+                " [===]  ",
+            ],
         },
-        Stage::Mature => match variant {
+        Stage::Mature => match v % 5 {
+            // formal upright
             0 => vec![
                 "   .@@@.   ",
                 " .@@@@@@@. ",
@@ -261,6 +310,7 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "    .|.    ",
                 "   [===]   ",
             ],
+            // informal upright
             1 => vec![
                 "  .,@@@,.  ",
                 " .@@@@@@@. ",
@@ -272,7 +322,8 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "    .|.    ",
                 "   [===]   ",
             ],
-            _ => vec![
+            // split trunk
+            2 => vec![
                 "   .@@@.   ",
                 " .@@@ @@@. ",
                 " @@@| |@@@ ",
@@ -283,10 +334,36 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "    .|.    ",
                 "   [===]   ",
             ],
+            // twin-trunk (Sokan)
+            3 => vec![
+                "  .@@.@@.  ",
+                " @@@@.@@@@ ",
+                " @@@|.|@@@ ",
+                " @@||.||@@ ",
+                "   \\|.|/   ",
+                "    \\ /    ",
+                "     |     ",
+                "    .|.    ",
+                "   [===]   ",
+            ],
+            // windswept (Fukinagashi)
+            _ => vec![
+                "    .@@@@@.",
+                "  .@@@@@@@ ",
+                "  @@@@@@@  ",
+                "  @@@@@/   ",
+                "    \\|/    ",
+                "     |     ",
+                "     |     ",
+                "    .|.    ",
+                "   [===]   ",
+            ],
         },
-        Stage::Ancient => match variant {
+        Stage::Ancient => match v % 5 {
+            // formal upright
             0 => vec![
-                "    .@@@@@.    ",
+                "     .@@@.     ",
+                "   .@@@@@@@.   ",
                 "  .@@@@@@@@@.  ",
                 " .@@@@@@@@@@@. ",
                 " @@@@/~~~\\@@@@ ",
@@ -296,12 +373,15 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "   | /   \\ |   ",
                 "   |/     \\|   ",
                 "    |     |    ",
+                "     \\   /     ",
                 "      .|.      ",
                 "     [===]     ",
             ],
+            // tilted crown
             1 => vec![
                 "   .@@@@@@.    ",
                 " .@@@@@@@@@@.  ",
+                " @@@@@@@@@@@@. ",
                 " @@@@@/\\@@@@@@.",
                 "  @@@@|  |@@@@.",
                 "    @@/  \\@@   ",
@@ -310,11 +390,14 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "   |   \\/   |  ",
                 "   |   ||   |  ",
                 "    \\  ||  /   ",
+                "     \\ || /    ",
                 "      .|.      ",
                 "     [===]     ",
             ],
-            _ => vec![
+            // broad canopy
+            2 => vec![
                 "     .@@@@.    ",
+                "   .@@@@@@@@.  ",
                 "  .@@@@@@@@@@. ",
                 " .@@@@@@@@@@@@.",
                 " @@@@/~~\\@@@@@ ",
@@ -324,15 +407,52 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "  | |  |   |   ",
                 "  |  \\/    |   ",
                 "   \\  ||  /    ",
+                "    \\ || /     ",
+                "      .|.      ",
+                "     [===]     ",
+            ],
+            // literati (Bunjingi) — tall thin trunk
+            3 => vec![
+                "     .@@@.     ",
+                "   .@@@@@@@.   ",
+                "   @@/~~~\\@@   ",
+                "    @|   |@    ",
+                "     |   |     ",
+                "     |   |     ",
+                "     |   |     ",
+                "     |   |     ",
+                "     |   |     ",
+                "      \\ /      ",
+                "       |       ",
+                "       |       ",
+                "      .|.      ",
+                "     [===]     ",
+            ],
+            // broom (Hokidachi) — fan canopy
+            _ => vec![
+                "  @@@@@@@@@@@  ",
+                " @@@@@@@@@@@@@ ",
+                " @@@@@@@@@@@@@ ",
+                " @@@@@@@@@@@@@ ",
+                " @@@/|||||\\@@@ ",
+                "  @@|     |@@  ",
+                "    |     |    ",
+                "    |     |    ",
+                "    |     |    ",
+                "    \\     /    ",
+                "     \\   /     ",
+                "      \\ /      ",
                 "      .|.      ",
                 "     [===]     ",
             ],
         },
-        Stage::Blossom => match variant {
+        Stage::Blossom => match v % 5 {
+            // formal flowering
             0 => vec![
                 "    .*@@@@@*.    ",
                 "  .*@@@*@*@@@@.  ",
                 " .*@@@@@@@@@@@*. ",
+                " .*@@@@*@@@@@@*. ",
                 " *@@@@/~~~\\@@@@* ",
                 "  *@@@|   |@@@*  ",
                 "     /     \\     ",
@@ -340,12 +460,15 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "    | /   \\ |    ",
                 "    |/     \\|    ",
                 "     |     |     ",
+                "      \\   /      ",
                 "       .|.       ",
                 "      [===]      ",
             ],
+            // tilted bloom
             1 => vec![
                 "   .*@@@@@@*.    ",
                 " .*@@@@*@@@@@@.  ",
+                " .*@@@*@@*@@@@*. ",
                 " *@@@@@/\\*@@@@@*.",
                 "  *@@@@|  |@@@@*.",
                 "     @@/  \\@@    ",
@@ -354,11 +477,14 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "    |   \\/   |   ",
                 "    |   ||   |   ",
                 "     \\  ||  /    ",
+                "      \\ || /     ",
                 "       .|.       ",
                 "      [===]      ",
             ],
-            _ => vec![
+            // broad bloom
+            2 => vec![
                 "     .*@@@@*.    ",
+                "  .*@@*@@@*@@*.  ",
                 "  .*@@@@*@@@@@*. ",
                 " .*@@@@@@@@@@@@*.",
                 " *@@@@/~~\\@@@@@* ",
@@ -368,6 +494,41 @@ pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "   |  |  |   |   ",
                 "   |   \\/    |   ",
                 "    \\  ||   /    ",
+                "     \\ ||  /     ",
+                "       .|.       ",
+                "      [===]      ",
+            ],
+            // flowering literati
+            3 => vec![
+                "      .@*@.      ",
+                "    .*@@@@@*.    ",
+                "   .*@@@*@@@*.   ",
+                "    *@@/~\\@@*    ",
+                "      @| |@      ",
+                "       | |       ",
+                "       | |       ",
+                "       | |       ",
+                "       | |       ",
+                "       | |       ",
+                "       \\ /       ",
+                "        |        ",
+                "       .|.       ",
+                "      [===]      ",
+            ],
+            // flowering broom
+            _ => vec![
+                "  *@*@*@*@*@*@*  ",
+                " @@@@@@@@@@@@@@@ ",
+                " @*@*@*@*@*@*@*@ ",
+                " @@@@@@@@@@@@@@@ ",
+                " @@@/|||||||\\@@@ ",
+                "  @@|       |@@  ",
+                "    |       |    ",
+                "    |       |    ",
+                "    |       |    ",
+                "    \\       /    ",
+                "     \\     /     ",
+                "      \\   /      ",
                 "       .|.       ",
                 "      [===]      ",
             ],

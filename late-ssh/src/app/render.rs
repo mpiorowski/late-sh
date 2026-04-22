@@ -94,6 +94,8 @@ struct DrawContext<'a> {
     profile_view: profile::ui::ProfileRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
+    multiplayer_room_selection: usize,
+    active_multiplayer_room: Option<usize>,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::games::tetris::state::State,
     sudoku_state: &'a crate::app::games::sudoku::state::State,
@@ -321,6 +323,8 @@ impl App {
                         profile_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
+                        multiplayer_room_selection: self.multiplayer_room_selection,
+                        active_multiplayer_room: self.active_multiplayer_room,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         sudoku_state: &self.sudoku_state,
@@ -530,6 +534,13 @@ impl App {
                     leaderboard: ctx.leaderboard,
                     show_sidebar: ctx.show_games_sidebar,
                 },
+            ),
+            Screen::MultiplayerRooms => crate::app::multiplayer_rooms::ui::draw_rooms_page(
+                frame,
+                content_area,
+                ctx.multiplayer_room_selection,
+                ctx.active_multiplayer_room,
+                ctx.is_admin,
             ),
         }
 

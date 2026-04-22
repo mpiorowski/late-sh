@@ -771,6 +771,10 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
+    if ctx.screen == Screen::MultiplayerRooms {
+        dispatch_screen_key(app, ctx.screen, 0x1B);
+        return;
+    }
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
         && app.chat.selected_message_id.is_some()
     {
@@ -873,6 +877,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
         Screen::Profile => profile::input::handle_arrow(app, key),
         Screen::Games => crate::app::games::input::handle_arrow(app, key),
+        Screen::MultiplayerRooms => crate::app::multiplayer_rooms::input::handle_arrow(app, key),
     }
 }
 
@@ -1078,6 +1083,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.screen = Screen::Profile;
             true
         }
+        b'5' => {
+            reset_composers_for_page_change(app);
+            app.screen = Screen::MultiplayerRooms;
+            true
+        }
         b'\t' => {
             reset_composers_for_page_change(app);
             app.screen = ctx.screen.next();
@@ -1090,6 +1100,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 }
                 Screen::Profile => {}
                 Screen::Games => {}
+                Screen::MultiplayerRooms => {}
             }
             true
         }
@@ -1116,6 +1127,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Games => {
             crate::app::games::input::handle_key(app, byte);
+        }
+        Screen::MultiplayerRooms => {
+            crate::app::multiplayer_rooms::input::handle_key(app, byte);
         }
     }
 }

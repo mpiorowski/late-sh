@@ -50,8 +50,9 @@ impl Banner {
 pub enum Screen {
     Dashboard,
     Chat,
-    Profile,
     Games,
+    Profile,
+    MultiplayerRooms,
 }
 
 impl Screen {
@@ -60,16 +61,18 @@ impl Screen {
             Screen::Dashboard => Screen::Chat,
             Screen::Chat => Screen::Games,
             Screen::Games => Screen::Profile,
-            Screen::Profile => Screen::Dashboard,
+            Screen::Profile => Screen::MultiplayerRooms,
+            Screen::MultiplayerRooms => Screen::Dashboard,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Profile,
+            Screen::Dashboard => Screen::MultiplayerRooms,
             Screen::Chat => Screen::Dashboard,
             Screen::Games => Screen::Chat,
             Screen::Profile => Screen::Games,
+            Screen::MultiplayerRooms => Screen::Profile,
         }
     }
 }
@@ -94,8 +97,9 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     let label = match current {
         Screen::Dashboard => "Dashboard",
         Screen::Chat => "Chat",
-        Screen::Profile => "Profile",
         Screen::Games => "Games",
+        Screen::Profile => "Profile",
+        Screen::MultiplayerRooms => "Rooms",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -153,15 +157,17 @@ mod tests {
         assert_eq!(Screen::Dashboard.next(), Screen::Chat);
         assert_eq!(Screen::Chat.next(), Screen::Games);
         assert_eq!(Screen::Games.next(), Screen::Profile);
-        assert_eq!(Screen::Profile.next(), Screen::Dashboard);
+        assert_eq!(Screen::Profile.next(), Screen::MultiplayerRooms);
+        assert_eq!(Screen::MultiplayerRooms.next(), Screen::Dashboard);
     }
 
     #[test]
     fn screen_prev_cycles_all_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::Profile);
+        assert_eq!(Screen::Dashboard.prev(), Screen::MultiplayerRooms);
         assert_eq!(Screen::Chat.prev(), Screen::Dashboard);
         assert_eq!(Screen::Games.prev(), Screen::Chat);
         assert_eq!(Screen::Profile.prev(), Screen::Games);
+        assert_eq!(Screen::MultiplayerRooms.prev(), Screen::Profile);
     }
 
     #[test]

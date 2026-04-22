@@ -226,6 +226,8 @@ pub struct App {
     /// Games Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
+    pub(crate) multiplayer_room_selection: usize,
+    pub(crate) active_multiplayer_room: Option<usize>,
     pub(crate) twenty_forty_eight_state: crate::app::games::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::games::tetris::state::State,
     pub(crate) sudoku_state: crate::app::games::sudoku::state::State,
@@ -576,6 +578,8 @@ impl App {
             bonsai_state,
             game_selection: 0,
             is_playing_game: false,
+            multiplayer_room_selection: 0,
+            active_multiplayer_room: None,
             twenty_forty_eight_state,
             tetris_state,
             sudoku_state,

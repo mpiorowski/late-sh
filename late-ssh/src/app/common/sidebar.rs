@@ -41,7 +41,7 @@ pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
         Constraint::Length(10), // visualizer
         Constraint::Length(7),  // now playing
         Constraint::Fill(1),    // activity (shrinks on small screens)
-        Constraint::Length(16), // bonsai tree (12 max art + 2 status + 2 border)
+        Constraint::Length(18), // bonsai tree (14 max art + 2 status + 2 border)
     ])
     .split(area);
 
@@ -58,6 +58,7 @@ fn draw_screen_card(frame: &mut Frame, area: Rect, screen: Screen) {
         (Screen::Chat, "2"),
         (Screen::Games, "3"),
         (Screen::Profile, "4"),
+        (Screen::MultiplayerRooms, "5"),
     ];
 
     let mut spans = Vec::new();
@@ -81,8 +82,9 @@ fn draw_screen_card(frame: &mut Frame, area: Rect, screen: Screen) {
     let label = match screen {
         Screen::Dashboard => "Dashboard",
         Screen::Chat => "Chat",
-        Screen::Profile => "Profile",
         Screen::Games => "Games",
+        Screen::Profile => "Profile",
+        Screen::MultiplayerRooms => "Rooms",
     };
 
     let block = Block::default()

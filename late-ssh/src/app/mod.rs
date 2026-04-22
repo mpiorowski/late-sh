@@ -7,6 +7,7 @@ pub mod games;
 pub(crate) mod help_modal;
 pub(crate) mod icon_picker;
 pub mod input;
+pub mod multiplayer_rooms;
 pub mod profile;
 pub(crate) mod profile_modal;
 pub mod qr;
