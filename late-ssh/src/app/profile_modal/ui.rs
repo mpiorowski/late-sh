@@ -8,12 +8,11 @@ use ratatui::{
 };
 
 use crate::app::{
-    common::{markdown::render_body_to_lines, theme},
+    common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     settings_modal::data::country_label,
 };
 
 use super::state::ProfileModalState;
-use crate::app::profile::ui::timezone_current_time;
 
 const MODAL_WIDTH: u16 = 92;
 const MODAL_HEIGHT: u16 = 28;

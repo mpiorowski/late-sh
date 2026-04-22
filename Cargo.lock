@@ -1151,6 +1151,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "dartboard-core"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b43f65e30afa66e93884ea0e53c6c289791081cfdb67c6baca3dc5607613858"
+dependencies = [
+ "serde",
+ "unicode-width",
+]
+
+[[package]]
+name = "dartboard-editor"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "492fd4b9408d10819dad3488673d5152fc4e3282b0b283a3f82bdde0e5a89ef4"
+dependencies = [
+ "dartboard-core",
+]
+
+[[package]]
+name = "dartboard-local"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5733f98e637d89003d55123b95074ea479b925678c1d99076bb165e8ecbaff2f"
+dependencies = [
+ "dartboard-core",
+]
+
+[[package]]
+name = "dartboard-picker-core"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d0a716114c887524d7c21b08c93fdd80eec3090f39e1318b983f6d5d0661081"
+dependencies = [
+ "emojis",
+ "serde_json",
+ "unicode_names2",
+]
+
+[[package]]
+name = "dartboard-tui"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23411a0442d0da99feafc482c072ea8a406597aa891788dd634b14a00b2d4ed4"
+dependencies = [
+ "dartboard-core",
+ "ratatui",
+ "unicode-width",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2572,6 +2622,11 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "crossterm",
+ "dartboard-core",
+ "dartboard-editor",
+ "dartboard-local",
+ "dartboard-picker-core",
+ "dartboard-tui",
  "emojis",
  "ipnet",
  "late-core",
@@ -2594,6 +2649,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "unicode-width",
+ "unicode_names2",
  "uuid",
  "vte",
 ]
@@ -6063,6 +6119,26 @@ name = "unicode-width"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+
+[[package]]
+name = "unicode_names2"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d189085656ca1203291e965444e7f6a2723fbdd1dd9f34f8482e79bafd8338a0"
+dependencies = [
+ "phf 0.11.3",
+ "unicode_names2_generator",
+]
+
+[[package]]
+name = "unicode_names2_generator"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1262662dc96937c71115228ce2e1d30f41db71a7a45d3459e98783ef94052214"
+dependencies = [
+ "phf_codegen",
+ "rand 0.8.5",
+]
 
 [[package]]
 name = "universal-hash"

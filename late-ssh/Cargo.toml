@@ -27,9 +27,15 @@ tokio = { workspace = true }
 # Database
 tokio-postgres = { workspace = true }
 crossterm.workspace = true
+dartboard-core.workspace = true
+dartboard-editor.workspace = true
+dartboard-local.workspace = true
+dartboard-picker-core.workspace = true
+dartboard-tui.workspace = true
 ratatui.workspace = true
 ratatui-textarea = { version = "0.9.1", default-features = false }
 unicode-width.workspace = true
+unicode_names2.workspace = true
 emojis.workspace = true
 rand_core = { workspace = true, features = ["std"] }
 base64.workspace = true

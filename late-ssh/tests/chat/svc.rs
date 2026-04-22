@@ -2,6 +2,7 @@ use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::{ChatRoom, ChatRoomParams},
     chat_room_member::ChatRoomMember,
+    profile::{Profile, ProfileParams},
     user::User,
 };
 use late_ssh::app::chat::notifications::svc::NotificationService;
@@ -397,6 +398,95 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
     assert!(
         other_entry.1.is_empty(),
         "non-selected room should not include messages in snapshot"
+    );
+}
+
+#[tokio::test]
+async fn publishes_snapshot_with_favorite_room_history() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut state_rx = service.subscribe_state();
+    let client = test_db.db.get().await.expect("db client");
+
+    let target_user = create_test_user(&test_db.db, "favorite_target").await;
+    let author_user = create_test_user(&test_db.db, "favorite_author").await;
+
+    let general_room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    let favorite_room = ChatRoom::get_or_create_public_room(&client, "favorites")
+        .await
+        .expect("favorite room");
+
+    ChatRoomMember::join(&client, general_room.id, target_user.id)
+        .await
+        .expect("join target general");
+    ChatRoomMember::join(&client, favorite_room.id, target_user.id)
+        .await
+        .expect("join target favorite");
+    ChatRoomMember::join(&client, general_room.id, author_user.id)
+        .await
+        .expect("join author general");
+    ChatRoomMember::join(&client, favorite_room.id, author_user.id)
+        .await
+        .expect("join author favorite");
+
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: favorite_room.id,
+            user_id: author_user.id,
+            body: "favorite backlog".to_string(),
+        },
+    )
+    .await
+    .expect("favorite message");
+
+    Profile::update(
+        &client,
+        target_user.id,
+        ProfileParams {
+            username: "favorite_target".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            notify_kinds: Vec::new(),
+            notify_bell: false,
+            notify_cooldown_mins: 0,
+            notify_format: None,
+            theme_id: Some("late".to_string()),
+            enable_background_color: false,
+            show_dashboard_header: true,
+            show_right_sidebar: true,
+            show_games_sidebar: true,
+            favorite_room_ids: vec![favorite_room.id],
+        },
+    )
+    .await
+    .expect("update favorites");
+
+    service.list_chats_task(target_user.id, Some(general_room.id));
+
+    timeout(Duration::from_secs(2), state_rx.changed())
+        .await
+        .expect("state timeout")
+        .expect("watch changed");
+    let snapshot = state_rx.borrow_and_update().clone();
+
+    let favorite_in_snapshot = snapshot
+        .chat_rooms
+        .iter()
+        .find(|(room, _)| room.id == favorite_room.id)
+        .expect("favorite room present");
+    assert!(
+        favorite_in_snapshot
+            .1
+            .iter()
+            .any(|message| message.body == "favorite backlog"),
+        "favorite room should preload its history in the snapshot"
     );
 }
 

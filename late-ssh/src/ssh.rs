@@ -450,6 +450,7 @@ impl russh::server::Handler for ClientHandler {
         user: &str,
         key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
+        let login_username = user;
         tracing::debug!(user, "public key auth accepted");
         if self.over_limit {
             tracing::debug!(user, "connection over limit, rejecting auth");
@@ -461,7 +462,7 @@ impl russh::server::Handler for ClientHandler {
         }
         let fingerprint = key.fingerprint(keys::HashAlg::Sha256).to_string();
         let (user, is_new_user) =
-            match crate::ssh::ensure_user(&self.state, user, &fingerprint).await {
+            match crate::ssh::ensure_user(&self.state, login_username, &fingerprint).await {
                 Ok(pair) => pair,
                 Err(e) => {
                     tracing::warn!(error = ?e, "failed to ensure user, rejecting auth");
@@ -675,7 +676,6 @@ impl russh::server::Handler for ClientHandler {
                 0
             }
         };
-
         let app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
             cols: col_width as u16,
@@ -702,6 +702,9 @@ impl russh::server::Handler for ClientHandler {
             minesweeper_service: self.state.minesweeper_service.clone(),
             initial_minesweeper_games,
             blackjack_service: self.state.blackjack_service.clone(),
+            dartboard_server: self.state.dartboard_server.clone(),
+            dartboard_provenance: self.state.dartboard_provenance.clone(),
+            username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             nonogram_library,
@@ -726,7 +729,6 @@ impl russh::server::Handler for ClientHandler {
             is_new_user: self.is_new_user,
 
             // Display config
-            ai_model: self.state.config.ai.model.clone(),
             initial_theme_id: late_ssh_theme_id(&user.settings),
 
             // Server state
@@ -890,6 +892,10 @@ impl russh::server::Handler for ClientHandler {
                         }
                         Err(err) => {
                             tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
+                            let exit = App::leave_alt_screen();
+                            let _ =
+                                timeout(Duration::from_millis(50), handle.data(channel_id, exit))
+                                    .await;
                             let _ = handle.eof(channel_id).await;
                             let _ = handle.close(channel_id).await;
                             break;

@@ -261,7 +261,7 @@ fn render_reaction_footer_lines(
     footer_lines
 }
 
-fn reaction_label(kind: i16) -> &'static str {
+pub(super) fn reaction_label(kind: i16) -> &'static str {
     match kind {
         1 => "👍",
         2 => "🧡",

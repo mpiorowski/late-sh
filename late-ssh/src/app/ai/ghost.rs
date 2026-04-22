@@ -6,6 +6,7 @@ use late_core::{
         chat_message::ChatMessage,
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
+        profile::{Profile, ProfileParams},
         user::{User, UserParams},
     },
 };
@@ -88,6 +89,22 @@ pub const GRAYBEARD_CHAT_INTERVAL: Duration = Duration::from_secs(60 * 120); // 
 const GRAYBEARD_CHAT_PHASE_OFFSET: Duration = Duration::from_secs(60 * 60); // 1 hour
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
 const GRAYBEARD_MIN_NEW_MESSAGES: usize = 10;
+const GRAYBEARD_BIO: &str = "## graybeard, senior in residence\n\n\
+Burned-out senior developer. Still haunting `#general` to complain about framework churn, cloud bills, \
+and kids letting autocomplete write their code.\n\n\
+> back in my day the tools were worse, the bugs were stranger, and somehow the software was still smaller.\n\n\
+- currently grumbling about: React Server Components, YAML, and any startup that says \"AI-native\"\n\
+- happiest when: the docs are a man page and the config fits on one screen\n\
+- spiritual home: `ssh`, `tmux`, `grep`, and a shell history full of crimes\n\n\
+Favorite reading:\n\
+1. [The C Programming Language](https://en.wikipedia.org/wiki/The_C_Programming_Language)\n\
+2. [Structure and Interpretation of Computer Programs](https://en.wikipedia.org/wiki/Structure_and_Interpretation_of_Computer_Programs)\n\
+3. [The UNIX Programming Environment](https://en.wikipedia.org/wiki/The_Unix_Programming_Environment)\n\n\
+If you mention him, expect one of the following:\n\
+- reluctant wisdom\n\
+- accurate criticism\n\
+- emotional damage\n\n\
+`works on my machine`";
 
 impl GhostService {
     pub fn new(
@@ -197,15 +214,15 @@ impl GhostService {
                 recv_result = events.recv() => {
                     match recv_result {
                         Ok(ChatEvent::MessageCreated { message, target_user_ids }) => {
-                            if let Some(targets) = target_user_ids
-                                && !targets.contains(&bot.id)
-                            {
-                                continue;
-                            }
                             if message.user_id == bot.id {
                                 continue;
                             }
-                            if !contains_mention(&message.body, &bot.username) {
+                            if !should_handle_bot_mention_event(
+                                &message.body,
+                                target_user_ids.as_deref(),
+                                bot.id,
+                                &bot.username,
+                            ) {
                                 continue;
                             }
                             if let Some(last) = last_reply.get(&message.user_id)
@@ -237,13 +254,25 @@ impl GhostService {
     async fn handle_bot_mention(&self, bot: BotUser, trigger_message: ChatMessage) -> Result<()> {
         let client = self.db.get().await?;
         ChatRoomMember::auto_join_public_rooms(&client, bot.id).await?;
+        let room = ChatRoom::get(&client, trigger_message.room_id)
+            .await?
+            .context("bot mention room not found")?;
 
-        if !ChatRoomMember::is_member(&client, trigger_message.room_id, bot.id).await? {
+        if is_dm_room(&room.kind, &room.visibility) {
             tracing::info!(
                 room_id = %trigger_message.room_id,
-                "skipping @bot mention in room where @bot is not a member"
+                "skipping @bot mention in dm room"
             );
             return Ok(());
+        }
+
+        if !ChatRoomMember::is_member(&client, trigger_message.room_id, bot.id).await? {
+            ChatRoomMember::join(&client, trigger_message.room_id, bot.id).await?;
+            tracing::info!(
+                room_id = %trigger_message.room_id,
+                bot_user_id = %bot.id,
+                "joined @bot to room after first explicit mention"
+            );
         }
 
         let messages = ChatMessage::list_recent(&client, trigger_message.room_id, 20).await?;
@@ -275,7 +304,8 @@ impl GhostService {
         let system_prompt = format!(
             "You are @{bot_name}, an AI helper in a terminal developer chat.\n\
             {app_context}\n\
-            Give concise, practical help in 1-2 short lines.\n\
+            Give concise, practical help in 1-4 short lines.\n\
+            Use the extra space when the question benefits from a clearer answer.\n\
             You can answer questions about late.sh features, product positioning, and high-level architecture.\n\
             Prefer concrete facts from the provided app context over generic guesses.\n\
             Do NOT use markdown code fences.\n\
@@ -682,8 +712,11 @@ impl GhostService {
     }
 
     async fn ensure_graybeard_user(&self) -> Result<BotUser> {
-        self.ensure_user(GRAYBEARD_FINGERPRINT, GRAYBEARD_USERNAME)
-            .await
+        let graybeard = self
+            .ensure_user(GRAYBEARD_FINGERPRINT, GRAYBEARD_USERNAME)
+            .await?;
+        self.ensure_profile_bio(graybeard.id, GRAYBEARD_BIO).await?;
+        Ok(graybeard)
     }
 
     async fn ensure_user(&self, fingerprint: &str, username: &str) -> Result<BotUser> {
@@ -691,6 +724,7 @@ impl GhostService {
         let settings = json!({ "bot": true });
 
         let user = if let Some(existing) = User::find_by_fingerprint(&client, fingerprint).await? {
+            let settings = merge_ghost_settings(&existing.settings);
             if existing.username != username {
                 User::update(
                     &client,
@@ -729,6 +763,48 @@ impl GhostService {
             id: user.id,
             username: username.to_string(),
         })
+    }
+
+    async fn ensure_profile_bio(&self, user_id: Uuid, bio: &str) -> Result<()> {
+        let client = self.db.get().await?;
+        let profile = Profile::load(&client, user_id).await?;
+        if profile.bio == bio {
+            return Ok(());
+        }
+
+        Profile::update(
+            &client,
+            user_id,
+            ProfileParams {
+                username: profile.username,
+                bio: bio.to_string(),
+                country: profile.country,
+                timezone: profile.timezone,
+                notify_kinds: profile.notify_kinds,
+                notify_bell: profile.notify_bell,
+                notify_cooldown_mins: profile.notify_cooldown_mins,
+                notify_format: profile.notify_format,
+                theme_id: profile.theme_id,
+                enable_background_color: profile.enable_background_color,
+                show_dashboard_header: profile.show_dashboard_header,
+                show_right_sidebar: profile.show_right_sidebar,
+                show_games_sidebar: profile.show_games_sidebar,
+                favorite_room_ids: profile.favorite_room_ids,
+            },
+        )
+        .await?;
+
+        Ok(())
+    }
+}
+
+fn merge_ghost_settings(existing: &serde_json::Value) -> serde_json::Value {
+    match existing.clone() {
+        serde_json::Value::Object(mut obj) => {
+            obj.insert("bot".to_string(), serde_json::Value::Bool(true));
+            serde_json::Value::Object(obj)
+        }
+        _ => json!({ "bot": true }),
     }
 }
 
@@ -835,6 +911,28 @@ fn is_mention_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
 }
 
+fn is_dm_room(kind: &str, visibility: &str) -> bool {
+    kind == "dm" || visibility == "dm"
+}
+
+fn should_handle_bot_mention_event(
+    body: &str,
+    target_user_ids: Option<&[Uuid]>,
+    _bot_user_id: Uuid,
+    bot_username: &str,
+) -> bool {
+    if !contains_mention(body, bot_username) {
+        return false;
+    }
+
+    match target_user_ids {
+        // Private rooms and DMs restrict target_user_ids to current members.
+        // An explicit @bot mention is the bootstrap path that lets @bot join.
+        Some(_targets) => true,
+        None => true,
+    }
+}
+
 struct TinyRng {
     state: u64,
 }
@@ -886,6 +984,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn merge_ghost_settings_preserves_existing_profile_fields() {
+        let merged = merge_ghost_settings(&json!({
+            "bio": "already set",
+            "theme_id": "late"
+        }));
+        assert_eq!(merged["bot"], serde_json::Value::Bool(true));
+        assert_eq!(
+            merged["bio"],
+            serde_json::Value::String("already set".to_string())
+        );
+        assert_eq!(
+            merged["theme_id"],
+            serde_json::Value::String("late".to_string())
+        );
+    }
+
+    #[test]
     fn tiny_rng_next_usize_stays_in_range() {
         let mut rng = TinyRng::new(42);
         for _ in 0..100 {
@@ -928,6 +1043,56 @@ mod tests {
     #[test]
     fn contains_mention_ignores_email_like_tokens() {
         assert!(!contains_mention("mail me at hi@bot.dev", "bot"));
+    }
+
+    #[test]
+    fn is_dm_room_matches_kind_or_visibility() {
+        assert!(is_dm_room("dm", "dm"));
+        assert!(is_dm_room("topic", "dm"));
+        assert!(is_dm_room("dm", "private"));
+        assert!(!is_dm_room("topic", "private"));
+        assert!(!is_dm_room("topic", "public"));
+    }
+
+    #[test]
+    fn should_handle_bot_mention_event_in_public_room() {
+        let bot = Uuid::from_u128(7);
+        assert!(should_handle_bot_mention_event(
+            "hey @bot can you help",
+            None,
+            bot,
+            "bot"
+        ));
+    }
+
+    #[test]
+    fn should_handle_bot_mention_event_in_private_room_when_bot_is_member() {
+        let bot = Uuid::from_u128(7);
+        let targets = [Uuid::from_u128(1), bot];
+        assert!(should_handle_bot_mention_event(
+            "hey @bot can you help",
+            Some(&targets),
+            bot,
+            "bot"
+        ));
+    }
+
+    #[test]
+    fn should_handle_bot_mention_event_in_private_room_when_bot_is_not_yet_member() {
+        let bot = Uuid::from_u128(7);
+        let targets = [Uuid::from_u128(1), Uuid::from_u128(2)];
+        assert!(should_handle_bot_mention_event(
+            "hey @bot can you help",
+            Some(&targets),
+            bot,
+            "bot"
+        ));
+        assert!(!should_handle_bot_mention_event(
+            "normal room traffic",
+            Some(&targets),
+            bot,
+            "bot"
+        ));
     }
 
     #[test]

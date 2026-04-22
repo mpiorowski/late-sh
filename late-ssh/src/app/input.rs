@@ -1,5 +1,6 @@
 use super::{
-    chat, dashboard, help_modal, icon_picker, profile, profile_modal, settings_modal, state::App,
+    chat, dashboard, help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
+    state::App,
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -50,19 +51,17 @@ pub(crate) enum ParsedInput {
     Byte(u8),
     Arrow(u8),
     CtrlArrow(u8),
+    ShiftArrow(u8),
     /// Arrow with the Alt/Meta modifier (xterm `CSI 1;3 {A|B|C|D}`).
     /// Most terminals emit this for Option-Arrow on macOS or Alt-Arrow on
     /// Linux; kitty does in its default (non-kitty-keyboard) mode. Consumers
     /// treat `AltArrow` and `CtrlArrow` identically for word-jump bindings.
     AltArrow(u8),
+    CtrlShiftArrow(u8),
     Delete,
     CtrlBackspace,
     CtrlDelete,
-    Scroll(isize),
-    MousePress {
-        x: u16,
-        y: u16,
-    },
+    Mouse(MouseEvent),
     BackTab,
     // Alt+Enter inserts a newline. `ESC`-prefixed control chords that would
     // otherwise wedge vte are pre-scanned before the parser sees them.
@@ -71,12 +70,49 @@ pub(crate) enum ParsedInput {
     // because tmux collapses Ctrl-modified Enter to bare `\r` unless the
     // kitty keyboard protocol is forwarded, which it isn't by default.
     AltS,
+    AltC,
     Paste(Vec<u8>),
     PageUp,
     PageDown,
     End,
+    Home,
     FocusGained,
     FocusLost,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MouseModifiers {
+    pub shift: bool,
+    pub alt: bool,
+    pub ctrl: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseEventKind {
+    Down,
+    Up,
+    Drag,
+    Moved,
+    ScrollUp,
+    ScrollDown,
+    ScrollLeft,
+    ScrollRight,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MouseEvent {
+    pub kind: MouseEventKind,
+    pub button: Option<MouseButton>,
+    pub x: u16,
+    pub y: u16,
+    pub modifiers: MouseModifiers,
 }
 
 /// vte keeps pending escape state when `ESC` is followed by control bytes
@@ -196,6 +232,10 @@ impl Perform for VtCollector {
                     self.events.push(ParsedInput::End);
                     return;
                 }
+                'H' => {
+                    self.events.push(ParsedInput::Home);
+                    return;
+                }
                 _ => {}
             }
         }
@@ -235,17 +275,22 @@ impl Perform for VtCollector {
                 self.finish_paste();
             }
             'A' | 'B' | 'C' | 'D' => {
-                // xterm modifier encoding (value = 1 + shift|alt<<1|ctrl<<2):
-                //   3 = Alt, 5 = Ctrl. Others (7 = Alt+Ctrl, 4 = Alt+Shift,
-                //   etc.) fall through to bare Arrow — no consumer
-                //   distinguishes them today.
                 let key = action as u8;
-                if p1 == Some(5) || (p0 == Some(5) && p1.is_none()) {
-                    self.events.push(ParsedInput::CtrlArrow(key));
-                } else if p1 == Some(3) || (p0 == Some(3) && p1.is_none()) {
-                    self.events.push(ParsedInput::AltArrow(key));
-                } else {
-                    self.events.push(ParsedInput::Arrow(key));
+                // xterm modifier param encoding: 2=Shift, 3=Alt, 4=Shift+Alt,
+                // 5=Ctrl, 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Shift+Alt. Some
+                // terminals drop the leading "1;" (e.g. CSI 2 A instead of
+                // CSI 1;2 A), so accept either placement.
+                let modifier = match (p0, p1) {
+                    (_, Some(m)) => Some(m),
+                    (Some(m), None) if m > 1 => Some(m),
+                    _ => None,
+                };
+                match modifier {
+                    Some(2) => self.events.push(ParsedInput::ShiftArrow(key)),
+                    Some(3) => self.events.push(ParsedInput::AltArrow(key)),
+                    Some(5) => self.events.push(ParsedInput::CtrlArrow(key)),
+                    Some(6) => self.events.push(ParsedInput::CtrlShiftArrow(key)),
+                    _ => self.events.push(ParsedInput::Arrow(key)),
                 }
             }
             '~' if p0 == Some(3) && p1 == Some(5) => {
@@ -269,6 +314,13 @@ impl Perform for VtCollector {
             'F' if intermediates.is_empty() && p0.unwrap_or(0) <= 1 => {
                 self.events.push(ParsedInput::End);
             }
+            // Home: numeric forms `CSI 1~` / `CSI 7~` and bare `CSI H`.
+            '~' if p0 == Some(1) || p0 == Some(7) => {
+                self.events.push(ParsedInput::Home);
+            }
+            'H' if intermediates.is_empty() && p0.unwrap_or(0) <= 1 => {
+                self.events.push(ParsedInput::Home);
+            }
             // Kitty keyboard protocol: some terminals report Backspace as
             // codepoint 127, others as 8 (BS). Accept both for Ctrl+Backspace.
             'u' if (p0 == Some(127) || p0 == Some(8)) && p1 == Some(5) => {
@@ -285,17 +337,61 @@ impl Perform for VtCollector {
                 self.events.push(ParsedInput::FocusLost);
             }
             'M' | 'm' if intermediates == [b'<'] && params.len() >= 3 => {
-                let button = p0.unwrap_or_default();
+                let raw = p0.unwrap_or_default();
                 let x = params.get(1).copied().unwrap_or(0);
                 let y = params.get(2).copied().unwrap_or(0);
-                match button {
-                    64 => self.events.push(ParsedInput::Scroll(1)),
-                    65 => self.events.push(ParsedInput::Scroll(-1)),
-                    // Left-button press only; release (action == 'm') ignored for now.
-                    0 if action == 'M' => {
-                        self.events.push(ParsedInput::MousePress { x, y });
-                    }
-                    _ => {}
+                let modifiers = MouseModifiers {
+                    shift: raw & 4 != 0,
+                    alt: raw & 8 != 0,
+                    ctrl: raw & 16 != 0,
+                };
+                // SGR mouse encodes wheel directions in bit 6 plus the low
+                // button bits: 64..67 => up/down/left/right.
+                if raw & 64 != 0 {
+                    let kind = match raw & 0b0100_0011 {
+                        64 => MouseEventKind::ScrollUp,
+                        65 => MouseEventKind::ScrollDown,
+                        66 => MouseEventKind::ScrollLeft,
+                        67 => MouseEventKind::ScrollRight,
+                        _ => return,
+                    };
+                    self.events.push(ParsedInput::Mouse(MouseEvent {
+                        kind,
+                        button: None,
+                        x,
+                        y,
+                        modifiers,
+                    }));
+                } else {
+                    let motion = raw & 32 != 0;
+                    let low = raw & 0b11;
+                    // Low bits 0..=2 identify the button; 3 means "no button"
+                    // (only meaningful with the motion bit set — mouse move
+                    // without any button held, reported by ?1003h).
+                    let button = match low {
+                        0 => Some(MouseButton::Left),
+                        1 => Some(MouseButton::Middle),
+                        2 => Some(MouseButton::Right),
+                        _ => None,
+                    };
+                    let kind = if motion {
+                        if button.is_some() {
+                            MouseEventKind::Drag
+                        } else {
+                            MouseEventKind::Moved
+                        }
+                    } else if action == 'M' {
+                        MouseEventKind::Down
+                    } else {
+                        MouseEventKind::Up
+                    };
+                    self.events.push(ParsedInput::Mouse(MouseEvent {
+                        kind,
+                        button,
+                        x,
+                        y,
+                        modifiers,
+                    }));
                 }
             }
             _ => {}
@@ -312,11 +408,15 @@ impl Perform for VtCollector {
             return;
         }
 
-        // Alt+S: "send and stay in compose". Picked over Ctrl+Enter because
-        // tmux collapses Ctrl-modified Enter to bare `\r` without the kitty
-        // keyboard protocol, but `ESC + <letter>` passes through unchanged.
-        if intermediates.is_empty() && (byte == b's' || byte == b'S') {
-            self.events.push(ParsedInput::AltS);
+        // Explicit Alt+printable chords we route across the app. Everything
+        // else falls through and is intentionally swallowed as a lone Alt
+        // modifier rather than leaking ESC + byte separately.
+        if intermediates.is_empty() {
+            match byte {
+                b's' | b'S' => self.events.push(ParsedInput::AltS),
+                b'c' | b'C' => self.events.push(ParsedInput::AltC),
+                _ => {}
+            }
         }
 
         // Alt+printable falls through and is intentionally ignored, so ESC does
@@ -449,6 +549,11 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    if app.show_quit_confirm {
+        quit_confirm::input::handle_input(app, event);
+        return;
+    }
+
     // Ctrl+O is a plain C0 control byte (0x0F) across terminals/tmux, so
     // treat it as the global "open settings" chord before any local routing.
     if matches!(event, ParsedInput::Byte(0x0F)) {
@@ -456,7 +561,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Help is the topmost modal: when both are open it owns input.
+    // The quit confirm is topmost. Otherwise the existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -485,6 +590,18 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // Screen-specific rich event handlers get first crack at
+    // Mouse/Home/modified-arrow events before the generic dispatch below.
+    if ctx.screen == Screen::Games
+        && app.is_playing_game
+        && crate::app::games::input::handle_event(app, &event)
+    {
+        return;
+    }
+    if ctx.screen == Screen::Artboard && crate::app::artboard::page::handle_event(app, &event) {
+        return;
+    }
+
     match event {
         ParsedInput::FocusGained | ParsedInput::FocusLost => {}
         ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
@@ -502,23 +619,19 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
                     app.banner = Some(b);
                 }
-                if let Some(topic) = app.chat.take_requested_help_topic() {
-                    app.help_modal_state.open(topic);
-                    app.show_help = true;
-                }
-                if app.chat.take_requested_settings_modal() {
-                    app.settings_modal_state.open_from_profile(
-                        app.profile_state.profile(),
-                        app.chat.favorite_room_options(),
-                        crate::app::settings_modal::ui::MODAL_WIDTH,
-                    );
-                    app.show_settings = true;
-                }
+                chat::input::handle_post_submit_requests(app);
             }
         }
-        ParsedInput::Scroll(delta) => handle_scroll_for_screen(app, ctx.screen, delta),
-        // Mouse clicks only matter inside the icon picker today; ignore here.
-        ParsedInput::MousePress { .. } => {}
+        ParsedInput::AltC => {}
+        // Mouse events only matter to a few specific consumers (icon picker,
+        // dartboard). The general dispatch path only uses vertical wheel
+        // events as a fallback for screens that scroll outside those richer
+        // handlers.
+        ParsedInput::Mouse(mouse) => {
+            if let Some(delta) = mouse_scroll_delta(mouse) {
+                handle_scroll_for_screen(app, ctx.screen, delta);
+            }
+        }
         ParsedInput::BackTab => {
             if ctx.screen == Screen::Chat && app.chat.room_jump_active {
                 return;
@@ -533,13 +646,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             if ctx.screen == Screen::Games && app.is_playing_game {
                 return;
             }
-            reset_composers_for_page_change(app);
-            app.screen = ctx.screen.prev();
-            if app.screen == Screen::Chat {
-                app.chat.request_list();
-                app.chat.sync_selection();
-                app.chat.mark_selected_room_read();
+            if artboard_blocks_global_page_switch(app, ctx.screen) {
+                return;
             }
+            reset_composers_for_page_change(app);
+            app.set_screen(ctx.screen.prev());
             app.chat.clear_message_selection();
         }
         // Page keys mirror Ctrl-U / Ctrl-D. Signs follow the existing scheme:
@@ -645,6 +756,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::AltArrow(_)
         | ParsedInput::CtrlBackspace
         | ParsedInput::CtrlDelete => {}
+        // Modified arrows are only bound on screens that opt in via the early
+        // `handle_event` hook. Everywhere else they're inert.
+        ParsedInput::ShiftArrow(_) | ParsedInput::CtrlShiftArrow(_) | ParsedInput::Home => {}
         ParsedInput::Arrow(key) => {
             if ctx.screen == Screen::Chat && app.chat.room_jump_active {
                 let _ = chat::input::handle_arrow(app, key);
@@ -691,7 +805,16 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.chat.composer_push('\n');
             app.chat.update_autocomplete();
         }
-        ParsedInput::Byte(0x1D) => try_open_icon_picker(app),
+        // 0x1D (Ctrl+] / Ctrl+5 / raw GS) opens the chat icon picker on
+        // chat-bearing screens, but active Artboard editing owns this
+        // keystroke as the glyph-picker open key — let it fall through
+        // to the byte dispatch below.
+        ParsedInput::Byte(0x1D)
+            if !((ctx.screen == Screen::Games && app.is_playing_game)
+                || (ctx.screen == Screen::Artboard && app.artboard_interacting)) =>
+        {
+            try_open_icon_picker(app)
+        }
         ParsedInput::Byte(byte) => handle_byte_event(app, ctx, byte),
         ParsedInput::Char(ch) => {
             if route_char_to_composer(app, ctx, ch) {
@@ -732,6 +855,10 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
 }
 
 fn dispatch_escape(app: &mut App) {
+    if app.show_quit_confirm {
+        quit_confirm::input::handle_escape(app);
+        return;
+    }
     if app.show_help {
         help_modal::input::handle_escape(app);
         return;
@@ -766,6 +893,22 @@ fn dispatch_escape(app: &mut App) {
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
         app.chat.close_overlay();
         return;
+    }
+    if ctx.screen == Screen::Artboard {
+        let Some(state) = app.dartboard_state.as_ref() else {
+            return;
+        };
+        if state.is_glyph_picker_open() || state.is_help_open() {
+            dispatch_screen_key(app, ctx.screen, 0x1B);
+            return;
+        }
+        if app.artboard_interacting {
+            if crate::app::artboard::page::handle_key(app, 0x1B) {
+                return;
+            }
+            app.deactivate_artboard_interaction();
+            return;
+        }
     }
     if ctx.screen == Screen::Games && app.is_playing_game {
         dispatch_screen_key(app, ctx.screen, 0x1B);
@@ -851,7 +994,16 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
             }
         }
         Screen::Chat => chat::input::handle_scroll(app, delta),
+        Screen::Artboard => {}
         _ => {}
+    }
+}
+
+fn mouse_scroll_delta(mouse: MouseEvent) -> Option<isize> {
+    match mouse.kind {
+        MouseEventKind::ScrollUp => Some(1),
+        MouseEventKind::ScrollDown => Some(-1),
+        _ => None,
     }
 }
 
@@ -871,8 +1023,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
             true
         }
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
-        Screen::Profile => profile::input::handle_arrow(app, key),
         Screen::Games => crate::app::games::input::handle_arrow(app, key),
+        Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
     }
 }
 
@@ -908,6 +1060,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_profile_modal = false;
     app.show_web_chat_qr = false;
+    app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
     app.chat.cancel_room_jump();
@@ -919,7 +1072,20 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
+pub(crate) fn trigger_global_quit(app: &mut App) {
+    match quit_confirm::input::action_for(app.show_quit_confirm) {
+        quit_confirm::input::QuitAction::OpenConfirm => {
+            app.show_quit_confirm = true;
+        }
+        quit_confirm::input::QuitAction::QuitNow => {
+            app.running = false;
+        }
+    }
+}
+
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
+    let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
+
     // ? opens help unless composing text
     if byte == b'?' && !ctx.chat_composing && !ctx.news_composing {
         app.help_modal_state
@@ -947,14 +1113,18 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
 
     if ctx.screen == Screen::Games
         && app.is_playing_game
-        && !matches!(byte, 0x03 | b'm' | b'M' | b'+' | b'=' | b'-' | b'_')
+        && !matches!(byte, b'm' | b'M' | b'+' | b'=' | b'-' | b'_')
     {
         return false;
     }
 
+    if ctx.screen == Screen::Artboard && app.artboard_interacting {
+        return false;
+    }
+
     match byte {
-        b'q' | b'Q' | 0x03 => {
-            app.running = false;
+        b'q' | b'Q' => {
+            trigger_global_quit(app);
             true
         }
         b'm' | b'M' => {
@@ -1055,42 +1225,29 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             ));
             true
         }
-        b'1' => {
+        b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.screen = Screen::Dashboard;
+            app.set_screen(Screen::Dashboard);
             true
         }
-        b'2' => {
+        b'2' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.chat.request_list();
-            app.chat.sync_selection();
-            app.chat.mark_selected_room_read();
-            app.screen = Screen::Chat;
+            app.set_screen(Screen::Chat);
             true
         }
-        b'3' => {
+        b'3' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.screen = Screen::Games;
+            app.set_screen(Screen::Games);
             true
         }
-        b'4' => {
+        b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.screen = Screen::Profile;
+            app.set_screen(Screen::Artboard);
             true
         }
-        b'\t' => {
+        b'\t' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.screen = ctx.screen.next();
-            match app.screen {
-                Screen::Dashboard => {}
-                Screen::Chat => {
-                    app.chat.request_list();
-                    app.chat.sync_selection();
-                    app.chat.mark_selected_room_read();
-                }
-                Screen::Profile => {}
-                Screen::Games => {}
-            }
+            app.set_screen(ctx.screen.next());
             true
         }
         b'P' => {
@@ -1103,6 +1260,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 }
 
+fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
+    if screen != Screen::Artboard {
+        return false;
+    }
+    let Some(state) = app.dartboard_state.as_ref() else {
+        return app.artboard_interacting;
+    };
+    app.artboard_interacting || state.is_help_open() || state.is_glyph_picker_open()
+}
+
 fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
     match screen {
         Screen::Dashboard => {
@@ -1111,11 +1278,11 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Chat => {
             chat::input::handle_byte(app, byte);
         }
-        Screen::Profile => {
-            profile::input::handle_byte(app, byte);
-        }
         Screen::Games => {
             crate::app::games::input::handle_key(app, byte);
+        }
+        Screen::Artboard => {
+            let _ = crate::app::artboard::page::handle_key(app, byte);
         }
     }
 }
@@ -1150,6 +1317,8 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'\r') => apply_icon_selection(app, false),
         ParsedInput::AltEnter => apply_icon_selection(app, true),
+        ParsedInput::Byte(b'\t') => app.icon_picker_state.next_tab(),
+        ParsedInput::BackTab => app.icon_picker_state.prev_tab(),
         ParsedInput::Byte(0x7f) => app.icon_picker_state.search_delete_char(),
         ParsedInput::Delete => app.icon_picker_state.search_delete_next_char(),
         ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
@@ -1164,7 +1333,18 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         // insert-newline respectively).
         ParsedInput::Byte(0x0B) => picker_move_selection(app, -1),
         ParsedInput::Byte(0x0A) => picker_move_selection(app, 1),
-        ParsedInput::Scroll(delta) => picker_move_selection(app, -delta * 3),
+        ParsedInput::Mouse(MouseEvent {
+            kind: MouseEventKind::Down,
+            button: Some(MouseButton::Left),
+            x,
+            y,
+            ..
+        }) => handle_icon_picker_click(app, x, y),
+        ParsedInput::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => picker_move_selection(app, -3),
+            MouseEventKind::ScrollDown => picker_move_selection(app, 3),
+            _ => {}
+        },
         ParsedInput::Arrow(b'C') => app.icon_picker_state.search_cursor_right(),
         ParsedInput::Arrow(b'D') => app.icon_picker_state.search_cursor_left(),
         ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
@@ -1193,7 +1373,6 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         }
         // ^/ (^_) stays on the app-level undo path so `reset_selection()` fires.
         ParsedInput::Byte(0x1F) => app.icon_picker_state.search_undo(),
-        ParsedInput::MousePress { x, y } => handle_icon_picker_click(app, x, y),
         ParsedInput::Char(ch) if !ch.is_control() => app.icon_picker_state.search_insert_char(ch),
         ParsedInput::Byte(byte) => {
             // Fallthrough: forward remaining Ctrl+<letter> chords (^A/^E/^F/
@@ -1208,109 +1387,55 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
 }
 
 fn picker_move_selection(app: &mut App, delta: isize) {
-    // Build filtered sections once per event — prevents the duplicated scan
-    // that we had when a separate helper computed `max` and then the scroll
-    // adjust recomputed the same view.
     let Some(catalog) = app.icon_catalog.as_ref() else {
         return;
     };
-    let sections = catalog.filtered(&app.icon_picker_state.search_str());
-    let max = icon_picker::picker::selectable_count(&sections);
-    if max == 0 {
-        return;
-    }
-    let cur = app.icon_picker_state.selected_index as isize;
-    let next = cur.saturating_add(delta).clamp(0, (max - 1) as isize) as usize;
-    let flat_idx = icon_picker::picker::selectable_to_flat(&sections, next).unwrap_or(0);
-
-    let state = &mut app.icon_picker_state;
-    state.selected_index = next;
-    let visible = state.visible_height.get().max(1);
-    if flat_idx < state.scroll_offset {
-        state.scroll_offset = flat_idx;
-    } else if flat_idx >= state.scroll_offset + visible {
-        state.scroll_offset = flat_idx.saturating_sub(visible - 1);
-    }
+    icon_picker::picker::move_selection(&mut app.icon_picker_state, catalog, delta);
 }
 
 /// Handle a left-button press at SGR 1-based coordinates (x, y).
 /// A click on a visible icon row selects it; a second click on the
 /// same item within DOUBLE_CLICK_WINDOW_MS inserts it (keeps the picker open).
 fn handle_icon_picker_click(app: &mut App, x: u16, y: u16) {
-    let _ = x;
-    // SGR coords are 1-based; ratatui Rect is 0-based.
-    let row_0based = y.saturating_sub(1);
+    let Some(col) = x.checked_sub(1) else {
+        return;
+    };
+    let Some(row) = y.checked_sub(1) else {
+        return;
+    };
 
-    let list = app.icon_picker_state.list_inner.get();
-    if list.height == 0 || row_0based < list.y || row_0based >= list.y + list.height {
+    if icon_picker::picker::click_tab(&mut app.icon_picker_state, col, row) {
         return;
     }
-    let offset_in_list = (row_0based - list.y) as usize;
-    let flat_idx = app.icon_picker_state.scroll_offset + offset_in_list;
 
     let Some(catalog) = app.icon_catalog.as_ref() else {
         return;
     };
-    let sections = catalog.filtered(&app.icon_picker_state.search_str());
-
-    let Some(selectable_idx) = icon_picker::picker::flat_to_selectable(&sections, flat_idx) else {
-        return;
-    };
-
-    let now = std::time::Instant::now();
-    let is_double = match app.icon_picker_state.last_click {
-        Some((prev, prev_idx)) => {
-            prev_idx == selectable_idx
-                && now.duration_since(prev).as_millis() <= icon_picker::DOUBLE_CLICK_WINDOW_MS
-        }
-        None => false,
-    };
-
-    let flat_idx_target =
-        icon_picker::picker::selectable_to_flat(&sections, selectable_idx).unwrap_or(0);
-    let state = &mut app.icon_picker_state;
-    state.selected_index = selectable_idx;
-    let visible = state.visible_height.get().max(1);
-    if flat_idx_target < state.scroll_offset {
-        state.scroll_offset = flat_idx_target;
-    } else if flat_idx_target >= state.scroll_offset + visible {
-        state.scroll_offset = flat_idx_target.saturating_sub(visible - 1);
-    }
-
-    if is_double {
-        app.icon_picker_state.last_click = None;
+    if icon_picker::picker::click_list(&mut app.icon_picker_state, catalog, col, row) {
         apply_icon_selection(app, true);
-    } else {
-        app.icon_picker_state.last_click = Some((now, selectable_idx));
     }
 }
 
 fn apply_icon_selection(app: &mut App, keep_open: bool) {
-    let selected = app.icon_picker_state.selected_index;
-
     let icon_str = {
         let Some(catalog) = app.icon_catalog.as_ref() else {
             app.icon_picker_open = false;
             return;
         };
-        let sections = catalog.filtered(&app.icon_picker_state.search_str());
-        match icon_picker::picker::entry_at_selectable(&sections, selected) {
-            Some(entry) => entry.icon.clone(),
-            None => {
-                if !keep_open {
-                    app.icon_picker_open = false;
-                }
-                return;
+        let Some(icon) = icon_picker::picker::selected_icon(&app.icon_picker_state, catalog) else {
+            if !keep_open {
+                app.icon_picker_open = false;
             }
+            return;
+        };
+        if icon.is_empty() {
+            return;
         }
+        icon
     };
 
     if !keep_open {
         app.icon_picker_open = false;
-    }
-
-    if icon_str.is_empty() {
-        return;
     }
 
     let ctx = InputContext::from_app(app);
@@ -1363,7 +1488,7 @@ mod tests {
     fn compose_room_switch_only_allowed_on_chat_screen() {
         assert!(compose_room_switch_allowed(Screen::Chat));
         assert!(!compose_room_switch_allowed(Screen::Dashboard));
-        assert!(!compose_room_switch_allowed(Screen::Profile));
+        assert!(!compose_room_switch_allowed(Screen::Games));
     }
 
     #[test]
@@ -1387,10 +1512,50 @@ mod tests {
     #[test]
     fn vt_parser_parses_scroll_events() {
         let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1b[<64;10;5M"), vec![ParsedInput::Scroll(1)]);
+        assert_eq!(
+            parser.feed(b"\x1b[<64;10;5M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                button: None,
+                x: 10,
+                y: 5,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
         assert_eq!(
             parser.feed(b"\x1b[<65;10;5m"),
-            vec![ParsedInput::Scroll(-1)]
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                button: None,
+                x: 10,
+                y: 5,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+    }
+
+    #[test]
+    fn vt_parser_parses_horizontal_scroll_events() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed(b"\x1b[<66;8;3M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollLeft,
+                button: None,
+                x: 8,
+                y: 3,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+        assert_eq!(
+            parser.feed(b"\x1b[<67;8;3M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollRight,
+                button: None,
+                x: 8,
+                y: 3,
+                modifiers: MouseModifiers::default(),
+            })]
         );
     }
 
@@ -1429,6 +1594,12 @@ mod tests {
     fn vt_parser_consumes_alt_printable_without_emitting_bytes() {
         let mut parser = VtInputParser::default();
         assert!(parser.feed(b"\x1bq").is_empty());
+    }
+
+    #[test]
+    fn vt_parser_emits_alt_c_for_explicit_clipboard_chord() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1bc"), vec![ParsedInput::AltC]);
     }
 
     #[test]
@@ -1559,6 +1730,132 @@ mod tests {
     fn vt_parser_parses_end_ss3_form() {
         let mut parser = VtInputParser::default();
         assert_eq!(parser.feed(b"\x1bOF"), vec![ParsedInput::End]);
+    }
+
+    #[test]
+    fn vt_parser_parses_home_forms() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1b[1~"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1b[7~"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1b[H"), vec![ParsedInput::Home]);
+        assert_eq!(parser.feed(b"\x1bOH"), vec![ParsedInput::Home]);
+    }
+
+    #[test]
+    fn vt_parser_parses_modified_arrow_variants() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed(b"\x1b[1;2A"),
+            vec![ParsedInput::ShiftArrow(b'A')]
+        );
+        assert_eq!(parser.feed(b"\x1b[2A"), vec![ParsedInput::ShiftArrow(b'A')]);
+        assert_eq!(parser.feed(b"\x1b[1;3B"), vec![ParsedInput::AltArrow(b'B')]);
+        assert_eq!(parser.feed(b"\x1b[3C"), vec![ParsedInput::AltArrow(b'C')]);
+        assert_eq!(
+            parser.feed(b"\x1b[1;6D"),
+            vec![ParsedInput::CtrlShiftArrow(b'D')]
+        );
+        assert_eq!(
+            parser.feed(b"\x1b[6A"),
+            vec![ParsedInput::CtrlShiftArrow(b'A')]
+        );
+    }
+
+    #[test]
+    fn vt_parser_parses_mouse_press_and_release() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed(b"\x1b[<0;10;5M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 10,
+                y: 5,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+        assert_eq!(
+            parser.feed(b"\x1b[<0;10;5m"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Up,
+                button: Some(MouseButton::Left),
+                x: 10,
+                y: 5,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+        assert_eq!(
+            parser.feed(b"\x1b[<2;10;5M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Right),
+                x: 10,
+                y: 5,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+    }
+
+    #[test]
+    fn vt_parser_parses_mouse_drag_and_move() {
+        let mut parser = VtInputParser::default();
+        // Left-button drag: base button 0 + motion bit 32 = 32.
+        assert_eq!(
+            parser.feed(b"\x1b[<32;4;6M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag,
+                button: Some(MouseButton::Left),
+                x: 4,
+                y: 6,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+        // Hover / motion without a button: low bits = 3, plus motion bit 32 = 35.
+        assert_eq!(
+            parser.feed(b"\x1b[<35;4;6M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                button: None,
+                x: 4,
+                y: 6,
+                modifiers: MouseModifiers::default(),
+            })]
+        );
+    }
+
+    #[test]
+    fn vt_parser_parses_mouse_modifier_bits() {
+        let mut parser = VtInputParser::default();
+        // Left press with Shift (bit 4): 0 | 4 = 4.
+        assert_eq!(
+            parser.feed(b"\x1b[<4;1;1M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 1,
+                y: 1,
+                modifiers: MouseModifiers {
+                    shift: true,
+                    alt: false,
+                    ctrl: false
+                },
+            })]
+        );
+        // Left press with Ctrl+Alt (bits 16|8 = 24): 0 | 24 = 24.
+        assert_eq!(
+            parser.feed(b"\x1b[<24;2;3M"),
+            vec![ParsedInput::Mouse(MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 2,
+                y: 3,
+                modifiers: MouseModifiers {
+                    shift: false,
+                    alt: true,
+                    ctrl: true
+                },
+            })]
+        );
     }
 
     #[test]

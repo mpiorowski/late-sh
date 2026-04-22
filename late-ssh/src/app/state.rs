@@ -47,6 +47,14 @@ pub(crate) enum NotificationMode {
     Osc9,
 }
 
+pub(crate) const GAME_SELECTION_2048: usize = 0;
+pub(crate) const GAME_SELECTION_TETRIS: usize = 1;
+pub(crate) const GAME_SELECTION_SUDOKU: usize = 2;
+pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
+pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
+pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
+pub(crate) const GAME_SELECTION_BLACKJACK: usize = 6;
+pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 impl NotificationMode {
     /// Map the `notify_format` profile field to a concrete mode. Unknown
     /// or missing values fall back to `Both`, matching the on-read
@@ -59,6 +67,9 @@ impl NotificationMode {
         }
     }
 }
+
+const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
+const CURSOR_SHAPE_STEADY_UNDERLINE: &[u8] = b"\x1b[4 q";
 
 #[derive(Clone, Default)]
 pub(super) struct SharedBuffer {
@@ -111,6 +122,12 @@ pub struct SessionConfig {
     pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub blackjack_service: crate::app::games::blackjack::svc::BlackjackService,
+    /// Shared in-proc dartboard server handle. Each session only connects — consuming a
+    /// color slot and showing up in `peer_count` — when the user actually
+    /// enters the dartboard game from the arcade.
+    pub dartboard_server: dartboard_local::ServerHandle,
+    pub dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
+    pub username: String,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub nonogram_library: crate::app::games::nonogram::state::Library,
@@ -138,8 +155,7 @@ pub struct SessionConfig {
     /// UI flags
     pub is_new_user: bool,
 
-    /// Display config (informational, shown on profile screen)
-    pub ai_model: String,
+    /// Display config
     pub initial_theme_id: String,
 
     /// Server state
@@ -159,6 +175,7 @@ pub struct App {
     pub(crate) show_splash: bool,
     pub(crate) splash_ticks: usize,
     pub(crate) splash_hint: String,
+    pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
@@ -233,6 +250,20 @@ pub struct App {
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
     pub(crate) blackjack_state: crate::app::games::blackjack::state::State,
+    /// `Some` while the user is inside the dartboard game, `None` otherwise.
+    /// Constructed on entry (connecting + consuming a color slot) and
+    /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
+    /// `Drop` impl). A full SSH-session drop cascades through `App` → this
+    /// `Option` → the underlying client, so the seat is released on logout
+    /// or connection loss.
+    pub(crate) dartboard_state: Option<crate::app::artboard::state::State>,
+    /// `true` while the dedicated Artboard screen is in editing mode.
+    /// View mode stays connected to the shared board but reserves global
+    /// screen hotkeys like `1-4` and `Tab`.
+    pub(crate) artboard_interacting: bool,
+    pub(crate) dartboard_server: dartboard_local::ServerHandle,
+    pub(crate) dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
+    pub(crate) username: String,
 
     /// Late Chips balance (loaded on login, updated via leaderboard refresh)
     pub(crate) chip_balance: i64,
@@ -259,9 +290,14 @@ pub struct App {
 }
 
 impl App {
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.show_settings = false;
+        self.show_quit_confirm = false;
     }
 
     /// Resolves which room the dashboard's chat card should display, given
@@ -284,23 +320,53 @@ impl App {
         }
     }
 
+    fn current_visible_chat_room_id(&self) -> Option<Uuid> {
+        match self.screen {
+            Screen::Dashboard => self.dashboard_active_room_id(),
+            Screen::Chat => self.chat.selected_room_id,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn sync_visible_chat_room(&mut self) {
+        let visible_room_id = self.current_visible_chat_room_id();
+        let changed = self.chat.visible_room_id() != visible_room_id;
+        self.chat.set_visible_room_id(visible_room_id);
+        if changed && let Some(room_id) = visible_room_id {
+            self.chat.mark_room_read(room_id);
+        }
+    }
+
     /// Pins to render in the dashboard quick-switch strip. `None` when fewer
     /// than two favorites are pinned — there's nothing to switch between, so
     /// the strip is hidden entirely.
-    pub(crate) fn dashboard_strip_pins(&self) -> Option<Vec<(uuid::Uuid, String, bool)>> {
+    pub(crate) fn dashboard_strip_pins(&self) -> Option<Vec<(uuid::Uuid, String, bool, i64)>> {
         let pins = &self.profile_state.profile().favorite_room_ids;
         if pins.len() < 2 {
             return None;
         }
         let catalog = self.chat.favorite_room_options();
         let active = self.dashboard_active_room_id();
-        let pills: Vec<(uuid::Uuid, String, bool)> = pins
+        let pills: Vec<(uuid::Uuid, String, bool, i64)> = pins
             .iter()
             .filter_map(|id| {
                 catalog
                     .iter()
                     .find(|option| option.id == *id)
-                    .map(|option| (option.id, option.label.clone(), Some(option.id) == active))
+                    .map(|option| {
+                        let unread = self
+                            .chat
+                            .unread_counts
+                            .get(&option.id)
+                            .copied()
+                            .unwrap_or(0);
+                        (
+                            option.id,
+                            option.label.clone(),
+                            Some(option.id) == active,
+                            unread,
+                        )
+                    })
             })
             .collect();
         // If membership churn leaves <2 resolvable pins, hide the strip
@@ -375,6 +441,7 @@ impl App {
     pub fn show_splash_for_tests(&mut self, hint: impl Into<String>) {
         self.show_splash = true;
         self.show_settings = false;
+        self.show_quit_confirm = false;
         self.splash_ticks = 1;
         self.splash_hint = hint.into();
     }
@@ -472,6 +539,9 @@ impl App {
             config.user_id,
             config.initial_chip_balance,
         );
+        let dartboard_server = config.dartboard_server.clone();
+        let dartboard_provenance = config.dartboard_provenance.clone();
+        let username = config.username.clone();
 
         let bonsai_state = if let Some(tree) = config.initial_bonsai_tree {
             crate::app::bonsai::state::BonsaiState::new(
@@ -512,8 +582,7 @@ impl App {
             Vec::new(),
             settings_modal::ui::MODAL_WIDTH,
         );
-
-        Ok(Self {
+        let mut app = Self {
             running: true,
             size: (cols, rows),
             screen: Screen::Dashboard,
@@ -522,6 +591,7 @@ impl App {
             show_splash: true,
             splash_ticks: 0,
             splash_hint,
+            show_quit_confirm: false,
             show_help: false,
             show_profile_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -564,7 +634,6 @@ impl App {
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
-                config.ai_model,
                 config.initial_theme_id,
             ),
             profile_modal_state: profile_modal::state::ProfileModalState::new(
@@ -574,7 +643,7 @@ impl App {
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
-            game_selection: 0,
+            game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             twenty_forty_eight_state,
             tetris_state,
@@ -583,6 +652,11 @@ impl App {
             solitaire_state,
             minesweeper_state,
             blackjack_state,
+            dartboard_state: None,
+            artboard_interacting: false,
+            dartboard_server,
+            dartboard_provenance,
+            username,
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
             pending_terminal_commands: Vec::new(),
@@ -592,7 +666,89 @@ impl App {
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
             last_terminal_bg: None,
-        })
+        };
+        if app.screen == Screen::Artboard {
+            app.enter_dartboard();
+        }
+        app.sync_visible_chat_room();
+        Ok(app)
+    }
+
+    /// Connect this session to the shared dartboard and install per-user
+    /// state. No-op if already connected (e.g. re-entering the game without
+    /// having left). Idempotent so input/render paths can call it without
+    /// bookkeeping.
+    pub(crate) fn enter_dartboard(&mut self) {
+        if self.dartboard_state.is_some() {
+            return;
+        }
+        let svc = crate::app::artboard::svc::DartboardService::new(
+            self.dartboard_server.clone(),
+            self.user_id,
+            &self.username,
+            self.dartboard_provenance.clone(),
+        );
+        self.dartboard_state = Some(crate::app::artboard::state::State::new(
+            svc,
+            self.username.clone(),
+            self.dartboard_provenance.clone(),
+        ));
+        self.set_cursor_shape(CURSOR_SHAPE_STEADY_UNDERLINE);
+    }
+
+    /// Drop this session's dartboard state. The underlying `LocalClient`'s
+    /// `Drop` impl fires `server.disconnect()`, freeing the color slot.
+    pub(crate) fn leave_dartboard(&mut self) {
+        if self.dartboard_state.is_none() {
+            return;
+        }
+        self.dartboard_state = None;
+        self.set_cursor_shape(CURSOR_SHAPE_STEADY_BLOCK);
+    }
+
+    pub(crate) fn activate_artboard_interaction(&mut self) {
+        self.enter_dartboard();
+        self.artboard_interacting = true;
+    }
+
+    pub(crate) fn deactivate_artboard_interaction(&mut self) {
+        self.artboard_interacting = false;
+        if let Some(state) = self.dartboard_state.as_mut() {
+            state.clear_local_state();
+            state.close_help();
+            state.close_glyph_picker();
+        }
+    }
+
+    pub(crate) fn set_screen(&mut self, screen: Screen) {
+        if self.screen == screen {
+            if screen == Screen::Artboard {
+                self.enter_dartboard();
+            }
+            self.sync_visible_chat_room();
+            return;
+        }
+
+        if self.screen == Screen::Artboard {
+            self.deactivate_artboard_interaction();
+            self.leave_dartboard();
+        }
+
+        self.screen = screen;
+
+        if self.screen == Screen::Chat {
+            self.chat.request_list();
+            self.chat.sync_selection();
+        }
+
+        if self.screen == Screen::Artboard {
+            self.enter_dartboard();
+        }
+        self.sync_visible_chat_room();
+    }
+
+    fn set_cursor_shape(&mut self, sequence: &[u8]) {
+        self.pending_terminal_commands.push(sequence.to_vec());
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
@@ -650,9 +806,11 @@ impl App {
         )
         .expect("failed to enter alt screen");
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
+        // 1003h = any-event mouse tracking (motion reports with or without a
+        // button held). Dartboard needs drag + hover parity with standalone.
         // 1006h = SGR extended encoding (ESC[< sequences instead of legacy X11)
         // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~)
-        buf.extend_from_slice(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h");
+        buf.extend_from_slice(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h");
         buf
     }
 
@@ -660,9 +818,11 @@ impl App {
         let mut buf = Vec::new();
         // 2004l = disable bracketed paste
         // 1006l = disable SGR mouse tracking
+        // 1003l = disable any-event mouse tracking
         // 1000l = disable basic mouse tracking
         // OSC 111 = reset terminal background color
-        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b]111\x1b\\");
+        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\");
+        buf.extend_from_slice(CURSOR_SHAPE_STEADY_BLOCK);
         crossterm::execute!(buf, cursor::Show, terminal::LeaveAlternateScreen)
             .expect("failed to leave alt screen");
         buf
@@ -759,5 +919,22 @@ mod tests {
             NotificationMode::from_format(Some("garbage")),
             NotificationMode::Both
         );
+    }
+
+    #[test]
+    fn leave_alt_screen_resets_cursor_shape() {
+        let bytes = App::leave_alt_screen();
+        assert!(
+            bytes
+                .windows(CURSOR_SHAPE_STEADY_BLOCK.len())
+                .any(|w| w == CURSOR_SHAPE_STEADY_BLOCK),
+            "expected steady block cursor reset in shutdown bytes, got: {bytes:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_shape_sequences_match_expected_descusr_codes() {
+        assert_eq!(CURSOR_SHAPE_STEADY_BLOCK, b"\x1b[2 q");
+        assert_eq!(CURSOR_SHAPE_STEADY_UNDERLINE, b"\x1b[4 q");
     }
 }

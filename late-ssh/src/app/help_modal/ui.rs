@@ -51,8 +51,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
     );
 
     let footer = Line::from(vec![
-        Span::styled("  ←/→ h/l", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" switch slides  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("  Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
@@ -65,11 +65,12 @@ fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTopic) {
     let mut spans = vec![Span::raw("  ")];
     for topic in HelpTopic::ALL {
         let active = topic == selected;
+        let active_style = Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_HIGHLIGHT())
+            .add_modifier(Modifier::BOLD);
         let style = if active {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .bg(theme::BG_HIGHLIGHT())
-                .add_modifier(Modifier::BOLD)
+            active_style
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };

@@ -142,6 +142,55 @@ install_target_dir() {
   fi
 }
 
+shell_rc_path() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+
+  case "$shell_name" in
+    zsh)
+      if [[ -f "${HOME}/.zprofile" || ! -f "${HOME}/.zshrc" ]]; then
+        printf '%s\n' "${HOME}/.zprofile"
+      else
+        printf '%s\n' "${HOME}/.zshrc"
+      fi
+      ;;
+    bash)
+      if [[ -f "${HOME}/.bash_profile" || ! -f "${HOME}/.bashrc" ]]; then
+        printf '%s\n' "${HOME}/.bash_profile"
+      else
+        printf '%s\n' "${HOME}/.bashrc"
+      fi
+      ;;
+    *)
+      printf '%s\n' "${HOME}/.profile"
+      ;;
+  esac
+}
+
+ensure_path_in_shell_rc() {
+  local target_dir="$1"
+  local rc_file path_line
+
+  rc_file="$(shell_rc_path)"
+  path_line="export PATH=\"${target_dir}:\$PATH\""
+
+  mkdir -p "$(dirname "$rc_file")"
+  touch "$rc_file"
+
+  if grep -Fqs "$path_line" "$rc_file"; then
+    log "PATH entry already present in ${rc_file}"
+    return
+  fi
+
+  {
+    printf '\n'
+    printf '# Added by late installer\n'
+    printf '%s\n' "$path_line"
+  } >>"$rc_file"
+
+  log "added ${target_dir} to PATH in ${rc_file}"
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -229,7 +278,11 @@ main() {
     *":${target_dir}:"*)
       ;;
     *)
-      log "warning: ${target_dir} is not currently on PATH"
+      if [[ "${EUID:-$(id -u)}" -ne 0 ]] && ! is_termux; then
+        ensure_path_in_shell_rc "$target_dir"
+      else
+        log "warning: ${target_dir} is not currently on PATH"
+      fi
       ;;
   esac
 

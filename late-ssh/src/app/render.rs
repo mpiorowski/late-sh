@@ -6,20 +6,21 @@ use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::Style,
+    style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Clear},
 };
 
 use late_core::models::leaderboard::LeaderboardData;
 
 use super::{
-    chat,
+    artboard, chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
-        sidebar::{SidebarProps, draw_sidebar},
+        sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
     },
-    dashboard, help_modal, icon_picker, profile, profile_modal, settings_modal,
+    dashboard, help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
     state::{App, NotificationMode},
     visualizer::Visualizer,
 };
@@ -91,7 +92,6 @@ struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
-    profile_view: profile::ui::ProfileRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
@@ -101,10 +101,13 @@ struct DrawContext<'a> {
     solitaire_state: &'a crate::app::games::solitaire::state::State,
     minesweeper_state: &'a crate::app::games::minesweeper::state::State,
     blackjack_state: &'a crate::app::games::blackjack::state::State,
+    dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
+    sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     activity: &'a std::collections::VecDeque<crate::state::ActivityEvent>,
@@ -114,6 +117,7 @@ struct DrawContext<'a> {
     show_games_sidebar: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
+    show_quit_confirm: bool,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_help: bool,
@@ -190,6 +194,7 @@ impl App {
         let banner = self.active_banner().cloned();
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
+        let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let now_playing_text = now_playing.as_ref().map(|np| np.track.to_string());
         let vote_next_switch_in = vote_snapshot
             .next_switch_in
@@ -224,6 +229,7 @@ impl App {
                 message_reactions,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
+                reaction_picker_active: self.chat.is_reaction_leader_active(),
                 composer: self.chat.composer(),
                 composing: self.chat.composing,
                 mention_matches: &self.chat.mention_ac.matches,
@@ -263,6 +269,7 @@ impl App {
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
+            reaction_picker_active: self.chat.is_reaction_leader_active(),
             highlighted_message_id: self.chat.highlighted_message_id,
             composer: self.chat.composer(),
             composing: self.chat.composing,
@@ -280,24 +287,6 @@ impl App {
             notifications_selected: self.chat.notifications_selected,
             notifications_unread_count: self.chat.notifications.unread_count(),
             notifications_view,
-        };
-        // Update viewport height for profile scroll (content area = total - borders)
-        let profile_viewport_h = area.height.saturating_sub(2);
-        self.profile_state.set_viewport_height(profile_viewport_h);
-        let user_streak = self
-            .leaderboard
-            .user_streaks
-            .get(&self.user_id)
-            .copied()
-            .unwrap_or(0);
-        let profile_view = profile::ui::ProfileRenderInput {
-            profile: self.profile_state.profile(),
-            ai_model: self.profile_state.ai_model(),
-            scroll_offset: self.profile_state.scroll_offset(),
-            current_streak: user_streak,
-            chip_balance: self.chip_balance,
-            tetris_best: self.tetris_state.best_score,
-            twenty_forty_eight_best: self.twenty_forty_eight_state.best_score,
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
@@ -318,7 +307,6 @@ impl App {
                         connect_url: self.connect_url.as_str(),
                         dashboard_view,
                         chat_view,
-                        profile_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
@@ -328,10 +316,13 @@ impl App {
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
                         blackjack_state: &self.blackjack_state,
+                        dartboard_state: self.dartboard_state.as_ref(),
+                        artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client_state.as_ref(),
+                        sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
                         activity: &self.activity,
@@ -341,6 +332,7 @@ impl App {
                         show_games_sidebar,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
+                        show_quit_confirm: self.show_quit_confirm,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
                         show_help: self.show_help,
@@ -491,7 +483,7 @@ impl App {
         }
 
         let block = Block::default()
-            .title(" late.sh ")
+            .title(app_frame_title(screen, &ctx))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
@@ -512,7 +504,11 @@ impl App {
                 dashboard::ui::draw_dashboard(frame, content_area, ctx.dashboard_view)
             }
             Screen::Chat => chat::ui::draw_chat(frame, content_area, ctx.chat_view),
-            Screen::Profile => profile::ui::draw_profile(frame, content_area, &ctx.profile_view),
+            Screen::Artboard => {
+                if let Some(state) = ctx.dartboard_state {
+                    artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
+                }
+            }
             Screen::Games => crate::app::games::ui::draw_games_hub(
                 frame,
                 content_area,
@@ -549,6 +545,7 @@ impl App {
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
+                    clock_text: ctx.sidebar_clock,
                 },
             );
         }
@@ -597,6 +594,10 @@ impl App {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state);
         }
 
+        if ctx.show_quit_confirm {
+            quit_confirm::ui::draw(frame, inner);
+        }
+
         if ctx.show_web_chat_qr
             && let Some(url) = ctx.web_chat_qr_url
         {
@@ -614,6 +615,65 @@ impl App {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
     }
+}
+
+fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        " late.sh ",
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    )];
+
+    let page_title = match screen {
+        Screen::Dashboard => "Dashboard",
+        Screen::Chat => "Chat",
+        Screen::Games => "The Arcade",
+        Screen::Artboard => "Artboard",
+    };
+    spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
+    spans.push(Span::styled(
+        format!("{page_title} "),
+        Style::default().fg(theme::TEXT_MUTED()),
+    ));
+
+    if screen == Screen::Artboard {
+        spans.push(Span::styled(
+            "by @mevanlc ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        let hints: &[(&str, &str)] = if ctx.artboard_interacting {
+            &[
+                ("active", "draw"),
+                ("Esc", "view"),
+                ("Ctrl+\\", "owners"),
+                ("Ctrl+P", "help"),
+            ]
+        } else {
+            &[
+                ("view", "pan"),
+                ("Alt+arrows", "pan"),
+                ("R-drag", "pan"),
+                ("i", "edit"),
+                ("Ctrl+\\", "owners"),
+            ]
+        };
+        for (key, desc) in hints {
+            spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
+            spans.push(Span::styled(
+                *key,
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                format!(" {desc} "),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
+    Line::from(spans)
 }
 
 #[cfg(test)]

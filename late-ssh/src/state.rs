@@ -1,4 +1,5 @@
 use crate::app::ai::svc::AiService;
+use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
@@ -64,6 +65,8 @@ pub struct State {
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
     pub blackjack_service: BlackjackService,
+    pub dartboard_server: dartboard_local::ServerHandle,
+    pub dartboard_provenance: SharedArtboardProvenance,
     pub leaderboard_service: LeaderboardService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,

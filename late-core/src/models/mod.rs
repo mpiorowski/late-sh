@@ -1,3 +1,4 @@
+pub mod artboard;
 pub mod article;
 pub mod article_feed_read;
 pub mod bonsai;

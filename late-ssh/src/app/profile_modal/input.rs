@@ -1,4 +1,7 @@
-use crate::app::{input::ParsedInput, state::App};
+use crate::app::{
+    input::{MouseEventKind, ParsedInput},
+    state::App,
+};
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
     if is_close_event(&event) {
@@ -17,7 +20,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Arrow(b'A') => {
             app.profile_modal_state.scroll_by(-1);
         }
-        ParsedInput::Scroll(delta) => app.profile_modal_state.scroll_by((-delta * 3) as i16),
+        ParsedInput::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => app.profile_modal_state.scroll_by(-3),
+            MouseEventKind::ScrollDown => app.profile_modal_state.scroll_by(3),
+            _ => {}
+        },
         ParsedInput::PageDown => {
             let step = (app.size.1 / 2).max(1) as i16;
             app.profile_modal_state.scroll_by(step);

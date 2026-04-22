@@ -19,6 +19,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         app.dashboard_g_prefix_armed = false;
         if (b'1'..=b'9').contains(&byte) {
             app.jump_dashboard_favorite((byte - b'1') as usize);
+            app.sync_visible_chat_room();
             return true;
         }
         // Any non-digit disarms and continues through normal handling so
@@ -32,14 +33,17 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
 
     if byte == b'[' {
         app.cycle_dashboard_favorite(-1);
+        app.sync_visible_chat_room();
         return true;
     }
     if byte == b']' {
         app.cycle_dashboard_favorite(1);
+        app.sync_visible_chat_room();
         return true;
     }
     if byte == b',' {
         app.toggle_dashboard_last_favorite();
+        app.sync_visible_chat_room();
         return true;
     }
 

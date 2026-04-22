@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-21
+- Last updated: 2026-04-22 (Artboard ownership provenance + Esc/view-mode fix)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, Profile, The Arcade), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..5` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), and configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on.
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, The Arcade, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..5` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), a dedicated shared multi-user ASCII artboard screen, and configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` now opens a quit-confirm modal; pressing `q` again exits and `Esc` dismisses it. `@bot` mention replies now receive compact context about online non-bot members in the active room (username plus optional bio/country/timezone, capped and truncated for prompt size).
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -430,6 +430,172 @@ Current invariants:
 - The CLI currently requires a working local audio output device to fully start.
 - Native SSH is now the default launcher path; `--ssh-mode old` remains the compatibility fallback. Native mode requires a server that supports the `late-cli-token-v1` SSH exec handshake.
 
+### 2.10 Artboard (Shared ASCII Canvas) [STABLE]
+
+`Artboard` is the user-facing name. The code and upstream crates still use `dartboard` heavily (`src/dartboard.rs`, `app/artboard/svc.rs`, `dartboard_core`, `dartboard_local`, `dartboard_editor`, `dartboard_tui`). When searching the repo, use both terms.
+
+#### High-level model
+
+- The artboard is a shared, persistent, multiplayer ASCII canvas on its own top-level app screen (`4`, or cycle with `Tab` / `Shift+Tab`).
+- The server owns one in-proc `dartboard_local::ServerHandle` for the whole `late-ssh` process.
+- The canonical canvas size is `384 x 192` (`late-ssh/src/dartboard.rs`).
+- A user does **not** connect to the shared board at SSH login. They only consume a peer/color slot after opening the Artboard screen.
+- Entering the Artboard screen opens in `view` mode; `i` / `Enter` switches into `active` edit mode.
+- Leaving the Artboard screen drops that session's `LocalClient` and frees the slot immediately.
+
+```mermaid
+flowchart LR
+    Nav["Screen 4 / Tab"] --> Page["App::set_screen(Screen::Artboard)"]
+    Page --> Enter["App::enter_dartboard()"]
+    Enter --> Svc["DartboardService::new()"]
+    Svc --> Client["dartboard_local::LocalClient<br/>per session"]
+    Client <-->|CanvasOp / ServerMsg| Server["Shared ServerHandle<br/>process-wide"]
+    Server --> Snap["watch::Receiver<DartboardSnapshot>"]
+    Server --> Events["broadcast::Receiver<DartboardEvent>"]
+    Snap --> State["artboard::state::State"]
+    Events --> State
+    State --> UI["artboard::ui + render loop"]
+    Server --> Persist["Postgres snapshot persistence"]
+```
+
+#### Runtime split: authoritative shared state vs local editor state
+
+Only canvas mutations are shared. Editor affordances stay local to the current SSH session.
+
+**Shared / authoritative**
+- Canvas contents
+- Peer list
+- Assigned user color
+- Sequence number / ack progress
+- Connect rejection state
+- Per-cell authorship (provenance) — map of `Pos -> username`, kept in `late-ssh/src/app/artboard/provenance.rs`. Surfaces through the ownership overlay and the Info sidebar's `Owner` / `Cell` rows.
+
+**Local / session-private**
+- Cursor and viewport origin
+- Active selection anchor
+- Floating brush / floating selection preview
+- Swatch strip contents + pin state
+- Temporary sampled glyph brush
+- Help overlay tab + scroll
+- Glyph picker search state
+- Private notice text
+
+This split is intentional: the multiplayer protocol syncs `CanvasOp`s, not full editor sessions. Two users can have completely different local selections/swatches while painting into the same shared board.
+
+#### Connection and service lifecycle
+
+1. `late-ssh/src/main.rs` loads the last persisted artboard snapshot from Postgres on server boot, then spawns the persistent in-proc dartboard server.
+2. `SessionConfig` carries the shared `dartboard_server` handle and shared provenance store into each SSH app instance.
+3. `App::set_screen(Screen::Artboard)` lazily calls `App::enter_dartboard()`, creating a per-user `DartboardService` and `artboard::state::State`, and switching the terminal cursor to steady underline.
+4. `DartboardService` calls `ServerHandle::try_connect_local(...)`. On success it spawns a dedicated OS thread that:
+   - polls a local command channel every ~16ms
+   - submits `CanvasOp`s to the shared server
+   - drains `ServerMsg`s into a `watch` snapshot plus `broadcast` event stream
+   - resolves broadcast writers to usernames and updates the shared provenance map
+5. `App::tick()` calls `dartboard_state.tick()` when present, which refreshes the local snapshot, updates cursor clamping, and surfaces rejection/lag notices.
+6. `App::leave_dartboard()` drops the local state and restores the normal block cursor.
+
+Important operational note:
+- Connection overflow is handled at connect time. The upstream server enforces a hard player cap (`dartboard_local::MAX_PLAYERS`); an overflow session gets `connect_rejected` instead of a live board connection.
+
+#### Persistence model
+
+- Runtime helper: `late-ssh/src/dartboard.rs`
+- Snapshot row model: `late_core::models::artboard::Snapshot`
+- Board key: `Snapshot::MAIN_BOARD_KEY`
+
+Persistence behavior:
+- The shared server boots from the last saved snapshot if one exists; otherwise it starts with a blank `384 x 192` canvas.
+- Canvas saves are coalesced and persisted in the background every 5 minutes while dirty.
+- Provenance is persisted alongside the canvas in `artboard_snapshots.provenance` as JSONB. The minimal schema is username-based (`Pos -> username`), not stable user UUIDs.
+- Shutdown/drain explicitly flushes the latest in-memory artboard snapshot before process exit.
+- Tests cover both periodic persistence and explicit flush-on-demand (`late-ssh/tests/games/artboard.rs`).
+
+#### Interaction model
+
+The artboard is keyboard-first, but it is not "just type into a grid". It layers a local editor model on top of the shared canvas and now has two interaction modes:
+
+- `view` mode: inspect the board, move the cursor/viewport, and keep global page switching (`1-4`, `Tab`, `Shift+Tab`) available.
+- `active` mode: edit the board. Single-key global shortcuts are suppressed so typing goes to the canvas/editor.
+
+```text
+type chars -> draw directly
+select region -> copy/cut -> swatch
+activate swatch -> floating brush
+Enter / ^V -> stamp brush
+^⇧+arrows -> stroke floating brush
+Esc -> dismiss brush/floating first, then clear selection
+```
+
+Key behaviors:
+- Artboard opens in `view` mode.
+- In `view` mode, arrows/Home/End/PageUp/PageDown move around the board without entering draw mode.
+- `i` or `Enter` enters `active` mode.
+- Plain typing draws directly at the cursor.
+- Typing space erases at the cursor.
+- `Shift+arrows` starts/extends a selection.
+- Mouse drag participates in the same editor selection/pointer model.
+- `Ctrl+C` / `Ctrl+X` copy or cut the current selection into the swatch strip.
+- Clicking a swatch body, or using `Ctrl+A / Ctrl+S / Ctrl+D / Ctrl+F / Ctrl+G`, activates swatch slots `1..5` as a floating brush.
+- Activating the currently active swatch again toggles floating-brush transparency.
+- `Enter` or `Ctrl+V` stamps the active floating brush without dismissing it.
+- `Ctrl+Shift+arrows` strokes a floating brush from the keyboard.
+- `Ctrl+]` opens the glyph picker for emoji / Unicode glyph insertion.
+- Double-clicking an existing non-space cell samples it into a temporary one-glyph brush.
+- `Ctrl+P` toggles the help overlay.
+- `Ctrl+\` toggles the ownership overlay. When on, cells render as per-author initials tinted by a deterministic username color derived from the provenance map.
+- The Info sidebar always shows `Owner` and `Cell` for the current cursor/hover subject. The overlay only changes canvas rendering.
+- `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in `active` mode, and only falls back to `view` mode once there is no local editor state left to dismiss.
+
+Mouse-specific extras:
+- Click swatch pin icon to pin/unpin a swatch.
+- `Ctrl+click` a swatch body clears that swatch slot.
+- Mouse wheel pans the viewport when the pointer is over the canvas.
+- Mouse wheel over the info overlay is intentionally swallowed so it does not pan the board underneath.
+
+#### Keyboard reference
+
+| Action | Keys / Mouse | Notes |
+| --- | --- | --- |
+| Open Artboard | `4`, `Tab`, `Shift+Tab` | Dedicated top-level screen; entering it also connects a local client |
+| Move around in view mode | `←↑↓→`, `Home`, `End`, `PgUp`, `PgDn`, mouse wheel | Lets users inspect/pan without entering draw mode |
+| Enter active mode | `i`, `Enter` | Switches the screen from inspect to edit |
+| Draw / erase in active mode | `<type>`, `Space`, `Backspace`, `Delete` | Plain typing edits the shared canvas |
+| Select | `Shift+arrows`, mouse drag | Local selection only |
+| Copy / cut to swatch | `Ctrl+C`, `Ctrl+X` | Fills swatch strip; does not sync to peers |
+| Activate swatch brush | click swatch, `Ctrl+A/S/D/F/G` | Slots `1..5` on the home row |
+| Stamp floating brush | `Enter`, `Ctrl+V` | Brush stays active |
+| Stroke floating brush | `Ctrl+Shift+arrows` | Repeated stamps while moving |
+| Toggle brush transparency | activate same swatch again | Floating preview shows transparency state |
+| Glyph picker | `Ctrl+]` | Searchable emoji / Unicode picker |
+| Help | `Ctrl+P` | Four-tab overlay (Overview / Drawing / Brushes / Session), authored in-project under `artboard/data.rs`. `Tab` / `Shift+Tab` switches tabs, `j` / `k` / arrows scroll. |
+| Ownership overlay | `Ctrl+\` | Recolors cells by author initials; `Owner` / `Cell` rows stay visible in the Info sidebar either way. Backed by `provenance.rs`. |
+| Return to view mode | `Esc` | Also closes help / glyph-picker before exiting edit mode |
+| Leave Artboard page | `1-4`, `Tab`, `Shift+Tab` | Available from `view` mode |
+
+#### UI and integration notes
+
+- Artboard now lives under `late-ssh/src/app/artboard/`, not `app/games/artboard/`.
+- The Artboard screen has its own renderer and does **not** use the generic game frame/sidebar layout used by the arcade games.
+- The screen chrome exposes `view` vs `active` mode explicitly in both the frame title and the Artboard info sidebar.
+- The artboard info sidebar shows cursor position, `Owner`, `Cell`, pan availability, brush status, current selection size, and connected peers.
+- The Artboard help overlay mirrors the global help modal style: single-row tabs, TitleCase labels, Amber active chip, `Tab` / `Shift+Tab` switches tabs, `j` / `k` / arrows scroll. Copy lives in `artboard/data.rs` (not pulled from upstream keymap).
+- Tab-switching keybindings were unified across modals: both the global help modal and the settings modal use `Tab` / `Shift+Tab` as the canonical tab switcher; arrow/hl routing was dropped from the help modals.
+- In `view` mode, global page switching stays live; in `active` mode, single-key global shortcuts are intentionally suppressed so the editor owns typing.
+- The global app quit-confirm still exists, but `Esc` is reserved for backing Artboard from overlay -> view mode before any screen change.
+#### Key files
+
+- `late-ssh/src/dartboard.rs` — process-wide server + persistence wrapper
+- `late-ssh/src/app/artboard/svc.rs` — per-session client/service bridge
+- `late-ssh/src/app/artboard/state.rs` — local editor/session state
+- `late-ssh/src/app/artboard/input.rs` — keyboard/mouse routing for active mode
+- `late-ssh/src/app/artboard/page.rs` — dedicated-screen routing for view vs active mode
+- `late-ssh/src/app/artboard/ui.rs` — canvas/sidebar/help/swatch rendering
+- `late-ssh/src/app/artboard/data.rs` — hand-authored help text for the 4 help tabs
+- `late-ssh/src/app/artboard/provenance.rs` — per-cell authorship map + ownership overlay source of truth
+- `late-ssh/tests/games/artboard.rs` — service + persistence integration tests
+- `late-ssh/src/app/input.rs`, `late-ssh/src/app/tick.rs`, `late-ssh/src/app/render.rs` — SSH app integration points
+
 ---
 
 ## 3. File Tree (Curated) [STABLE]
@@ -554,7 +720,7 @@ late-sh/
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Chat`, `Games`, `Profile` (cycle: `Dashboard -> Chat -> Games -> Profile -> Dashboard`; News and Mentions are synthetic room-like entries within Chat, not separate screens, each with their own persisted unread state)
+- `Screen`: `Dashboard`, `Chat`, `Games` (cycle: `Dashboard -> Chat -> Games -> Dashboard`; News and Mentions are synthetic room-like entries within Chat, not separate screens, each with their own persisted unread state)
 - `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 
@@ -849,8 +1015,8 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Bonsai cut changes seed optimistically:** The `cut()` method updates `self.seed` in memory immediately and fires a background DB task. If the DB write fails, the in-memory seed diverges from persisted until next login.
 - **Help modal (`?`) intercepts all input:** When `show_help` is true, the input handler dismisses the modal on any keypress before any other input processing. This includes `?` itself (toggle off) and `Esc`.
 - **Desktop notifications bypass the frame diff:** OSC 777 (kitty/Ghostty/rxvt-unicode/foot/wezterm/konsole/mlterm) and OSC 9 (iTerm2) payloads are written to `App::pending_terminal_commands`, not into the ratatui frame. `late-ssh::ssh::render_once` drains that buffer **after** pushing the frame diff and sends each payload as a separate `handle.data` call. Writing them inline with `write!(self.shared, …)` would slip them into the diff and get re-emitted on every redraw. Same rule applies to OSC 52 clipboard copies. The session emits an XTVERSION probe (`CSI > q`) alongside the other alt-screen setup bytes and narrows `App::notification_mode` (`Both` → `Osc777` | `Osc9`) from the DCS reply (`ESC P > | <name>(<version>) ST`) — kitty/wezterm/ghostty/foot/konsole/rxvt-unicode/mlterm land on `Osc777`, iTerm2 on `Osc9`, and unknown/non-responding terminals stay on `Both` (prior behavior). Replies are spliced out of the raw byte stream **before** the splash short-circuit so the leading `ESC` doesn't dismiss the splash (`input::extract_xtversion_replies`); the `vte::Parser` DCS path (`hook`/`put`/`unhook`) catches the same reply again after splash and `App::set_terminal_version` is idempotent, so the double-path is intentional.
-- **Notification pipeline is kind-tagged and throttled server-side:** `ChatState::pending_notifications` holds `PendingNotification { kind: &'static str, title, body }` entries drained each render. `render.rs` picks the first pending whose `kind` is in `users.settings.notify_kinds` and honors the shared `notify_cooldown_mins` via `App::last_notify_at`. Adding a new kind means: (1) append to `ProfileState::NOTIFY_KINDS`, (2) add a row in `profile/ui.rs` `kinds` tuple, (3) enqueue it from the relevant event handler, (4) update the unit test `notify_kinds_constant_matches_ui_expectations` in `profile/state.rs`. No tmux DCS wrapping — tmux is explicitly unsupported.
-- **Profile notifications default to all-off:** Migration 026 merges profile fields into `users.settings` with `notify_kinds = []` and `notify_cooldown_mins = 0`. `render.rs` only fires if the kind string is present in the user's array, so a brand-new account is silent until they opt in on the profile screen. A focus-tracking `"unfocused"` policy used to exist (DEC mode 1004) but was removed — `notify_kinds` is the whole model now.
+- **Notification pipeline is kind-tagged and throttled server-side:** `ChatState::pending_notifications` holds `PendingNotification { kind: &'static str, title, body }` entries drained each render. `render.rs` picks the first pending whose `kind` is in `users.settings.notify_kinds` and honors the shared `notify_cooldown_mins` via `App::last_notify_at`. Adding a new kind means: (1) add a matching toggle row in the settings modal UI/state, (2) enqueue it from the relevant event handler, and (3) update the render-side matcher/tests that assume the current `"dms" | "mentions" | "game_events"` set. No tmux DCS wrapping — tmux is explicitly unsupported.
+- **Profile notifications default to all-off:** Migration 026 merges profile fields into `users.settings` with `notify_kinds = []` and `notify_cooldown_mins = 0`. `render.rs` only fires if the kind string is present in the user's array, so a brand-new account is silent until they opt in through the settings modal. A focus-tracking `"unfocused"` policy used to exist (DEC mode 1004) but was removed — `notify_kinds` is the whole model now.
 - **`Profile` is a view, not a table:** Migration 026 dropped the `profiles` table — username + notify settings + theme now live on `users` (column + `settings` JSONB). `late_core::models::profile::Profile` is a projection loaded via `Profile::load(client, user_id)` and saved via `Profile::update(client, user_id, params)`, which merges into `settings` with `settings || jsonb_build_object(...)` to preserve unrelated keys (theme_id, ignored_user_ids) under concurrent writes.
 
 ---
@@ -882,13 +1048,15 @@ Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI
 ### D. Per-user 10s refresh does heavy work for everyone, every cycle
 - `list_chat_rooms` (`late-ssh/src/app/chat/svc.rs:179`) runs every 10s per session and unconditionally fetches:
   - room membership + unread counts (`svc.rs:181`, `svc.rs:182`)
-  - up to 1000 messages for the active room (`svc.rs:191`)
-  - up to 1000 messages for `#general` (`svc.rs:196`) — **even when the user isn't on the dashboard**
+  - up to 1000 messages for the active room
+  - up to 1000 messages for `#general` — **even when the user isn't on the dashboard**
+  - up to 1000 messages for joined pinned favorites so dashboard quick-switch rooms are always fully hydrated on snapshot load
   - all usernames (`svc.rs:209`) — global, identical for everyone
   - all bonsai trees (`svc.rs:213`) — global, identical for everyone
   - per-user ignored list
 - At 60 users that's ~120 list_recent calls / 10s shipping ~12k+ rows/sec from PG just for the warm-tail refresh.
-- **Direction:** drop `HISTORY_LIMIT` to ~200 (no human reads back 1000), let general's tail be cached once in `ChatService` (broadcasts already keep it warm), only fetch the *selected* non-general room per-user.
+- **Constraint learned from dashboard favorites:** do **not** optimize this by guessing hydration from local room state like `messages.is_empty()`. Non-active rooms can receive live `MessageCreated` / `DeltaSynced` events before their historical backlog is ever fetched, so "non-empty" does not mean "fully hydrated". Any future perf cut must preserve a real snapshot/backlog contract for rooms the UI can immediately show (today: active room, `#general`, joined pinned favorites).
+- **Direction:** drop `HISTORY_LIMIT` to ~200 (no human reads back 1000), let general's tail be cached once in `ChatService` (broadcasts already keep it warm), and if needed split "initial/UI-visible preload set" from the steady-state 10s refresh scope. Reduce query volume without reintroducing local-state hydration heuristics.
 - Refresh task itself stays — it's load-bearing for dropped-broadcast recovery (lagged `MessageCreated`/`MessageEdited`); only the global queries and the volume move out.
 
 ### E. Unread-count query may get painful as message volume grows
@@ -994,6 +1162,49 @@ ORDER BY m.created DESC
 LIMIT 20;"
 ```
 
+### 10.2.1 Production DB access
+
+Production Postgres runs as a CloudNativePG cluster in Kubernetes.
+
+Keep this public doc generic: discover the current service name, secret name, DB name, and DB user from the live cluster or Terraform instead of hardcoding them here.
+
+Fastest working path is to run `psql` from inside a Postgres pod and connect over TCP to the read-write service using credentials from the generated CNPG secret.
+
+```bash
+# 1. Find a Postgres pod
+kubectl get pods -n default
+
+# 2. Inspect the app deployment / infra to discover:
+#    - read-write DB service host
+#    - secret name holding DB credentials
+#    - secret keys for user/password/dbname
+
+# 3. Decode generated credentials from the discovered secret
+kubectl get secret -n default <db-secret> -o jsonpath='{.data.user}' | base64 -d; echo
+kubectl get secret -n default <db-secret> -o jsonpath='{.data.password}' | base64 -d; echo
+kubectl get secret -n default <db-secret> -o jsonpath='{.data.dbname}' | base64 -d; echo
+
+# 4. Run a query from inside the pod (replace placeholders)
+kubectl exec -n default <postgres-pod> -- \
+  env PGPASSWORD='<password>' \
+  psql -h <rw-service> -U <db-user> -d <db-name> -c "select 1;"
+```
+
+Useful example: chat rooms use `slug`, not `name`.
+
+```bash
+kubectl exec -n default <postgres-pod> -- \
+  env PGPASSWORD='<password>' \
+  psql -h <rw-service> -U <db-user> -d <db-name> -c \
+  "select id, kind, visibility, slug, permanent from chat_rooms where lower(coalesce(slug, '')) = 'suggestions';"
+```
+
+Notes:
+
+- Do not use `psql -U <db-user>` over the pod-local socket without `-h <rw-service>`; peer auth inside the container can fail even when TCP auth works.
+- For ad hoc prod inspection, prefer read-only `SELECT` queries.
+- If the obvious pod name is unavailable, use any live CNPG Postgres pod.
+
 ### 10.3 Testing
 
 ```bash
@@ -1025,7 +1236,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
 | **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/settings`, `/help`) with grouped room sections and synthetic `news`, `mentions`, and `discover` entries in the room list. `discover` shows public rooms you have not joined yet with member/message counts; Enter joins the selected room. `/public #room` opens or creates an opt-in public room and joins only the caller. |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Profile** | 4 | Active | Read-only public identity card: username, country, timezone, optional `Current time` (derived from timezone when parseable), bio, Your Stats (streak + badge, chips, high scores), @bot/@graybeard info. Bio is wrapped at the same width the modal editor uses (`settings_modal::ui::bio_text_width(MODAL_WIDTH)`) via `build_composer_rows`, so pasted URLs fold instead of running off-screen. All editing happens in the **profile/settings modal** (auto-opens on first login, reopen via global `Ctrl+O` or `/settings`) — sectioned into Identity / Appearance / Notifications / Location. The Appearance section now includes theme, terminal background color, the global right sidebar toggle, and the arcade leaderboard sidebar toggle; theme/background/sidebar preview live from the draft while the modal is open. Bio is an inline full-width bordered editor under the Identity heading (encouraging people to share site / GitHub / socials); it accepts bracketed-paste so URLs drop in whole. Selecting a chat message and pressing `p` opens a separate read-only **profile modal** for that author; it shows the same public identity summary, supports `j/k` or arrows for scroll, and is slightly wider than the first revision. |
+| **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 
 ### Layout
 
@@ -1056,22 +1267,21 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-Toast notification is hidden by default (0 rows). When active, it appears as a 3-row bordered block (green for success, red for error) at the **top-right** of the content area. The profile/settings overlay renders on top of the toast.
+Toast notification is hidden by default (0 rows). When active, it appears as a 3-row bordered block (green for success, red for error) at the **top-right** of the content area. The settings overlay renders on top of the toast.
 
 ### Keyboard shortcuts
 
 | Key | Context | Action |
 |-----|---------|--------|
-| `q` / `Q` / `Ctrl+C` | Global | Quit |
-| `?` | Global (not composing) | Open help modal (multi-slide guide). Also works inside the profile/settings modal, which renders help on top while keeping the draft intact. |
-| `h` / `l` / `←` / `→` | Help modal | Switch slides (Overview / Chat / Music / News / Arcade / Bonsai / Profile / Architecture) |
+| `q` / `Q` | Global | Open quit confirm; pressing `q` again exits |
+| `?` | Global (not composing) | Open help modal (multi-slide guide). Also works inside the settings modal, which renders help on top while keeping the draft intact. |
+| `h` / `l` / `←` / `→` | Help modal | Switch slides (Overview / Chat / Music / News / Arcade / Bonsai / Settings / Architecture) |
 | `j` / `k` / `↑` / `↓` | Help modal | Scroll current slide (uncapped — past the last line is blank space) |
-| `?` / `q` / `Esc` | Help modal | Close (returns to underlying screen, including the profile/settings modal if it was open) |
+| `?` / `q` / `Esc` | Help modal | Close (returns to the underlying screen, including the settings modal if it was open) |
 | `Tab` | Global | Cycle screens |
 | `1` | Global | Jump to Dashboard |
 | `2` | Global | Jump to Chat |
 | `3` | Global | Jump to Games |
-| `4` | Global | Jump to Profile |
 | `m` | Global | Toggle mute on paired client |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
@@ -1127,17 +1337,17 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `/active` | Chat composer | List active SSH users from the in-memory session registry |
 | `/list` | Chat composer | List users in the selected non-auto-join ("private") room |
 | `/music` | Chat composer | Open music setup instructions in the same scrollable overlay flow as `/help` |
-| `/settings` | Chat composer | Open the profile/settings modal |
+| `/settings` | Chat composer | Open the settings modal |
 | `/ignore [@user]` | Chat composer | Mute a user, or list muted users when no arg |
 | `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
 | `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
 | `q` / `Esc` | Chat overlay (`/help`, ignore list) | Close overlay |
-| `Ctrl+O` | Global | Open the profile/settings modal from anywhere |
-| `↑` / `↓` / `j` / `k` | Profile/settings modal | Move between rows (Username, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
-| `←` / `→` | Profile/settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
-| `Space` / `Enter` / `e` | Profile/settings modal | Activate row — edit username/bio, cycle a setting, or open the country/timezone picker |
-| `Alt+Enter` | Profile/settings modal (bio editing) | Insert newline |
-| `?` | Profile/settings modal | Open help modal on top |
+| `Ctrl+O` | Global | Open the settings modal from anywhere |
+| `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
+| `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
+| `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/bio, cycle a setting, or open the country/timezone picker |
+| `Alt+Enter` | Settings modal (bio editing) | Insert newline |
+| `?` | Settings modal | Open help modal on top |
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |
 | `q` / `Esc` | Read-only profile modal | Close |
 | `Esc` | Any modal | Close/cancel |
