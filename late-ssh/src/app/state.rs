@@ -47,12 +47,6 @@ pub(crate) enum NotificationMode {
     Osc9,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DevtestJump {
-    Artboard,
-    Sudoku,
-}
-
 pub(crate) const GAME_SELECTION_2048: usize = 0;
 pub(crate) const GAME_SELECTION_TETRIS: usize = 1;
 pub(crate) const GAME_SELECTION_SUDOKU: usize = 2;
@@ -160,7 +154,6 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
-    pub devtest_jump: Option<DevtestJump>,
 
     /// Display config
     pub initial_theme_id: String,
@@ -589,18 +582,13 @@ impl App {
             Vec::new(),
             settings_modal::ui::MODAL_WIDTH,
         );
-        let (screen, show_settings, show_splash, game_selection) = match config.devtest_jump {
-            Some(DevtestJump::Artboard) => (Screen::Artboard, false, false, DEFAULT_GAME_SELECTION),
-            Some(DevtestJump::Sudoku) => (Screen::Games, false, false, GAME_SELECTION_SUDOKU),
-            None => (Screen::Dashboard, true, true, DEFAULT_GAME_SELECTION),
-        };
         let mut app = Self {
             running: true,
             size: (cols, rows),
-            screen,
+            screen: Screen::Dashboard,
             banner: None,
-            show_settings,
-            show_splash,
+            show_settings: true,
+            show_splash: true,
             splash_ticks: 0,
             splash_hint,
             show_quit_confirm: false,
@@ -655,7 +643,7 @@ impl App {
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
-            game_selection,
+            game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             twenty_forty_eight_state,
             tetris_state,

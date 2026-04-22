@@ -214,23 +214,16 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         }
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 10 || inner.width < 50 {
+    if area.height < 10 || area.width < 50 {
         frame.render_widget(
             Paragraph::new("Terminal too small for The Arcade").alignment(Alignment::Center),
-            inner,
+            area,
         );
         return;
     }
 
     // Two-column layout: game list (left) + leaderboard (right)
-    let (content_area, sidebar_area) = games_sidebar_layout(inner, view.show_sidebar);
+    let (content_area, sidebar_area) = games_sidebar_layout(area, view.show_sidebar);
 
     let show_header = content_area.height >= 25;
     let layout = if show_header {

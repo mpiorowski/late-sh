@@ -583,8 +583,6 @@ Mouse-specific extras:
 - Tab-switching keybindings were unified across modals: both the global help modal and the settings modal use `Tab` / `Shift+Tab` as the canonical tab switcher; arrow/hl routing was dropped from the help modals.
 - In `view` mode, global page switching stays live; in `active` mode, single-key global shortcuts are intentionally suppressed so the editor owns typing.
 - The global app quit-confirm still exists, but `Esc` is reserved for backing Artboard from overlay -> view mode before any screen change.
-- `LATE_DEVTEST_ENV=1` plus SSH login name `artboard` jumps directly into the Artboard screen in `view` mode (see `resolve_devtest_jump` in `late-ssh/src/ssh.rs`).
-
 #### Key files
 
 - `late-ssh/src/dartboard.rs` — process-wide server + persistence wrapper

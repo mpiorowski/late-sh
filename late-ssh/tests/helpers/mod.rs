@@ -23,7 +23,7 @@ use late_ssh::app::games::sudoku::svc::SudokuService;
 use late_ssh::app::games::tetris::svc::TetrisService;
 use late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::profile::svc::ProfileService;
-use late_ssh::app::state::{App, DevtestJump, SessionConfig};
+use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
 use late_ssh::config::{AiConfig, Config};
 use late_ssh::session::{PairControlMessage, PairedClientRegistry, SessionRegistry};
@@ -239,100 +239,12 @@ pub fn make_app_with_chat_service(
         active_users: None,
         activity_feed_rx: None,
         is_new_user: false,
-        devtest_jump: None,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "late".to_string(),
     })
     .expect("app");
     app.skip_splash_for_tests();
     (app, chat_service)
-}
-
-pub fn make_app_with_devtest_jump(
-    db: Db,
-    user_id: Uuid,
-    session_token: &str,
-    devtest_jump: DevtestJump,
-) -> App {
-    App::new(SessionConfig {
-        cols: 100,
-        rows: 32,
-        vote_service: VoteService::new(
-            db.clone(),
-            "127.0.0.1:0".to_string(),
-            Duration::from_secs(30 * 60),
-            Arc::new(Mutex::new(HashMap::new())),
-            broadcast::channel::<ActivityEvent>(64).0,
-        ),
-        chat_service: ChatService::new(db.clone(), NotificationService::new(db.clone())),
-        notification_service: NotificationService::new(db.clone()),
-        article_service: ArticleService::new(
-            db.clone(),
-            AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
-            ChatService::new(db.clone(), NotificationService::new(db.clone())),
-        ),
-        profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
-        twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
-        initial_2048_game: None,
-        initial_2048_high_score: None,
-        tetris_service: TetrisService::new(db.clone()),
-        initial_tetris_game: None,
-        initial_tetris_high_score: None,
-        sudoku_service: SudokuService::new(
-            db.clone(),
-            broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
-        ),
-        initial_sudoku_games: Vec::new(),
-        nonogram_service: NonogramService::new(
-            db.clone(),
-            broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
-        ),
-        initial_nonogram_games: Vec::new(),
-        solitaire_service: SolitaireService::new(
-            db.clone(),
-            broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
-        ),
-        initial_solitaire_games: Vec::new(),
-        minesweeper_service: MinesweeperService::new(
-            db.clone(),
-            broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
-        ),
-        initial_minesweeper_games: Vec::new(),
-        blackjack_service: BlackjackService::new(
-            ChipService::new(db.clone()),
-            broadcast::channel(64).0,
-            db.clone(),
-        ),
-        dartboard_server: test_dartboard_server(),
-        dartboard_provenance: test_dartboard_provenance(),
-        username: "test-user".to_string(),
-        bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
-        initial_bonsai_tree: None,
-        nonogram_library: NonogramLibrary::default(),
-        initial_chip_balance: 0,
-        leaderboard_rx: None,
-        web_url: "http://localhost:3000".to_string(),
-        session_token: session_token.to_string(),
-        session_registry: None,
-        paired_client_registry: None,
-        web_chat_registry: None,
-        session_rx: None,
-        now_playing_rx: None,
-        user_id,
-        is_admin: false,
-        my_vote: None,
-        active_users: None,
-        activity_feed_rx: None,
-        is_new_user: false,
-        devtest_jump: Some(devtest_jump),
-        is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        initial_theme_id: "late".to_string(),
-    })
-    .expect("app")
 }
 
 pub fn make_app_with_paired_client(
@@ -421,7 +333,6 @@ pub fn make_app_with_paired_client(
         active_users: None,
         activity_feed_rx: None,
         is_new_user: false,
-        devtest_jump: None,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "late".to_string(),
     })

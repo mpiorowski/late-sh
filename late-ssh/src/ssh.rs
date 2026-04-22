@@ -19,7 +19,7 @@ use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
-use crate::app::state::{App, DevtestJump, SessionConfig};
+use crate::app::state::{App, SessionConfig};
 use crate::metrics;
 use crate::state::{ActivityEvent, State};
 
@@ -69,7 +69,6 @@ struct ClientHandler {
     state: State,
     user: Option<User>,
     is_new_user: bool,
-    devtest_jump: Option<DevtestJump>,
 
     /// Connection metadata
     transport_peer_addr: Option<std::net::SocketAddr>,
@@ -276,7 +275,6 @@ impl Server {
             state: self.state.clone(),
             user: None,
             is_new_user: false,
-            devtest_jump: None,
             activity_feed_rx: None,
             transport_peer_addr,
             peer_addr: effective_peer_addr,
@@ -472,14 +470,6 @@ impl russh::server::Handler for ClientHandler {
                 }
             };
         self.is_new_user = is_new_user;
-        self.devtest_jump = resolve_devtest_jump(login_username, is_new_user);
-        if let Some(jump) = self.devtest_jump {
-            tracing::info!(
-                ?jump,
-                login_username,
-                "devtest jump enabled for existing user"
-            );
-        }
         if !self.active_user_incremented {
             let mut active_users = self.state.active_users.lock_recover();
 
@@ -737,7 +727,6 @@ impl russh::server::Handler for ClientHandler {
             // Voting
             my_vote,
             is_new_user: self.is_new_user,
-            devtest_jump: self.devtest_jump,
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
@@ -1182,25 +1171,6 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
     Ok((user, is_new_user))
 }
 
-fn resolve_devtest_jump(login_username: &str, is_new_user: bool) -> Option<DevtestJump> {
-    if is_new_user || !matches!(std::env::var("LATE_DEVTEST_ENV").as_deref(), Ok("1")) {
-        return None;
-    }
-
-    let username = login_username.trim().to_ascii_lowercase();
-    let stem = username
-        .split_once('@')
-        .map(|(left, _)| left)
-        .unwrap_or(&username);
-    if stem == "artboard" {
-        Some(DevtestJump::Artboard)
-    } else if stem == "sudoku" {
-        Some(DevtestJump::Sudoku)
-    } else {
-        None
-    }
-}
-
 fn late_ssh_theme_id(settings: &Value) -> String {
     extract_theme_id(settings).unwrap_or_else(|| "late".to_string())
 }
@@ -1216,9 +1186,6 @@ fn reject_publickey_only() -> Auth {
 mod tests {
     use super::*;
     use std::str::FromStr;
-    use std::sync::Mutex;
-
-    static LATE_DEVTEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn reject_publickey_only_advertises_only_publickey() {
@@ -1417,57 +1384,5 @@ mod tests {
             "world tick must beat the throttle branch under `biased` select"
         );
         assert!(!input_pending);
-    }
-
-    #[test]
-    fn resolve_devtest_jump_requires_existing_user_and_exact_env_value() {
-        let _guard = LATE_DEVTEST_ENV_LOCK.lock().expect("lock devtest env");
-        unsafe { std::env::remove_var("LATE_DEVTEST_ENV") };
-        assert_eq!(resolve_devtest_jump("artboard@test", false), None);
-
-        unsafe { std::env::set_var("LATE_DEVTEST_ENV", "") };
-        assert_eq!(resolve_devtest_jump("artboard@test", false), None);
-
-        unsafe { std::env::set_var("LATE_DEVTEST_ENV", "true") };
-        assert_eq!(resolve_devtest_jump("artboard@test", false), None);
-
-        unsafe { std::env::set_var("LATE_DEVTEST_ENV", "1") };
-        assert_eq!(
-            resolve_devtest_jump("artboard@test", false),
-            Some(DevtestJump::Artboard)
-        );
-        assert_eq!(
-            resolve_devtest_jump("sudoku@test", false),
-            Some(DevtestJump::Sudoku)
-        );
-        assert_eq!(resolve_devtest_jump("artboard@test", true), None);
-
-        unsafe { std::env::remove_var("LATE_DEVTEST_ENV") };
-    }
-
-    #[test]
-    fn resolve_devtest_jump_only_uses_incoming_ssh_login_name() {
-        let _guard = LATE_DEVTEST_ENV_LOCK.lock().expect("lock devtest env");
-        unsafe { std::env::set_var("LATE_DEVTEST_ENV", "1") };
-
-        assert_eq!(resolve_devtest_jump("joe@test", false), None);
-        assert_eq!(
-            resolve_devtest_jump("artboard", false),
-            Some(DevtestJump::Artboard)
-        );
-        assert_eq!(
-            resolve_devtest_jump("artboard@test", false),
-            Some(DevtestJump::Artboard)
-        );
-        assert_eq!(
-            resolve_devtest_jump("sudoku", false),
-            Some(DevtestJump::Sudoku)
-        );
-        assert_eq!(
-            resolve_devtest_jump("SUDOKU@test", false),
-            Some(DevtestJump::Sudoku)
-        );
-
-        unsafe { std::env::remove_var("LATE_DEVTEST_ENV") };
     }
 }
