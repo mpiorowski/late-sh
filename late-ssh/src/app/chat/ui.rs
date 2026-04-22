@@ -27,9 +27,10 @@ use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 5] = [1, 2, 3, 4, 5];
 
-fn contributor_badge_for_username(username: &str) -> Option<&'static str> {
+fn custom_badge_for_username(username: &str) -> Option<&'static str> {
     match username.trim().to_ascii_lowercase().as_str() {
-        "mevanlc" | "yawner" | "kirii.md" => Some(" 🔧"),
+        "mevanlc" | "yawner" => Some(" 🔧"),
+        "kirii.md" => Some(" 🎨"),
         _ => None,
     }
 }
@@ -429,7 +430,7 @@ fn ensure_chat_rows_cache(
         } else {
             format_username_with_country(msg.user_id, raw_author, ctx.countries)
         };
-        let contributor_badge = contributor_badge_for_username(raw_author).unwrap_or_default();
+        let contributor_badge = custom_badge_for_username(raw_author).unwrap_or_default();
         let is_bot = raw_author == "bot" || raw_author == "graybeard";
         let badge = if !is_bot {
             ctx.badges.get(&msg.user_id).copied()
