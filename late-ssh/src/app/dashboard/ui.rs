@@ -297,7 +297,7 @@ mod tests {
         let lines = render_dashboard(DASHBOARD_HIDE_VOTE_AT_WIDTH);
         assert!(!lines.join("\n").contains("Dashboard view too small."));
         assert!(lines.join("\n").contains("Stream"));
-        assert!(lines.join("\n").contains("Chat"));
+        assert!(lines.join("\n").contains("No messages yet."));
     }
 
     #[test]
@@ -307,7 +307,7 @@ mod tests {
         assert!(!rendered.contains("Dashboard view too small."));
         assert!(!rendered.contains("Stream"));
         assert!(!rendered.contains("Vote Next"));
-        assert!(rendered.contains("Chat"));
+        assert!(rendered.contains("No messages yet."));
     }
 
     #[test]
@@ -316,7 +316,7 @@ mod tests {
         let rendered = lines.join("\n");
         assert!(!rendered.contains("Stream"));
         assert!(!rendered.contains("Vote Next"));
-        assert!(rendered.contains("Chat"));
+        assert!(rendered.contains("No messages yet."));
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
         let lines = render_dashboard_with_size(100, DASHBOARD_MIN_FULL_HEIGHT);
         let rendered = lines.join("\n");
         assert!(rendered.contains("Stream"));
-        assert!(rendered.contains("Chat"));
+        assert!(rendered.contains("No messages yet."));
     }
 
     #[test]
@@ -397,7 +397,7 @@ mod tests {
 
         assert!(!rendered.contains("Stream"));
         assert!(!rendered.contains("Vote Next"));
-        assert!(rendered.contains("Chat"));
+        assert!(rendered.contains("No messages yet."));
     }
 
     #[test]

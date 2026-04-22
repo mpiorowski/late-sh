@@ -800,7 +800,7 @@ fn draw_help(frame: &mut Frame, area: Rect, state: &State) {
     );
 
     let footer = Line::from(vec![
-        Span::styled("  Tab/Shift+Tab", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("  Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
@@ -863,6 +863,30 @@ mod tests {
         let drawing = lines_for(HelpTab::Drawing).join("\n");
         assert!(drawing.contains("move cursor"));
         assert!(drawing.contains("Shift+arrows"));
+    }
+
+    #[test]
+    fn clipboard_preview_offset_skips_leading_blank_rows_and_columns() {
+        let clipboard = Clipboard::new(
+            4,
+            3,
+            vec![
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow('A')),
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow(' ')),
+                Some(CellValue::Narrow(' ')),
+            ],
+        );
+
+        assert_eq!(clipboard_preview_offset(&clipboard), (2, 1));
     }
 
     #[test]
@@ -1096,7 +1120,6 @@ mod tests {
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);
-        let mut state = State::new(svc, "painter".to_string(), shared_provenance);
-        state
+        State::new(svc, "painter".to_string(), shared_provenance)
     }
 }

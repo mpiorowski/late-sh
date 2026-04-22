@@ -284,7 +284,6 @@ mod tests {
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);
-        let mut state = State::new(svc, "viewer".to_string(), shared_provenance);
-        state
+        State::new(svc, "viewer".to_string(), shared_provenance)
     }
 }

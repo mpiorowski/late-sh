@@ -83,16 +83,19 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" save & preview  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Alt+Enter", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" newline  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" save & switch tab", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(
+                    " save & switch tabs",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
             ]);
         }
         (Tab::Bio, false) => {
             spans.extend([
                 Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" edit  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tab  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);
@@ -105,8 +108,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" cycle  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" edit/apply  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tab  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);
@@ -121,8 +124,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" remove  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" add  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);

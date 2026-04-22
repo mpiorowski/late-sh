@@ -215,7 +215,6 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     }
 
     let block = Block::default()
-        .title(" The Arcade ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
 

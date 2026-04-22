@@ -569,6 +569,55 @@ mod tests {
     }
 
     #[test]
+    fn raw_control_bytes_map_to_expected_app_keys() {
+        assert_eq!(
+            app_key_from_raw_control_byte(0x00),
+            Some(AppKey {
+                code: AppKeyCode::Char(' '),
+                modifiers: AppModifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            })
+        );
+        assert_eq!(
+            app_key_from_raw_control_byte(0x09),
+            Some(AppKey {
+                code: AppKeyCode::Tab,
+                modifiers: AppModifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            })
+        );
+        assert_eq!(app_key_from_raw_control_byte(0x0D), None);
+        assert_eq!(app_key_from_raw_control_byte(0x1B), None);
+    }
+
+    #[test]
+    fn mouse_pointer_translation_converts_sgr_coords_and_modifiers() {
+        let pointer = app_pointer_event_from_mouse(&MouseEvent {
+            kind: MouseEventKind::Drag,
+            button: Some(MouseButton::Right),
+            x: 7,
+            y: 5,
+            modifiers: crate::app::input::MouseModifiers {
+                shift: true,
+                ctrl: true,
+                ..Default::default()
+            },
+        })
+        .expect("pointer event");
+
+        assert_eq!(pointer.column, 6);
+        assert_eq!(pointer.row, 4);
+        assert_eq!(pointer.kind, AppPointerKind::Drag(AppPointerButton::Right));
+        assert!(pointer.modifiers.shift);
+        assert!(pointer.modifiers.ctrl);
+        assert!(!pointer.modifiers.alt);
+    }
+
+    #[test]
     fn floating_hover_motion_tracks_preview_cursor() {
         let mut state = test_state();
         state.snapshot.canvas = Canvas::with_size(40, 20);
@@ -1073,7 +1122,6 @@ mod tests {
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);
-        let mut state = State::new(svc, "painter".to_string(), shared_provenance);
-        state
+        State::new(svc, "painter".to_string(), shared_provenance)
     }
 }

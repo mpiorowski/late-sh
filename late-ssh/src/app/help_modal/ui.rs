@@ -51,7 +51,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
     );
 
     let footer = Line::from(vec![
-        Span::styled("  Tab/Shift+Tab", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("  Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),

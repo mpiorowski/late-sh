@@ -1164,6 +1164,24 @@ mod tests {
     }
 
     #[test]
+    fn owner_initial_skips_prefix_punctuation_and_defaults_when_missing() {
+        assert_eq!(owner_initial("__mat"), 'M');
+        assert_eq!(owner_initial("!!!"), '?');
+    }
+
+    #[test]
+    fn paste_cursor_end_handles_crlf_controls_and_bounds() {
+        assert_eq!(
+            paste_cursor_end(Pos { x: 2, y: 0 }, "A\r\nB\u{7}C", 4, 2),
+            Pos { x: 3, y: 1 }
+        );
+        assert_eq!(
+            paste_cursor_end(Pos { x: 3, y: 1 }, "ZZ", 4, 2),
+            Pos { x: 3, y: 1 }
+        );
+    }
+
+    #[test]
     fn type_char_advances_cursor_right() {
         let mut state = test_state();
         state.type_char('A', (80, 24));

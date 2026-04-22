@@ -625,11 +625,22 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .add_modifier(Modifier::BOLD),
     )];
 
+    let page_title = match screen {
+        Screen::Dashboard => "Dashboard",
+        Screen::Chat => "Chat",
+        Screen::Games => "The Arcade",
+        Screen::Artboard => "Artboard",
+    };
+    spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
+    spans.push(Span::styled(
+        format!("{page_title} "),
+        Style::default().fg(theme::TEXT_MUTED()),
+    ));
+
     if screen == Screen::Artboard {
-        spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
         spans.push(Span::styled(
-            "Artboard ",
-            Style::default().fg(theme::TEXT_MUTED()),
+            "by @mevanlc ",
+            Style::default().fg(theme::TEXT_DIM()),
         ));
         let hints: &[(&str, &str)] = if ctx.artboard_interacting {
             &[
@@ -645,7 +656,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 ("R-drag", "pan"),
                 ("i", "edit"),
                 ("Ctrl+\\", "owners"),
-                ("Tab/1-4", "switch"),
             ]
         };
         for (key, desc) in hints {
