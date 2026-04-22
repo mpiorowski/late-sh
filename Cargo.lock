@@ -2648,6 +2648,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "unicode-width",
+ "unicode_names2",
  "uuid",
  "vte",
 ]

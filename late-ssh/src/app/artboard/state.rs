@@ -18,10 +18,8 @@ use tokio::sync::{
     watch,
 };
 
-use dartboard_picker_core::IconCatalogData;
-
-use super::glyph_picker;
 use super::svc::{DartboardEvent, DartboardService, DartboardSnapshot};
+use crate::app::icon_picker::{self, catalog::IconCatalogData};
 
 const DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 
@@ -38,8 +36,8 @@ pub struct State {
     last_canvas_click: Option<(Instant, Pos)>,
     help_open: bool,
     help_tab: HelpTab,
-    help_scroll: u16,
-    glyph_picker: glyph_picker::State,
+    help_scroll_offsets: [u16; HelpTab::ALL.len()],
+    glyph_picker: icon_picker::IconPickerState,
     glyph_picker_open: bool,
     glyph_catalog: Option<IconCatalogData>,
     snapshot_rx: watch::Receiver<DartboardSnapshot>,
@@ -63,8 +61,8 @@ impl State {
             last_canvas_click: None,
             help_open: false,
             help_tab: HelpTab::default(),
-            help_scroll: 0,
-            glyph_picker: glyph_picker::State::default(),
+            help_scroll_offsets: [0; HelpTab::ALL.len()],
+            glyph_picker: icon_picker::IconPickerState::default(),
             glyph_picker_open: false,
             glyph_catalog: None,
             snapshot_rx,
@@ -155,6 +153,11 @@ impl State {
         self.set_viewport_for_screen(screen_size);
         self.editor
             .move_dir(&self.snapshot.canvas, MoveDir::PageDown);
+    }
+
+    pub fn pan_viewport_by(&mut self, screen_size: (u16, u16), dx: isize, dy: isize) {
+        self.set_viewport_for_screen(screen_size);
+        self.editor.pan_by(&self.snapshot.canvas, dx, dy);
     }
 
     pub fn paint_char(&mut self, ch: char) {
@@ -555,44 +558,40 @@ impl State {
     }
 
     pub fn help_scroll(&self) -> u16 {
-        self.help_scroll
+        self.help_scroll_offsets[self.help_tab.index()]
     }
 
     pub fn select_next_help_tab(&mut self) {
         self.help_tab = self.help_tab.next();
-        self.help_scroll = 0;
     }
 
     pub fn select_prev_help_tab(&mut self) {
         self.help_tab = self.help_tab.prev();
-        self.help_scroll = 0;
     }
 
     pub fn select_help_tab(&mut self, tab: HelpTab) {
-        if self.help_tab != tab {
-            self.help_tab = tab;
-            self.help_scroll = 0;
-        }
+        self.help_tab = tab;
     }
 
     pub fn scroll_help(&mut self, delta: i16) {
-        let current = self.help_scroll as i32;
-        self.help_scroll = (current + delta as i32).max(0) as u16;
+        let idx = self.help_tab.index();
+        let current = self.help_scroll_offsets[idx] as i32;
+        self.help_scroll_offsets[idx] = (current + delta as i32).max(0) as u16;
     }
 
     pub fn reset_help_scroll(&mut self) {
-        self.help_scroll = 0;
+        self.help_scroll_offsets[self.help_tab.index()] = 0;
     }
 
     pub fn is_glyph_picker_open(&self) -> bool {
         self.glyph_picker_open
     }
 
-    pub fn glyph_picker_state(&self) -> &glyph_picker::State {
+    pub fn glyph_picker_state(&self) -> &icon_picker::IconPickerState {
         &self.glyph_picker
     }
 
-    pub fn glyph_picker_state_mut(&mut self) -> &mut glyph_picker::State {
+    pub fn glyph_picker_state_mut(&mut self) -> &mut icon_picker::IconPickerState {
         &mut self.glyph_picker
     }
 
@@ -611,9 +610,9 @@ impl State {
         self.suppress_swatch_preview = false;
 
         if self.glyph_catalog.is_none() {
-            self.glyph_catalog = Some(glyph_picker::load_catalog());
+            self.glyph_catalog = Some(IconCatalogData::load());
         }
-        self.glyph_picker = glyph_picker::State::default();
+        self.glyph_picker = icon_picker::IconPickerState::default();
         self.glyph_picker_open = true;
     }
 
@@ -633,7 +632,7 @@ impl State {
         let Some(catalog) = self.glyph_catalog.as_ref() else {
             return;
         };
-        glyph_picker::move_selection(&mut self.glyph_picker, catalog, delta);
+        icon_picker::picker::move_selection(&mut self.glyph_picker, catalog, delta);
     }
 
     /// Handle a left-down in the picker list at screen coords (column, row),
@@ -643,22 +642,13 @@ impl State {
         let Some(catalog) = self.glyph_catalog.as_ref() else {
             return false;
         };
-        glyph_picker::click_list(&mut self.glyph_picker, catalog, column, row)
+        icon_picker::picker::click_list(&mut self.glyph_picker, catalog, column, row)
     }
 
     /// Handle a left-down in the tab strip at screen column `column`.
     /// Returns `true` if a tab was hit.
     pub fn glyph_picker_click_tab(&mut self, column: u16, row: u16) -> bool {
-        let tabs = self.glyph_picker.tabs_inner.get();
-        if tabs.height == 0 || row < tabs.y || row >= tabs.y + tabs.height {
-            return false;
-        }
-        if let Some(tab) = glyph_picker::tab_at_x(tabs, column) {
-            self.glyph_picker.set_tab(tab);
-            true
-        } else {
-            false
-        }
+        icon_picker::picker::click_tab(&mut self.glyph_picker, column, row)
     }
 
     /// Confirm the selection: paint the leading scalar of the selected glyph
@@ -669,7 +659,7 @@ impl State {
             self.glyph_picker_open = false;
             return false;
         };
-        let Some(icon) = glyph_picker::selected_glyph(&self.glyph_picker, catalog) else {
+        let Some(icon) = icon_picker::picker::selected_icon(&self.glyph_picker, catalog) else {
             if !keep_open {
                 self.glyph_picker_open = false;
             }
@@ -867,36 +857,30 @@ pub enum BrushMode {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum HelpTab {
     #[default]
-    Guide,
+    Overview,
     Drawing,
-    Selection,
-    Clipboard,
-    Transform,
+    Brushes,
     Session,
 }
 
 impl HelpTab {
-    pub const ALL: [HelpTab; 6] = [
-        HelpTab::Guide,
+    pub const ALL: [HelpTab; 4] = [
+        HelpTab::Overview,
         HelpTab::Drawing,
-        HelpTab::Selection,
-        HelpTab::Clipboard,
-        HelpTab::Transform,
+        HelpTab::Brushes,
         HelpTab::Session,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            HelpTab::Guide => "guide",
-            HelpTab::Drawing => "drawing",
-            HelpTab::Selection => "selection",
-            HelpTab::Clipboard => "clipboard",
-            HelpTab::Transform => "transform",
-            HelpTab::Session => "session",
+            HelpTab::Overview => "Overview",
+            HelpTab::Drawing => "Drawing",
+            HelpTab::Brushes => "Brushes",
+            HelpTab::Session => "Session",
         }
     }
 
-    fn index(self) -> usize {
+    pub fn index(self) -> usize {
         Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0)
     }
 

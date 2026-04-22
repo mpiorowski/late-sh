@@ -583,9 +583,7 @@ impl App {
             settings_modal::ui::MODAL_WIDTH,
         );
         let (screen, show_settings, show_splash, game_selection) = match config.devtest_jump {
-            Some(DevtestJump::Artboard) => {
-                (Screen::Artboard, false, false, DEFAULT_GAME_SELECTION)
-            }
+            Some(DevtestJump::Artboard) => (Screen::Artboard, false, false, DEFAULT_GAME_SELECTION),
             Some(DevtestJump::Sudoku) => (Screen::Games, false, false, GAME_SELECTION_SUDOKU),
             None => (Screen::Dashboard, true, true, DEFAULT_GAME_SELECTION),
         };

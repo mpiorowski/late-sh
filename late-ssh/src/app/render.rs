@@ -14,8 +14,7 @@ use ratatui::{
 use late_core::models::leaderboard::LeaderboardData;
 
 use super::{
-    artboard,
-    chat,
+    artboard, chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
@@ -632,13 +631,25 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             "Artboard ",
             Style::default().fg(theme::TEXT_MUTED()),
         ));
-        for (key, desc) in if ctx.artboard_interacting {
-            [("Esc", "View mode"), ("^P", "Help")]
+        let hints: &[(&str, &str)] = if ctx.artboard_interacting {
+            &[("active", "draw"), ("Esc", "view"), ("Ctrl+P", "help")]
         } else {
-            [("i", "Interact"), ("Tab/1-4", "Switch")]
-        } {
+            &[
+                ("view", "pan"),
+                ("Alt+arrows", "pan"),
+                ("R-drag", "pan"),
+                ("i", "edit"),
+                ("Tab/1-4", "switch"),
+            ]
+        };
+        for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
-            spans.push(Span::styled(key, Style::default().fg(theme::AMBER_DIM())));
+            spans.push(Span::styled(
+                *key,
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ));
             spans.push(Span::styled(
                 format!(" {desc} "),
                 Style::default().fg(theme::TEXT_DIM()),

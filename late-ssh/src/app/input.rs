@@ -1108,12 +1108,12 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
 
     if ctx.screen == Screen::Games
         && app.is_playing_game
-        && !matches!(byte, 0x03 | b'm' | b'M' | b'+' | b'=' | b'-' | b'_')
+        && !matches!(byte, b'm' | b'M' | b'+' | b'=' | b'-' | b'_')
     {
         return false;
     }
 
-    if ctx.screen == Screen::Artboard && app.artboard_interacting && byte != 0x03 {
+    if ctx.screen == Screen::Artboard && app.artboard_interacting {
         return false;
     }
 
@@ -1127,10 +1127,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                     app.running = false;
                 }
             }
-            true
-        }
-        0x03 => {
-            app.running = false;
             true
         }
         b'm' | b'M' => {
@@ -1313,6 +1309,8 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'\r') => apply_icon_selection(app, false),
         ParsedInput::AltEnter => apply_icon_selection(app, true),
+        ParsedInput::Byte(b'\t') => app.icon_picker_state.next_tab(),
+        ParsedInput::BackTab => app.icon_picker_state.prev_tab(),
         ParsedInput::Byte(0x7f) => app.icon_picker_state.search_delete_char(),
         ParsedInput::Delete => app.icon_picker_state.search_delete_next_char(),
         ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
@@ -1381,109 +1379,55 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
 }
 
 fn picker_move_selection(app: &mut App, delta: isize) {
-    // Build filtered sections once per event — prevents the duplicated scan
-    // that we had when a separate helper computed `max` and then the scroll
-    // adjust recomputed the same view.
     let Some(catalog) = app.icon_catalog.as_ref() else {
         return;
     };
-    let sections = catalog.filtered(&app.icon_picker_state.search_str());
-    let max = icon_picker::picker::selectable_count(&sections);
-    if max == 0 {
-        return;
-    }
-    let cur = app.icon_picker_state.selected_index as isize;
-    let next = cur.saturating_add(delta).clamp(0, (max - 1) as isize) as usize;
-    let flat_idx = icon_picker::picker::selectable_to_flat(&sections, next).unwrap_or(0);
-
-    let state = &mut app.icon_picker_state;
-    state.selected_index = next;
-    let visible = state.visible_height.get().max(1);
-    if flat_idx < state.scroll_offset {
-        state.scroll_offset = flat_idx;
-    } else if flat_idx >= state.scroll_offset + visible {
-        state.scroll_offset = flat_idx.saturating_sub(visible - 1);
-    }
+    icon_picker::picker::move_selection(&mut app.icon_picker_state, catalog, delta);
 }
 
 /// Handle a left-button press at SGR 1-based coordinates (x, y).
 /// A click on a visible icon row selects it; a second click on the
 /// same item within DOUBLE_CLICK_WINDOW_MS inserts it (keeps the picker open).
 fn handle_icon_picker_click(app: &mut App, x: u16, y: u16) {
-    let _ = x;
-    // SGR coords are 1-based; ratatui Rect is 0-based.
-    let row_0based = y.saturating_sub(1);
+    let Some(col) = x.checked_sub(1) else {
+        return;
+    };
+    let Some(row) = y.checked_sub(1) else {
+        return;
+    };
 
-    let list = app.icon_picker_state.list_inner.get();
-    if list.height == 0 || row_0based < list.y || row_0based >= list.y + list.height {
+    if icon_picker::picker::click_tab(&mut app.icon_picker_state, col, row) {
         return;
     }
-    let offset_in_list = (row_0based - list.y) as usize;
-    let flat_idx = app.icon_picker_state.scroll_offset + offset_in_list;
 
     let Some(catalog) = app.icon_catalog.as_ref() else {
         return;
     };
-    let sections = catalog.filtered(&app.icon_picker_state.search_str());
-
-    let Some(selectable_idx) = icon_picker::picker::flat_to_selectable(&sections, flat_idx) else {
-        return;
-    };
-
-    let now = std::time::Instant::now();
-    let is_double = match app.icon_picker_state.last_click {
-        Some((prev, prev_idx)) => {
-            prev_idx == selectable_idx
-                && now.duration_since(prev).as_millis() <= icon_picker::DOUBLE_CLICK_WINDOW_MS
-        }
-        None => false,
-    };
-
-    let flat_idx_target =
-        icon_picker::picker::selectable_to_flat(&sections, selectable_idx).unwrap_or(0);
-    let state = &mut app.icon_picker_state;
-    state.selected_index = selectable_idx;
-    let visible = state.visible_height.get().max(1);
-    if flat_idx_target < state.scroll_offset {
-        state.scroll_offset = flat_idx_target;
-    } else if flat_idx_target >= state.scroll_offset + visible {
-        state.scroll_offset = flat_idx_target.saturating_sub(visible - 1);
-    }
-
-    if is_double {
-        app.icon_picker_state.last_click = None;
+    if icon_picker::picker::click_list(&mut app.icon_picker_state, catalog, col, row) {
         apply_icon_selection(app, true);
-    } else {
-        app.icon_picker_state.last_click = Some((now, selectable_idx));
     }
 }
 
 fn apply_icon_selection(app: &mut App, keep_open: bool) {
-    let selected = app.icon_picker_state.selected_index;
-
     let icon_str = {
         let Some(catalog) = app.icon_catalog.as_ref() else {
             app.icon_picker_open = false;
             return;
         };
-        let sections = catalog.filtered(&app.icon_picker_state.search_str());
-        match icon_picker::picker::entry_at_selectable(&sections, selected) {
-            Some(entry) => entry.icon.clone(),
-            None => {
-                if !keep_open {
-                    app.icon_picker_open = false;
-                }
-                return;
+        let Some(icon) = icon_picker::picker::selected_icon(&app.icon_picker_state, catalog) else {
+            if !keep_open {
+                app.icon_picker_open = false;
             }
+            return;
+        };
+        if icon.is_empty() {
+            return;
         }
+        icon
     };
 
     if !keep_open {
         app.icon_picker_open = false;
-    }
-
-    if icon_str.is_empty() {
-        return;
     }
 
     let ctx = InputContext::from_app(app);

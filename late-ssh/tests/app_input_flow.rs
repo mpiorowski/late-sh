@@ -74,6 +74,27 @@ async fn q_opens_quit_confirm_and_escape_dismisses_it() {
 }
 
 #[tokio::test]
+async fn ctrl_c_does_not_quit_the_app() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-c-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-c-flow-it");
+
+    app.handle_input(b"\x03");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    assert!(app.running, "expected Ctrl+C to no longer quit the app");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" Dashboard "),
+        "expected app to remain on the dashboard after Ctrl+C; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Quit? "),
+        "expected Ctrl+C to stay inert rather than opening quit confirm; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn screen_number_keys_switch_between_dashboard_games_chat_and_artboard() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-it").await;

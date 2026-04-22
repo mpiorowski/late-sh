@@ -902,6 +902,10 @@ impl russh::server::Handler for ClientHandler {
                         }
                         Err(err) => {
                             tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
+                            let exit = App::leave_alt_screen();
+                            let _ =
+                                timeout(Duration::from_millis(50), handle.data(channel_id, exit))
+                                    .await;
                             let _ = handle.eof(channel_id).await;
                             let _ = handle.close(channel_id).await;
                             break;

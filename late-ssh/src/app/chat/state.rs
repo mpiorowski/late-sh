@@ -1888,6 +1888,7 @@ fn reply_preview_text(body: &str) -> String {
 
 pub(crate) fn new_chat_textarea() -> TextArea<'static> {
     let mut ta = TextArea::default();
+    ta.set_style(Style::default().fg(theme::TEXT()));
     ta.set_placeholder_text("Type a message...");
     ta.set_placeholder_style(Style::default().fg(theme::TEXT_DIM()));
     ta.set_cursor_line_style(Style::default());
@@ -2151,6 +2152,12 @@ mod tests {
     #[test]
     fn parse_dm_trims_whitespace() {
         assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
+    }
+
+    #[test]
+    fn new_chat_textarea_uses_theme_text_color() {
+        let textarea = new_chat_textarea();
+        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
     }
 
     #[test]
