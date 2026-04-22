@@ -19,6 +19,11 @@ pub fn handle_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> Inpu
     if state.is_glyph_picker_open() {
         return handle_picker_byte(state, screen_size, byte);
     }
+    if byte == 0x1C {
+        state.toggle_ownership_overlay();
+        state.clear_pending_canvas_click();
+        return InputAction::Handled;
+    }
     if byte == 0x10 {
         state.toggle_help();
         state.clear_pending_canvas_click();
@@ -254,8 +259,6 @@ fn handle_help_arrow(state: &mut State, key: u8) -> bool {
     match key {
         b'A' => state.scroll_help(-1),
         b'B' => state.scroll_help(1),
-        b'C' => state.select_next_help_tab(),
-        b'D' => state.select_prev_help_tab(),
         _ => return false,
     }
     true
@@ -427,8 +430,11 @@ fn jump_to_edge(state: &mut State, screen_size: (u16, u16), key: u8) {
 }
 
 fn handle_mouse(state: &mut State, screen_size: (u16, u16), mouse: &MouseEvent) -> InputAction {
+    state.set_hover_screen_point(screen_size, mouse.x, mouse.y);
+
     if let Some(hit) = swatch_hit(screen_size, state, mouse.x, mouse.y) {
         state.clear_pending_canvas_click();
+        state.clear_hover();
         if matches!(mouse.kind, MouseEventKind::Down)
             && matches!(mouse.button, Some(MouseButton::Left))
         {
@@ -448,6 +454,7 @@ fn handle_mouse(state: &mut State, screen_size: (u16, u16), mouse: &MouseEvent) 
 
     if info_hit(screen_size, state, mouse.x, mouse.y) {
         state.clear_pending_canvas_click();
+        state.clear_hover();
         return InputAction::Handled;
     }
 
@@ -535,6 +542,7 @@ fn map_button(button: MouseButton) -> Option<AppPointerButton> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::artboard::provenance::ArtboardProvenance;
     use crate::app::artboard::svc::DartboardService;
     use dartboard_core::{Canvas, CellValue, RgbColor};
     use dartboard_editor::Clipboard;
@@ -947,7 +955,10 @@ mod tests {
             InputAction::Handled
         ));
 
-        assert!(handle_arrow(&mut state, (80, 24), b'C'));
+        assert!(matches!(
+            handle_byte(&mut state, (80, 24), b'\t'),
+            InputAction::Handled
+        ));
         assert_eq!(
             state.help_tab(),
             crate::app::artboard::state::HelpTab::Drawing
@@ -1056,8 +1067,10 @@ mod tests {
 
     fn test_state() -> State {
         let server = crate::dartboard::spawn_server();
-        let svc = DartboardService::new(server, Uuid::now_v7(), "painter");
-        let mut state = State::new(svc);
+        let shared_provenance = ArtboardProvenance::default().shared();
+        let svc =
+            DartboardService::new(server, Uuid::now_v7(), "painter", shared_provenance.clone());
+        let mut state = State::new(svc, "painter".to_string(), shared_provenance);
         state.snapshot.your_color = Some(RgbColor::new(255, 196, 64));
         state
     }

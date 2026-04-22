@@ -12,27 +12,45 @@ async fn artboard_snapshot_upsert_replaces_existing_canvas() {
         "cells": [],
         "colors": [],
     });
+    let first_provenance = serde_json::json!({
+        "cells": []
+    });
     let second_canvas = serde_json::json!({
         "width": 384,
         "height": 192,
         "cells": [[{"x": 3, "y": 2}, {"Narrow": "A"}]],
         "colors": [],
     });
+    let second_provenance = serde_json::json!({
+        "cells": [[{"x": 3, "y": 2}, "mat"]]
+    });
 
-    Snapshot::upsert(&client, Snapshot::MAIN_BOARD_KEY, first_canvas)
-        .await
-        .expect("insert snapshot");
-    let updated = Snapshot::upsert(&client, Snapshot::MAIN_BOARD_KEY, second_canvas.clone())
-        .await
-        .expect("update snapshot");
+    Snapshot::upsert(
+        &client,
+        Snapshot::MAIN_BOARD_KEY,
+        first_canvas,
+        first_provenance,
+    )
+    .await
+    .expect("insert snapshot");
+    let updated = Snapshot::upsert(
+        &client,
+        Snapshot::MAIN_BOARD_KEY,
+        second_canvas.clone(),
+        second_provenance.clone(),
+    )
+    .await
+    .expect("update snapshot");
 
     assert_eq!(updated.canvas, second_canvas);
+    assert_eq!(updated.provenance, second_provenance);
 
     let reloaded = Snapshot::find_by_board_key(&client, Snapshot::MAIN_BOARD_KEY)
         .await
         .expect("reload snapshot")
         .expect("snapshot exists");
     assert_eq!(reloaded.canvas, second_canvas);
+    assert_eq!(reloaded.provenance, second_provenance);
 
     let count = client
         .query_one(

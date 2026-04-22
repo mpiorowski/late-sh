@@ -7,6 +7,7 @@ use late_core::{
     test_utils::{TestDb, test_db},
 };
 use late_ssh::app::ai::svc::AiService;
+use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
@@ -41,6 +42,10 @@ pub async fn new_test_db() -> TestDb {
 
 fn test_dartboard_server() -> dartboard_local::ServerHandle {
     late_ssh::dartboard::spawn_server()
+}
+
+fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArtboardProvenance {
+    ArtboardProvenance::default().shared()
 }
 
 pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
@@ -137,6 +142,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         chip_service,
         blackjack_service,
         dartboard_server,
+        dartboard_provenance: test_dartboard_provenance(),
         leaderboard_service,
         now_playing_rx,
         activity_feed: activity_tx,
@@ -213,6 +219,7 @@ pub fn make_app_with_chat_service(
             db.clone(),
         ),
         dartboard_server: test_dartboard_server(),
+        dartboard_provenance: test_dartboard_provenance(),
         username: "test-user".to_string(),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
@@ -301,6 +308,7 @@ pub fn make_app_with_devtest_jump(
             db.clone(),
         ),
         dartboard_server: test_dartboard_server(),
+        dartboard_provenance: test_dartboard_provenance(),
         username: "test-user".to_string(),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
@@ -393,6 +401,7 @@ pub fn make_app_with_paired_client(
             db.clone(),
         ),
         dartboard_server: test_dartboard_server(),
+        dartboard_provenance: test_dartboard_provenance(),
         username: "test-user".to_string(),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,

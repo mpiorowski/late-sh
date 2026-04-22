@@ -906,7 +906,7 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if ctx.screen == Screen::Artboard {
-        let Some(state) = app.dartboard_state.as_mut() else {
+        let Some(state) = app.dartboard_state.as_ref() else {
             return;
         };
         if state.is_glyph_picker_open() || state.is_help_open() {
@@ -914,6 +914,9 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         if app.artboard_interacting {
+            if crate::app::artboard::page::handle_key(app, 0x1B) {
+                return;
+            }
             app.deactivate_artboard_interaction();
             return;
         }

@@ -9,6 +9,7 @@ crate::model! {
         @data
         pub board_key: String,
         pub canvas: Value,
+        pub provenance: Value,
     }
 }
 
@@ -25,15 +26,22 @@ impl Snapshot {
         Ok(row.map(Self::from))
     }
 
-    pub async fn upsert(client: &Client, board_key: &str, canvas: Value) -> Result<Self> {
+    pub async fn upsert(
+        client: &Client,
+        board_key: &str,
+        canvas: Value,
+        provenance: Value,
+    ) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO artboard_snapshots (board_key, canvas)
-                 VALUES ($1, $2)
+                "INSERT INTO artboard_snapshots (board_key, canvas, provenance)
+                 VALUES ($1, $2, $3)
                  ON CONFLICT (board_key) DO UPDATE
-                 SET canvas = EXCLUDED.canvas, updated = current_timestamp
+                 SET canvas = EXCLUDED.canvas,
+                     provenance = EXCLUDED.provenance,
+                     updated = current_timestamp
                  RETURNING *",
-                &[&board_key, &canvas],
+                &[&board_key, &canvas, &provenance],
             )
             .await?;
         Ok(Self::from(row))

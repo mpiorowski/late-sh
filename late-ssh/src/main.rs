@@ -58,7 +58,13 @@ async fn finish_ssh_drain(
 }
 
 async fn flush_dartboard_snapshot(state: &State, fatal_error: &mut Option<anyhow::Error>) {
-    match late_ssh::dartboard::flush_server_snapshot(&state.db, &state.dartboard_server).await {
+    match late_ssh::dartboard::flush_server_snapshot(
+        &state.db,
+        &state.dartboard_server,
+        &state.dartboard_provenance,
+    )
+    .await
+    {
         Ok(()) => tracing::info!("flushed artboard snapshot during shutdown"),
         Err(err) => {
             tracing::error!(error = ?err, "failed to flush artboard snapshot during shutdown");
@@ -147,15 +153,23 @@ async fn main() -> anyhow::Result<()> {
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());
-    let initial_dartboard_canvas = match late_ssh::dartboard::load_persisted_canvas(&db).await {
-        Ok(canvas) => canvas,
+    let initial_dartboard = match late_ssh::dartboard::load_persisted_artboard(&db).await {
+        Ok(snapshot) => snapshot,
         Err(error) => {
             tracing::warn!(error = ?error, "failed to restore artboard snapshot");
             None
         }
     };
-    let dartboard_server =
-        late_ssh::dartboard::spawn_persistent_server(db.clone(), initial_dartboard_canvas);
+    let dartboard_provenance = initial_dartboard
+        .as_ref()
+        .map(|snapshot| snapshot.provenance.clone())
+        .unwrap_or_default()
+        .shared();
+    let dartboard_server = late_ssh::dartboard::spawn_persistent_server(
+        db.clone(),
+        initial_dartboard.map(|snapshot| snapshot.canvas),
+        dartboard_provenance.clone(),
+    );
     let leaderboard_service =
         late_ssh::app::games::leaderboard::svc::LeaderboardService::new(db.clone());
     let nonogram_library = match late_ssh::app::games::nonogram::state::load_default_library() {
@@ -206,6 +220,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service,
         blackjack_service,
         dartboard_server,
+        dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),
         conn_limit,
         conn_counts,

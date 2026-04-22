@@ -82,7 +82,10 @@ async fn ctrl_c_does_not_quit_the_app() {
     app.handle_input(b"\x03");
     tokio::time::sleep(Duration::from_millis(60)).await;
 
-    assert!(app.running, "expected Ctrl+C to no longer quit the app");
+    assert!(
+        app.is_running(),
+        "expected Ctrl+C to no longer quit the app"
+    );
     let frame = render_plain(&mut app);
     assert!(
         frame.contains(" Dashboard "),

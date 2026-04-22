@@ -18,6 +18,7 @@ use tokio::sync::{
     watch,
 };
 
+use super::provenance::{SharedArtboardProvenance, apply_shared_op};
 use super::svc::{DartboardEvent, DartboardService, DartboardSnapshot};
 use crate::app::icon_picker::{self, catalog::IconCatalogData};
 
@@ -40,12 +41,20 @@ pub struct State {
     glyph_picker: icon_picker::IconPickerState,
     glyph_picker_open: bool,
     glyph_catalog: Option<IconCatalogData>,
+    username: String,
+    shared_provenance: SharedArtboardProvenance,
+    ownership_overlay: bool,
+    hover_pos: Option<Pos>,
     snapshot_rx: watch::Receiver<DartboardSnapshot>,
     event_rx: broadcast::Receiver<DartboardEvent>,
 }
 
 impl State {
-    pub fn new(svc: DartboardService) -> Self {
+    pub fn new(
+        svc: DartboardService,
+        username: String,
+        shared_provenance: SharedArtboardProvenance,
+    ) -> Self {
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
         let event_rx = svc.subscribe_events();
@@ -65,6 +74,10 @@ impl State {
             glyph_picker: icon_picker::IconPickerState::default(),
             glyph_picker_open: false,
             glyph_catalog: None,
+            username,
+            shared_provenance,
+            ownership_overlay: false,
+            hover_pos: None,
             snapshot_rx,
             event_rx,
         }
@@ -104,6 +117,36 @@ impl State {
 
     pub fn viewport_origin(&self) -> Pos {
         self.editor.viewport_origin
+    }
+
+    pub fn hover_pos(&self) -> Option<Pos> {
+        self.hover_pos
+    }
+
+    pub fn owner_subject_pos(&self) -> Pos {
+        self.hover_pos.unwrap_or(self.cursor())
+    }
+
+    pub fn owner_username(&self) -> Option<&str> {
+        self.snapshot
+            .provenance
+            .username_at(&self.snapshot.canvas, self.owner_subject_pos())
+    }
+
+    pub fn ownership_overlay_enabled(&self) -> bool {
+        self.ownership_overlay
+    }
+
+    pub fn toggle_ownership_overlay(&mut self) {
+        self.ownership_overlay = !self.ownership_overlay;
+    }
+
+    pub fn set_hover_screen_point(&mut self, screen_size: (u16, u16), x: u16, y: u16) {
+        self.hover_pos = self.canvas_pos_for_screen_point(screen_size, x, y);
+    }
+
+    pub fn clear_hover(&mut self) {
+        self.hover_pos = None;
     }
 
     pub fn set_viewport_for_screen(&mut self, screen_size: (u16, u16)) {
@@ -220,13 +263,14 @@ impl State {
 
     pub fn handle_editor_action(&mut self, action: EditorAction) -> EditorKeyDispatch {
         let before = self.snapshot.canvas.clone();
+        let before_provenance = self.snapshot.provenance.clone();
         let color = self.active_user_color();
         let dispatch =
             editor_handle_action(&mut self.editor, &mut self.snapshot.canvas, action, color);
         self.sync_floating_source_selection();
 
         if self.snapshot.canvas != before {
-            let _ = self.submit_canvas_diff(before);
+            let _ = self.submit_canvas_diff(before, before_provenance);
         }
 
         dispatch
@@ -234,6 +278,7 @@ impl State {
 
     pub fn handle_pointer_event(&mut self, pointer: AppPointerEvent) -> EditorPointerDispatch {
         let before = self.snapshot.canvas.clone();
+        let before_provenance = self.snapshot.provenance.clone();
         let had_floating = self.editor.floating.is_some();
         let had_local_floating = self.floating_source_selection.is_some();
         let pointer_over_canvas = self
@@ -251,7 +296,7 @@ impl State {
             self.suppress_swatch_preview = false;
         }
         if self.snapshot.canvas != before {
-            let _ = self.submit_canvas_diff(before);
+            let _ = self.submit_canvas_diff(before, before_provenance);
         }
         dispatch
     }
@@ -356,9 +401,28 @@ impl State {
     }
 
     pub fn canvas_for_render(&self) -> Option<Canvas> {
-        let floating = self.editor.floating.as_ref()?;
-        let mut canvas = self.snapshot.canvas.clone();
-        if !floating.transparent
+        let mut canvas = if self.ownership_overlay {
+            self.owner_overlay_canvas()
+        } else if let Some(floating) = self.editor.floating.as_ref() {
+            let mut canvas = self.snapshot.canvas.clone();
+            if !floating.transparent
+                && let Some(selection) = self.floating_source_selection
+            {
+                clear_bounds_on(
+                    &mut canvas,
+                    selection
+                        .bounds()
+                        .normalized_for_canvas(&self.snapshot.canvas),
+                );
+            }
+            canvas
+        } else {
+            return None;
+        };
+
+        if self.ownership_overlay
+            && let Some(floating) = self.editor.floating.as_ref()
+            && !floating.transparent
             && let Some(selection) = self.floating_source_selection
         {
             clear_bounds_on(
@@ -368,11 +432,35 @@ impl State {
                     .normalized_for_canvas(&self.snapshot.canvas),
             );
         }
+
         Some(canvas)
     }
 
     pub fn should_show_canvas_cursor(&self) -> bool {
         !self.help_open && !self.swatch_preview_suppressed()
+    }
+
+    fn owner_overlay_canvas(&self) -> Canvas {
+        let mut canvas = self.snapshot.canvas.clone();
+        for y in 0..canvas.height {
+            for x in 0..canvas.width {
+                let pos = Pos { x, y };
+                if self.snapshot.canvas.glyph_origin(pos).is_none() {
+                    continue;
+                }
+                let Some(username) = self
+                    .snapshot
+                    .provenance
+                    .username_at(&self.snapshot.canvas, pos)
+                else {
+                    let _ = canvas.put_glyph(pos, '?');
+                    continue;
+                };
+                let _ =
+                    canvas.put_glyph_colored(pos, owner_initial(username), owner_color(username));
+            }
+        }
+        canvas
     }
 
     pub fn export_system_clipboard_text(&self) -> String {
@@ -425,7 +513,8 @@ impl State {
             color,
             floating.transparent,
         );
-        let _ = self.submit_canvas_diff(before);
+        let before_provenance = self.snapshot.provenance.clone();
+        let _ = self.submit_canvas_diff(before, before_provenance);
         editor_dismiss_floating(&mut self.editor);
         self.floating_source_selection = None;
         if was_temp_brush {
@@ -468,6 +557,7 @@ impl State {
         self.floating_source_selection = None;
         self.suppress_swatch_preview = false;
         self.last_canvas_click = None;
+        self.hover_pos = None;
     }
 
     pub fn active_brush(&self) -> Option<Brush> {
@@ -724,19 +814,29 @@ impl State {
         edit: impl FnOnce(&mut EditorSession, &mut Canvas, RgbColor) -> bool,
     ) -> bool {
         let before = self.snapshot.canvas.clone();
+        let before_provenance = self.snapshot.provenance.clone();
         let color = self.active_user_color();
-        let changed = edit(&mut self.editor, &mut self.snapshot.canvas, color);
-        if !changed {
+        let _ = edit(&mut self.editor, &mut self.snapshot.canvas, color);
+        if self.snapshot.canvas == before {
             return false;
         }
-        self.submit_canvas_diff(before)
+        self.submit_canvas_diff(before, before_provenance)
     }
 
-    fn submit_canvas_diff(&mut self, before: Canvas) -> bool {
+    fn submit_canvas_diff(
+        &mut self,
+        before: Canvas,
+        before_provenance: super::provenance::ArtboardProvenance,
+    ) -> bool {
         let Some(op) = diff_canvas_op(&before, &self.snapshot.canvas, self.active_user_color())
         else {
             return false;
         };
+        self.snapshot.provenance = before_provenance;
+        self.snapshot
+            .provenance
+            .apply_op(&before, &op, &self.username);
+        apply_shared_op(&self.shared_provenance, &before, &op, &self.username);
         self.svc.submit_op(op);
         true
     }
@@ -754,12 +854,13 @@ impl State {
                     return;
                 }
                 let before = self.snapshot.canvas.clone();
+                let before_provenance = self.snapshot.provenance.clone();
                 let _ = self.snapshot.canvas.put_glyph_colored(
                     self.editor.cursor,
                     ch,
                     self.active_user_color(),
                 );
-                let _ = self.submit_canvas_diff(before);
+                let _ = self.submit_canvas_diff(before, before_provenance);
             }
             Brush::Erase => self.clear_at_cursor(),
         }
@@ -829,6 +930,33 @@ impl State {
         }
         self.suppress_swatch_preview = false;
     }
+}
+
+fn owner_initial(username: &str) -> char {
+    username
+        .chars()
+        .find(|ch| ch.is_alphanumeric())
+        .map(|ch| ch.to_ascii_uppercase())
+        .unwrap_or('?')
+}
+
+fn owner_color(username: &str) -> RgbColor {
+    const PALETTE: [RgbColor; 8] = [
+        RgbColor::new(255, 110, 64),
+        RgbColor::new(255, 196, 64),
+        RgbColor::new(145, 226, 88),
+        RgbColor::new(72, 220, 170),
+        RgbColor::new(84, 196, 255),
+        RgbColor::new(128, 163, 255),
+        RgbColor::new(192, 132, 255),
+        RgbColor::new(255, 124, 196),
+    ];
+
+    let idx = username
+        .bytes()
+        .fold(0usize, |acc, byte| acc.wrapping_add(byte as usize))
+        % PALETTE.len();
+    PALETTE[idx]
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -990,6 +1118,7 @@ fn canvas_pos_for_screen_point(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::artboard::provenance::ArtboardProvenance;
     use dartboard_core::CellValue;
     use dartboard_editor::Clipboard;
     use std::{
@@ -1014,10 +1143,12 @@ mod tests {
 
     fn test_state() -> State {
         let server = crate::dartboard::spawn_server();
-        let svc = DartboardService::new(server, Uuid::now_v7(), "painter");
+        let shared_provenance = ArtboardProvenance::default().shared();
+        let svc =
+            DartboardService::new(server, Uuid::now_v7(), "painter", shared_provenance.clone());
         let rx = svc.subscribe_state();
         wait_for(|| rx.borrow().your_user_id.is_some().then_some(()));
-        let mut state = State::new(svc);
+        let mut state = State::new(svc, "painter".to_string(), shared_provenance);
         state.tick();
         state.set_viewport_for_screen((80, 24));
         state
@@ -1370,6 +1501,20 @@ mod tests {
         assert!(state.is_glyph_picker_open());
         assert!(!state.has_floating());
         assert!(state.selection_view().is_none());
+    }
+
+    #[test]
+    fn edit_canvas_detects_real_canvas_changes_even_if_helper_reports_false() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(5, 3);
+
+        let changed = state.edit_canvas(|_editor, canvas, color| {
+            let _ = canvas.put_glyph_colored(Pos { x: 0, y: 0 }, '👍', color);
+            false
+        });
+
+        assert!(changed);
+        assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), '👍');
     }
 
     #[test]

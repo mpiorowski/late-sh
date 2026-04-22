@@ -94,6 +94,36 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
         format!("{},{}", state.cursor().x, state.cursor().y),
         theme::AMBER(),
     ));
+    let owner_pos = state.owner_subject_pos();
+    let owner_label = if state.hover_pos().is_some() {
+        "Hover"
+    } else {
+        "Owner"
+    };
+    let owner_value = state.owner_username().unwrap_or("unknown").to_string();
+    let owner_color = if state.owner_username().is_some() {
+        theme::TEXT_BRIGHT()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    lines.push(info_label_value(
+        owner_label,
+        format!("{owner_value} @ {},{}", owner_pos.x, owner_pos.y),
+        owner_color,
+    ));
+    lines.push(info_label_value(
+        "Owners",
+        if state.ownership_overlay_enabled() {
+            "shown".to_string()
+        } else {
+            "hidden".to_string()
+        },
+        if state.ownership_overlay_enabled() {
+            theme::SUCCESS()
+        } else {
+            theme::TEXT_FAINT()
+        },
+    ));
     lines.push(pan_indicator_line(state));
 
     let (brush, brush_color) = match state.brush_mode() {
@@ -779,19 +809,16 @@ fn draw_help(frame: &mut Frame, area: Rect, state: &State) {
         .into_iter()
         .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::TEXT()))))
         .collect();
-    let visible = body.height as usize;
-    let max_scroll = lines.len().saturating_sub(visible) as u16;
-    let scroll = state.help_scroll().min(max_scroll);
     frame.render_widget(
         Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
+            .scroll((state.help_scroll(), 0)),
         body,
     );
 
     let footer = Line::from(vec![
-        Span::styled("  ←/→ h/l", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" switch slides  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("  Tab/Shift+Tab", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
@@ -821,6 +848,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTab) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::artboard::provenance::ArtboardProvenance;
     use crate::app::artboard::state::State;
     use dartboard_core::{CellValue, RgbColor};
     use dartboard_editor::Clipboard;
@@ -839,7 +867,7 @@ mod tests {
         let state = test_state();
         assert_eq!(
             artboard_info_area_for_screen((80, 24), &state),
-            Some(Rect::new(27, 1, 28, 6))
+            Some(Rect::new(27, 1, 28, 9))
         );
     }
 
@@ -902,9 +930,11 @@ mod tests {
 
         assert_eq!(lines[0].to_string(), "Mode       view");
         assert_eq!(lines[1].to_string(), "Cursor     0,0");
-        assert_eq!(lines[2].to_string(), "Pan        ◀ ▲ ▼ ▶");
-        assert_eq!(lines[3].to_string(), "Brush      none");
-        assert_eq!(lines[4].to_string(), "Selection  none");
+        assert_eq!(lines[2].to_string(), "Owner      unknown @ 0,0");
+        assert_eq!(lines[3].to_string(), "Owners     hidden");
+        assert_eq!(lines[4].to_string(), "Pan        ◀ ▲ ▼ ▶");
+        assert_eq!(lines[5].to_string(), "Brush      none");
+        assert_eq!(lines[6].to_string(), "Selection  none");
     }
 
     #[test]
@@ -918,7 +948,7 @@ mod tests {
 
         let lines = artboard_info_lines(&state, true);
         assert_eq!(lines[0].to_string(), "Mode       active");
-        assert_eq!(lines[4].to_string(), "Selection  3x2");
+        assert_eq!(lines[6].to_string(), "Selection  3x2");
     }
 
     #[test]
@@ -1077,8 +1107,10 @@ mod tests {
 
     fn test_state() -> State {
         let server = crate::dartboard::spawn_server();
-        let svc = DartboardService::new(server, Uuid::now_v7(), "painter");
-        let mut state = State::new(svc);
+        let shared_provenance = ArtboardProvenance::default().shared();
+        let svc =
+            DartboardService::new(server, Uuid::now_v7(), "painter", shared_provenance.clone());
+        let mut state = State::new(svc, "painter".to_string(), shared_provenance);
         state.snapshot.your_color = Some(RgbColor::new(255, 196, 64));
         state
     }

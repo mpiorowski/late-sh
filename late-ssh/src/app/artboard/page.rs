@@ -23,6 +23,10 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
     }
 
     match byte {
+        0x1C => {
+            state.toggle_ownership_overlay();
+            true
+        }
         b'i' | b'I' | b'\r' | b'\n' => {
             app.activate_artboard_interaction();
             true
@@ -137,6 +141,7 @@ fn handle_view_mode_mouse(
     size: (u16, u16),
     mouse: &MouseEvent,
 ) -> bool {
+    state.set_hover_screen_point(size, mouse.x, mouse.y);
     if matches!(
         mouse.kind,
         MouseEventKind::Down | MouseEventKind::Drag | MouseEventKind::Up
@@ -173,7 +178,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::app::artboard::{state::State, svc::DartboardService};
+    use crate::app::artboard::{
+        provenance::ArtboardProvenance, state::State, svc::DartboardService,
+    };
 
     #[test]
     fn view_mode_right_drag_reuses_editor_pan_behavior() {
@@ -269,8 +276,10 @@ mod tests {
 
     fn test_state() -> State {
         let server = crate::dartboard::spawn_server();
-        let svc = DartboardService::new(server, Uuid::now_v7(), "viewer");
-        let mut state = State::new(svc);
+        let shared_provenance = ArtboardProvenance::default().shared();
+        let svc =
+            DartboardService::new(server, Uuid::now_v7(), "viewer", shared_provenance.clone());
+        let mut state = State::new(svc, "viewer".to_string(), shared_provenance);
         state.snapshot.your_color = Some(RgbColor::new(255, 196, 64));
         state
     }

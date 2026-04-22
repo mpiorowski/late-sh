@@ -9,6 +9,10 @@ use dartboard_core::Canvas;
 use dartboard_local::{CanvasStore, ServerHandle};
 use late_core::{MutexRecover, db::Db, models::artboard::Snapshot};
 
+use crate::app::artboard::provenance::{
+    ArtboardProvenance, SharedArtboardProvenance, clone_shared_provenance,
+};
+
 pub const CANVAS_WIDTH: usize = 384;
 pub const CANVAS_HEIGHT: usize = 192;
 const DEFAULT_PERSIST_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -37,7 +41,12 @@ struct PostgresCanvasStore {
 }
 
 impl PostgresCanvasStore {
-    fn new(db: Db, initial_canvas: Option<Canvas>, persist_interval: Duration) -> Self {
+    fn new(
+        db: Db,
+        initial_canvas: Option<Canvas>,
+        shared_provenance: SharedArtboardProvenance,
+        persist_interval: Duration,
+    ) -> Self {
         let initial_canvas = initial_canvas.unwrap_or_else(blank_canvas);
         let persist_state = Arc::new(Mutex::new(PersistState::default()));
         let (persist_notify_tx, persist_notify_rx) = mpsc::channel();
@@ -45,12 +54,14 @@ impl PostgresCanvasStore {
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {
                 let thread_state = persist_state.clone();
+                let thread_provenance = shared_provenance.clone();
                 thread::Builder::new()
                     .name("dartboard-persist".to_string())
                     .spawn(move || {
                         run_persist_loop(
                             db,
                             thread_state,
+                            thread_provenance,
                             persist_notify_rx,
                             runtime,
                             persist_interval,
@@ -92,6 +103,18 @@ impl CanvasStore for PostgresCanvasStore {
 }
 
 pub async fn load_persisted_canvas(db: &Db) -> anyhow::Result<Option<Canvas>> {
+    Ok(load_persisted_artboard(db)
+        .await?
+        .map(|snapshot| snapshot.canvas))
+}
+
+pub async fn load_persisted_provenance(db: &Db) -> anyhow::Result<Option<ArtboardProvenance>> {
+    Ok(load_persisted_artboard(db)
+        .await?
+        .map(|snapshot| snapshot.provenance))
+}
+
+pub async fn load_persisted_artboard(db: &Db) -> anyhow::Result<Option<PersistedArtboard>> {
     let client = db.get().await.context("failed to get db client")?;
     let Some(snapshot) = Snapshot::find_by_board_key(&client, Snapshot::MAIN_BOARD_KEY)
         .await
@@ -101,32 +124,56 @@ pub async fn load_persisted_canvas(db: &Db) -> anyhow::Result<Option<Canvas>> {
     };
     let canvas =
         serde_json::from_value(snapshot.canvas).context("failed to decode artboard snapshot")?;
-    Ok(Some(canvas))
+    let provenance = serde_json::from_value(snapshot.provenance)
+        .context("failed to decode artboard provenance")?;
+    Ok(Some(PersistedArtboard { canvas, provenance }))
 }
 
-pub async fn flush_server_snapshot(db: &Db, server: &ServerHandle) -> anyhow::Result<()> {
+pub async fn flush_server_snapshot(
+    db: &Db,
+    server: &ServerHandle,
+    shared_provenance: &SharedArtboardProvenance,
+) -> anyhow::Result<()> {
     let canvas = server.canvas_snapshot();
-    save_canvas_snapshot(db, &canvas).await
+    let provenance = clone_shared_provenance(shared_provenance);
+    save_canvas_snapshot(db, &canvas, &provenance).await
 }
 
 pub fn spawn_server() -> ServerHandle {
     ServerHandle::spawn_local(LateShCanvasStore)
 }
 
-pub fn spawn_persistent_server(db: Db, initial_canvas: Option<Canvas>) -> ServerHandle {
-    spawn_persistent_server_with_interval(db, initial_canvas, DEFAULT_PERSIST_INTERVAL)
+pub fn spawn_persistent_server(
+    db: Db,
+    initial_canvas: Option<Canvas>,
+    shared_provenance: SharedArtboardProvenance,
+) -> ServerHandle {
+    spawn_persistent_server_with_interval(
+        db,
+        initial_canvas,
+        shared_provenance,
+        DEFAULT_PERSIST_INTERVAL,
+    )
 }
 
 pub fn spawn_persistent_server_with_interval(
     db: Db,
     initial_canvas: Option<Canvas>,
+    shared_provenance: SharedArtboardProvenance,
     persist_interval: Duration,
 ) -> ServerHandle {
     ServerHandle::spawn_local(PostgresCanvasStore::new(
         db,
         initial_canvas,
+        shared_provenance,
         persist_interval,
     ))
+}
+
+#[derive(Debug, Clone)]
+pub struct PersistedArtboard {
+    pub canvas: Canvas,
+    pub provenance: ArtboardProvenance,
 }
 
 fn blank_canvas() -> Canvas {
@@ -136,6 +183,7 @@ fn blank_canvas() -> Canvas {
 fn run_persist_loop(
     db: Db,
     persist_state: Arc<Mutex<PersistState>>,
+    shared_provenance: SharedArtboardProvenance,
     persist_notify_rx: mpsc::Receiver<()>,
     runtime: tokio::runtime::Handle,
     persist_interval: Duration,
@@ -144,7 +192,7 @@ fn run_persist_loop(
         match persist_notify_rx.recv() {
             Ok(()) => {}
             Err(_) => {
-                flush_dirty_canvas(&db, &persist_state, &runtime);
+                flush_dirty_canvas(&db, &persist_state, &shared_provenance, &runtime);
                 return;
             }
         }
@@ -161,13 +209,13 @@ fn run_persist_loop(
                     Ok(()) => {}
                     Err(mpsc::RecvTimeoutError::Timeout) => break,
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        flush_dirty_canvas(&db, &persist_state, &runtime);
+                        flush_dirty_canvas(&db, &persist_state, &shared_provenance, &runtime);
                         return;
                     }
                 }
             }
 
-            if !flush_dirty_canvas(&db, &persist_state, &runtime) {
+            if !flush_dirty_canvas(&db, &persist_state, &shared_provenance, &runtime) {
                 break;
             }
         }
@@ -177,6 +225,7 @@ fn run_persist_loop(
 fn flush_dirty_canvas(
     db: &Db,
     persist_state: &Arc<Mutex<PersistState>>,
+    shared_provenance: &SharedArtboardProvenance,
     runtime: &tokio::runtime::Handle,
 ) -> bool {
     let canvas = {
@@ -192,7 +241,8 @@ fn flush_dirty_canvas(
         return false;
     };
 
-    if let Err(error) = persist_canvas(runtime, db, &canvas) {
+    let provenance = clone_shared_provenance(shared_provenance);
+    if let Err(error) = persist_canvas(runtime, db, &canvas, &provenance) {
         tracing::error!(error = ?error, "failed to persist artboard snapshot");
         let mut state = persist_state.lock_recover();
         state.latest_canvas = Some(canvas);
@@ -208,17 +258,24 @@ fn persist_canvas(
     runtime: &tokio::runtime::Handle,
     db: &Db,
     canvas: &Canvas,
+    provenance: &ArtboardProvenance,
 ) -> anyhow::Result<()> {
-    runtime.block_on(save_canvas_snapshot(db, canvas))
+    runtime.block_on(save_canvas_snapshot(db, canvas, provenance))
 }
 
-async fn save_canvas_snapshot(db: &Db, canvas: &Canvas) -> anyhow::Result<()> {
+async fn save_canvas_snapshot(
+    db: &Db,
+    canvas: &Canvas,
+    provenance: &ArtboardProvenance,
+) -> anyhow::Result<()> {
     let canvas = serde_json::to_value(canvas).context("failed to serialize artboard canvas")?;
+    let provenance =
+        serde_json::to_value(provenance).context("failed to serialize artboard provenance")?;
     let client = db
         .get()
         .await
         .context("failed to get db client for artboard save")?;
-    Snapshot::upsert(&client, Snapshot::MAIN_BOARD_KEY, canvas)
+    Snapshot::upsert(&client, Snapshot::MAIN_BOARD_KEY, canvas, provenance)
         .await
         .context("failed to upsert artboard snapshot")?;
     Ok(())
