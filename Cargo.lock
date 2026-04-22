@@ -1180,17 +1180,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dartboard-picker-core"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7de6bfcd97eb13b6d2aa084e67a6a7cec2348a9c7ad8d9f44376859abce1af1"
-dependencies = [
- "emojis",
- "serde_json",
- "unicode_names2",
-]
-
-[[package]]
 name = "dartboard-tui"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2625,7 +2614,6 @@ dependencies = [
  "dartboard-core",
  "dartboard-editor",
  "dartboard-local",
- "dartboard-picker-core",
  "dartboard-tui",
  "emojis",
  "ipnet",

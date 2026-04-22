@@ -30,7 +30,6 @@ crossterm.workspace = true
 dartboard-core.workspace = true
 dartboard-editor.workspace = true
 dartboard-local.workspace = true
-dartboard-picker-core.workspace = true
 dartboard-tui.workspace = true
 ratatui.workspace = true
 ratatui-textarea = { version = "0.9.1", default-features = false }

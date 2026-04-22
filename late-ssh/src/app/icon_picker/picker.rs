@@ -402,7 +402,7 @@ fn render_footer(f: &mut Frame, area: Rect) {
         Span::styled(" keep open", dim),
         sep.clone(),
         Span::styled("Tab/S+Tab", key),
-        Span::styled(" switch sets", dim),
+        Span::styled(" switch", dim),
     ];
     spans.push(sep);
     spans.push(Span::styled("Esc", key));
