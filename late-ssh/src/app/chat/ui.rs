@@ -29,7 +29,7 @@ const REACTION_PICKER_KEYS: [i16; 5] = [1, 2, 3, 4, 5];
 
 fn contributor_badge_for_username(username: &str) -> Option<&'static str> {
     match username.trim().to_ascii_lowercase().as_str() {
-        "mevanlc" | "yawner" => Some(" 🔧"),
+        "mevanlc" | "yawner" | "kirii.md" => Some(" 🔧"),
         _ => None,
     }
 }
@@ -258,8 +258,11 @@ fn chat_composer_lines_for_height(textarea: &TextArea<'static>, width: usize) ->
 }
 
 fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
-    usize::from(view.composer.is_empty() && !view.mention_active && view.reaction_picker_active)
-        .max(1)
+    if view.composer.is_empty() && !view.mention_active && view.reaction_picker_active {
+        reaction_picker_placeholder_lines(Style::default()).len()
+    } else {
+        0
+    }
 }
 
 pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
