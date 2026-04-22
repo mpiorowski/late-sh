@@ -56,7 +56,10 @@ mod tests {
     fn move_topic_wraps_at_both_ends() {
         let mut state = HelpModalState::new();
         state.move_topic(-1);
-        assert_eq!(state.selected_topic(), HelpTopic::ALL[HelpTopic::ALL.len() - 1]);
+        assert_eq!(
+            state.selected_topic(),
+            HelpTopic::ALL[HelpTopic::ALL.len() - 1]
+        );
 
         state.move_topic(1);
         assert_eq!(state.selected_topic(), HelpTopic::Overview);
