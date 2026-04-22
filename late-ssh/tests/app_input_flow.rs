@@ -536,6 +536,33 @@ async fn members_command_shows_room_members_without_persisting_message() {
 }
 
 #[tokio::test]
+async fn exit_command_opens_quit_confirm_and_stays_client_side() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "exit-command-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join user to general");
+
+    let mut app = make_app(test_db.db.clone(), user.id, "exit-command-flow-it");
+
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "> general").await;
+
+    app.handle_input(b"i/exit\r");
+    wait_for_render_contains(&mut app, " Quit? ").await;
+
+    let messages = ChatMessage::list_recent(&client, general.id, 20)
+        .await
+        .expect("list recent messages");
+    assert!(messages.is_empty(), "expected /exit to stay client-side");
+}
+
+#[tokio::test]
 async fn ignore_command_hides_messages_and_persists_across_refresh() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "ignore-flow-viewer").await;

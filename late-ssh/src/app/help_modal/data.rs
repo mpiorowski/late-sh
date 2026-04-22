@@ -109,6 +109,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /unignore [@user]  remove a user from your ignore list",
         "  /music             explain how music works",
         "  /settings          open your settings modal",
+        "  /exit              open quit confirm",
         "  Ctrl+O             open your settings modal anywhere",
         "",
         "Messages",

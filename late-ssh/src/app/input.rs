@@ -619,18 +619,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
                     app.banner = Some(b);
                 }
-                if let Some(topic) = app.chat.take_requested_help_topic() {
-                    app.help_modal_state.open(topic);
-                    app.show_help = true;
-                }
-                if app.chat.take_requested_settings_modal() {
-                    app.settings_modal_state.open_from_profile(
-                        app.profile_state.profile(),
-                        app.chat.favorite_room_options(),
-                        crate::app::settings_modal::ui::MODAL_WIDTH,
-                    );
-                    app.show_settings = true;
-                }
+                chat::input::handle_post_submit_requests(app);
             }
         }
         ParsedInput::AltC => {}
@@ -1083,6 +1072,17 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
+pub(crate) fn trigger_global_quit(app: &mut App) {
+    match quit_confirm::input::action_for(app.show_quit_confirm) {
+        quit_confirm::input::QuitAction::OpenConfirm => {
+            app.show_quit_confirm = true;
+        }
+        quit_confirm::input::QuitAction::QuitNow => {
+            app.running = false;
+        }
+    }
+}
+
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
@@ -1124,14 +1124,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
 
     match byte {
         b'q' | b'Q' => {
-            match quit_confirm::input::action_for(app.show_quit_confirm) {
-                quit_confirm::input::QuitAction::OpenConfirm => {
-                    app.show_quit_confirm = true;
-                }
-                quit_confirm::input::QuitAction::QuitNow => {
-                    app.running = false;
-                }
-            }
+            trigger_global_quit(app);
             true
         }
         b'm' | b'M' => {

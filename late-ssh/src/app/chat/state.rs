@@ -105,6 +105,7 @@ pub struct ChatState {
     pub(crate) pending_notifications: Vec<PendingNotification>,
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
+    requested_quit: bool,
 }
 
 pub(crate) struct PendingNotification {
@@ -176,6 +177,7 @@ impl ChatState {
             pending_notifications: Vec::new(),
             requested_help_topic: None,
             requested_settings_modal: false,
+            requested_quit: false,
         }
     }
 
@@ -279,6 +281,10 @@ impl ChatState {
 
     pub fn take_requested_settings_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_settings_modal)
+    }
+
+    pub fn take_requested_quit(&mut self) -> bool {
+        std::mem::take(&mut self.requested_quit)
     }
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
@@ -806,6 +812,12 @@ impl ChatState {
         if body.trim() == "/settings" {
             self.clear_composer_after_submit();
             self.requested_settings_modal = true;
+            return None;
+        }
+
+        if body.trim() == "/exit" {
+            self.clear_composer_after_submit();
+            self.requested_quit = true;
             return None;
         }
 

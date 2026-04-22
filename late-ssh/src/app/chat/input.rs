@@ -49,12 +49,7 @@ pub fn handle_compose_input(
             if let Some(b) = app.chat.submit_composer(false, from_dashboard) {
                 app.banner = Some(b);
             }
-            if let Some(topic) = app.chat.take_requested_help_topic() {
-                open_help_modal(app, topic);
-            }
-            if app.chat.take_requested_settings_modal() {
-                open_settings_modal(app);
-            }
+            handle_post_submit_requests(app);
         }
         0x15 => {
             // Readline ^U: kill from cursor to start of current line.
@@ -113,6 +108,18 @@ fn open_settings_modal(app: &mut App) {
         crate::app::settings_modal::ui::MODAL_WIDTH,
     );
     app.show_settings = true;
+}
+
+pub(crate) fn handle_post_submit_requests(app: &mut App) {
+    if app.chat.take_requested_quit() {
+        crate::app::input::trigger_global_quit(app);
+    }
+    if let Some(topic) = app.chat.take_requested_help_topic() {
+        open_help_modal(app, topic);
+    }
+    if app.chat.take_requested_settings_modal() {
+        open_settings_modal(app);
+    }
 }
 
 pub fn handle_compose_char(app: &mut App, ch: char) {
