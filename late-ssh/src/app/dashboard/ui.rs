@@ -447,6 +447,7 @@ mod tests {
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
+                            reaction_picker_active: false,
                             composer: &composer,
                             composing: false,
                             mention_matches: &[],
