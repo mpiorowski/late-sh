@@ -152,7 +152,7 @@ impl SymphoniaStreamDecoder {
         Ok(())
     }
 
-    fn spec(&self) -> AudioSpec {
+    pub(super) fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
@@ -266,10 +266,9 @@ fn push_interleaved_samples(
     out.extend_from_slice(buf.samples());
 }
 
-pub(super) fn probe_stream_spec(audio_base_url: &str) -> Result<AudioSpec> {
-    let decoder = SymphoniaStreamDecoder::new_http(&trim_stream_suffix(audio_base_url))
-        .context("failed to create audio decoder for stream probe")?;
-    Ok(decoder.spec())
+pub(super) fn probe_stream(audio_base_url: &str) -> Result<SymphoniaStreamDecoder> {
+    SymphoniaStreamDecoder::new_http(&trim_stream_suffix(audio_base_url))
+        .context("failed to create audio decoder for stream probe")
 }
 
 pub(super) fn trim_stream_suffix(audio_base_url: &str) -> String {

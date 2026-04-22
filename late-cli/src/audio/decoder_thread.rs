@@ -1,10 +1,8 @@
-use anyhow::Result;
 use ringbuf::{HeapProd, traits::Producer};
 use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
     thread,
     time::Duration,
@@ -22,20 +20,10 @@ pub(super) fn spawn_decoder_thread(
     source_spec: AudioSpec,
     output_sample_rate: u32,
     stop: Arc<AtomicBool>,
-    ready_tx: mpsc::SyncSender<Result<()>>,
+    initial_decoder: SymphoniaStreamDecoder,
 ) {
     thread::spawn(move || {
-        let mut decoder_opt =
-            match SymphoniaStreamDecoder::new_http(&trim_stream_suffix(&audio_base_url)) {
-                Ok(decoder) => {
-                    let _ = ready_tx.send(Ok(()));
-                    Some(decoder)
-                }
-                Err(err) => {
-                    let _ = ready_tx.send(Err(err.context("failed to create audio decoder")));
-                    return;
-                }
-            };
+        let mut decoder_opt = Some(initial_decoder);
 
         let mut chunk = Vec::with_capacity(1024 * source_spec.channels);
         let mut resampler = StreamingLinearResampler::new(

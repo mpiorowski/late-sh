@@ -7,7 +7,6 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
-        mpsc,
     },
     thread,
     time::Duration,
@@ -16,7 +15,7 @@ use tokio::sync::broadcast;
 
 mod decoder;
 
-use decoder::{SymphoniaStreamDecoder, probe_stream_spec, trim_stream_suffix};
+use decoder::{SymphoniaStreamDecoder, probe_stream, trim_stream_suffix};
 
 #[derive(Debug, Clone)]
 pub(super) struct VizSample {
@@ -61,9 +60,10 @@ impl AudioRuntime {
         }
 
         let probe_url = audio_base_url.clone();
-        let source_spec = tokio::task::spawn_blocking(move || probe_stream_spec(&probe_url))
+        let initial_decoder = tokio::task::spawn_blocking(move || probe_stream(&probe_url))
             .await
             .context("audio stream probe task failed")??;
+        let source_spec = initial_decoder.spec();
         let output_sample_rate = output_sample_rate_for(source_spec)?;
         let ring_capacity_samples =
             (output_sample_rate as usize * source_spec.channels * 2).max(1);
@@ -75,7 +75,6 @@ impl AudioRuntime {
         let volume_percent = Arc::new(AtomicU8::new(30));
         let stats = Arc::new(AudioStats::default());
         let (analyzer_tx, _) = broadcast::channel(32);
-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
         let stream = build_output_stream(
             source_spec,
@@ -96,7 +95,7 @@ impl AudioRuntime {
             source_spec,
             output_sample_rate,
             Arc::clone(&stop),
-            ready_tx,
+            initial_decoder,
         );
         spawn_audio_stats_thread(Arc::clone(&stats), Arc::clone(&stop));
         spawn_playback_analyzer_thread(
@@ -105,9 +104,6 @@ impl AudioRuntime {
             output_sample_rate,
             Arc::clone(&stop),
         );
-        ready_rx
-            .recv()
-            .context("failed to receive decoder startup status")??;
         stream
             .play()
             .context("failed to start audio output stream")?;
