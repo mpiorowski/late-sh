@@ -53,7 +53,8 @@ pub(super) fn build_output_stream(
     })?;
     let channels = config.channels() as usize;
     let sample_rate = config.sample_rate().0;
-    let stream_config = config.config();
+    let mut stream_config = config.config();
+    apply_platform_buffer_size(&mut stream_config, config.buffer_size());
     let err_fn = |err| eprintln!("audio output stream error: {err}");
     let output_state = PlaybackOutputState {
         queue,
@@ -285,6 +286,40 @@ fn map_output_frame(source_frame: &[f32], output_channels: usize) -> Vec<f32> {
     }
 }
 
+fn apply_platform_buffer_size(
+    config: &mut cpal::StreamConfig,
+    supported: &cpal::SupportedBufferSize,
+) {
+    let Some(preferred) = preferred_buffer_frames() else {
+        return;
+    };
+    if let Some(frames) = clamp_preferred_buffer_frames(preferred, supported) {
+        config.buffer_size = cpal::BufferSize::Fixed(frames);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn preferred_buffer_frames() -> Option<u32> {
+    Some(2048)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn preferred_buffer_frames() -> Option<u32> {
+    None
+}
+
+fn clamp_preferred_buffer_frames(
+    preferred: u32,
+    supported: &cpal::SupportedBufferSize,
+) -> Option<u32> {
+    match *supported {
+        cpal::SupportedBufferSize::Range { min, max } if max >= min && max > 0 => {
+            Some(preferred.clamp(min.max(1), max))
+        }
+        _ => None,
+    }
+}
+
 fn mix_for_analyzer(source_frame: &[f32]) -> f32 {
     if source_frame.is_empty() {
         return 0.0;
@@ -329,6 +364,32 @@ mod tests {
             cpal::SampleFormat::F32,
         );
         assert_eq!(preferred_output_sample_rate(&config, 44_100), 44_100);
+    }
+
+    #[test]
+    fn clamp_preferred_buffer_frames_returns_preferred_inside_range() {
+        let supported = cpal::SupportedBufferSize::Range {
+            min: 256,
+            max: 8192,
+        };
+        assert_eq!(clamp_preferred_buffer_frames(2048, &supported), Some(2048));
+    }
+
+    #[test]
+    fn clamp_preferred_buffer_frames_clamps_to_bounds() {
+        let supported = cpal::SupportedBufferSize::Range {
+            min: 4096,
+            max: 8192,
+        };
+        assert_eq!(clamp_preferred_buffer_frames(2048, &supported), Some(4096));
+    }
+
+    #[test]
+    fn clamp_preferred_buffer_frames_returns_none_when_unknown() {
+        assert_eq!(
+            clamp_preferred_buffer_frames(2048, &cpal::SupportedBufferSize::Unknown),
+            None
+        );
     }
 
     #[test]
