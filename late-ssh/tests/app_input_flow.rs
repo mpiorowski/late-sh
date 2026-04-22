@@ -197,6 +197,28 @@ async fn active_artboard_blocks_screen_number_hotkeys_until_escape() {
 }
 
 #[tokio::test]
+async fn artboard_help_modal_tab_switches_help_tabs_instead_of_pages() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-help-tab-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-help-tab-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    app.handle_input(b"\x10");
+    wait_for_render_contains(&mut app, "Two modes").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, "Draw / erase").await;
+
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains(" Dashboard "),
+        "expected Artboard help Tab to stay on Artboard instead of switching page; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn dashboard_chat_compose_treats_screen_hotkeys_as_text() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dash-chat-compose-it").await;

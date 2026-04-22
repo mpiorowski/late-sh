@@ -657,7 +657,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             if ctx.screen == Screen::Games && app.is_playing_game {
                 return;
             }
-            if ctx.screen == Screen::Artboard && app.artboard_interacting {
+            if artboard_blocks_global_page_switch(app, ctx.screen) {
                 return;
             }
             reset_composers_for_page_change(app);
@@ -1084,6 +1084,8 @@ fn open_settings_modal_globally(app: &mut App) {
 }
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
+    let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
+
     // ? opens help unless composing text
     if byte == b'?' && !ctx.chat_composing && !ctx.news_composing {
         app.help_modal_state
@@ -1230,27 +1232,27 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             ));
             true
         }
-        b'1' => {
+        b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);
             true
         }
-        b'2' => {
+        b'2' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Chat);
             true
         }
-        b'3' => {
+        b'3' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Games);
             true
         }
-        b'4' => {
+        b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Artboard);
             true
         }
-        b'\t' => {
+        b'\t' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(ctx.screen.next());
             true
@@ -1263,6 +1265,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         _ => false,
     }
+}
+
+fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
+    if screen != Screen::Artboard {
+        return false;
+    }
+    let Some(state) = app.dartboard_state.as_ref() else {
+        return app.artboard_interacting;
+    };
+    app.artboard_interacting || state.is_help_open() || state.is_glyph_picker_open()
 }
 
 fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {

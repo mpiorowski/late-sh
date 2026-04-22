@@ -65,11 +65,12 @@ fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTopic) {
     let mut spans = vec![Span::raw("  ")];
     for topic in HelpTopic::ALL {
         let active = topic == selected;
+        let active_style = Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_HIGHLIGHT())
+            .add_modifier(Modifier::BOLD);
         let style = if active {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .bg(theme::BG_HIGHLIGHT())
-                .add_modifier(Modifier::BOLD)
+            active_style
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
