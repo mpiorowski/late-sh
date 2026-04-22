@@ -1,5 +1,6 @@
 use super::{
-    chat, dashboard, help_modal, icon_picker, profile, profile_modal, settings_modal, state::App,
+    chat, dashboard, help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
+    state::App,
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -449,6 +450,11 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    if app.show_quit_confirm {
+        quit_confirm::input::handle_input(app, event);
+        return;
+    }
+
     // Ctrl+O is a plain C0 control byte (0x0F) across terminals/tmux, so
     // treat it as the global "open settings" chord before any local routing.
     if matches!(event, ParsedInput::Byte(0x0F)) {
@@ -456,7 +462,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Help is the topmost modal: when both are open it owns input.
+    // The quit confirm is topmost. Otherwise the existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -732,6 +738,10 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
 }
 
 fn dispatch_escape(app: &mut App) {
+    if app.show_quit_confirm {
+        quit_confirm::input::handle_escape(app);
+        return;
+    }
     if app.show_help {
         help_modal::input::handle_escape(app);
         return;
@@ -871,7 +881,6 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
             true
         }
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
-        Screen::Profile => profile::input::handle_arrow(app, key),
         Screen::Games => crate::app::games::input::handle_arrow(app, key),
     }
 }
@@ -908,6 +917,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_profile_modal = false;
     app.show_web_chat_qr = false;
+    app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
     app.chat.cancel_room_jump();
@@ -953,7 +963,18 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 
     match byte {
-        b'q' | b'Q' | 0x03 => {
+        b'q' | b'Q' => {
+            match quit_confirm::input::action_for(app.show_quit_confirm) {
+                quit_confirm::input::QuitAction::OpenConfirm => {
+                    app.show_quit_confirm = true;
+                }
+                quit_confirm::input::QuitAction::QuitNow => {
+                    app.running = false;
+                }
+            }
+            true
+        }
+        0x03 => {
             app.running = false;
             true
         }
@@ -1073,11 +1094,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.screen = Screen::Games;
             true
         }
-        b'4' => {
-            reset_composers_for_page_change(app);
-            app.screen = Screen::Profile;
-            true
-        }
         b'\t' => {
             reset_composers_for_page_change(app);
             app.screen = ctx.screen.next();
@@ -1088,7 +1104,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                     app.chat.sync_selection();
                     app.chat.mark_selected_room_read();
                 }
-                Screen::Profile => {}
                 Screen::Games => {}
             }
             true
@@ -1110,9 +1125,6 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Chat => {
             chat::input::handle_byte(app, byte);
-        }
-        Screen::Profile => {
-            profile::input::handle_byte(app, byte);
         }
         Screen::Games => {
             crate::app::games::input::handle_key(app, byte);
@@ -1363,7 +1375,7 @@ mod tests {
     fn compose_room_switch_only_allowed_on_chat_screen() {
         assert!(compose_room_switch_allowed(Screen::Chat));
         assert!(!compose_room_switch_allowed(Screen::Dashboard));
-        assert!(!compose_room_switch_allowed(Screen::Profile));
+        assert!(!compose_room_switch_allowed(Screen::Games));
     }
 
     #[test]

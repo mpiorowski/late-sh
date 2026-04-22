@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use chrono::Utc;
 use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
@@ -28,6 +29,7 @@ pub struct SidebarProps<'a> {
     pub audio_beat: f32,
     pub connect_url: &'a str,
     pub activity: &'a VecDeque<ActivityEvent>,
+    pub clock_text: &'a str,
 }
 
 pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
@@ -48,7 +50,13 @@ pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     draw_screen_card(frame, layout[0], screen);
     visualizer.render(frame, layout[1]);
     draw_now_playing(frame, layout[2], now_playing, paired_client);
-    draw_status(frame, layout[3], online_count, props.activity);
+    draw_status(
+        frame,
+        layout[3],
+        online_count,
+        props.activity,
+        props.clock_text,
+    );
     crate::app::bonsai::ui::draw_bonsai(frame, layout[4], props.bonsai, props.audio_beat);
 }
 
@@ -57,7 +65,6 @@ fn draw_screen_card(frame: &mut Frame, area: Rect, screen: Screen) {
         (Screen::Dashboard, "1"),
         (Screen::Chat, "2"),
         (Screen::Games, "3"),
-        (Screen::Profile, "4"),
     ];
 
     let mut spans = Vec::new();
@@ -81,7 +88,6 @@ fn draw_screen_card(frame: &mut Frame, area: Rect, screen: Screen) {
     let label = match screen {
         Screen::Dashboard => "Dashboard",
         Screen::Chat => "Chat",
-        Screen::Profile => "Profile",
         Screen::Games => "Games",
     };
 
@@ -218,6 +224,7 @@ fn draw_status(
     area: Rect,
     online_count: usize,
     activity: &VecDeque<ActivityEvent>,
+    clock_text: &str,
 ) {
     if area.height < 3 {
         return;
@@ -230,7 +237,16 @@ fn draw_status(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut lines = vec![Line::from(vec![
+    let header_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    };
+    let header_cols =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).split(header_area);
+
+    let online_line = Line::from(vec![
         Span::styled("● ", Style::default().fg(theme::SUCCESS())),
         Span::styled(
             format!("{}", online_count),
@@ -239,16 +255,31 @@ fn draw_status(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" online", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("  ", Style::default()),
-        Span::styled("?", Style::default().fg(theme::AMBER())),
-        Span::styled(" help", Style::default().fg(theme::TEXT_DIM())),
-    ])];
+    ]);
+    frame.render_widget(Paragraph::new(online_line), header_cols[0]);
 
-    let activity_rows = inner.height.saturating_sub(1).min(20) as usize;
+    let clock_line = Line::from(Span::styled(
+        clock_text.to_string(),
+        Style::default().fg(theme::TEXT_MUTED()),
+    ));
+    frame.render_widget(Paragraph::new(clock_line).right_aligned(), header_cols[1]);
+
+    let events_area = Rect {
+        x: inner.x,
+        y: inner.y + 1,
+        width: inner.width,
+        height: inner.height.saturating_sub(1),
+    };
+    if events_area.height == 0 {
+        return;
+    }
+
+    let activity_rows = events_area.height.min(20) as usize;
     let visible_events = (activity_rows / 2).max(1);
-    let meta_width = inner.width as usize;
-    let action_width = inner.width as usize;
+    let meta_width = events_area.width as usize;
+    let action_width = events_area.width as usize;
 
+    let mut lines = Vec::new();
     for event in activity.iter().rev().take(visible_events) {
         let elapsed = event.at.elapsed().as_secs();
         let ago = if elapsed < 60 {
@@ -270,7 +301,12 @@ fn draw_status(
         )]));
     }
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), events_area);
+}
+
+pub fn sidebar_clock_text(timezone: Option<&str>) -> String {
+    crate::app::common::time::timezone_current_time(Utc::now(), timezone)
+        .unwrap_or_else(|| Utc::now().format("UTC %H:%M").to_string())
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -289,4 +325,15 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     let mut out: String = chars.into_iter().take(max_chars - 1).collect();
     out.push('…');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidebar_clock_text_falls_back_to_utc_when_timezone_missing() {
+        let clock = sidebar_clock_text(None);
+        assert!(clock.starts_with("UTC "));
+    }
 }

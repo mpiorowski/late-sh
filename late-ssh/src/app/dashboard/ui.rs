@@ -40,8 +40,8 @@ pub struct DashboardRenderInput<'a> {
     pub show_header: bool,
     /// When `Some`, the user has 2+ favorites pinned and we render a
     /// quick-switch strip directly above the chat card. Each entry is
-    /// `(room_id, label, is_active)`. `None` hides the strip.
-    pub favorites_strip: Option<&'a [(uuid::Uuid, String, bool)]>,
+    /// `(room_id, label, is_active, unread_count)`. `None` hides the strip.
+    pub favorites_strip: Option<&'a [(uuid::Uuid, String, bool, i64)]>,
     pub chat_view: DashboardChatView<'a>,
 }
 
@@ -88,7 +88,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 fn draw_chat_section(
     frame: &mut Frame,
     area: Rect,
-    favorites_strip: Option<&[(uuid::Uuid, String, bool)]>,
+    favorites_strip: Option<&[(uuid::Uuid, String, bool, i64)]>,
     chat_view: DashboardChatView<'_>,
 ) {
     let Some(pins) = favorites_strip else {
@@ -106,9 +106,9 @@ fn draw_chat_section(
     draw_dashboard_chat_card(frame, split[1], chat_view);
 }
 
-fn draw_favorites_strip(frame: &mut Frame, area: Rect, pins: &[(uuid::Uuid, String, bool)]) {
+fn draw_favorites_strip(frame: &mut Frame, area: Rect, pins: &[(uuid::Uuid, String, bool, i64)]) {
     let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-    for (idx, (_, label, active)) in pins.iter().enumerate() {
+    for (idx, (_, label, active, unread)) in pins.iter().enumerate() {
         if idx > 0 {
             spans.push(Span::raw(" "));
         }
@@ -127,7 +127,15 @@ fn draw_favorites_strip(frame: &mut Frame, area: Rect, pins: &[(uuid::Uuid, Stri
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        spans.push(Span::styled(format!(" {slot}{label} "), style));
+        let unread_suffix = if *unread > 0 {
+            format!(" ({unread})")
+        } else {
+            String::new()
+        };
+        spans.push(Span::styled(
+            format!(" {slot}{label}{unread_suffix} "),
+            style,
+        ));
     }
     spans.push(Span::styled(
         "   [] cycle · , last · g_ jump",
@@ -388,5 +396,81 @@ mod tests {
         assert!(!rendered.contains("Stream"));
         assert!(!rendered.contains("Vote Next"));
         assert!(rendered.contains("Chat"));
+    }
+
+    #[test]
+    fn dashboard_favorites_strip_renders_unread_counts() {
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let vote_counts = VoteCount {
+            lofi: 3,
+            ambient: 2,
+            classic: 1,
+            jazz: 0,
+        };
+        let mut rows_cache = ChatRowsCache::default();
+        let usernames: HashMap<Uuid, String> = HashMap::new();
+        let countries: HashMap<Uuid, String> = HashMap::new();
+        let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
+        let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let message_reactions = HashMap::new();
+        let composer = ratatui_textarea::TextArea::default();
+        let rust_room = Uuid::now_v7();
+        let go_room = Uuid::now_v7();
+
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, 100, 20);
+                draw_dashboard(
+                    frame,
+                    area,
+                    DashboardRenderInput {
+                        now_playing: Some("Boards of Canada"),
+                        vote_counts: &vote_counts,
+                        current_genre: Genre::Lofi,
+                        next_switch_in: Duration::from_secs(95),
+                        my_vote: Some(Genre::Ambient),
+                        show_header: true,
+                        favorites_strip: Some(&[
+                            (rust_room, "#rust".to_string(), true, 3),
+                            (go_room, "#go".to_string(), false, 0),
+                        ]),
+                        chat_view: DashboardChatView {
+                            messages: &[],
+                            overlay: None,
+                            rows_cache: &mut rows_cache,
+                            usernames: &usernames,
+                            countries: &countries,
+                            badges: &badges,
+                            message_reactions: &message_reactions,
+                            current_user_id: Uuid::nil(),
+                            selected_message_id: None,
+                            composer: &composer,
+                            composing: false,
+                            mention_matches: &[],
+                            mention_selected: 0,
+                            mention_active: false,
+                            reply_author: None,
+                            is_editing: false,
+                            bonsai_glyphs: &bonsai_glyphs,
+                        },
+                    },
+                );
+            })
+            .expect("draw");
+
+        let rendered = (0..20)
+            .map(|y| {
+                let mut out = String::new();
+                for x in 0..100 {
+                    out.push_str(terminal.backend().buffer()[(x, y)].symbol());
+                }
+                out
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("#rust (3)"));
+        assert!(rendered.contains("#go"));
     }
 }
