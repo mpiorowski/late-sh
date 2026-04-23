@@ -655,6 +655,7 @@ impl State {
     }
 
     pub fn register_canvas_click(&mut self, pos: Pos) -> bool {
+        let pos = self.snapshot.canvas.glyph_origin(pos).unwrap_or(pos);
         let now = Instant::now();
         let is_double = match self.last_canvas_click {
             Some((prev, prev_pos)) => {
@@ -819,10 +820,13 @@ impl State {
         if glyph.ch == ' ' {
             return false;
         }
-        self.editor.cursor = pos;
+        self.editor.cursor = glyph.pos;
         self.editor.clear_selection();
         self.editor.floating = Some(EditorFloatingSelection {
-            clipboard: capture_bounds(&self.snapshot.canvas, Bounds::single(pos)),
+            clipboard: capture_bounds(
+                &self.snapshot.canvas,
+                Bounds::single(glyph.pos).normalized_for_canvas(&self.snapshot.canvas),
+            ),
             transparent: true,
             source_index: None,
         });
@@ -1191,7 +1195,7 @@ mod tests {
     use super::*;
     use crate::app::artboard::provenance::ArtboardProvenance;
     use crate::app::artboard::svc::{DartboardService, DartboardSnapshot};
-    use dartboard_core::{CellValue, RgbColor};
+    use dartboard_core::{CanvasOp, CellValue, RgbColor};
     use dartboard_editor::Clipboard;
 
     fn test_state() -> State {
@@ -1451,6 +1455,34 @@ mod tests {
     }
 
     #[test]
+    fn register_canvas_click_treats_wide_glyph_halves_as_one_target() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(4, 1);
+        let _ = state.snapshot.canvas.put_glyph(Pos { x: 0, y: 0 }, '👍');
+
+        assert!(!state.register_canvas_click(Pos { x: 0, y: 0 }));
+        assert!(state.register_canvas_click(Pos { x: 1, y: 0 }));
+    }
+
+    #[test]
+    fn temp_glyph_brush_from_wide_continuation_captures_full_glyph() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(4, 1);
+        let _ = state.snapshot.canvas.put_glyph(Pos { x: 0, y: 0 }, '👍');
+
+        assert!(state.activate_temp_glyph_brush_at(Pos { x: 1, y: 0 }));
+
+        assert_eq!(state.cursor(), Pos { x: 0, y: 0 });
+        assert_eq!(state.brush_mode(), BrushMode::Glyph('👍'));
+        let floating = state
+            .floating_view()
+            .expect("temp brush floating preview shown");
+        assert_eq!(floating.anchor, Pos { x: 0, y: 0 });
+        assert_eq!(floating.width, 2);
+        assert_eq!(floating.height, 1);
+    }
+
+    #[test]
     fn app_key_ctrl_v_stamps_floating_like_reference_client() {
         let mut state = test_state();
         state.snapshot.canvas = Canvas::with_size(5, 3);
@@ -1662,6 +1694,31 @@ mod tests {
 
         assert!(changed);
         assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), '👍');
+    }
+
+    #[test]
+    fn diff_canvas_op_wide_insert_left_of_filled_cell_replays_cleanly() {
+        let mut before = Canvas::with_size(5, 1);
+        before.set_colored(Pos { x: 1, y: 0 }, 'A', RgbColor::new(1, 2, 3));
+
+        let mut after = before.clone();
+        let _ = after.put_glyph_colored(Pos { x: 0, y: 0 }, '👍', RgbColor::new(4, 5, 6));
+
+        let op = diff_canvas_op(&before, &after, RgbColor::new(4, 5, 6)).expect("wide insert op");
+        let mut replay = before.clone();
+        replay.apply(&op);
+
+        assert_eq!(
+            op,
+            CanvasOp::PaintCell {
+                pos: Pos { x: 0, y: 0 },
+                ch: '👍',
+                fg: RgbColor::new(4, 5, 6),
+            }
+        );
+        assert_eq!(replay, after);
+        assert_eq!(replay.get(Pos { x: 0, y: 0 }), '👍');
+        assert_eq!(replay.cell(Pos { x: 1, y: 0 }), Some(CellValue::WideCont));
     }
 
     #[test]

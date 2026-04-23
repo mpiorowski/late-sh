@@ -1152,9 +1152,9 @@ dependencies = [
 
 [[package]]
 name = "dartboard-core"
-version = "0.1.2"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26437a368a7e09949254063c48eac1a5d9ca7440d94313d6161f990dee69d36b"
+checksum = "13bd9ba2233fb309f1be774da820be06bcad0a9b77c533eef6838d40d46bee0c"
 dependencies = [
  "serde",
  "unicode-width",
@@ -1162,39 +1162,28 @@ dependencies = [
 
 [[package]]
 name = "dartboard-editor"
-version = "0.1.2"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e47a143d156e1f5ada15b75503e2a5cd628114ae62d1861cea963541c0bc355"
+checksum = "6e8962b1d1da9d8d50063fff642a8a9588fd3acdb86bdb08f674c3071019fbde"
 dependencies = [
  "dartboard-core",
 ]
 
 [[package]]
 name = "dartboard-local"
-version = "0.1.2"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28c89c42ba73c95b8d991a1c45e5d6a98f7dba08b5793bc3e4b7a4f008f35514"
+checksum = "302c51e3953afdcda7f52ca13d03f91ef1591f41678a348818d043f256840869"
 dependencies = [
  "dartboard-core",
  "rand 0.8.5",
 ]
 
 [[package]]
-name = "dartboard-picker-core"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7de6bfcd97eb13b6d2aa084e67a6a7cec2348a9c7ad8d9f44376859abce1af1"
-dependencies = [
- "emojis",
- "serde_json",
- "unicode_names2",
-]
-
-[[package]]
 name = "dartboard-tui"
-version = "0.1.2"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd905faa35ab031d0e90d085611762128771184902074a357042b0067fb5509f"
+checksum = "973bdd9a26d69b1a6c3e6ffcf63e8835d74aa661324a4ff0b5d5ff180eaa9946"
 dependencies = [
  "dartboard-core",
  "ratatui",
@@ -1524,7 +1513,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2625,7 +2614,6 @@ dependencies = [
  "dartboard-core",
  "dartboard-editor",
  "dartboard-local",
- "dartboard-picker-core",
  "dartboard-tui",
  "emojis",
  "ipnet",
@@ -3031,7 +3019,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4630,7 +4618,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4698,7 +4686,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6502,7 +6490,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
