@@ -28,6 +28,7 @@ rustfft.workspace = true
 shlex.workspace = true
 symphonia = { workspace = true, features = ["mp3"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+vte.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["term", "process", "signal", "fs"] }

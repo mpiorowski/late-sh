@@ -10,6 +10,7 @@ use tokio::{sync::broadcast, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info};
 
+use super::predict::{ChatComposerHint, LocalEcho};
 use super::audio::VizSample;
 
 pub(super) struct PairClientInfo {
@@ -30,6 +31,16 @@ enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
+    ChatComposerHint {
+        active: bool,
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        text: String,
+        cursor_line: usize,
+        cursor_col: usize,
+    },
 }
 
 pub(super) async fn run_viz_ws(
@@ -38,6 +49,7 @@ pub(super) async fn run_viz_ws(
     client: &PairClientInfo,
     frames: &mut broadcast::Receiver<VizSample>,
     playback: &PlaybackState<'_>,
+    local_echo: LocalEcho,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!(%ws_url, "connecting pair websocket");
@@ -79,10 +91,15 @@ pub(super) async fn run_viz_ws(
                     break;
                 };
                 match msg? {
-                    Message::Text(text)
-                        if apply_pair_control(&text, playback.muted, playback.volume_percent)? =>
-                    {
-                        send_client_state(&mut ws, client, playback).await?;
+                    Message::Text(text) => {
+                        if apply_pair_control(
+                            &text,
+                            playback.muted,
+                            playback.volume_percent,
+                            &local_echo,
+                        )? {
+                            send_client_state(&mut ws, client, playback).await?;
+                        }
                     }
                     Message::Close(_) => break,
                     _ => {}
@@ -113,7 +130,12 @@ async fn send_client_state(
     Ok(())
 }
 
-fn apply_pair_control(text: &str, muted: &AtomicBool, volume_percent: &AtomicU8) -> Result<bool> {
+fn apply_pair_control(
+    text: &str,
+    muted: &AtomicBool,
+    volume_percent: &AtomicU8,
+    local_echo: &LocalEcho,
+) -> Result<bool> {
     match serde_json::from_str::<PairControlMessage>(text)? {
         PairControlMessage::ToggleMute => {
             let now_muted = muted.fetch_xor(true, Ordering::Relaxed) ^ true;
@@ -129,6 +151,28 @@ fn apply_pair_control(text: &str, muted: &AtomicBool, volume_percent: &AtomicU8)
             let new_volume = bump_volume(volume_percent, -5);
             info!(volume_percent = new_volume, "applied paired volume down");
             Ok(true)
+        }
+        PairControlMessage::ChatComposerHint {
+            active,
+            x,
+            y,
+            width,
+            height,
+            text,
+            cursor_line,
+            cursor_col,
+        } => {
+            local_echo.apply_chat_hint(ChatComposerHint {
+                active,
+                x,
+                y,
+                width,
+                height,
+                text,
+                cursor_line,
+                cursor_col,
+            });
+            Ok(false)
         }
     }
 }
@@ -210,11 +254,24 @@ mod tests {
     fn apply_pair_control_toggles_muted_state() {
         let muted = AtomicBool::new(false);
         let volume_percent = AtomicU8::new(100);
+        let local_echo = LocalEcho::default();
 
-        apply_pair_control(r#"{"event":"toggle_mute"}"#, &muted, &volume_percent).unwrap();
+        apply_pair_control(
+            r#"{"event":"toggle_mute"}"#,
+            &muted,
+            &volume_percent,
+            &local_echo,
+        )
+        .unwrap();
         assert!(muted.load(Ordering::Relaxed));
 
-        apply_pair_control(r#"{"event":"toggle_mute"}"#, &muted, &volume_percent).unwrap();
+        apply_pair_control(
+            r#"{"event":"toggle_mute"}"#,
+            &muted,
+            &volume_percent,
+            &local_echo,
+        )
+        .unwrap();
         assert!(!muted.load(Ordering::Relaxed));
     }
 
@@ -222,11 +279,24 @@ mod tests {
     fn apply_pair_control_adjusts_volume() {
         let muted = AtomicBool::new(false);
         let volume_percent = AtomicU8::new(50);
+        let local_echo = LocalEcho::default();
 
-        apply_pair_control(r#"{"event":"volume_up"}"#, &muted, &volume_percent).unwrap();
+        apply_pair_control(
+            r#"{"event":"volume_up"}"#,
+            &muted,
+            &volume_percent,
+            &local_echo,
+        )
+        .unwrap();
         assert_eq!(volume_percent.load(Ordering::Relaxed), 55);
 
-        apply_pair_control(r#"{"event":"volume_down"}"#, &muted, &volume_percent).unwrap();
+        apply_pair_control(
+            r#"{"event":"volume_down"}"#,
+            &muted,
+            &volume_percent,
+            &local_echo,
+        )
+        .unwrap();
         assert_eq!(volume_percent.load(Ordering::Relaxed), 50);
     }
 }
