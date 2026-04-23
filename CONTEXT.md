@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-22 (Artboard ownership provenance + Esc/view-mode fix)
+- Last updated: 2026-04-23 (Artboard push/pull key removal)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -544,6 +544,7 @@ Key behaviors:
 - Double-clicking an existing non-space cell samples it into a temporary one-glyph brush.
 - `Ctrl+P` toggles the help overlay.
 - `Ctrl+\` toggles the ownership overlay. When on, cells render as per-author initials tinted by a deterministic username color derived from the provenance map.
+- Selection-local shape ops now stop at `Ctrl+T` (flip selection corner), `Ctrl+B` (draw border), and `Ctrl+Space` (smart-fill). The older `Ctrl+H/J/K/L` and `Ctrl+Y/U/I/O` push/pull chords are intentionally unbound.
 - The Info sidebar always shows `Owner` and `Cell` for the current cursor/hover subject. The overlay only changes canvas rendering.
 - `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in `active` mode, and only falls back to `view` mode once there is no local editor state left to dismiss.
 
@@ -562,6 +563,7 @@ Mouse-specific extras:
 | Enter active mode | `i`, `Enter` | Switches the screen from inspect to edit |
 | Draw / erase in active mode | `<type>`, `Space`, `Backspace`, `Delete` | Plain typing edits the shared canvas |
 | Select | `Shift+arrows`, mouse drag | Local selection only |
+| Selection shape ops | `Ctrl+T`, `Ctrl+B`, `Ctrl+Space` | Flip corner, draw border, or smart-fill the current selection |
 | Copy / cut to swatch | `Ctrl+C`, `Ctrl+X` | Fills swatch strip; does not sync to peers |
 | Activate swatch brush | click swatch, `Ctrl+A/S/D/F/G` | Slots `1..5` on the home row |
 | Stamp floating brush | `Enter`, `Ctrl+V` | Brush stays active |
