@@ -33,7 +33,7 @@ pub struct IconCatalogData {
     emoji_sections: Vec<IconSection>,
     unicode_browse_sections: Vec<IconSection>,
     nerd_sections: Vec<IconSection>,
-    unicode_query: RefCell<Option<CachedUnicodeQuery>>,
+    unicode_query_cache: RefCell<Vec<CachedUnicodeQuery>>,
 }
 
 const COMMON_EMOJI: &[&str] = &[
@@ -72,6 +72,10 @@ const COMMON_UNICODE: &[(&str, &str)] = &[
 ];
 
 const UNICODE_SEARCH_LIMIT: usize = 200;
+
+/// Number of recent unicode queries kept in the LRU. Covers typing across a
+/// search word plus a few backspaces without rescanning the codepoint range.
+const UNICODE_QUERY_CACHE_CAP: usize = 16;
 
 impl IconCatalogData {
     pub fn load() -> Self {
@@ -115,7 +119,7 @@ impl IconCatalogData {
             emoji_sections,
             unicode_browse_sections,
             nerd_sections,
-            unicode_query: RefCell::new(None),
+            unicode_query_cache: RefCell::new(Vec::with_capacity(UNICODE_QUERY_CACHE_CAP)),
         }
     }
 
@@ -137,20 +141,30 @@ impl IconCatalogData {
                     return f(&sections);
                 }
 
-                let rebuild = self
-                    .unicode_query
-                    .borrow()
-                    .as_ref()
-                    .is_none_or(|cached| cached.query != query);
-                if rebuild {
-                    *self.unicode_query.borrow_mut() = Some(CachedUnicodeQuery {
-                        query: query.to_string(),
-                        sections: build_unicode_search_sections(query),
-                    });
+                {
+                    let mut cache = self.unicode_query_cache.borrow_mut();
+                    if let Some(pos) = cache.iter().position(|c| c.query == query) {
+                        if pos != 0 {
+                            let hit = cache.remove(pos);
+                            cache.insert(0, hit);
+                        }
+                    } else {
+                        let sections = build_unicode_search_sections(query);
+                        cache.insert(
+                            0,
+                            CachedUnicodeQuery {
+                                query: query.to_string(),
+                                sections,
+                            },
+                        );
+                        if cache.len() > UNICODE_QUERY_CACHE_CAP {
+                            cache.pop();
+                        }
+                    }
                 }
 
-                let cache = self.unicode_query.borrow();
-                let cached = cache.as_ref().expect("unicode query cache missing");
+                let cache = self.unicode_query_cache.borrow();
+                let cached = cache.first().expect("unicode query cache missing");
                 let sections = filter_sections(&cached.sections, "");
                 f(&sections)
             }
