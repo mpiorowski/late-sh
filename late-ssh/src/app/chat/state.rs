@@ -933,6 +933,15 @@ impl ChatState {
             return Some(Banner::success(&format!("Deleting #{slug}...")));
         }
 
+        if let Some(slug) = parse_fill_room_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("Admin only: /fill-room"));
+            }
+            self.service.fill_room_task(self.user_id, slug.to_string());
+            return Some(Banner::success(&format!("Filling #{slug}...")));
+        }
+
         if let Some(command) = unknown_slash_command(&body) {
             self.clear_composer_after_submit();
             return Some(Banner::error(&format!("Unknown command: {command}")));
@@ -1370,6 +1379,16 @@ impl ChatState {
                     self.request_list();
                     banner = Some(Banner::success(&format!("Deleted permanent #{slug}")));
                 }
+                ChatEvent::RoomFilled {
+                    user_id,
+                    slug,
+                    users_added,
+                } if self.user_id == user_id => {
+                    self.request_list();
+                    banner = Some(Banner::success(&format!(
+                        "Filled #{slug} ({users_added} users added)"
+                    )));
+                }
                 ChatEvent::AdminFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
@@ -1691,6 +1710,16 @@ fn parse_create_room_command(input: &str) -> Option<&str> {
 /// Parse `/delete-room <slug>` from the composer text (admin only).
 fn parse_delete_room_command(input: &str) -> Option<&str> {
     let rest = input.strip_prefix("/delete-room ")?.trim_start();
+    let slug = rest.strip_prefix('#').unwrap_or(rest).trim();
+    if slug.is_empty() {
+        return None;
+    }
+    Some(slug)
+}
+
+/// Parse `/fill-room <slug>` from the composer text (admin only).
+fn parse_fill_room_command(input: &str) -> Option<&str> {
+    let rest = input.strip_prefix("/fill-room ")?.trim_start();
     let slug = rest.strip_prefix('#').unwrap_or(rest).trim();
     if slug.is_empty() {
         return None;
@@ -2411,6 +2440,34 @@ mod tests {
     #[test]
     fn parse_delete_room_not_command() {
         assert_eq!(parse_delete_room_command("hello"), None);
+    }
+
+    #[test]
+    fn parse_fill_room_with_hash() {
+        assert_eq!(
+            parse_fill_room_command("/fill-room #announcements"),
+            Some("announcements")
+        );
+    }
+
+    #[test]
+    fn parse_fill_room_without_hash() {
+        assert_eq!(
+            parse_fill_room_command("/fill-room announcements"),
+            Some("announcements")
+        );
+    }
+
+    #[test]
+    fn parse_fill_room_empty() {
+        assert_eq!(parse_fill_room_command("/fill-room "), None);
+        assert_eq!(parse_fill_room_command("/fill-room #"), None);
+    }
+
+    #[test]
+    fn parse_fill_room_not_command() {
+        assert_eq!(parse_fill_room_command("hello"), None);
+        assert_eq!(parse_fill_room_command("/fill-rooms foo"), None);
     }
 
     #[test]

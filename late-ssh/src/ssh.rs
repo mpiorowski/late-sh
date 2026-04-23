@@ -40,11 +40,11 @@ const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
 const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
 
 /// Paired "there is unrendered input" flag + wakeup. `Notify` is just the
-/// alarm clock; `dirty` is the source of truth. `dirty` is written under the
-/// app mutex so any render that subsequently grabs the same mutex either
-/// already covered the input or will see `dirty = true` and know to render.
-/// Using `Notify` alone leaves a stored permit after a batched render,
-/// causing one spurious identical frame per typing burst.
+/// alarm clock; `dirty` is the source of truth. The input path sets `dirty`
+/// after enqueuing bytes for the render task, and the render task clears it
+/// immediately before draining that queue under the app mutex. Using `Notify`
+/// alone leaves a stored permit after a batched render, causing one spurious
+/// identical frame per typing burst.
 struct RenderSignal {
     dirty: AtomicBool,
     notify: Notify,
@@ -88,6 +88,8 @@ struct ClientHandler {
     /// Signaled by input/resize paths to request an immediate (world-stateless)
     /// render, so typed characters echo without waiting for the next world tick.
     render_signal: Option<Arc<RenderSignal>>,
+    input_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
+    input_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>>,
     cli_mode: bool,
     session_token: Option<String>,
     session_rx: Option<tokio::sync::mpsc::Receiver<crate::session::SessionMessage>>,
@@ -139,6 +141,9 @@ pub async fn run_with_listener(
         keys,
         window_size: 8 * 1024 * 1024, // 8MB window size
         event_buffer_size: 128,
+        nodelay: true,
+        keepalive_interval: Some(std::time::Duration::from_secs(30)),
+        keepalive_max: 3,
         ..Default::default()
     };
     let config = Arc::new(config);
@@ -286,6 +291,8 @@ impl Server {
             channel: None,
             app: None,
             render_signal: None,
+            input_tx: None,
+            input_rx: None,
             cli_mode: false,
             session_token: None,
             session_rx: None,
@@ -676,6 +683,7 @@ impl russh::server::Handler for ClientHandler {
                 0
             }
         };
+        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
         let app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
             cols: col_width as u16,
@@ -736,6 +744,8 @@ impl russh::server::Handler for ClientHandler {
         })
         .context("failed to initialize app for PTY session")?;
         self.app = Some(Arc::new(TokioMutex::new(app)));
+        self.input_tx = Some(input_tx);
+        self.input_rx = Some(input_rx);
         match session.channel_success(channel) {
             Ok(()) => tracing::debug!("pty channel_success sent"),
             Err(e) => tracing::error!(error = ?e, "pty channel_success failed"),
@@ -833,6 +843,10 @@ impl russh::server::Handler for ClientHandler {
             Err(e) => tracing::error!(error = ?e, "shell channel_success failed"),
         }
         if let (Some(chan), Some(app)) = (self.channel.take(), self.app.as_ref()) {
+            let mut input_rx = self
+                .input_rx
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("session input receiver missing during shell request"))?;
             let channel_id = chan.id();
             let handle = session.handle();
 
@@ -874,6 +888,7 @@ impl russh::server::Handler for ClientHandler {
                     };
                     match render_once(
                         &app,
+                        &mut input_rx,
                         &handle,
                         channel_id,
                         frame_drop_log_every,
@@ -907,30 +922,26 @@ impl russh::server::Handler for ClientHandler {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, data, session), fields(peer = ?self.peer_addr, len = data.len()))]
+    #[tracing::instrument(skip(self, data, _session), fields(peer = ?self.peer_addr, len = data.len()))]
     async fn data(
         &mut self,
-        channel: ChannelId,
+        _channel: ChannelId,
         data: &[u8],
-        session: &mut Session,
+        _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(len = data.len(), "received input data");
-        let Some(app) = self.app.as_ref() else {
+        if self.app.is_none() {
+            return Ok(());
+        }
+        let Some(input_tx) = self.input_tx.as_ref() else {
             return Ok(());
         };
-        {
-            let mut app = app.lock().await;
-            app.handle_input(data);
-            if !app.running {
-                tracing::info!("client requested disconnect");
-                clean_disconnect(&session.handle(), channel).await;
-                return Ok(());
-            }
-            if let Some(signal) = self.render_signal.as_ref() {
-                signal.dirty.store(true, Ordering::Release);
-            }
+        if input_tx.send(data.to_vec()).is_err() {
+            tracing::debug!("session input queue closed; dropping inbound ssh input");
+            return Ok(());
         }
         if let Some(signal) = self.render_signal.as_ref() {
+            signal.dirty.store(true, Ordering::Release);
             signal.notify.notify_one();
         }
         Ok(())
@@ -1050,6 +1061,7 @@ async fn next_render_action(
 
 async fn render_once(
     app: &Arc<TokioMutex<crate::app::state::App>>,
+    input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
     handle: &russh::server::Handle,
     channel_id: ChannelId,
     frame_drop_log_every: u64,
@@ -1061,10 +1073,16 @@ async fn render_once(
         if !app.running {
             return Ok(true);
         }
-        // Clear `dirty` under the same lock that gates input mutations.
-        // Any input arriving after we release the lock will re-set `dirty`
-        // and be picked up by a subsequent loop iteration.
+        // Clear `dirty` before draining the queued input so any input arriving
+        // during this render flips it back to `true` and schedules another
+        // pass instead of being erased by this batch.
         signal.dirty.store(false, Ordering::Release);
+        while let Ok(data) = input_rx.try_recv() {
+            app.handle_input(&data);
+            if !app.running {
+                return Ok(true);
+            }
+        }
         if advance_world {
             app.tick();
         }
@@ -1246,7 +1264,8 @@ mod tests {
         world_tick.tick().await; // consume immediate first tick
 
         // A prior input rang the bell and was batched into a render; the
-        // render cleared `dirty` but the permit is still sitting here.
+        // render cleared `dirty` after draining the queue but the permit is
+        // still sitting here.
         signal.notify.notify_one();
         assert!(!signal.dirty.load(Ordering::Acquire));
 
