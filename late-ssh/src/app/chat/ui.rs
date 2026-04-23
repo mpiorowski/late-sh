@@ -25,7 +25,7 @@ use late_core::models::leaderboard::BadgeTier;
 use super::state::{MentionMatch, ROOM_JUMP_KEYS};
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
-const REACTION_PICKER_KEYS: [i16; 5] = [1, 2, 3, 4, 5];
+const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 
 fn custom_badge_for_username(username: &str) -> Option<&'static str> {
     match username.trim().to_ascii_lowercase().as_str() {
@@ -1398,18 +1398,22 @@ mod tests {
         view.composing = false;
         view.selected_message = true;
 
-        let backend = TestBackend::new(72, 3);
+        let backend = TestBackend::new(96, 3);
         let mut terminal = Terminal::new(backend).expect("term");
 
         terminal
-            .draw(|f| draw_composer_block(f, Rect::new(0, 0, 72, 3), &view))
+            .draw(|f| draw_composer_block(f, Rect::new(0, 0, 96, 3), &view))
             .unwrap();
 
         let buf = terminal.backend().buffer();
-        let row_1: String = (0..72).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        let row_1: String = (0..96).map(|x| buf[(x, 1)].symbol().to_string()).collect();
         assert!(
             row_1.contains("1 👍"),
             "reaction choices missing from {row_1:?}",
+        );
+        assert!(
+            row_1.contains("8 🤔"),
+            "extended reaction choices missing from {row_1:?}",
         );
     }
 

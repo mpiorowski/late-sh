@@ -19,6 +19,9 @@ fn leader_reaction_kind(byte: u8) -> Option<i16> {
         b'3' => Some(3),
         b'4' => Some(4),
         b'5' => Some(5),
+        b'6' => Some(6),
+        b'7' => Some(7),
+        b'8' => Some(8),
         _ => None,
     }
 }
@@ -437,6 +440,9 @@ mod tests {
     fn leader_reaction_keys_are_plain_digits() {
         assert_eq!(leader_reaction_kind(b'1'), Some(1));
         assert_eq!(leader_reaction_kind(b'5'), Some(5));
+        assert_eq!(leader_reaction_kind(b'6'), Some(6));
+        assert_eq!(leader_reaction_kind(b'7'), Some(7));
+        assert_eq!(leader_reaction_kind(b'8'), Some(8));
         assert_eq!(leader_reaction_kind(b'!'), None);
     }
 }

@@ -1095,7 +1095,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return true;
     }
 
-    if matches!(byte, b'1' | b'2' | b'3' | b'4' | b'5')
+    if matches!(byte, b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8')
         && (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat)
         && app.chat.is_reaction_leader_active()
     {
