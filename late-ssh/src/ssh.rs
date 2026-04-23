@@ -843,10 +843,9 @@ impl russh::server::Handler for ClientHandler {
             Err(e) => tracing::error!(error = ?e, "shell channel_success failed"),
         }
         if let (Some(chan), Some(app)) = (self.channel.take(), self.app.as_ref()) {
-            let mut input_rx = self
-                .input_rx
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("session input receiver missing during shell request"))?;
+            let mut input_rx = self.input_rx.take().ok_or_else(|| {
+                anyhow::anyhow!("session input receiver missing during shell request")
+            })?;
             let channel_id = chan.id();
             let handle = session.handle();
 
