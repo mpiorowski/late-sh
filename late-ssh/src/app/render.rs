@@ -16,7 +16,6 @@ use late_core::models::leaderboard::LeaderboardData;
 use super::{
     artboard, chat,
     common::{
-        composer::composer_line_count,
         primitives::{Banner, BannerKind, Screen, draw_banner},
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
@@ -25,7 +24,7 @@ use super::{
     state::{App, NotificationMode},
     visualizer::Visualizer,
 };
-use crate::session::{ClientAudioState, ClientKind, ClientSshMode, PairControlMessage};
+use crate::session::ClientAudioState;
 
 fn sanitize_notification_field(input: &str) -> String {
     input
@@ -88,9 +87,6 @@ fn dashboard_header_enabled(
         profile_enabled
     }
 }
-
-const DASHBOARD_HIDE_STREAM_AT_WIDTH: u16 = 39;
-const DASHBOARD_MIN_FULL_HEIGHT: u16 = 16;
 
 struct DrawContext<'a> {
     connect_url: &'a str,
@@ -355,42 +351,6 @@ impl App {
             })
             .context("failed to draw frame")?;
 
-        if let (Some(paired), Some(registry)) = (
-            paired_client_state.as_ref(),
-            self.paired_client_registry.as_ref(),
-        )
-            && paired.client_kind == ClientKind::Cli
-            && paired.ssh_mode == ClientSshMode::Native
-        {
-            let payload = match self.chat_composer_hint(
-                area,
-                show_right_sidebar,
-                show_dashboard_header,
-            ) {
-                Some(hint) => PairControlMessage::ChatComposerHint {
-                    active: true,
-                    x: hint.x,
-                    y: hint.y,
-                    width: hint.width,
-                    height: hint.height,
-                    text: hint.text,
-                    cursor_line: hint.cursor_line,
-                    cursor_col: hint.cursor_col,
-                },
-                None => PairControlMessage::ChatComposerHint {
-                    active: false,
-                    x: 0,
-                    y: 0,
-                    width: 0,
-                    height: 0,
-                    text: String::new(),
-                    cursor_line: 0,
-                    cursor_col: 0,
-                },
-            };
-            let _ = registry.send_control(&self.session_token, payload);
-        }
-
         // Emit OSC 52 clipboard sequence if a copy was requested.
         // Format: \x1b]52;c;<base64>\x07
         if let Some(text) = self.pending_clipboard.take() {
@@ -444,70 +404,6 @@ impl App {
         }
 
         Ok(self.shared.take())
-    }
-
-    fn chat_composer_hint(
-        &self,
-        area: Rect,
-        show_right_sidebar: bool,
-        show_dashboard_header: bool,
-    ) -> Option<ChatComposerHint> {
-        if self.show_splash
-            || self.show_settings
-            || self.show_profile_modal
-            || self.show_help
-            || self.show_quit_confirm
-            || self.show_web_chat_qr
-            || self.icon_picker_open
-            || !matches!(self.screen, Screen::Chat | Screen::Dashboard)
-            || self.chat.news_selected
-            || self.chat.notifications_selected
-            || self.chat.discover_selected
-            || !self.chat.composing
-            || self.chat.mention_ac.active
-        {
-            return None;
-        }
-
-        let inner = Block::default().borders(Borders::ALL).inner(area);
-        let content_area = if show_right_sidebar {
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
-        } else {
-            inner
-        };
-        let composer_area = match self.screen {
-            Screen::Chat => chat_page_composer_area(content_area, self.chat.composer()),
-            Screen::Dashboard => {
-                let dashboard_area = dashboard_chat_section_area(
-                    content_area,
-                    show_dashboard_header,
-                    self.dashboard_strip_pins().as_deref(),
-                );
-                dashboard_card_composer_area(dashboard_area, self.chat.composer())
-            }
-            _ => return None,
-        };
-        let composer_inner = Block::default().borders(Borders::ALL).inner(composer_area);
-        let text_area = Rect {
-            x: composer_inner.x.saturating_add(1),
-            y: composer_inner.y,
-            width: composer_inner.width.saturating_sub(2),
-            height: composer_inner.height,
-        };
-        if text_area.width == 0 || text_area.height == 0 {
-            return None;
-        }
-        let ratatui_textarea::DataCursor(cursor_line, cursor_col) = self.chat.composer().cursor();
-
-        Some(ChatComposerHint {
-            x: text_area.x,
-            y: text_area.y,
-            width: text_area.width,
-            height: text_area.height,
-            text: self.chat.composer().lines().join("\n"),
-            cursor_line,
-            cursor_col,
-        })
     }
 
     fn active_banner(&self) -> Option<&Banner> {
@@ -718,65 +614,6 @@ impl App {
         {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
-    }
-}
-
-struct ChatComposerHint {
-    x: u16,
-    y: u16,
-    width: u16,
-    height: u16,
-    text: String,
-    cursor_line: usize,
-    cursor_col: usize,
-}
-
-fn chat_page_composer_area(
-    content_area: Rect,
-    composer: &ratatui_textarea::TextArea<'static>,
-) -> Rect {
-    let composer_text_width = content_area.width.saturating_sub(2).max(1) as usize;
-    let total_composer_lines = composer_line_count(&composer.lines().join("\n"), composer_text_width);
-    let visible_composer_lines = total_composer_lines.min(5);
-    let composer_height = visible_composer_lines as u16 + 2;
-    Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(content_area)[1]
-}
-
-fn dashboard_card_composer_area(
-    card_area: Rect,
-    composer: &ratatui_textarea::TextArea<'static>,
-) -> Rect {
-    let composer_text_width = card_area.width.saturating_sub(2).max(1) as usize;
-    let total_composer_lines = composer_line_count(&composer.lines().join("\n"), composer_text_width);
-    let visible_composer_lines = total_composer_lines.min(5);
-    let composer_height = visible_composer_lines as u16 + 2;
-    Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(1),
-        Constraint::Length(composer_height),
-    ])
-    .split(card_area)[2]
-}
-
-fn dashboard_chat_section_area(
-    content_area: Rect,
-    show_dashboard_header: bool,
-    favorites_strip: Option<&[(uuid::Uuid, String, bool, i64)]>,
-) -> Rect {
-    let base_area = if !show_dashboard_header
-        || content_area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH
-        || content_area.height < DASHBOARD_MIN_FULL_HEIGHT
-    {
-        content_area
-    } else {
-        Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(content_area)[1]
-    };
-
-    match favorites_strip {
-        Some(_) if base_area.height >= 6 => {
-            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(base_area)[1]
-        }
-        _ => base_area,
     }
 }
 

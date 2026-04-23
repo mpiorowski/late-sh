@@ -135,16 +135,6 @@ pub enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
-    ChatComposerHint {
-        active: bool,
-        x: u16,
-        y: u16,
-        width: u16,
-        height: u16,
-        text: String,
-        cursor_line: usize,
-        cursor_col: usize,
-    },
 }
 
 #[derive(Clone, Default)]

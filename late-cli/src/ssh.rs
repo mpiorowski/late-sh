@@ -23,7 +23,6 @@ use tracing::{debug, info};
 
 use super::{
     config::{Config, SshMode},
-    predict::LocalEcho,
     pty::terminal_size_or_default,
 };
 
@@ -132,20 +131,14 @@ pub(super) enum WriterCommand {
     Close,
 }
 
-enum LocalOutputCommand {
-    Data(Vec<u8>),
-    Close,
-}
-
 pub(super) async fn spawn_ssh(
     config: &Config,
     identity_file: &Path,
     token_tx: oneshot::Sender<String>,
-    local_echo: LocalEcho,
 ) -> Result<SshProcess> {
     match config.ssh_mode {
         SshMode::Subprocess => spawn_subprocess_ssh(config, identity_file, token_tx).await,
-        SshMode::Native => spawn_native_ssh(config, identity_file, token_tx, local_echo).await,
+        SshMode::Native => spawn_native_ssh(config, identity_file, token_tx).await,
     }
 }
 
@@ -310,7 +303,6 @@ async fn spawn_native_ssh(
     config: &Config,
     identity_file: &Path,
     token_tx: oneshot::Sender<String>,
-    local_echo: LocalEcho,
 ) -> Result<SshProcess> {
     let target = ResolvedTarget::from_config(config)?;
     let private_key = keys::load_secret_key(identity_file, None).with_context(|| {
@@ -382,32 +374,18 @@ async fn spawn_native_ssh(
     let (mut read_half, write_half) = channel.split();
     let input_gate = Arc::new(AtomicBool::new(false));
     let input_gate_for_task = Arc::clone(&input_gate);
-    let (ssh_writer_tx, ssh_writer_rx) = mpsc::unbounded_channel();
-    let ssh_writer_tx_for_completion = ssh_writer_tx.clone();
-    let ssh_writer_tx_for_resize = ssh_writer_tx.clone();
-    let (stdout_tx, stdout_rx) = mpsc::unbounded_channel();
-    let stdout_tx_for_input = stdout_tx.clone();
-    let stdout_tx_for_output = stdout_tx.clone();
-    let local_echo_for_input = local_echo.clone();
-    let local_echo_for_output = local_echo.clone();
+    let (writer_tx, writer_rx) = mpsc::unbounded_channel();
+    let writer_tx_for_completion = writer_tx.clone();
+    let writer_tx_for_resize = writer_tx.clone();
 
-    let writer_task =
-        tokio::spawn(async move { drive_native_writer(write_half, ssh_writer_rx).await });
-    let stdout_task = tokio::spawn(async move { drive_local_stdout(stdout_rx).await });
+    let writer_task = tokio::spawn(async move { drive_native_writer(write_half, writer_rx).await });
     let input_task = tokio::task::spawn_blocking(move || {
-        forward_stdin_to_native(
-            ssh_writer_tx,
-            stdout_tx_for_input,
-            local_echo_for_input,
-            input_gate_for_task,
-        )
+        forward_stdin_to_native(writer_tx, input_gate_for_task)
     });
     let completion_task = tokio::spawn(async move {
-        let exit = drive_native_output(&mut read_half, stdout_tx_for_output, local_echo_for_output).await;
-        let _ = ssh_writer_tx_for_completion.send(WriterCommand::Close);
-        let _ = stdout_tx.send(LocalOutputCommand::Close);
+        let exit = drive_native_output(&mut read_half).await;
+        let _ = writer_tx_for_completion.send(WriterCommand::Close);
         let _ = writer_task.await;
-        let _ = stdout_task.await;
         let _ = session
             .disconnect(Disconnect::ByApplication, "", "en")
             .await;
@@ -417,7 +395,7 @@ async fn spawn_native_ssh(
     Ok(SshProcess {
         completion_task,
         input_task,
-        resize_handle: ResizeHandle::Native(ssh_writer_tx_for_resize),
+        resize_handle: ResizeHandle::Native(writer_tx_for_resize),
         input_gate,
     })
 }
@@ -602,11 +580,8 @@ fn forward_ssh_output(mut pty: fs::File, token_tx: oneshot::Sender<String>) -> R
     Ok(())
 }
 
-async fn drive_native_output(
-    read_half: &mut ChannelReadHalf,
-    stdout_tx: mpsc::UnboundedSender<LocalOutputCommand>,
-    local_echo: LocalEcho,
-) -> Result<SshExit> {
+async fn drive_native_output(read_half: &mut ChannelReadHalf) -> Result<SshExit> {
+    let mut stdout = tokio::io::stdout();
     let mut stderr = tokio::io::stderr();
     let mut exit_code = None;
     let mut exit_signal = None;
@@ -614,19 +589,8 @@ async fn drive_native_output(
     while let Some(msg) = read_half.wait().await {
         match msg {
             ChannelMsg::Data { data } => {
-                if stdout_tx
-                    .send(LocalOutputCommand::Data(data.as_ref().to_vec()))
-                    .is_err()
-                {
-                    anyhow::bail!("local stdout channel closed");
-                }
-                if let Some(snapshot) = local_echo.overlay_snapshot()
-                    && stdout_tx
-                        .send(LocalOutputCommand::Data(LocalEcho::render_overlay(&snapshot)))
-                        .is_err()
-                {
-                    anyhow::bail!("local stdout channel closed");
-                }
+                stdout.write_all(data.as_ref()).await?;
+                stdout.flush().await?;
             }
             ChannelMsg::ExtendedData { data, .. } => {
                 stderr.write_all(data.as_ref()).await?;
@@ -658,20 +622,6 @@ async fn drive_native_output(
     }
 
     Ok(SshExit::RemoteStatus { code: exit_code })
-}
-
-async fn drive_local_stdout(mut rx: mpsc::UnboundedReceiver<LocalOutputCommand>) -> Result<()> {
-    let mut stdout = tokio::io::stdout();
-    while let Some(command) = rx.recv().await {
-        match command {
-            LocalOutputCommand::Data(data) => {
-                stdout.write_all(&data).await?;
-                stdout.flush().await?;
-            }
-            LocalOutputCommand::Close => break,
-        }
-    }
-    Ok(())
 }
 
 fn render_signal_name(signal_name: &russh::Sig) -> String {
@@ -763,8 +713,6 @@ fn forward_stdin_to_pty(mut pty: fs::File, input_gate: Arc<AtomicBool>) -> Resul
 
 fn forward_stdin_to_native(
     tx: mpsc::UnboundedSender<WriterCommand>,
-    stdout_tx: mpsc::UnboundedSender<LocalOutputCommand>,
-    local_echo: LocalEcho,
     input_gate: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut stdin = std::io::stdin().lock();
@@ -783,11 +731,6 @@ fn forward_stdin_to_native(
         }
         if !input_gate.load(Ordering::Relaxed) {
             continue;
-        }
-        if let Some(snapshot) = local_echo.apply_local_input(&buf[..n]) {
-            let _ = stdout_tx.send(LocalOutputCommand::Data(LocalEcho::render_overlay(
-                &snapshot,
-            )));
         }
         if tx.send(WriterCommand::Data(buf[..n].to_vec())).is_err() {
             break;

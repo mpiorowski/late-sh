@@ -11,7 +11,6 @@ mod audio;
 
 mod config;
 mod identity;
-mod predict;
 mod pty;
 mod raw_mode;
 mod ssh;
@@ -20,7 +19,6 @@ mod ws;
 use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
 use identity::ensure_client_identity_at;
-use predict::LocalEcho;
 use raw_mode::RawModeGuard;
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
 use ws::{PairClientInfo, PlaybackState, client_platform_label, run_viz_ws};
@@ -47,13 +45,12 @@ async fn main() -> Result<()> {
     }
     info!("starting ssh session");
     let (token_tx, token_rx) = oneshot::channel();
-    let local_echo = LocalEcho::default();
     let SshProcess {
         completion_task,
         input_task,
         resize_handle,
         input_gate,
-    } = spawn_ssh(&config, &ssh_identity, token_tx, local_echo.clone()).await?;
+    } = spawn_ssh(&config, &ssh_identity, token_tx).await?;
     let resize_task = tokio::spawn(forward_resize_events(resize_handle));
 
     let token = tokio::time::timeout(Duration::from_secs(10), token_rx)
@@ -88,15 +85,7 @@ async fn main() -> Result<()> {
         const MAX_RETRIES: usize = 10;
         loop {
             if let Err(err) =
-                run_viz_ws(
-                    &api_base_url,
-                    &token,
-                    &client,
-                    &mut frames,
-                    &playback,
-                    local_echo.clone(),
-                )
-                .await
+                run_viz_ws(&api_base_url, &token, &client, &mut frames, &playback).await
             {
                 retries += 1;
                 if retries > MAX_RETRIES {
