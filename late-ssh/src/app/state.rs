@@ -407,6 +407,19 @@ impl App {
         self.dashboard_favorite_index = slot;
     }
 
+    pub(crate) fn select_dashboard_favorite_room(&mut self, room_id: Uuid) {
+        let Some(slot) = self
+            .profile_state
+            .profile()
+            .favorite_room_ids
+            .iter()
+            .position(|id| *id == room_id)
+        else {
+            return;
+        };
+        self.jump_dashboard_favorite(slot);
+    }
+
     /// Vim-alternate-buffer style jump: swap the current and previous
     /// active pin. No-op when fewer than two pins are present or there's
     /// no prior pin to jump back to (first tap of this session).

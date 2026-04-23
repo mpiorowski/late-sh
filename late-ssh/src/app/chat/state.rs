@@ -600,7 +600,7 @@ impl ChatState {
         )
     }
 
-    fn select_room_slot(&mut self, slot: RoomSlot) -> bool {
+    pub(crate) fn select_room_slot(&mut self, slot: RoomSlot) -> bool {
         self.selected_message_id = None;
         self.reaction_leader_active = false;
         self.highlighted_message_id = None;

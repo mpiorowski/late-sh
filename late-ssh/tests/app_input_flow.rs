@@ -491,6 +491,48 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
 }
 
 #[tokio::test]
+async fn chat_room_list_is_mouse_clickable() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "chat-room-mouse-it").await;
+    let author = create_test_user(&test_db.db, "chat-room-mouse-author-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    let rust = ChatRoom::get_or_create_public_room(&client, "rust")
+        .await
+        .expect("create rust room");
+    for room in [general.id, rust.id] {
+        ChatRoomMember::join(&client, room, user.id)
+            .await
+            .expect("join viewer");
+        ChatRoomMember::join(&client, room, author.id)
+            .await
+            .expect("join author");
+    }
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: rust.id,
+            user_id: author.id,
+            body: "rust room backlog".to_string(),
+        },
+    )
+    .await
+    .expect("create rust message");
+
+    let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "rust").await;
+
+    let click = "\x1b[<0;5;10M";
+    app.handle_input(click.as_bytes());
+
+    wait_for_render_contains(&mut app, "rust room backlog").await;
+}
+
+#[tokio::test]
 async fn chat_reaction_leader_cancels_and_consumes_non_digit_input() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "f-cancel-viewer").await;

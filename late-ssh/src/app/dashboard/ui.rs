@@ -7,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     app::chat::ui::{DashboardChatView, draw_dashboard_chat_card},
@@ -82,6 +83,44 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     draw_chat_section(frame, sections[1], view.favorites_strip, view.chat_view);
 }
 
+pub(crate) fn favorites_strip_hit_test(
+    area: Rect,
+    show_header: bool,
+    pins: &[(uuid::Uuid, String, bool, i64)],
+    x: u16,
+    y: u16,
+) -> Option<uuid::Uuid> {
+    let strip_area = favorites_strip_area(area, show_header, pins)?;
+    if y != strip_area.y || x < strip_area.x || x >= strip_area.right() {
+        return None;
+    }
+
+    let mut cursor_x = strip_area.x + 1;
+    for (idx, (room_id, label, _, unread)) in pins.iter().enumerate() {
+        if idx > 0 {
+            cursor_x = cursor_x.saturating_add(1);
+        }
+        let slot = if idx < 9 {
+            format!("{}:", idx + 1)
+        } else {
+            String::new()
+        };
+        let unread_suffix = if *unread > 0 {
+            format!(" ({unread})")
+        } else {
+            String::new()
+        };
+        let pill = format!(" {slot}{label}{unread_suffix} ");
+        let width = UnicodeWidthStr::width(pill.as_str()) as u16;
+        let end_x = cursor_x.saturating_add(width);
+        if x >= cursor_x && x < end_x {
+            return Some(*room_id);
+        }
+        cursor_x = end_x;
+    }
+    None
+}
+
 /// Draws the chat card, with an optional pill strip above it. When the user
 /// has 2+ favorites pinned, we carve one row off the top for the strip;
 /// otherwise the chat card takes the whole area.
@@ -104,6 +143,32 @@ fn draw_chat_section(
     let split = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
     draw_favorites_strip(frame, split[0], pins);
     draw_dashboard_chat_card(frame, split[1], chat_view);
+}
+
+fn favorites_strip_area(
+    area: Rect,
+    show_header: bool,
+    pins: &[(uuid::Uuid, String, bool, i64)],
+) -> Option<Rect> {
+    if pins.len() < 2 {
+        return None;
+    }
+
+    let chat_area = if show_header {
+        if area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH || area.height < DASHBOARD_MIN_FULL_HEIGHT {
+            area
+        } else {
+            Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(area)[1]
+        }
+    } else {
+        area
+    };
+
+    if chat_area.height < 6 {
+        return None;
+    }
+
+    Some(Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(chat_area)[0])
 }
 
 fn draw_favorites_strip(frame: &mut Frame, area: Rect, pins: &[(uuid::Uuid, String, bool, i64)]) {
@@ -475,5 +540,50 @@ mod tests {
 
         assert!(rendered.contains("#rust (3)"));
         assert!(rendered.contains("#go"));
+    }
+
+    #[test]
+    fn favorites_strip_hit_test_returns_clicked_room() {
+        let rust_room = Uuid::now_v7();
+        let go_room = Uuid::now_v7();
+        let pins = vec![
+            (rust_room, "#rust".to_string(), true, 3),
+            (go_room, "#go".to_string(), false, 0),
+        ];
+        let area = Rect::new(1, 1, 74, 30);
+
+        assert_eq!(
+            favorites_strip_hit_test(area, true, &pins, 10, 6),
+            Some(rust_room)
+        );
+        assert_eq!(
+            favorites_strip_hit_test(area, true, &pins, 18, 6),
+            Some(go_room)
+        );
+        assert_eq!(favorites_strip_hit_test(area, true, &pins, 40, 6), None);
+    }
+
+    #[test]
+    fn favorites_strip_hit_test_returns_none_when_strip_hidden() {
+        let room = Uuid::now_v7();
+        let pins = vec![(room, "#rust".to_string(), true, 0)];
+
+        assert_eq!(
+            favorites_strip_hit_test(Rect::new(1, 1, 74, 30), true, &pins, 5, 7),
+            None
+        );
+        assert_eq!(
+            favorites_strip_hit_test(
+                Rect::new(1, 1, 74, 5),
+                false,
+                &[
+                    (room, "#rust".to_string(), true, 0),
+                    (Uuid::now_v7(), "#go".to_string(), false, 0)
+                ],
+                5,
+                1
+            ),
+            None
+        );
     }
 }
