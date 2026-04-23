@@ -981,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_lf_maps_to_ctrl_j_instead_of_enter() {
+    fn raw_lf_is_ignored_after_push_pull_removal() {
         let mut state = test_state();
         state.snapshot.canvas = Canvas::with_size(3, 3);
         state
@@ -991,19 +991,19 @@ mod tests {
 
         let action = handle_byte(&mut state, (80, 24), b'\n');
 
-        assert!(matches!(action, InputAction::Handled));
+        assert!(matches!(action, InputAction::Ignored));
         assert_eq!(
             state
                 .snapshot
                 .canvas
-                .get(dartboard_core::Pos { x: 0, y: 1 }),
+                .get(dartboard_core::Pos { x: 0, y: 0 }),
             'A'
         );
         assert_eq!(
             state
                 .snapshot
                 .canvas
-                .get(dartboard_core::Pos { x: 0, y: 0 }),
+                .get(dartboard_core::Pos { x: 0, y: 1 }),
             ' '
         );
     }
