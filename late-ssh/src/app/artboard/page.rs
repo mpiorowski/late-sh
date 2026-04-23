@@ -29,6 +29,11 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             state.toggle_ownership_overlay();
             true
         }
+        b'?' => {
+            state.toggle_help();
+            state.clear_pending_canvas_click();
+            true
+        }
         b'i' | b'I' | b'\r' | b'\n' => {
             app.activate_artboard_interaction();
             true

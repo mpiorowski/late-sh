@@ -310,7 +310,7 @@ fn draw_canvas(
     // The widget renders cells; the frame owns the cursor position so the
     // terminal's native cursor lands on the active cell without the widget
     // needing to repaint a highlight.
-    let cursor = state.cursor();
+    let cursor = canvas_cursor_render_pos(state);
     let viewport_origin = state.viewport_origin();
     if state.should_show_canvas_cursor()
         && cursor.x >= viewport_origin.x
@@ -329,6 +329,14 @@ fn draw_canvas(
             frame.set_cursor_position((cx, cy));
         }
     }
+}
+
+fn canvas_cursor_render_pos(state: &State) -> dartboard_core::Pos {
+    state
+        .snapshot
+        .canvas
+        .glyph_origin(state.cursor())
+        .unwrap_or(state.cursor())
 }
 
 pub(crate) fn swatch_hit(
@@ -992,6 +1000,22 @@ mod tests {
         let lines = artboard_info_lines(&state, true);
         assert_eq!(lines[0].to_string(), "Mode       active");
         assert_eq!(lines[6].to_string(), "Selection  3x2");
+    }
+
+    #[test]
+    fn render_cursor_pos_uses_wide_origin_for_continuation() {
+        let mut state = test_state();
+        let _ = state
+            .snapshot
+            .canvas
+            .put_glyph(dartboard_core::Pos { x: 0, y: 0 }, '👍');
+        state.editor.cursor = dartboard_core::Pos { x: 1, y: 0 };
+
+        assert_eq!(
+            canvas_cursor_render_pos(&state),
+            dartboard_core::Pos { x: 0, y: 0 }
+        );
+        assert_eq!(state.cursor(), dartboard_core::Pos { x: 1, y: 0 });
     }
 
     #[test]

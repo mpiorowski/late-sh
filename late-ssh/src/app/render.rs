@@ -639,7 +639,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     if screen == Screen::Artboard {
         spans.push(Span::styled(
-            "by @mevanlc ",
+            "by github.com/mevanlc ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
         let hints: &[(&str, &str)] = if ctx.artboard_interacting {

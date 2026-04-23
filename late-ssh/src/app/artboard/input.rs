@@ -715,6 +715,35 @@ mod tests {
     }
 
     #[test]
+    fn plain_click_on_wide_continuation_keeps_logical_cursor_on_cell_two() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(10, 4);
+        state.set_viewport_for_screen((80, 24));
+        let _ = state
+            .snapshot
+            .canvas
+            .put_glyph(dartboard_core::Pos { x: 0, y: 0 }, '👍');
+
+        let action = handle_mouse(
+            &mut state,
+            (80, 24),
+            &MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 3,
+                y: 2,
+                modifiers: Default::default(),
+            },
+        );
+
+        assert!(matches!(
+            action,
+            InputAction::Handled | InputAction::Ignored
+        ));
+        assert_eq!(state.cursor(), dartboard_core::Pos { x: 1, y: 0 });
+    }
+
+    #[test]
     fn ctrl_click_swatch_body_clears_slot() {
         let mut state = test_state();
         state.editor.swatches[0] = Some(dartboard_editor::Swatch {
@@ -832,6 +861,70 @@ mod tests {
             .floating_view()
             .expect("temp brush floating preview shown");
         assert_eq!(floating.anchor, dartboard_core::Pos { x: 0, y: 0 });
+    }
+
+    #[test]
+    fn double_click_canvas_wide_glyph_from_continuation_arms_temp_brush() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(10, 4);
+        let _ = state
+            .snapshot
+            .canvas
+            .put_glyph(dartboard_core::Pos { x: 0, y: 0 }, '👍');
+
+        let first_down = handle_mouse(
+            &mut state,
+            (80, 24),
+            &MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 3,
+                y: 2,
+                modifiers: Default::default(),
+            },
+        );
+        let first_up = handle_mouse(
+            &mut state,
+            (80, 24),
+            &MouseEvent {
+                kind: MouseEventKind::Up,
+                button: Some(MouseButton::Left),
+                x: 3,
+                y: 2,
+                modifiers: Default::default(),
+            },
+        );
+        assert!(matches!(
+            first_up,
+            InputAction::Handled | InputAction::Ignored
+        ));
+
+        let second_down = handle_mouse(
+            &mut state,
+            (80, 24),
+            &MouseEvent {
+                kind: MouseEventKind::Down,
+                button: Some(MouseButton::Left),
+                x: 3,
+                y: 2,
+                modifiers: Default::default(),
+            },
+        );
+
+        assert!(matches!(
+            first_down,
+            InputAction::Handled | InputAction::Ignored
+        ));
+        assert!(matches!(second_down, InputAction::Handled));
+        assert_eq!(
+            state.brush_mode(),
+            crate::app::artboard::state::BrushMode::Glyph('👍')
+        );
+        let floating = state
+            .floating_view()
+            .expect("temp brush floating preview shown");
+        assert_eq!(floating.anchor, dartboard_core::Pos { x: 0, y: 0 });
+        assert_eq!(floating.width, 2);
     }
 
     #[test]

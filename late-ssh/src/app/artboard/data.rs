@@ -154,6 +154,7 @@ fn session_lines() -> Vec<String> {
         "",
         "Help and quit",
         "  Ctrl+P             toggle this help",
+        "  ?                  toggle this help in view mode",
         "  q                  open quit confirm",
         "",
         "Other",

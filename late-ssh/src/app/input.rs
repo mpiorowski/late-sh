@@ -1086,8 +1086,9 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
-    // ? opens help unless composing text
-    if byte == b'?' && !ctx.chat_composing && !ctx.news_composing {
+    // ? opens the global guide unless the current screen owns it.
+    if byte == b'?' && !ctx.chat_composing && !ctx.news_composing && ctx.screen != Screen::Artboard
+    {
         app.help_modal_state
             .open(crate::app::help_modal::data::HelpTopic::Overview);
         app.show_help = true;

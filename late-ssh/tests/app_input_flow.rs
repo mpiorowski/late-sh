@@ -259,6 +259,52 @@ async fn artboard_help_modal_tab_switches_help_tabs_instead_of_pages() {
 }
 
 #[tokio::test]
+async fn artboard_view_mode_question_mark_opens_local_help() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-view-help-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-view-help-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Two modes").await;
+
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains(" Guide "),
+        "expected ? on Artboard view mode to open local help, not the global guide; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn active_artboard_question_mark_types_into_canvas_instead_of_opening_help() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-questionmark-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-questionmark-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    wait_for_render_contains(&mut app, "Cursor     0,0").await;
+
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Cursor     1,0").await;
+
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Mode       active"),
+        "expected ? to stay inside active artboard mode; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Guide "),
+        "expected ? in active artboard mode to avoid the global guide; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn dashboard_chat_compose_treats_screen_hotkeys_as_text() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dash-chat-compose-it").await;
