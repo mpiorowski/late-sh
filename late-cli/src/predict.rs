@@ -69,6 +69,11 @@ struct ComposerRow {
 impl LocalEcho {
     pub(super) fn apply_chat_hint(&self, hint: ChatComposerHint) {
         let mut state = self.inner.lock().unwrap();
+        let previous_authoritative = state
+            .hint
+            .as_ref()
+            .filter(|hint| hint.active)
+            .map(ComposerState::from_hint);
         let authoritative = if hint.active {
             Some(ComposerState::from_hint(&hint))
         } else {
@@ -79,6 +84,17 @@ impl LocalEcho {
         match (&state.predicted, authoritative) {
             (_, None) => state.predicted = None,
             (Some(predicted), Some(authoritative)) if *predicted == authoritative => {
+                state.predicted = None;
+            }
+            (Some(_), Some(authoritative))
+                if previous_authoritative
+                    .as_ref()
+                    .is_some_and(|previous| previous != &authoritative) =>
+            {
+                // Server state moved in a way our local prediction did not
+                // exactly match (submit/clear, external mutation, cursor move,
+                // or partial reconciliation). Drop the prediction and rebase
+                // subsequent local input on the new authoritative state.
                 state.predicted = None;
             }
             _ => {}
@@ -457,4 +473,59 @@ fn pad_to_width(text: &str, width: usize) -> String {
         out.push_str(&" ".repeat(width - current));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hint(active: bool, text: &str, cursor_line: usize, cursor_col: usize) -> ChatComposerHint {
+        ChatComposerHint {
+            active,
+            x: 10,
+            y: 20,
+            width: 20,
+            height: 3,
+            text: text.to_string(),
+            cursor_line,
+            cursor_col,
+        }
+    }
+
+    #[test]
+    fn authoritative_reset_drops_stale_prediction() {
+        let echo = LocalEcho::default();
+        echo.apply_chat_hint(hint(true, "hello", 0, 5));
+
+        let first = echo
+            .apply_local_input(b"x")
+            .expect("local prediction after append");
+        assert_eq!(first.text, "hellox");
+
+        // Server clears the composer while keeping it active (e.g. stay-open
+        // submit or another authoritative mutation). The stale local draft
+        // must be dropped before the next local keypress.
+        echo.apply_chat_hint(hint(true, "", 0, 0));
+        let second = echo
+            .apply_local_input(b"y")
+            .expect("prediction rebased on cleared authoritative state");
+        assert_eq!(second.text, "y");
+    }
+
+    #[test]
+    fn unchanged_authoritative_hint_keeps_prediction() {
+        let echo = LocalEcho::default();
+        echo.apply_chat_hint(hint(true, "hello", 0, 5));
+
+        let first = echo
+            .apply_local_input(b"x")
+            .expect("local prediction after append");
+        assert_eq!(first.text, "hellox");
+
+        // Duplicate server hint before the SSH/WS round-trip catches up
+        // should not discard the still-pending local echo.
+        echo.apply_chat_hint(hint(true, "hello", 0, 5));
+        let snapshot = echo.overlay_snapshot().expect("prediction preserved");
+        assert_eq!(snapshot.text, "hellox");
+    }
 }

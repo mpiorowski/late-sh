@@ -89,6 +89,9 @@ fn dashboard_header_enabled(
     }
 }
 
+const DASHBOARD_HIDE_STREAM_AT_WIDTH: u16 = 39;
+const DASHBOARD_MIN_FULL_HEIGHT: u16 = 16;
+
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -359,7 +362,11 @@ impl App {
             && paired.client_kind == ClientKind::Cli
             && paired.ssh_mode == ClientSshMode::Native
         {
-            let payload = match self.chat_composer_hint(area, show_right_sidebar) {
+            let payload = match self.chat_composer_hint(
+                area,
+                show_right_sidebar,
+                show_dashboard_header,
+            ) {
                 Some(hint) => PairControlMessage::ChatComposerHint {
                     active: true,
                     x: hint.x,
@@ -439,15 +446,20 @@ impl App {
         Ok(self.shared.take())
     }
 
-    fn chat_composer_hint(&self, area: Rect, show_right_sidebar: bool) -> Option<ChatComposerHint> {
-        if self.screen != Screen::Chat
-            || self.show_splash
+    fn chat_composer_hint(
+        &self,
+        area: Rect,
+        show_right_sidebar: bool,
+        show_dashboard_header: bool,
+    ) -> Option<ChatComposerHint> {
+        if self.show_splash
             || self.show_settings
             || self.show_profile_modal
             || self.show_help
             || self.show_quit_confirm
             || self.show_web_chat_qr
             || self.icon_picker_open
+            || !matches!(self.screen, Screen::Chat | Screen::Dashboard)
             || self.chat.news_selected
             || self.chat.notifications_selected
             || self.chat.discover_selected
@@ -463,17 +475,18 @@ impl App {
         } else {
             inner
         };
-        let composer_text_width = content_area.width.saturating_sub(2).max(1) as usize;
-        let total_composer_lines =
-            composer_line_count(&self.chat.composer().lines().join("\n"), composer_text_width);
-        let visible_composer_lines = total_composer_lines.min(5);
-        let composer_height = visible_composer_lines as u16 + 2;
-        let layout = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(composer_height),
-        ])
-        .split(content_area);
-        let composer_area = layout[1];
+        let composer_area = match self.screen {
+            Screen::Chat => chat_page_composer_area(content_area, self.chat.composer()),
+            Screen::Dashboard => {
+                let dashboard_area = dashboard_chat_section_area(
+                    content_area,
+                    show_dashboard_header,
+                    self.dashboard_strip_pins().as_deref(),
+                );
+                dashboard_card_composer_area(dashboard_area, self.chat.composer())
+            }
+            _ => return None,
+        };
         let composer_inner = Block::default().borders(Borders::ALL).inner(composer_area);
         let text_area = Rect {
             x: composer_inner.x.saturating_add(1),
@@ -716,6 +729,55 @@ struct ChatComposerHint {
     text: String,
     cursor_line: usize,
     cursor_col: usize,
+}
+
+fn chat_page_composer_area(
+    content_area: Rect,
+    composer: &ratatui_textarea::TextArea<'static>,
+) -> Rect {
+    let composer_text_width = content_area.width.saturating_sub(2).max(1) as usize;
+    let total_composer_lines = composer_line_count(&composer.lines().join("\n"), composer_text_width);
+    let visible_composer_lines = total_composer_lines.min(5);
+    let composer_height = visible_composer_lines as u16 + 2;
+    Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(content_area)[1]
+}
+
+fn dashboard_card_composer_area(
+    card_area: Rect,
+    composer: &ratatui_textarea::TextArea<'static>,
+) -> Rect {
+    let composer_text_width = card_area.width.saturating_sub(2).max(1) as usize;
+    let total_composer_lines = composer_line_count(&composer.lines().join("\n"), composer_text_width);
+    let visible_composer_lines = total_composer_lines.min(5);
+    let composer_height = visible_composer_lines as u16 + 2;
+    Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(composer_height),
+    ])
+    .split(card_area)[2]
+}
+
+fn dashboard_chat_section_area(
+    content_area: Rect,
+    show_dashboard_header: bool,
+    favorites_strip: Option<&[(uuid::Uuid, String, bool, i64)]>,
+) -> Rect {
+    let base_area = if !show_dashboard_header
+        || content_area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH
+        || content_area.height < DASHBOARD_MIN_FULL_HEIGHT
+    {
+        content_area
+    } else {
+        Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(content_area)[1]
+    };
+
+    match favorites_strip {
+        Some(_) if base_area.height >= 6 => {
+            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(base_area)[1]
+        }
+        _ => base_area,
+    }
 }
 
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {

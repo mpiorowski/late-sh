@@ -427,7 +427,7 @@ Current invariant:
 Current invariants:
 - The installer defaults to `https://cli.late.sh`, and the CLI supports `-v` / `--verbose` for stderr debug logging.
 - Browser and CLI share the same paired-client protocol, so the TUI can show target kind plus live mute/volume state in the sidebar.
-- Native `late-cli` can now locally predict the **main Chat-screen composer only**. Scope is intentionally narrow: no dashboard chat card, no mentions popup, no artboard/game prediction, and no old OpenSSH subprocess mode.
+- Native `late-cli` can now locally predict the main chat composer on both the `Dashboard` chat card and the full `Chat` page. Scope is still intentionally narrow: no mentions popup, no artboard/game prediction, and no old OpenSSH subprocess mode.
 - The CLI currently requires a working local audio output device to fully start.
 - Native SSH is now the default launcher path; `--ssh-mode old` remains the compatibility fallback. Native mode requires a server that supports the `late-cli-token-v1` SSH exec handshake.
 
