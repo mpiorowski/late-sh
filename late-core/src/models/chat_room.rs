@@ -284,6 +284,19 @@ impl ChatRoom {
             .await?;
         Ok(count)
     }
+
+    /// Update the auto-join flag for a room.
+    pub async fn set_auto_join(client: &Client, room_id: Uuid, auto_join: bool) -> Result<u64> {
+        let count = client
+            .execute(
+                "UPDATE chat_rooms
+                 SET auto_join = $2, updated = current_timestamp
+                 WHERE id = $1",
+                &[&room_id, &auto_join],
+            )
+            .await?;
+        Ok(count)
+    }
 }
 
 pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
