@@ -1932,19 +1932,30 @@ pub(crate) fn new_chat_textarea() -> TextArea<'static> {
     ta.set_style(Style::default().fg(theme::TEXT()));
     ta.set_placeholder_text("Type a message...");
     ta.set_placeholder_style(Style::default().fg(theme::TEXT_DIM()));
-    ta.set_cursor_line_style(Style::default());
-    ta.set_cursor_style(Style::default());
+    ta.set_cursor_line_style(Style::default().fg(theme::TEXT()));
+    ta.set_cursor_style(hidden_composer_cursor_style());
     ta.set_wrap_mode(WrapMode::Word);
     ta
 }
 
 fn set_composer_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
     let style = if visible {
-        Style::default().add_modifier(Modifier::REVERSED)
+        visible_composer_cursor_style()
     } else {
-        Style::default()
+        hidden_composer_cursor_style()
     };
     ta.set_cursor_style(style);
+}
+
+fn hidden_composer_cursor_style() -> Style {
+    Style::default().fg(theme::TEXT())
+}
+
+fn visible_composer_cursor_style() -> Style {
+    Style::default()
+        .fg(theme::BG_CANVAS())
+        .bg(theme::TEXT())
+        .add_modifier(Modifier::BOLD)
 }
 
 fn news_reply_preview_text(body: &str) -> Option<String> {
@@ -2199,6 +2210,26 @@ mod tests {
     fn new_chat_textarea_uses_theme_text_color() {
         let textarea = new_chat_textarea();
         assert_eq!(textarea.style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().bg, None);
+    }
+
+    #[test]
+    fn composer_cursor_visible_uses_explicit_theme_colors() {
+        let mut textarea = new_chat_textarea();
+        set_composer_cursor_visible(&mut textarea, true);
+        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
+        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
+    }
+
+    #[test]
+    fn composer_cursor_hidden_restores_plain_text_color() {
+        let mut textarea = new_chat_textarea();
+        set_composer_cursor_visible(&mut textarea, true);
+        set_composer_cursor_visible(&mut textarea, false);
+        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().bg, None);
     }
 
     #[test]
