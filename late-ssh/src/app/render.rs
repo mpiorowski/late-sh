@@ -131,6 +131,7 @@ struct DrawContext<'a> {
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
+    mentions_unread_count: i64,
 }
 
 impl App {
@@ -346,6 +347,7 @@ impl App {
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
+                        mentions_unread_count: self.chat.notifications.unread_count(),
                     },
                 )
             })
@@ -482,10 +484,13 @@ impl App {
             return;
         }
 
-        let block = Block::default()
+        let mut block = Block::default()
             .title(app_frame_title(screen, &ctx))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+        if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
+            block = block.title_top(hud);
+        }
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -677,10 +682,33 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     Line::from(spans)
 }
 
+fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
+    if unread <= 0 {
+        return None;
+    }
+    let noun = if unread == 1 { "mention" } else { "mentions" };
+    Some(
+        Line::from(vec![
+            Span::styled(
+                format!(" {unread}"),
+                Style::default()
+                    .fg(theme::MENTION())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {noun} "),
+                Style::default().fg(theme::TEXT_MUTED()),
+            ),
+        ])
+        .right_aligned(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, desktop_notification_bytes, games_sidebar_enabled, sidebar_enabled,
+        NotificationMode, desktop_notification_bytes, games_sidebar_enabled, mentions_hud_title,
+        sidebar_enabled,
     };
 
     #[test]
@@ -759,5 +787,25 @@ mod tests {
     fn games_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
         assert!(games_sidebar_enabled(false, false, true));
         assert!(!games_sidebar_enabled(false, true, false));
+    }
+
+    #[test]
+    fn mentions_hud_title_hidden_when_unread_is_zero_or_negative() {
+        assert!(mentions_hud_title(0).is_none());
+        assert!(mentions_hud_title(-3).is_none());
+    }
+
+    #[test]
+    fn mentions_hud_title_renders_right_aligned_pluralized_text() {
+        use ratatui::layout::Alignment;
+
+        let one = mentions_hud_title(1).expect("one mention should render");
+        assert_eq!(one.alignment, Some(Alignment::Right));
+        let text: String = one.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, " 1 mention ");
+
+        let many = mentions_hud_title(14).expect("many mentions should render");
+        let text: String = many.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, " 14 mentions ");
     }
 }
