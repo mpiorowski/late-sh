@@ -10,7 +10,7 @@ use crate::app::{
     bonsai::{
         care::{BonsaiCareState, CareMode, branch_targets_for},
         state::BonsaiState,
-        ui::{TreeOverlay, render_tree_art_lines, tree_ascii},
+        ui::{TreeOverlay, render_tree_art_lines, tree_ascii, tree_variant_name},
     },
     common::theme,
 };
@@ -102,20 +102,36 @@ fn draw_tree(
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, bonsai: &BonsaiState, care: &BonsaiCareState) {
-    let summary = Line::from(vec![
-        Span::styled(
-            bonsai.stage().label().to_string(),
+    let stage = bonsai.stage();
+    let mut summary_spans = vec![Span::styled(
+        stage.label().to_string(),
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    )];
+    if bonsai.is_alive
+        && let Some((style, gloss)) = tree_variant_name(stage, bonsai.seed)
+    {
+        summary_spans.push(dot());
+        summary_spans.push(Span::styled(
+            style.to_string(),
             Style::default()
-                .fg(theme::TEXT_BRIGHT())
+                .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
-        ),
-        dot(),
-        Span::styled(
-            format!("Day {}", bonsai.age_days),
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ])
-    .centered();
+        ));
+        summary_spans.push(Span::styled(
+            format!("  {gloss}"),
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+    summary_spans.push(dot());
+    summary_spans.push(Span::styled(
+        format!("Day {}", bonsai.age_days),
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    let summary = Line::from(summary_spans).centered();
 
     let action = if let Some(msg) = care.message.as_deref() {
         Line::from(Span::styled(
