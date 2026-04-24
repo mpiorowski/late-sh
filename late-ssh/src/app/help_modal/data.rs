@@ -466,6 +466,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  x                 cut the branch under the cursor",
         "  p                 prune hard: -1 stage, new shape",
         "  s                 copy the bonsai to clipboard",
+        "  ?                 open this help section",
         "",
         "How growth works",
         "  watering gives +10 growth",

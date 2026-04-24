@@ -40,6 +40,7 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         }));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    draw_water_hint(frame, area, state.can_water());
 
     if inner.height < 2 || inner.width < 10 {
         return;
@@ -232,18 +233,6 @@ fn status_lines(state: &BonsaiState) -> Vec<Line<'static>> {
                 Style::default().fg(theme::TEXT_FAINT()),
             ))
             .centered(),
-            StatusLineSpec::StageLabel(label) => Line::from(Span::styled(
-                label,
-                Style::default()
-                    .fg(theme::TEXT_MUTED())
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .centered(),
-            StatusLineSpec::CanWater => Line::from(vec![
-                Span::styled("w", Style::default().fg(theme::AMBER())),
-                Span::styled(" water", Style::default().fg(theme::TEXT_DIM())),
-            ])
-            .centered(),
             StatusLineSpec::WateredToday => Line::from(Span::styled(
                 "Watered today",
                 Style::default().fg(theme::SUCCESS()),
@@ -256,23 +245,43 @@ fn status_lines(state: &BonsaiState) -> Vec<Line<'static>> {
 #[derive(Debug, PartialEq, Eq)]
 enum StatusLineSpec {
     DeadHint,
-    StageLabel(String),
-    CanWater,
     WateredToday,
 }
 
-fn status_line_specs(is_alive: bool, stage: Stage, can_water: bool) -> Vec<StatusLineSpec> {
+fn status_line_specs(is_alive: bool, _stage: Stage, can_water: bool) -> Vec<StatusLineSpec> {
     if !is_alive {
         return vec![StatusLineSpec::DeadHint];
     }
 
-    let mut lines = vec![StatusLineSpec::StageLabel(stage.label().to_string())];
-    if can_water {
-        lines.push(StatusLineSpec::CanWater);
-    } else {
+    let mut lines = Vec::new();
+    if !can_water {
         lines.push(StatusLineSpec::WateredToday);
     }
     lines
+}
+
+fn draw_water_hint(frame: &mut Frame, area: Rect, can_water: bool) {
+    if !can_water || area.width < 12 {
+        return;
+    }
+    let width = 9;
+    let hint_area = Rect {
+        x: area.x + area.width.saturating_sub(width + 2),
+        y: area.y,
+        width,
+        height: 1,
+    };
+    let line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            "w",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" care ", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(line), hint_area);
 }
 
 fn leaf_color_for_stage(stage: Stage) -> ratatui::style::Color {
@@ -669,19 +678,10 @@ mod tests {
 
     #[test]
     fn status_specs_show_stage_and_watering_status() {
-        assert_eq!(
-            status_line_specs(true, Stage::Young, true),
-            vec![
-                StatusLineSpec::StageLabel("Young Tree".to_string()),
-                StatusLineSpec::CanWater,
-            ]
-        );
+        assert_eq!(status_line_specs(true, Stage::Young, true), vec![]);
         assert_eq!(
             status_line_specs(true, Stage::Young, false),
-            vec![
-                StatusLineSpec::StageLabel("Young Tree".to_string()),
-                StatusLineSpec::WateredToday,
-            ]
+            vec![StatusLineSpec::WateredToday]
         );
     }
 }

@@ -39,6 +39,7 @@ pub(crate) fn draw(
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    draw_help_hint(frame, popup);
 
     let layout = Layout::vertical([
         Constraint::Fill(1),
@@ -180,13 +181,22 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         key("hjkl/←↑↓→"),
         text(" move"),
         gap(),
-        key("?"),
-        text(" help"),
-        gap(),
         key("q"),
         text(" close"),
     ])
     .centered();
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn draw_help_hint(frame: &mut Frame, popup: Rect) {
+    let width = 9;
+    let area = Rect {
+        x: popup.x + popup.width.saturating_sub(width + 2),
+        y: popup.y,
+        width,
+        height: 1,
+    };
+    let line = Line::from(vec![Span::raw(" "), key("?"), text(" help ")]);
     frame.render_widget(Paragraph::new(line), area);
 }
 
