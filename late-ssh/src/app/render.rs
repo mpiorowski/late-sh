@@ -14,7 +14,7 @@ use ratatui::{
 use late_core::models::leaderboard::LeaderboardData;
 
 use super::{
-    artboard, chat,
+    artboard, bonsai, chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
@@ -120,6 +120,8 @@ struct DrawContext<'a> {
     show_quit_confirm: bool,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
+    show_bonsai_modal: bool,
+    bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_splash: bool,
@@ -337,6 +339,8 @@ impl App {
                         show_quit_confirm: self.show_quit_confirm,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
+                        show_bonsai_modal: self.show_bonsai_modal,
+                        bonsai_care_state: &self.bonsai_care_state,
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_splash: self.show_splash,
@@ -594,6 +598,16 @@ impl App {
 
         if ctx.show_profile_modal {
             profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
+        }
+
+        if ctx.show_bonsai_modal {
+            bonsai::modal_ui::draw(
+                frame,
+                inner,
+                ctx.bonsai,
+                ctx.bonsai_care_state,
+                ctx.visualizer.beat(),
+            );
         }
 
         if ctx.show_help {

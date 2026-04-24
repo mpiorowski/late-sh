@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::{collections::BTreeSet, time::SystemTime};
 
 use ratatui::{
     Frame,
@@ -8,8 +8,18 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use super::state::{BonsaiState, Stage};
+use super::{
+    care::BranchTarget,
+    state::{BonsaiState, Stage},
+};
 use crate::app::common::theme;
+
+pub(crate) struct TreeOverlay<'a> {
+    pub targets: &'a [BranchTarget],
+    pub cut_branch_ids: &'a BTreeSet<i32>,
+    pub selected_id: Option<i32>,
+    pub show_selection: bool,
+}
 
 /// Render the bonsai widget for the sidebar. Takes a fixed area.
 pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32) {
@@ -54,7 +64,34 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         lines.push(Line::from(""));
     }
 
-    // Render tree lines
+    lines.extend(render_tree_art_lines(
+        stage,
+        state.seed,
+        wilting,
+        inner.width as usize,
+        beat,
+        None,
+    ));
+
+    // Pad to push status to bottom
+    while lines.len() < available.saturating_sub(status_height) {
+        lines.push(Line::from(""));
+    }
+
+    lines.extend(status_lines);
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+pub(crate) fn render_tree_art_lines(
+    stage: Stage,
+    seed: i64,
+    wilting: bool,
+    width: usize,
+    beat: f32,
+    overlay: Option<TreeOverlay<'_>>,
+) -> Vec<Line<'static>> {
+    let tree_art = tree_ascii(stage, seed, wilting);
     let leaf_color = if wilting {
         theme::AMBER_DIM()
     } else {
@@ -77,7 +114,7 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         .as_secs_f64();
     let sway_base = (sway_time * 2.0).sin(); // ~3s period
     let sway_amplitude = beat.clamp(0.0, 1.0) as f64 * 1.5;
-    let w = inner.width as usize;
+    let w = width;
 
     // Count canopy lines (contain @, #, or *) for per-line falloff
     let canopy_count = if has_canopy {
@@ -89,6 +126,7 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         0
     };
 
+    let mut lines = Vec::new();
     for (_i, art_line) in tree_art.iter().enumerate() {
         // Only canopy lines sway; top of canopy sways most
         let is_canopy = has_canopy && art_line.chars().any(|c| matches!(c, '@' | '#' | '*'));
@@ -109,7 +147,36 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         };
 
         let mut spans = Vec::new();
-        for ch in art_line.chars() {
+        let chars: Vec<char> = art_line.chars().collect();
+        for (x, ch) in chars.iter().copied().enumerate() {
+            if let Some(target) = overlay.as_ref().and_then(|overlay| {
+                overlay
+                    .targets
+                    .iter()
+                    .find(|target| target.x == x && target.y == _i)
+            }) {
+                let cut = overlay
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.cut_branch_ids.contains(&target.id));
+                let selected = overlay.as_ref().is_some_and(|overlay| {
+                    overlay.show_selection && overlay.selected_id == Some(target.id)
+                });
+                let display = if cut { ch } else { target.glyph };
+                let mut style = Style::default().fg(if cut {
+                    theme::TEXT_FAINT()
+                } else {
+                    trunk_color
+                });
+                if selected {
+                    style = style
+                        .fg(theme::AMBER_GLOW())
+                        .bg(theme::BG_SELECTION())
+                        .add_modifier(Modifier::BOLD);
+                }
+                spans.push(Span::styled(display.to_string(), style));
+                continue;
+            }
+
             let color = match ch {
                 '|' | '/' | '\\' | '_' | '~' => trunk_color,
                 '.' | '\'' | ',' | '*' | '@' | '#' | 'o' | 'O' => leaf_color,
@@ -120,22 +187,14 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         }
 
         // Manual centering with sway offset
-        let art_width = art_line.chars().count();
+        let art_width = chars.len();
         let base_pad = w.saturating_sub(art_width) / 2;
         let pad = (base_pad as i32 + offset).max(0) as usize;
         let pad = pad.min(w.saturating_sub(art_width));
         spans.insert(0, Span::raw(" ".repeat(pad)));
         lines.push(Line::from(spans));
     }
-
-    // Pad to push status to bottom
-    while lines.len() < available.saturating_sub(status_height) {
-        lines.push(Line::from(""));
-    }
-
-    lines.extend(status_lines);
-
-    frame.render_widget(Paragraph::new(lines), inner);
+    lines
 }
 
 fn status_lines(state: &BonsaiState) -> Vec<Line<'static>> {
@@ -205,7 +264,7 @@ fn leaf_color_for_stage(stage: Stage) -> ratatui::style::Color {
 
 // ── ASCII Art per stage ──────────────────────────────────────
 
-pub(super) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'static str> {
+pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'static str> {
     // Seed → per-stage variant picker. Each stage applies its own modulo so we
     // can add variants stage-by-stage without shifting the others around.
     let v = seed.unsigned_abs() as usize;

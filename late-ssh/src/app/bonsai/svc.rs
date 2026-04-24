@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use late_core::db::Db;
-use late_core::models::bonsai::{Grave, Tree};
+use late_core::models::bonsai::{DailyCare, Grave, Tree};
 use rand_core::{OsRng, RngCore};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -19,12 +19,19 @@ impl BonsaiService {
         Self { db, activity_feed }
     }
 
-    /// Load or create a bonsai tree for this user. Handles death check on login.
     pub async fn ensure_tree(&self, user_id: Uuid) -> Result<Tree> {
+        self.ensure_tree_with_care(user_id)
+            .await
+            .map(|(tree, _care)| tree)
+    }
+
+    /// Load or create a bonsai tree and today's UTC care row. Handles death
+    /// checks and one-shot missed-care penalties for previous care rows.
+    pub async fn ensure_tree_with_care(&self, user_id: Uuid) -> Result<(Tree, DailyCare)> {
         let client = self.db.get().await?;
         let today = chrono::Utc::now().date_naive();
 
-        if let Some(mut tree) = Tree::find_by_user_id(&client, user_id).await? {
+        let mut tree = if let Some(mut tree) = Tree::find_by_user_id(&client, user_id).await? {
             // Check if tree should die (7+ days without watering)
             // If never watered, use created date as the reference point
             if tree.is_alive {
@@ -47,13 +54,26 @@ impl BonsaiService {
                     });
                 }
             }
-            Ok(tree)
+            tree
         } else {
             // New user: create tree with user-derived seed
             let seed = user_id.as_u128() as i64;
-            let tree = Tree::ensure(&client, user_id, seed).await?;
-            Ok(tree)
+            Tree::ensure(&client, user_id, seed).await?
+        };
+
+        if tree.is_alive {
+            self.apply_care_penalties(&client, user_id, today, &mut tree)
+                .await?;
         }
+
+        let care = DailyCare::ensure(
+            &client,
+            user_id,
+            today,
+            crate::app::bonsai::care::branch_goal_for(tree.seed, today) as i32,
+        )
+        .await?;
+        Ok((tree, care))
     }
 
     /// Water the tree (once per day). Returns true if watering happened.
@@ -82,6 +102,7 @@ impl BonsaiService {
         }
 
         Tree::water(&client, user_id, today).await?;
+        DailyCare::mark_watered(&client, user_id, today).await?;
 
         // Grant growth points: base 10, bonus if consecutive day
         let bonus = if let Some(last) = tree.last_watered {
@@ -142,6 +163,39 @@ impl BonsaiService {
         Tree::cut(&client, user_id, new_seed, cost).await
     }
 
+    pub fn cut_daily_branch_task(&self, user_id: Uuid, care_date: NaiveDate, branch_id: i32) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.cut_daily_branch(user_id, care_date, branch_id).await {
+                tracing::error!(error = ?e, "failed to cut daily bonsai branch");
+            }
+        });
+    }
+
+    async fn cut_daily_branch(
+        &self,
+        user_id: Uuid,
+        care_date: NaiveDate,
+        branch_id: i32,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        DailyCare::add_cut_branch(&client, user_id, care_date, branch_id).await
+    }
+
+    pub fn clear_daily_branches_task(&self, user_id: Uuid, care_date: NaiveDate) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.clear_daily_branches(user_id, care_date).await {
+                tracing::error!(error = ?e, "failed to reset daily bonsai branches");
+            }
+        });
+    }
+
+    async fn clear_daily_branches(&self, user_id: Uuid, care_date: NaiveDate) -> Result<()> {
+        let client = self.db.get().await?;
+        DailyCare::clear_cut_branches(&client, user_id, care_date).await
+    }
+
     /// Add connection-time growth (called periodically from tick)
     pub fn add_growth_task(&self, user_id: Uuid, points: i32) {
         let svc = self.clone();
@@ -159,5 +213,42 @@ impl BonsaiService {
 
     pub fn today() -> NaiveDate {
         chrono::Utc::now().date_naive()
+    }
+
+    async fn apply_care_penalties(
+        &self,
+        client: &tokio_postgres::Client,
+        user_id: Uuid,
+        today: NaiveDate,
+        tree: &mut Tree,
+    ) -> Result<()> {
+        for care in DailyCare::unapplied_before(client, user_id, today).await? {
+            let missed_water = !care.watered && !care.water_penalty_applied;
+            let missed_prune = (care.cut_branch_ids.len() as i32) < care.branch_goal
+                && !care.prune_penalty_applied;
+            let mut percent = 0;
+            if missed_water {
+                percent += 20;
+            }
+            if missed_prune {
+                percent += 10;
+            }
+
+            if percent > 0 {
+                let loss = ((tree.growth_points as f64) * (percent as f64 / 100.0)).ceil() as i32;
+                tree.growth_points = tree.growth_points.saturating_sub(loss);
+                Tree::decay_growth_percent(client, user_id, percent).await?;
+            }
+
+            DailyCare::mark_penalties_applied(
+                client,
+                user_id,
+                care.care_date,
+                missed_water,
+                missed_prune,
+            )
+            .await?;
+        }
+        Ok(())
     }
 }
