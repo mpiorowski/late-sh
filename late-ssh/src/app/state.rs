@@ -356,18 +356,17 @@ impl App {
                     .iter()
                     .find(|option| option.id == *id)
                     .map(|option| {
-                        let unread = self
-                            .chat
-                            .unread_counts
-                            .get(&option.id)
-                            .copied()
-                            .unwrap_or(0);
-                        (
-                            option.id,
-                            option.label.clone(),
-                            Some(option.id) == active,
-                            unread,
-                        )
+                        let is_active = Some(option.id) == active;
+                        let unread = if is_active {
+                            0
+                        } else {
+                            self.chat
+                                .unread_counts
+                                .get(&option.id)
+                                .copied()
+                                .unwrap_or(0)
+                        };
+                        (option.id, option.label.clone(), is_active, unread)
                     })
             })
             .collect();
