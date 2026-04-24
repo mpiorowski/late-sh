@@ -49,8 +49,8 @@ impl ChatMessageReaction {
     }
 
     pub async fn toggle(client: &Client, message_id: Uuid, user_id: Uuid, kind: i16) -> Result<()> {
-        if !(1..=5).contains(&kind) {
-            bail!("reaction kind must be between 1 and 5");
+        if !(1..=8).contains(&kind) {
+            bail!("reaction kind must be between 1 and 8");
         }
 
         let existing = Self::get_by_user_and_message(client, message_id, user_id).await?;

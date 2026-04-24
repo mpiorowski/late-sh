@@ -26,6 +26,29 @@ impl Snapshot {
         Ok(row.map(Self::from))
     }
 
+    pub async fn list_by_board_key_prefix(client: &Client, prefix: &str) -> Result<Vec<Self>> {
+        let pattern = format!("{prefix}%");
+        let rows = client
+            .query(
+                "SELECT * FROM artboard_snapshots
+                 WHERE board_key LIKE $1
+                 ORDER BY board_key DESC, created DESC",
+                &[&pattern],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    pub async fn delete_by_board_key(client: &Client, board_key: &str) -> Result<u64> {
+        let count = client
+            .execute(
+                "DELETE FROM artboard_snapshots WHERE board_key = $1",
+                &[&board_key],
+            )
+            .await?;
+        Ok(count)
+    }
+
     pub async fn upsert(
         client: &Client,
         board_key: &str,

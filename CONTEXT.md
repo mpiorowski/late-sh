@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-22 (Artboard ownership provenance + Esc/view-mode fix)
+- Last updated: 2026-04-23 (Artboard daily/monthly rollover snapshots)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -507,6 +507,8 @@ Important operational note:
 Persistence behavior:
 - The shared server boots from the last saved snapshot if one exists; otherwise it starts with a blank `384 x 192` canvas.
 - Canvas saves are coalesced and persisted in the background every 5 minutes while dirty.
+- A server-side UTC rollover task archives one daily snapshot at each day boundary under `daily:YYYY-MM-DD`, keeping only the newest 7 daily rows.
+- On UTC month rollover, the archived prior-day daily snapshot is also saved as `monthly:YYYY-MM`, then the live `main` board is blanked in-memory and persisted back as a fresh empty board.
 - Provenance is persisted alongside the canvas in `artboard_snapshots.provenance` as JSONB. The minimal schema is username-based (`Pos -> username`), not stable user UUIDs.
 - Shutdown/drain explicitly flushes the latest in-memory artboard snapshot before process exit.
 - Tests cover both periodic persistence and explicit flush-on-demand (`late-ssh/tests/games/artboard.rs`).

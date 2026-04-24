@@ -319,6 +319,21 @@ async fn main() -> anyhow::Result<()> {
         Ok(())
     });
 
+    let dartboard_rollover_shutdown = singleton_shutdown.clone();
+    let dartboard_rollover_db = state.db.clone();
+    let dartboard_rollover_server = state.dartboard_server.clone();
+    let dartboard_rollover_provenance = state.dartboard_provenance.clone();
+    tasks.spawn(async move {
+        late_ssh::dartboard::run_daily_snapshot_rollover_task(
+            dartboard_rollover_db,
+            dartboard_rollover_server,
+            dartboard_rollover_provenance,
+            dartboard_rollover_shutdown,
+        )
+        .await;
+        Ok(())
+    });
+
     let vote_shutdown = singleton_shutdown.clone();
     tasks.spawn(async move {
         vote_service.start_background_task(vote_shutdown).await;

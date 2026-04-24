@@ -257,6 +257,8 @@ fn handle_server_msg(
             if let Some(actor) = actor_name(&snapshot, from, username) {
                 snapshot.provenance.apply_op(&before, &op, &actor);
                 apply_shared_op(shared_provenance, &before, &op, &actor);
+            } else if matches!(op, CanvasOp::Replace { .. }) {
+                snapshot.provenance = clone_shared_provenance(shared_provenance);
             }
             snapshot.last_seq = snapshot.last_seq.max(seq);
             let _ = snapshot_tx.send(snapshot);
@@ -304,4 +306,54 @@ fn actor_name(snapshot: &DartboardSnapshot, from: UserId, username: &str) -> Opt
         .iter()
         .find(|peer| peer.user_id == from)
         .map(|peer| peer.name.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use dartboard_core::{Canvas, Pos, ServerMsg};
+    use tokio::sync::{broadcast, watch};
+
+    use super::{DartboardSnapshot, handle_server_msg};
+    use crate::app::artboard::provenance::{ArtboardProvenance, clone_shared_provenance};
+
+    #[test]
+    fn unknown_replace_resyncs_provenance_from_shared_state() {
+        let mut initial_canvas = Canvas::with_size(4, 4);
+        let _ = initial_canvas.put_glyph(Pos { x: 0, y: 0 }, 'A');
+        let mut initial_provenance = ArtboardProvenance::default();
+        initial_provenance.tag(Pos { x: 0, y: 0 }, "mat");
+        let (snapshot_tx, snapshot_rx) = watch::channel(DartboardSnapshot {
+            canvas: initial_canvas,
+            provenance: initial_provenance,
+            ..Default::default()
+        });
+        let (event_tx, _) = broadcast::channel(4);
+        let shared_provenance = ArtboardProvenance::default().shared();
+
+        handle_server_msg(
+            ServerMsg::OpBroadcast {
+                from: 0,
+                op: dartboard_core::CanvasOp::Replace {
+                    canvas: Canvas::with_size(4, 4),
+                },
+                seq: 1,
+            },
+            &snapshot_tx,
+            &event_tx,
+            &shared_provenance,
+            "mat",
+        );
+
+        let snapshot = snapshot_rx.borrow().clone();
+        assert_eq!(
+            snapshot.provenance,
+            clone_shared_provenance(&shared_provenance)
+        );
+        assert!(
+            snapshot
+                .provenance
+                .username_at(&snapshot.canvas, Pos { x: 0, y: 0 })
+                .is_none()
+        );
+    }
 }

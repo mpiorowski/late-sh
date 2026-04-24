@@ -489,6 +489,7 @@ impl App {
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
+        frame.render_widget(Clear, inner);
 
         let (content_area, sidebar_area) = if ctx.show_right_sidebar {
             let main_layout =
