@@ -40,7 +40,7 @@ pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
         Constraint::Length(10), // visualizer
         Constraint::Length(7),  // now playing
         Constraint::Fill(1),    // activity (shrinks on small screens)
-        Constraint::Length(18), // bonsai tree (14 max art + 2 status + 2 border)
+        Constraint::Length(16), // bonsai tree (12 max art + 2 status + 2 border)
     ])
     .split(area);
 
