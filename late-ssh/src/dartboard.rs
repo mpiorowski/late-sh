@@ -9,7 +9,7 @@ use chrono::{Datelike, NaiveDate, Utc};
 use dartboard_core::{Canvas, CanvasOp};
 use dartboard_local::{CanvasStore, ColorSelectionMode, ServerHandle};
 use late_core::{MutexRecover, db::Db, models::artboard::Snapshot};
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::time::{Instant as TokioInstant, sleep, sleep_until};
 
 use crate::app::artboard::provenance::{
     ArtboardProvenance, SharedArtboardProvenance, clone_shared_provenance,
@@ -23,6 +23,7 @@ const MONTHLY_SNAPSHOT_PREFIX: &str = "monthly:";
 const MAX_DAILY_SNAPSHOTS: usize = 7;
 const SYSTEM_ROLLOVER_USER_ID: u64 = 0;
 const SYSTEM_ROLLOVER_CLIENT_OP_ID: u64 = 0;
+const ROLLOVER_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 struct LateShCanvasStore;
@@ -152,23 +153,37 @@ pub async fn run_daily_snapshot_rollover_task(
     shared_provenance: SharedArtboardProvenance,
     shutdown: late_core::shutdown::CancellationToken,
 ) {
-    let mut ticker = interval(Duration::from_secs(30));
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut current_day = Utc::now().date_naive();
-    ticker.tick().await;
+    let mut rollover_day = next_utc_day(Utc::now().date_naive());
 
     loop {
+        let wake_at = utc_day_wake_instant(rollover_day);
         tokio::select! {
             _ = shutdown.cancelled() => break,
-            _ = ticker.tick() => {
-                let now = Utc::now();
-                let today = now.date_naive();
-                if today == current_day {
-                    continue;
+            _ = sleep_until(wake_at) => {}
+        }
+
+        loop {
+            if Utc::now().date_naive() < rollover_day {
+                break;
+            }
+
+            match rollover_daily_snapshot_for_day(&db, &server, &shared_provenance, rollover_day)
+                .await
+            {
+                Ok(()) => {
+                    rollover_day = next_utc_day(rollover_day);
+                    break;
                 }
-                current_day = today;
-                if let Err(error) = rollover_daily_snapshot(&db, &server, &shared_provenance, now).await {
-                    tracing::error!(error = ?error, at = %now, "failed to roll over artboard snapshots");
+                Err(error) => {
+                    tracing::error!(
+                        error = ?error,
+                        rollover_day = %rollover_day,
+                        "failed to roll over artboard snapshots; retrying"
+                    );
+                    tokio::select! {
+                        _ = shutdown.cancelled() => return,
+                        _ = sleep(ROLLOVER_RETRY_INTERVAL) => {}
+                    }
                 }
             }
         }
@@ -229,39 +244,72 @@ fn monthly_board_key(date: NaiveDate) -> String {
     )
 }
 
-async fn rollover_daily_snapshot(
+fn next_utc_day(date: NaiveDate) -> NaiveDate {
+    date.succ_opt().expect("UTC date overflow")
+}
+
+fn utc_day_wake_instant(date: NaiveDate) -> TokioInstant {
+    let target = date
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is a valid time")
+        .and_utc();
+    let delay = target
+        .signed_duration_since(Utc::now())
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    TokioInstant::now() + delay
+}
+
+fn decode_persisted_artboard(snapshot: Snapshot) -> anyhow::Result<PersistedArtboard> {
+    let canvas =
+        serde_json::from_value(snapshot.canvas).context("failed to decode artboard snapshot")?;
+    let provenance = serde_json::from_value(snapshot.provenance)
+        .context("failed to decode artboard provenance")?;
+    Ok(PersistedArtboard { canvas, provenance })
+}
+
+pub async fn rollover_daily_snapshot_for_day(
     db: &Db,
     server: &ServerHandle,
     shared_provenance: &SharedArtboardProvenance,
-    now: chrono::DateTime<Utc>,
+    rollover_day: NaiveDate,
 ) -> anyhow::Result<()> {
-    let archived_day = now
-        .date_naive()
+    let archived_day = rollover_day
         .pred_opt()
         .context("failed to compute previous UTC date for artboard rollover")?;
     let daily_key = daily_board_key(archived_day);
 
-    {
+    let daily = {
         let client = db.get().await.context("failed to get db client")?;
-        if Snapshot::find_by_board_key(&client, &daily_key)
+        Snapshot::find_by_board_key(&client, &daily_key)
             .await
             .context("failed to check existing daily artboard snapshot")?
-            .is_some()
-        {
-            return Ok(());
-        }
-    }
+    };
 
-    let canvas = server.canvas_snapshot();
-    let provenance = clone_shared_provenance(shared_provenance);
-    save_canvas_snapshot_for_key(db, &daily_key, &canvas, &provenance).await?;
-    prune_daily_snapshots(db, MAX_DAILY_SNAPSHOTS).await?;
-    tracing::info!(board_key = %daily_key, "saved daily artboard snapshot");
+    let archived = if let Some(snapshot) = daily {
+        decode_persisted_artboard(snapshot)
+            .with_context(|| format!("failed to decode existing {daily_key} snapshot"))?
+    } else {
+        let canvas = server.canvas_snapshot();
+        let provenance = clone_shared_provenance(shared_provenance);
+        save_canvas_snapshot_for_key(db, &daily_key, &canvas, &provenance).await?;
+        prune_daily_snapshots(db, MAX_DAILY_SNAPSHOTS).await?;
+        tracing::info!(board_key = %daily_key, "saved daily artboard snapshot");
+        PersistedArtboard { canvas, provenance }
+    };
 
-    if now.day() == 1 {
+    if rollover_day.day() == 1 {
         let monthly_key = monthly_board_key(archived_day);
-        save_canvas_snapshot_for_key(db, &monthly_key, &canvas, &provenance).await?;
-        tracing::info!(board_key = %monthly_key, "saved monthly artboard snapshot");
+        {
+            let client = db.get().await.context("failed to get db client")?;
+            if Snapshot::find_by_board_key(&client, &monthly_key)
+                .await
+                .context("failed to check existing monthly artboard snapshot")?
+                .is_some()
+            {
+                return Ok(());
+            }
+        }
 
         let blank = blank_canvas();
         let blank_provenance = ArtboardProvenance::default();
@@ -278,6 +326,9 @@ async fn rollover_daily_snapshot(
         );
         save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &blank, &blank_provenance)
             .await?;
+        save_canvas_snapshot_for_key(db, &monthly_key, &archived.canvas, &archived.provenance)
+            .await?;
+        tracing::info!(board_key = %monthly_key, "saved monthly artboard snapshot");
         tracing::info!("blanked live artboard for UTC month rollover");
     }
 

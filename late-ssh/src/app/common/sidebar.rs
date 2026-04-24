@@ -10,7 +10,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use super::primitives::Screen;
 use super::theme;
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::visualizer::Visualizer;
@@ -18,7 +17,6 @@ use crate::session::ClientAudioState;
 use crate::state::ActivityEvent;
 
 pub struct SidebarProps<'a> {
-    pub screen: Screen,
     pub game_selection: usize,
     pub is_playing_game: bool,
     pub visualizer: &'a Visualizer,
@@ -37,9 +35,8 @@ pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     let now_playing = props.now_playing;
     let paired_client = props.paired_client;
     let online_count = props.online_count;
-    let screen = props.screen;
     let layout = Layout::vertical([
-        Constraint::Length(3),  // screen card
+        Constraint::Length(3),  // clock
         Constraint::Length(10), // visualizer
         Constraint::Length(7),  // now playing
         Constraint::Fill(1),    // activity (shrinks on small screens)
@@ -47,59 +44,43 @@ pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     ])
     .split(area);
 
-    draw_screen_card(frame, layout[0], screen);
+    draw_clock_card(frame, layout[0], props.clock_text);
     visualizer.render(frame, layout[1]);
     draw_now_playing(frame, layout[2], now_playing, paired_client);
-    draw_status(
-        frame,
-        layout[3],
-        online_count,
-        props.activity,
-        props.clock_text,
-    );
+    draw_status(frame, layout[3], online_count, props.activity);
     crate::app::bonsai::ui::draw_bonsai(frame, layout[4], props.bonsai, props.audio_beat);
 }
 
-fn draw_screen_card(frame: &mut Frame, area: Rect, screen: Screen) {
-    let tabs = [
-        (Screen::Dashboard, "1"),
-        (Screen::Chat, "2"),
-        (Screen::Games, "3"),
-        (Screen::Artboard, "4"),
-    ];
-
-    let mut spans = Vec::new();
-    for (s, key) in tabs {
-        if s == screen {
-            spans.push(Span::styled(
-                format!(" {key} "),
-                Style::default()
-                    .fg(theme::BG_SELECTION())
-                    .bg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            spans.push(Span::styled(
-                format!(" {key} "),
-                Style::default().fg(theme::TEXT_DIM()),
-            ));
-        }
-    }
-
-    let label = match screen {
-        Screen::Dashboard => "Dashboard",
-        Screen::Chat => "Chat",
-        Screen::Games => "Games",
-        Screen::Artboard => "Artboard",
-    };
-
+fn draw_clock_card(frame: &mut Frame, area: Rect, clock_text: &str) {
     let block = Block::default()
-        .title(format!(" {label} "))
+        .title(" Time ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+    frame.render_widget(Paragraph::new(clock_line(clock_text)).centered(), inner);
+}
+
+fn clock_line(clock_text: &str) -> Line<'static> {
+    let mut parts = clock_text.rsplitn(2, ' ');
+    let time = parts.next().unwrap_or(clock_text);
+    let label = parts.next();
+
+    let mut spans = vec![Span::styled("◷ ", Style::default().fg(theme::AMBER_DIM()))];
+    if let Some(label) = label {
+        spans.push(Span::styled(
+            label.to_string(),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::styled(
+        time.to_string(),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    Line::from(spans)
 }
 
 fn draw_now_playing(
@@ -226,7 +207,6 @@ fn draw_status(
     area: Rect,
     online_count: usize,
     activity: &VecDeque<ActivityEvent>,
-    clock_text: &str,
 ) {
     if area.height < 3 {
         return;
@@ -245,9 +225,6 @@ fn draw_status(
         width: inner.width,
         height: 1,
     };
-    let header_cols =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).split(header_area);
-
     let online_line = Line::from(vec![
         Span::styled("● ", Style::default().fg(theme::SUCCESS())),
         Span::styled(
@@ -258,13 +235,7 @@ fn draw_status(
         ),
         Span::styled(" online", Style::default().fg(theme::TEXT_DIM())),
     ]);
-    frame.render_widget(Paragraph::new(online_line), header_cols[0]);
-
-    let clock_line = Line::from(Span::styled(
-        clock_text.to_string(),
-        Style::default().fg(theme::TEXT_MUTED()),
-    ));
-    frame.render_widget(Paragraph::new(clock_line).right_aligned(), header_cols[1]);
+    frame.render_widget(Paragraph::new(online_line), header_area);
 
     let events_area = Rect {
         x: inner.x,

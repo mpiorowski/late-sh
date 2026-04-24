@@ -507,7 +507,7 @@ Important operational note:
 Persistence behavior:
 - The shared server boots from the last saved snapshot if one exists; otherwise it starts with a blank `384 x 192` canvas.
 - Canvas saves are coalesced and persisted in the background every 5 minutes while dirty.
-- A server-side UTC rollover task archives one daily snapshot at each day boundary under `daily:YYYY-MM-DD`, keeping only the newest 7 daily rows.
+- A server-side UTC rollover task wakes at each UTC day boundary, archives one daily snapshot under `daily:YYYY-MM-DD`, keeps only the newest 7 daily rows, and retries the same pending rollover on failure instead of advancing the date.
 - On UTC month rollover, the archived prior-day daily snapshot is also saved as `monthly:YYYY-MM`, then the live `main` board is blanked in-memory and persisted back as a fresh empty board.
 - Provenance is persisted alongside the canvas in `artboard_snapshots.provenance` as JSONB. The minimal schema is username-based (`Pos -> username`), not stable user UUIDs.
 - Shutdown/drain explicitly flushes the latest in-memory artboard snapshot before process exit.
