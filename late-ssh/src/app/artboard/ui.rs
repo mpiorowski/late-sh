@@ -1202,7 +1202,7 @@ mod tests {
         let state = test_state();
         assert_eq!(
             artboard_info_area_for_screen((80, 24), &state),
-            Some(Rect::new(27, 1, 28, 13))
+            Some(Rect::new(27, 1, 28, 15))
         );
     }
 
