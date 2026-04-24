@@ -107,6 +107,55 @@ fn eleventh_service_reports_connect_rejected() {
     assert!(rx.borrow().your_user_id.is_none());
 }
 
+#[test]
+fn unknown_replace_resyncs_provenance_from_shared_state() {
+    let server = dartboard::spawn_server();
+    let shared = shared_provenance();
+    let painter = connected_service(server.clone(), "painter", shared.clone());
+    let rx = painter.subscribe_state();
+    wait_for(|| rx.borrow().your_user_id.is_some().then_some(()));
+
+    painter.submit_op(CanvasOp::PaintCell {
+        pos: Pos { x: 0, y: 0 },
+        ch: 'A',
+        fg: test_color(),
+    });
+    wait_for(|| {
+        let snapshot = rx.borrow().clone();
+        (snapshot.canvas.get(Pos { x: 0, y: 0 }) == 'A'
+            && snapshot
+                .provenance
+                .username_at(&snapshot.canvas, Pos { x: 0, y: 0 })
+                == Some("painter"))
+        .then_some(())
+    });
+
+    {
+        let mut provenance = shared.lock().expect("shared provenance lock");
+        *provenance = ArtboardProvenance::default();
+    }
+    server.submit_op_for(
+        0,
+        0,
+        CanvasOp::Replace {
+            canvas: Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT),
+        },
+    );
+
+    wait_for(|| {
+        let snapshot = rx.borrow().clone();
+        (snapshot.canvas.get(Pos { x: 0, y: 0 }) == ' ' && snapshot.last_seq >= 2).then_some(())
+    });
+    let snapshot = rx.borrow().clone();
+    assert_eq!(snapshot.provenance, ArtboardProvenance::default());
+    assert!(
+        snapshot
+            .provenance
+            .username_at(&snapshot.canvas, Pos { x: 0, y: 0 })
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn persistent_server_saves_and_restores_snapshot() {
     let test_db = new_test_db().await;
