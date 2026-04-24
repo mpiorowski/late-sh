@@ -2,9 +2,12 @@ use chrono::NaiveDate;
 use rand_core::{OsRng, RngCore};
 use uuid::Uuid;
 
-use late_core::models::bonsai::Tree;
+use late_core::models::bonsai::{MAX_GROWTH_POINTS, Tree};
 
 use super::svc::BonsaiService;
+
+pub(crate) const STAGE_GROWTH_POINTS: i32 = 100;
+pub(crate) const WRONG_CUT_GROWTH_LOSS: i32 = 10;
 
 /// How many ticks between passive growth grants (1 point per ~10 minutes at 15fps)
 const GROWTH_TICK_INTERVAL: usize = 15 * 60 * 10; // 15fps * 600s = 9000 ticks
@@ -12,6 +15,7 @@ const GROWTH_TICK_INTERVAL: usize = 15 * 60 * 10; // 15fps * 600s = 9000 ticks
 pub struct BonsaiState {
     pub user_id: Uuid,
     pub svc: BonsaiService,
+    pub is_admin: bool,
 
     // Cached tree state (refreshed on water/respawn)
     pub growth_points: i32,
@@ -29,7 +33,7 @@ pub struct BonsaiState {
 }
 
 impl BonsaiState {
-    pub fn new(user_id: Uuid, svc: BonsaiService, tree: Tree) -> Self {
+    pub fn new(user_id: Uuid, svc: BonsaiService, tree: Tree, is_admin: bool) -> Self {
         let today = chrono::Utc::now().date_naive();
         let created_date = tree.created.date_naive();
         let age_days = (today - created_date).num_days().max(0);
@@ -37,6 +41,7 @@ impl BonsaiState {
         Self {
             user_id,
             svc,
+            is_admin,
             growth_points: tree.growth_points,
             last_watered: tree.last_watered,
             seed: tree.seed,
@@ -64,33 +69,33 @@ impl BonsaiState {
         self.ticks_since_growth += 1;
         if self.ticks_since_growth >= GROWTH_TICK_INTERVAL {
             self.ticks_since_growth = 0;
-            self.growth_points += 1;
-            self.svc.add_growth_task(self.user_id, 1);
+            if self.add_growth_locally(1) > 0 {
+                self.svc.add_growth_task(self.user_id, 1);
+            }
         }
     }
 
-    /// Water the tree. Returns true if watering is valid (alive + not yet watered today).
-    pub fn water(&mut self) -> bool {
+    /// Water the tree. Returns points granted (0 if already watered today or dead).
+    pub fn water(&mut self) -> i32 {
         if !self.is_alive {
-            return false;
+            return 0;
         }
         let today = BonsaiService::today();
-        if self.last_watered == Some(today) {
-            return false; // Already watered
+        if !self.is_admin && self.last_watered == Some(today) {
+            return 0; // Already watered
         }
 
-        // Optimistic update
         let bonus = if let Some(last) = self.last_watered {
             if (today - last).num_days() == 1 { 5 } else { 0 }
         } else {
             0
         };
-        self.growth_points += 10 + bonus;
+        let gained = self.add_growth_locally(10 + bonus);
         self.last_watered = Some(today);
         self.watered_this_session = true;
 
-        self.svc.water_task(self.user_id);
-        true
+        self.svc.water_task(self.user_id, self.is_admin);
+        gained
     }
 
     /// Respawn a dead tree
@@ -125,20 +130,63 @@ impl BonsaiState {
 
     /// Can water right now?
     pub fn can_water(&self) -> bool {
-        can_water_on(self.is_alive, self.last_watered, BonsaiService::today())
+        can_water_on(
+            self.is_alive,
+            self.last_watered,
+            BonsaiService::today(),
+            self.is_admin,
+        )
     }
 
-    /// Cut/prune the tree — costs 20% growth points, changes visual variant.
+    /// Cut/prune the tree — drops one growth stage, changes visual variant.
     /// Returns true if cut happened.
     pub fn cut(&mut self) -> bool {
-        if !self.is_alive || self.growth_points < 10 {
+        if !self.is_alive || self.growth_points < STAGE_GROWTH_POINTS {
             return false;
         }
-        let cost = (self.growth_points as f64 * 0.2).ceil() as i32;
+        let cost = STAGE_GROWTH_POINTS;
         self.growth_points -= cost;
         self.seed = OsRng.next_u64() as i64;
         self.svc.cut_task(self.user_id, self.seed, cost);
         true
+    }
+
+    pub(crate) fn cut_daily_branch(&mut self, branch_id: i32) {
+        self.svc
+            .cut_daily_branch_task(self.user_id, BonsaiService::today(), branch_id);
+    }
+
+    pub(crate) fn reset_daily_branches(&mut self) {
+        self.svc
+            .clear_daily_branches_task(self.user_id, BonsaiService::today());
+    }
+
+    pub(crate) fn reset_daily_care_for_respawn(
+        &mut self,
+        care_date: chrono::NaiveDate,
+        branch_goal: i32,
+    ) {
+        self.svc
+            .reset_daily_care_task(self.user_id, care_date, branch_goal);
+    }
+
+    pub(crate) fn punish_wrong_cut(&mut self) -> i32 {
+        if !self.is_alive || self.growth_points <= 0 {
+            return 0;
+        }
+        let loss = self.growth_points.min(WRONG_CUT_GROWTH_LOSS);
+        self.growth_points -= loss;
+        self.svc.lose_growth_task(self.user_id, loss);
+        loss
+    }
+
+    fn add_growth_locally(&mut self, points: i32) -> i32 {
+        if points <= 0 || self.growth_points >= MAX_GROWTH_POINTS {
+            return 0;
+        }
+        let before = self.growth_points;
+        self.growth_points = (self.growth_points + points).min(MAX_GROWTH_POINTS);
+        self.growth_points - before
     }
 
     /// ASCII snippet for sharing (plain text, no ANSI)
@@ -158,12 +206,12 @@ pub fn stage_for(is_alive: bool, growth_points: i32) -> Stage {
         return Stage::Dead;
     }
     match growth_points {
-        0..=9 => Stage::Seed,
-        10..=29 => Stage::Sprout,
-        30..=69 => Stage::Sapling,
-        70..=139 => Stage::Young,
-        140..=279 => Stage::Mature,
-        280..=499 => Stage::Ancient,
+        0..=99 => Stage::Seed,
+        100..=199 => Stage::Sprout,
+        200..=299 => Stage::Sapling,
+        300..=399 => Stage::Young,
+        400..=499 => Stage::Mature,
+        500..=599 => Stage::Ancient,
         _ => Stage::Blossom,
     }
 }
@@ -176,8 +224,13 @@ fn is_wilting_state(is_alive: bool, age_days: i64, days_since_watered: Option<i6
     is_alive && days_since_watered.map_or(age_days >= 2, |days| days >= 2)
 }
 
-fn can_water_on(is_alive: bool, last_watered: Option<NaiveDate>, today: NaiveDate) -> bool {
-    is_alive && last_watered != Some(today)
+fn can_water_on(
+    is_alive: bool,
+    last_watered: Option<NaiveDate>,
+    today: NaiveDate,
+    is_admin: bool,
+) -> bool {
+    is_alive && (is_admin || last_watered != Some(today))
 }
 
 fn share_label(is_alive: bool, age_days: i64) -> String {
@@ -191,13 +244,13 @@ fn share_label(is_alive: bool, age_days: i64) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     Dead,
-    Seed,    // 0-9 pts
-    Sprout,  // 10-29 pts (~1-3 days)
-    Sapling, // 30-69 pts (~3-7 days)
-    Young,   // 70-139 pts (~7-14 days)
-    Mature,  // 140-279 pts (~14-28 days)
-    Ancient, // 280-499 pts (~28-50 days)
-    Blossom, // 500+ pts (~50+ days)
+    Seed,    // 0-99 pts
+    Sprout,  // 100-199 pts
+    Sapling, // 200-299 pts
+    Young,   // 300-399 pts
+    Mature,  // 400-499 pts
+    Ancient, // 500-599 pts
+    Blossom, // 600-700 pts
 }
 
 impl Stage {
@@ -220,10 +273,10 @@ impl Stage {
             Stage::Dead => "",
             Stage::Seed => "\u{00b7}",     // ·
             Stage::Sprout => "\u{2698}",   // ⚘
-            Stage::Sapling => "\u{2698}",  // ⚘
+            Stage::Sapling => "\u{1f331}", // 🌱
             Stage::Young => "\u{1f332}",   // 🌲
             Stage::Mature => "\u{1f333}",  // 🌳
-            Stage::Ancient => "\u{1f333}", // 🌳
+            Stage::Ancient => "\u{1f338}", // 🌸
             Stage::Blossom => "\u{1f33C}", // 🌼
         }
     }
@@ -249,18 +302,19 @@ mod tests {
     fn stage_thresholds_match_growth_ranges() {
         let cases = [
             (true, 0, Stage::Seed),
-            (true, 9, Stage::Seed),
-            (true, 10, Stage::Sprout),
-            (true, 29, Stage::Sprout),
-            (true, 30, Stage::Sapling),
-            (true, 69, Stage::Sapling),
-            (true, 70, Stage::Young),
-            (true, 139, Stage::Young),
-            (true, 140, Stage::Mature),
-            (true, 279, Stage::Mature),
-            (true, 280, Stage::Ancient),
-            (true, 499, Stage::Ancient),
-            (true, 500, Stage::Blossom),
+            (true, 99, Stage::Seed),
+            (true, 100, Stage::Sprout),
+            (true, 199, Stage::Sprout),
+            (true, 200, Stage::Sapling),
+            (true, 299, Stage::Sapling),
+            (true, 300, Stage::Young),
+            (true, 399, Stage::Young),
+            (true, 400, Stage::Mature),
+            (true, 499, Stage::Mature),
+            (true, 500, Stage::Ancient),
+            (true, 599, Stage::Ancient),
+            (true, 600, Stage::Blossom),
+            (true, 700, Stage::Blossom),
             (false, 999, Stage::Dead),
         ];
 
@@ -274,16 +328,22 @@ mod tests {
         let today = BonsaiService::today();
 
         assert_eq!(days_since_watered_on(None, today), None);
-        assert!(can_water_on(true, None, today));
+        assert!(can_water_on(true, None, today, false));
 
         assert_eq!(days_since_watered_on(Some(today), today), Some(0));
-        assert!(!can_water_on(true, Some(today), today));
+        assert!(!can_water_on(true, Some(today), today, false));
+        assert!(can_water_on(true, Some(today), today, true));
 
         assert_eq!(
             days_since_watered_on(Some(today - Duration::days(1)), today),
             Some(1)
         );
-        assert!(can_water_on(true, Some(today - Duration::days(1)), today));
+        assert!(can_water_on(
+            true,
+            Some(today - Duration::days(1)),
+            today,
+            false
+        ));
     }
 
     #[test]

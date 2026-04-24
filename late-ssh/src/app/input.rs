@@ -581,6 +581,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_bonsai_modal {
+        crate::app::bonsai::modal_input::handle_input(app, event);
+        return;
+    }
+
     // Picker intercepts all input when open (ESC is handled via dispatch_escape).
     if app.icon_picker_open {
         handle_icon_picker_input(app, event);
@@ -877,6 +882,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_profile_modal {
         profile_modal::input::handle_escape(app);
+        return;
+    }
+    if app.show_bonsai_modal {
+        crate::app::bonsai::modal_input::handle_escape(app);
         return;
     }
     if app.icon_picker_open {
@@ -1211,6 +1220,7 @@ fn reset_composers_for_page_change(app: &mut App) {
 fn open_settings_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
     app.show_web_chat_qr = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
@@ -1345,37 +1355,12 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'x' | b'X' if !ctx.chat_composing && !ctx.news_composing => {
-            if app.bonsai_state.cut() {
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Bonsai pruned!",
-                ));
-            } else if !app.bonsai_state.is_alive {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Can't prune a dead tree",
-                ));
-            } else {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Not enough growth to prune",
-                ));
-            }
-            true
-        }
         b'w' | b'W' if !ctx.chat_composing && !ctx.news_composing => {
-            if !app.bonsai_state.is_alive {
-                app.bonsai_state.respawn();
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "New seed planted!",
-                ));
-            } else if app.bonsai_state.water() {
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Bonsai watered!",
-                ));
-            } else {
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Already watered today",
-                ));
-            }
+            app.show_help = false;
+            app.show_profile_modal = false;
+            app.show_settings = false;
+            app.show_quit_confirm = false;
+            app.show_bonsai_modal = true;
             true
         }
         b's' | b'S' if !ctx.chat_composing && !ctx.news_composing => {

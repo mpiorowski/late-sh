@@ -667,11 +667,16 @@ impl russh::server::Handler for ClientHandler {
                     Vec::new()
                 }
             };
-        let initial_bonsai_tree = match self.state.bonsai_service.ensure_tree(user_id).await {
-            Ok(tree) => Some(tree),
+        let (initial_bonsai_tree, initial_bonsai_care) = match self
+            .state
+            .bonsai_service
+            .ensure_tree_with_care(user_id)
+            .await
+        {
+            Ok((tree, care)) => (Some(tree), Some(care)),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                None
+                (None, None)
             }
         };
 
@@ -718,6 +723,7 @@ impl russh::server::Handler for ClientHandler {
             username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
+            initial_bonsai_care,
             nonogram_library,
             initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),

@@ -95,6 +95,9 @@ impl App {
 
         // Bonsai passive growth
         self.bonsai_state.tick();
+        if self.show_bonsai_modal {
+            self.bonsai_care_state.tick();
+        }
 
         if let Some(rx) = &mut self.activity_feed_rx {
             while let Ok(event) = rx.try_recv() {

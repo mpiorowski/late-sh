@@ -131,6 +131,7 @@ pub struct SessionConfig {
     pub username: String,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
+    pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
     pub nonogram_library: crate::app::games::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
@@ -179,6 +180,7 @@ pub struct App {
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
     pub(crate) show_profile_modal: bool,
+    pub(crate) show_bonsai_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -240,6 +242,7 @@ pub struct App {
 
     /// Bonsai
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
+    pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
 
     /// Games Hub
     pub(crate) game_selection: usize,
@@ -302,6 +305,7 @@ impl App {
         self.show_splash = false;
         self.show_settings = false;
         self.show_quit_confirm = false;
+        self.show_bonsai_modal = false;
     }
 
     /// Resolves which room the dashboard's chat card should display, given
@@ -565,6 +569,7 @@ impl App {
                 config.user_id,
                 config.bonsai_service.clone(),
                 tree,
+                config.is_admin,
             )
         } else {
             // Fallback: create a default dead-ish state (should not happen in practice)
@@ -581,8 +586,25 @@ impl App {
                     seed: config.user_id.as_u128() as i64,
                     is_alive: true,
                 },
+                config.is_admin,
             )
         };
+        let bonsai_care_state = config
+            .initial_bonsai_care
+            .map(|care| {
+                crate::app::bonsai::care::BonsaiCareState::from_daily(
+                    care,
+                    bonsai_state.seed,
+                    bonsai_state.stage(),
+                )
+            })
+            .unwrap_or_else(|| {
+                crate::app::bonsai::care::BonsaiCareState::fallback(
+                    chrono::Utc::now().date_naive(),
+                    bonsai_state.seed,
+                    bonsai_state.stage(),
+                )
+            });
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -611,6 +633,7 @@ impl App {
             show_quit_confirm: false,
             show_help: false,
             show_profile_modal: false,
+            show_bonsai_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -660,6 +683,7 @@ impl App {
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
+            bonsai_care_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             multiplayer_room_selection: 0,

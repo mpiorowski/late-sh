@@ -15,6 +15,11 @@ pub enum ThemeKind {
     Espresso = 9,
     GruvboxDark = 10,
     OneDarkPro = 11,
+    RosePine = 12,
+    TokyoNight = 13,
+    Kanagawa = 14,
+    Dracula = 15,
+    Oxocarbon = 16,
 }
 
 #[derive(Clone, Copy)]
@@ -115,6 +120,31 @@ pub const OPTIONS: &[ThemeOption] = &[
         kind: ThemeKind::OneDarkPro,
         id: "onedarkpro",
         label: "One Dark Pro",
+    },
+    ThemeOption {
+        kind: ThemeKind::RosePine,
+        id: "rosepine",
+        label: "Rose Pine",
+    },
+    ThemeOption {
+        kind: ThemeKind::TokyoNight,
+        id: "tokyonight",
+        label: "Tokyo Night",
+    },
+    ThemeOption {
+        kind: ThemeKind::Kanagawa,
+        id: "kanagawa",
+        label: "Kanagawa",
+    },
+    ThemeOption {
+        kind: ThemeKind::Dracula,
+        id: "dracula",
+        label: "Dracula",
+    },
+    ThemeOption {
+        kind: ThemeKind::Oxocarbon,
+        id: "oxocarbon",
+        label: "Oxocarbon",
     },
 ];
 
@@ -478,6 +508,156 @@ const PALETTE_ONE_DARK_PRO: Palette = Palette {
     badge_gold: Color::Rgb(235, 186, 91),
 };
 
+const PALETTE_ROSE_PINE: Palette = Palette {
+    bg_canvas: Color::Rgb(25, 23, 36),
+    bg_selection: Color::Rgb(64, 61, 82),
+    bg_highlight: Color::Rgb(31, 29, 46), // Dimmer than canvas for recessed replies
+    border_dim: Color::Rgb(110, 106, 134),
+    border: Color::Rgb(156, 153, 175),
+    border_active: Color::Rgb(235, 188, 186), // Rose
+    text_faint: Color::Rgb(110, 106, 134),
+    text_dim: Color::Rgb(156, 153, 175),
+    text_muted: Color::Rgb(224, 222, 244),
+    text: Color::Rgb(224, 222, 244),
+    text_bright: Color::Rgb(235, 111, 146), // Love (Red) - Piercing contrast
+    amber: Color::Rgb(246, 193, 119),
+    amber_dim: Color::Rgb(196, 143, 69),
+    amber_glow: Color::Rgb(246, 193, 119),
+    chat_body: Color::Rgb(224, 222, 244),
+    chat_author: Color::Rgb(196, 167, 231), // Iris
+    mention: Color::Rgb(235, 188, 186),
+    success: Color::Rgb(49, 116, 143), // Pine
+    error: Color::Rgb(235, 111, 146),
+    bot: Color::Rgb(156, 207, 216), // Foam
+    bonsai_sprout: Color::Rgb(156, 207, 216),
+    bonsai_leaf: Color::Rgb(49, 116, 143),
+    bonsai_canopy: Color::Rgb(156, 207, 216),
+    bonsai_bloom: Color::Rgb(196, 167, 231),
+    badge_bronze: Color::Rgb(235, 111, 146),
+    badge_silver: Color::Rgb(224, 222, 244),
+    badge_gold: Color::Rgb(246, 193, 119),
+};
+
+const PALETTE_TOKYO_NIGHT: Palette = Palette {
+    bg_canvas: Color::Rgb(36, 40, 59),
+    bg_selection: Color::Rgb(41, 46, 66),
+    bg_highlight: Color::Rgb(26, 27, 38), // Night-mode dimming for replies
+    border_dim: Color::Rgb(59, 66, 97),
+    border: Color::Rgb(86, 95, 137),
+    border_active: Color::Rgb(122, 162, 247), // Blue
+    text_faint: Color::Rgb(86, 95, 137),
+    text_dim: Color::Rgb(169, 177, 214),
+    text_muted: Color::Rgb(192, 202, 245),
+    text: Color::Rgb(192, 202, 245),
+    text_bright: Color::Rgb(187, 154, 247), // Purple-bright contrast
+    amber: Color::Rgb(224, 175, 104),
+    amber_dim: Color::Rgb(184, 135, 64),
+    amber_glow: Color::Rgb(224, 175, 104),
+    chat_body: Color::Rgb(192, 202, 245),
+    chat_author: Color::Rgb(42, 195, 222), // Cyan
+    mention: Color::Rgb(255, 158, 100),    // Orange
+    success: Color::Rgb(158, 206, 106),    // Green
+    error: Color::Rgb(247, 118, 142),      // Red
+    bot: Color::Rgb(122, 162, 247),
+    bonsai_sprout: Color::Rgb(115, 218, 202),
+    bonsai_leaf: Color::Rgb(158, 206, 106),
+    bonsai_canopy: Color::Rgb(122, 162, 247),
+    bonsai_bloom: Color::Rgb(187, 154, 247),
+    badge_bronze: Color::Rgb(255, 158, 100),
+    badge_silver: Color::Rgb(192, 202, 245),
+    badge_gold: Color::Rgb(224, 175, 104),
+};
+
+const PALETTE_KANAGAWA: Palette = Palette {
+    bg_canvas: Color::Rgb(31, 31, 40),
+    bg_selection: Color::Rgb(45, 45, 59),
+    bg_highlight: Color::Rgb(22, 22, 29), // Sumi-e black for dimmed replies
+    border_dim: Color::Rgb(54, 54, 75),
+    border: Color::Rgb(84, 82, 122),
+    border_active: Color::Rgb(126, 150, 189), // Dragon Blue
+    text_faint: Color::Rgb(114, 113, 133),
+    text_dim: Color::Rgb(156, 156, 156),
+    text_muted: Color::Rgb(210, 201, 166),
+    text: Color::Rgb(210, 201, 166),       // Fuji White
+    text_bright: Color::Rgb(230, 180, 80), // Autumn Yellow
+    amber: Color::Rgb(255, 160, 102),      // Surimi Orange
+    amber_dim: Color::Rgb(196, 112, 60),
+    amber_glow: Color::Rgb(255, 160, 102),
+    chat_body: Color::Rgb(210, 201, 166),
+    chat_author: Color::Rgb(152, 187, 108), // Spring Green
+    mention: Color::Rgb(149, 123, 171),     // Oni Violet
+    success: Color::Rgb(152, 187, 108),
+    error: Color::Rgb(196, 114, 114),
+    bot: Color::Rgb(126, 150, 189),
+    bonsai_sprout: Color::Rgb(122, 162, 152),
+    bonsai_leaf: Color::Rgb(152, 187, 108),
+    bonsai_canopy: Color::Rgb(126, 150, 189),
+    bonsai_bloom: Color::Rgb(149, 123, 171),
+    badge_bronze: Color::Rgb(196, 112, 60),
+    badge_silver: Color::Rgb(114, 113, 133),
+    badge_gold: Color::Rgb(230, 180, 80),
+};
+
+const PALETTE_DRACULA: Palette = Palette {
+    bg_canvas: Color::Rgb(40, 42, 54),
+    bg_selection: Color::Rgb(68, 71, 90),
+    bg_highlight: Color::Rgb(33, 34, 44), // Deeply dimmed reply blocks
+    border_dim: Color::Rgb(68, 71, 90),
+    border: Color::Rgb(98, 114, 164),
+    border_active: Color::Rgb(189, 147, 249), // Purple
+    text_faint: Color::Rgb(98, 114, 164),
+    text_dim: Color::Rgb(139, 151, 189),
+    text_muted: Color::Rgb(248, 248, 242),
+    text: Color::Rgb(248, 248, 242),
+    text_bright: Color::Rgb(255, 121, 198), // Pink highlight
+    amber: Color::Rgb(241, 250, 140),       // Yellow
+    amber_dim: Color::Rgb(191, 200, 90),
+    amber_glow: Color::Rgb(241, 250, 140),
+    chat_body: Color::Rgb(248, 248, 242),
+    chat_author: Color::Rgb(139, 233, 253), // Cyan
+    mention: Color::Rgb(255, 184, 108),     // Orange
+    success: Color::Rgb(80, 250, 123),      // Green
+    error: Color::Rgb(255, 85, 85),         // Red
+    bot: Color::Rgb(189, 147, 249),
+    bonsai_sprout: Color::Rgb(139, 233, 253),
+    bonsai_leaf: Color::Rgb(80, 250, 123),
+    bonsai_canopy: Color::Rgb(189, 147, 249),
+    bonsai_bloom: Color::Rgb(255, 121, 198),
+    badge_bronze: Color::Rgb(255, 184, 108),
+    badge_silver: Color::Rgb(248, 248, 242),
+    badge_gold: Color::Rgb(241, 250, 140),
+};
+
+const PALETTE_OXOCARBON: Palette = Palette {
+    bg_canvas: Color::Rgb(22, 22, 22),
+    bg_selection: Color::Rgb(38, 38, 38),
+    bg_highlight: Color::Rgb(14, 14, 14), // Ultra-dark reply blocks
+    border_dim: Color::Rgb(57, 57, 57),
+    border: Color::Rgb(82, 82, 82),
+    border_active: Color::Rgb(61, 184, 255), // Cyan focus
+    text_faint: Color::Rgb(82, 82, 82),
+    text_dim: Color::Rgb(182, 182, 182),
+    text_muted: Color::Rgb(242, 244, 248),
+    text: Color::Rgb(242, 244, 248),
+    text_bright: Color::Rgb(255, 126, 182), // Neon Pink contrast
+    amber: Color::Rgb(190, 149, 255),       // Purple
+    amber_dim: Color::Rgb(140, 99, 205),
+    amber_glow: Color::Rgb(190, 149, 255),
+    chat_body: Color::Rgb(242, 244, 248),
+    chat_author: Color::Rgb(61, 184, 255),
+    mention: Color::Rgb(51, 255, 184), // Teal
+    success: Color::Rgb(61, 184, 255),
+    error: Color::Rgb(255, 126, 182),
+    bot: Color::Rgb(190, 149, 255),
+    bonsai_sprout: Color::Rgb(51, 255, 184),
+    bonsai_leaf: Color::Rgb(61, 184, 255),
+    bonsai_canopy: Color::Rgb(190, 149, 255),
+    bonsai_bloom: Color::Rgb(255, 126, 182),
+    badge_bronze: Color::Rgb(255, 126, 182),
+    badge_silver: Color::Rgb(242, 244, 248),
+    badge_gold: Color::Rgb(190, 149, 255),
+};
+
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Late) };
 }
@@ -537,6 +717,11 @@ fn current_palette() -> &'static Palette {
         ThemeKind::Espresso => &PALETTE_ESPRESSO,
         ThemeKind::GruvboxDark => &PALETTE_GRUVBOX_DARK,
         ThemeKind::OneDarkPro => &PALETTE_ONE_DARK_PRO,
+        ThemeKind::RosePine => &PALETTE_ROSE_PINE,
+        ThemeKind::TokyoNight => &PALETTE_TOKYO_NIGHT,
+        ThemeKind::Kanagawa => &PALETTE_KANAGAWA,
+        ThemeKind::Dracula => &PALETTE_DRACULA,
+        ThemeKind::Oxocarbon => &PALETTE_OXOCARBON,
         ThemeKind::Late => &PALETTE_LATE,
     })
 }
@@ -698,7 +883,7 @@ mod tests {
 
     #[test]
     fn cycle_theme_wraps() {
-        assert_eq!(cycle_id("onedarkpro", true), "late");
-        assert_eq!(cycle_id("late", false), "onedarkpro");
+        assert_eq!(cycle_id("oxocarbon", true), "late");
+        assert_eq!(cycle_id("late", false), "oxocarbon");
     }
 }
