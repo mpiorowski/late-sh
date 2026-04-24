@@ -34,7 +34,7 @@ services:
       - victoriametrics
 
   victoriametrics:
-    container_name: victoriametrics
+    container_name: late-victoriametrics
     image: victoriametrics/victoria-metrics:latest
     ports:
       - "8428:8428"
@@ -46,7 +46,7 @@ services:
     restart: always
 
   victorialogs:
-    container_name: victorialogs
+    container_name: late-victorialogs
     image: victoriametrics/victoria-logs:latest
     ports:
       - "9428:9428"
@@ -58,7 +58,7 @@ services:
     restart: always
 
   victoriatraces:
-    container_name: victoriatraces
+    container_name: late-victoriatraces
     image: victoriametrics/victoria-traces:latest
     ports:
       - "10428:10428"

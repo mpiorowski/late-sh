@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use crate::state::ActivityEvent;
 
+const MISSED_PRUNE_GROWTH_LOSS: i32 = 10;
+
 #[derive(Clone)]
 pub struct BonsaiService {
     db: Db,
@@ -70,23 +72,27 @@ impl BonsaiService {
             &client,
             user_id,
             today,
-            crate::app::bonsai::care::branch_goal_for(tree.seed, today) as i32,
+            crate::app::bonsai::care::branch_goal_for(
+                crate::app::bonsai::state::stage_for(tree.is_alive, tree.growth_points),
+                tree.seed,
+                today,
+            ) as i32,
         )
         .await?;
         Ok((tree, care))
     }
 
-    /// Water the tree (once per day). Returns true if watering happened.
-    pub fn water_task(&self, user_id: Uuid) {
+    /// Water the tree. Non-admin users are limited to once per day.
+    pub fn water_task(&self, user_id: Uuid, unlimited: bool) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.water(user_id).await {
+            if let Err(e) = svc.water(user_id, unlimited).await {
                 tracing::error!(error = ?e, "failed to water bonsai");
             }
         });
     }
 
-    async fn water(&self, user_id: Uuid) -> Result<bool> {
+    async fn water(&self, user_id: Uuid, unlimited: bool) -> Result<bool> {
         let client = self.db.get().await?;
         let today = chrono::Utc::now().date_naive();
 
@@ -97,7 +103,7 @@ impl BonsaiService {
         if !tree.is_alive {
             return Ok(false);
         }
-        if tree.last_watered == Some(today) {
+        if !unlimited && tree.last_watered == Some(today) {
             return Ok(false); // Already watered today
         }
 
@@ -211,6 +217,20 @@ impl BonsaiService {
         Tree::add_growth(&client, user_id, points).await
     }
 
+    pub fn lose_growth_task(&self, user_id: Uuid, points: i32) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.lose_growth(user_id, points).await {
+                tracing::error!(error = ?e, "failed to subtract bonsai growth");
+            }
+        });
+    }
+
+    async fn lose_growth(&self, user_id: Uuid, points: i32) -> Result<()> {
+        let client = self.db.get().await?;
+        Tree::lose_growth(&client, user_id, points).await
+    }
+
     pub fn today() -> NaiveDate {
         chrono::Utc::now().date_naive()
     }
@@ -226,18 +246,10 @@ impl BonsaiService {
             let missed_water = !care.watered && !care.water_penalty_applied;
             let missed_prune = (care.cut_branch_ids.len() as i32) < care.branch_goal
                 && !care.prune_penalty_applied;
-            let mut percent = 0;
-            if missed_water {
-                percent += 20;
-            }
-            if missed_prune {
-                percent += 10;
-            }
 
-            if percent > 0 {
-                let loss = ((tree.growth_points as f64) * (percent as f64 / 100.0)).ceil() as i32;
-                tree.growth_points = tree.growth_points.saturating_sub(loss);
-                Tree::decay_growth_percent(client, user_id, percent).await?;
+            if missed_prune {
+                tree.growth_points = tree.growth_points.saturating_sub(MISSED_PRUNE_GROWTH_LOSS);
+                Tree::lose_growth(client, user_id, MISSED_PRUNE_GROWTH_LOSS).await?;
             }
 
             DailyCare::mark_penalties_applied(

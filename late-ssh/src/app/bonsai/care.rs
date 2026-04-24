@@ -28,38 +28,41 @@ pub(crate) struct BonsaiCareState {
     pub watered: bool,
     pub cut_branch_ids: BTreeSet<i32>,
     pub branch_goal: usize,
-    pub cursor: usize,
+    pub cursor_x: usize,
+    pub cursor_y: usize,
     pub mode: CareMode,
     pub water_animation_ticks: u8,
     pub message: Option<String>,
 }
 
 impl BonsaiCareState {
-    pub fn from_daily(care: DailyCare, seed: i64) -> Self {
+    pub fn from_daily(care: DailyCare, seed: i64, stage: Stage) -> Self {
         let branch_goal = if care.branch_goal > 0 {
             care.branch_goal as usize
         } else {
-            branch_goal_for(seed, care.care_date)
+            branch_goal_for(stage, seed, care.care_date)
         };
         Self {
             date: care.care_date,
             watered: care.watered,
             cut_branch_ids: care.cut_branch_ids.into_iter().collect(),
             branch_goal,
-            cursor: 0,
+            cursor_x: 0,
+            cursor_y: 0,
             mode: CareMode::Water,
             water_animation_ticks: 0,
             message: None,
         }
     }
 
-    pub fn fallback(date: NaiveDate, seed: i64) -> Self {
+    pub fn fallback(date: NaiveDate, seed: i64, stage: Stage) -> Self {
         Self {
             date,
             watered: false,
             cut_branch_ids: BTreeSet::new(),
-            branch_goal: branch_goal_for(seed, date),
-            cursor: 0,
+            branch_goal: branch_goal_for(stage, seed, date),
+            cursor_x: 0,
+            cursor_y: 0,
             mode: CareMode::Water,
             water_animation_ticks: 0,
             message: None,
@@ -70,13 +73,21 @@ impl BonsaiCareState {
         self.water_animation_ticks = self.water_animation_ticks.saturating_sub(1);
     }
 
-    pub fn move_cursor(&mut self, delta: isize, target_count: usize) {
-        if target_count == 0 {
-            self.cursor = 0;
+    pub fn set_cursor(&mut self, x: usize, y: usize) {
+        self.cursor_x = x;
+        self.cursor_y = y;
+    }
+
+    pub fn move_cursor(&mut self, dx: isize, dy: isize, width: usize, height: usize) {
+        if width == 0 || height == 0 {
+            self.cursor_x = 0;
+            self.cursor_y = 0;
             return;
         }
-        let current = self.cursor.min(target_count - 1) as isize;
-        self.cursor = (current + delta).rem_euclid(target_count as isize) as usize;
+        let max_x = width.saturating_sub(1) as isize;
+        let max_y = height.saturating_sub(1) as isize;
+        self.cursor_x = (self.cursor_x as isize + dx).clamp(0, max_x) as usize;
+        self.cursor_y = (self.cursor_y as isize + dy).clamp(0, max_y) as usize;
     }
 
     pub fn mark_watered(&mut self) {
@@ -87,12 +98,19 @@ impl BonsaiCareState {
 
     pub fn reset_branch_cuts(&mut self) {
         self.cut_branch_ids.clear();
-        self.cursor = 0;
+        self.cursor_x = 0;
+        self.cursor_y = 0;
         self.mode = CareMode::Prune;
     }
 
-    pub fn cut_selected(&mut self, targets: &[BranchTarget]) -> Option<i32> {
-        let target = targets.get(self.cursor.min(targets.len().saturating_sub(1)))?;
+    pub fn cut_at_cursor(&mut self, targets: &[BranchTarget]) -> Option<i32> {
+        let Some(target) = targets
+            .iter()
+            .find(|target| target.x == self.cursor_x && target.y == self.cursor_y)
+        else {
+            self.message = Some("No wrong branch here".to_string());
+            return None;
+        };
         if self.cut_branch_ids.insert(target.id) {
             self.message = Some("Clean cut".to_string());
             Some(target.id)
@@ -111,8 +129,19 @@ impl BonsaiCareState {
     }
 }
 
-pub(crate) fn branch_goal_for(seed: i64, date: NaiveDate) -> usize {
-    3 + (hash_parts(seed, date, 0) as usize % 2)
+pub(crate) fn branch_goal_for(stage: Stage, seed: i64, date: NaiveDate) -> usize {
+    let (min, spread) = match stage {
+        Stage::Dead => (0, 0),
+        Stage::Seed | Stage::Sprout => (1, 1),
+        Stage::Sapling => (2, 1),
+        Stage::Young | Stage::Mature => (3, 1),
+        Stage::Ancient | Stage::Blossom => (4, 1),
+    };
+    if spread == 0 {
+        min
+    } else {
+        min + (hash_parts(seed, date, 0) as usize % (spread + 1))
+    }
 }
 
 pub(crate) fn branch_targets_for(
@@ -224,17 +253,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn branch_goal_is_daily_three_or_four() {
+    fn branch_goal_scales_with_growth_stage() {
         let date = NaiveDate::from_ymd_opt(2026, 4, 24).unwrap();
-        let goal = branch_goal_for(42, date);
-        assert!((3..=4).contains(&goal));
-        assert_eq!(goal, branch_goal_for(42, date));
+
+        for stage in [Stage::Seed, Stage::Sprout] {
+            let goal = branch_goal_for(stage, 42, date);
+            assert!((1..=2).contains(&goal));
+            assert_eq!(goal, branch_goal_for(stage, 42, date));
+        }
+
+        let goal = branch_goal_for(Stage::Sapling, 42, date);
+        assert!((2..=3).contains(&goal));
+
+        for stage in [Stage::Young, Stage::Mature] {
+            let goal = branch_goal_for(stage, 42, date);
+            assert!((3..=4).contains(&goal));
+        }
+
+        for stage in [Stage::Ancient, Stage::Blossom] {
+            let goal = branch_goal_for(stage, 42, date);
+            assert!((4..=5).contains(&goal));
+        }
     }
 
     #[test]
     fn cut_selected_records_branch_once() {
         let date = NaiveDate::from_ymd_opt(2026, 4, 24).unwrap();
-        let mut state = BonsaiCareState::fallback(date, 42);
+        let mut state = BonsaiCareState::fallback(date, 42, Stage::Seed);
         let targets = [BranchTarget {
             id: 7,
             x: 1,
@@ -242,8 +287,9 @@ mod tests {
             glyph: '/',
         }];
 
-        assert_eq!(state.cut_selected(&targets), Some(7));
-        assert_eq!(state.cut_selected(&targets), None);
+        state.set_cursor(1, 1);
+        assert_eq!(state.cut_at_cursor(&targets), Some(7));
+        assert_eq!(state.cut_at_cursor(&targets), None);
         assert_eq!(state.branches_done(), 1);
     }
 }

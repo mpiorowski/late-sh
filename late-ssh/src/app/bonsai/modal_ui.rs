@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -41,53 +41,16 @@ pub(crate) fn draw(
     frame.render_widget(block, popup);
 
     let layout = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(15),
-        Constraint::Length(3),
+        Constraint::Fill(1),
         Constraint::Length(2),
+        Constraint::Length(1),
         Constraint::Length(1),
     ])
     .split(inner);
 
-    draw_header(frame, layout[0], bonsai, care);
-    draw_tree(frame, layout[1], bonsai, care, beat);
-    draw_status(frame, layout[2], bonsai, care);
-    draw_controls(frame, layout[3], care);
-}
-
-fn draw_header(frame: &mut Frame, area: Rect, bonsai: &BonsaiState, care: &BonsaiCareState) {
-    let water = if care.watered {
-        Span::styled("watered", Style::default().fg(theme::SUCCESS()))
-    } else {
-        Span::styled("needs water", Style::default().fg(theme::AMBER()))
-    };
-    let branches = Span::styled(
-        format!("{}/{}", care.branches_done(), care.branch_goal),
-        Style::default()
-            .fg(if care.all_branches_cut() {
-                theme::SUCCESS()
-            } else {
-                theme::AMBER()
-            })
-            .add_modifier(Modifier::BOLD),
-    );
-    let line = Line::from(vec![
-        Span::raw("  UTC "),
-        Span::styled(
-            care.date.to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-        Span::styled("  ·  ", Style::default().fg(theme::BORDER_DIM())),
-        Span::styled(
-            bonsai.stage().label(),
-            Style::default().fg(theme::TEXT_BRIGHT()),
-        ),
-        Span::styled("  ·  ", Style::default().fg(theme::BORDER_DIM())),
-        water,
-        Span::styled("  · branches ", Style::default().fg(theme::TEXT_DIM())),
-        branches,
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+    draw_tree(frame, layout[0], bonsai, care, beat);
+    draw_status(frame, layout[1], bonsai, care);
+    draw_footer(frame, layout[3]);
 }
 
 fn draw_tree(
@@ -100,9 +63,6 @@ fn draw_tree(
     let stage = bonsai.stage();
     let art = tree_ascii(stage, bonsai.seed, bonsai.is_wilting());
     let targets = branch_targets_for(stage, bonsai.seed, care.date, &art, care.branch_goal);
-    let selected_id = targets
-        .get(care.cursor.min(targets.len().saturating_sub(1)))
-        .map(|target| target.id);
 
     let mut tree_lines = render_tree_art_lines(
         stage,
@@ -113,7 +73,8 @@ fn draw_tree(
         Some(TreeOverlay {
             targets: &targets,
             cut_branch_ids: &care.cut_branch_ids,
-            selected_id,
+            cursor_x: care.cursor_x,
+            cursor_y: care.cursor_y,
             show_selection: care.mode == CareMode::Prune,
         }),
     );
@@ -140,76 +101,87 @@ fn draw_tree(
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, bonsai: &BonsaiState, care: &BonsaiCareState) {
-    let penalty = if care.watered && care.all_branches_cut() {
-        ("Daily care complete", theme::SUCCESS())
-    } else if !care.watered && !care.all_branches_cut() {
-        ("Missed water: -20%, missed pruning: -10%", theme::AMBER())
-    } else if !care.watered {
-        (
-            "Water before UTC midnight or lose 20% growth",
-            theme::AMBER(),
-        )
-    } else {
-        (
-            "Trim all marked branches or lose 10% growth",
-            theme::AMBER(),
-        )
-    };
+    let summary = Line::from(vec![
+        Span::styled(
+            bonsai.stage().label().to_string(),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        dot(),
+        Span::styled(
+            format!("Day {}", bonsai.age_days),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])
+    .centered();
 
-    let message = care.message.as_deref().unwrap_or(if bonsai.is_alive {
-        penalty.0
-    } else {
-        "Plant anew with w"
-    });
-    let lines = vec![
+    let action = if let Some(msg) = care.message.as_deref() {
         Line::from(Span::styled(
-            message.to_string(),
-            Style::default().fg(penalty.1),
+            msg.to_string(),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
         ))
-        .centered(),
-        Line::from(vec![
-            Span::styled("Growth ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                bonsai.growth_points.to_string(),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" pts", Style::default().fg(theme::TEXT_DIM())),
-        ])
-        .centered(),
-    ];
-    frame.render_widget(Paragraph::new(lines), area);
+    } else {
+        let (text, color) = action_hint(bonsai, care);
+        Line::from(Span::styled(text, Style::default().fg(color)))
+    }
+    .centered();
+
+    frame.render_widget(Paragraph::new(vec![summary, action]), area);
 }
 
-fn draw_controls(frame: &mut Frame, area: Rect, care: &BonsaiCareState) {
-    let mode = match care.mode {
-        CareMode::Water => "care",
-        CareMode::Prune => "prune",
-    };
-    let lines = vec![
-        Line::from(vec![
-            key("w"),
-            text(" water  "),
-            key("p"),
-            text(" reshape -1 stage  "),
-            key("←/→ hjkl"),
-            text(" move  "),
-            key("x"),
-            text(" cut"),
-        ])
-        .centered(),
-        Line::from(vec![
-            Span::styled(
-                format!("mode: {mode}  "),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-            key("Esc/q"),
-            text(" close"),
-        ])
-        .centered(),
-    ];
-    frame.render_widget(Paragraph::new(lines), area);
+fn action_hint(bonsai: &BonsaiState, care: &BonsaiCareState) -> (String, Color) {
+    if !bonsai.is_alive {
+        return ("plant anew with w".to_string(), theme::AMBER());
+    }
+    let remaining = care.branch_goal.saturating_sub(care.branches_done());
+    let branch_word = if remaining == 1 { "branch" } else { "branches" };
+    match (care.watered, remaining, bonsai.is_admin) {
+        (false, 0, _) => ("water today before midnight".to_string(), theme::AMBER()),
+        (false, n, _) => (
+            format!("water today, cut {n} overgrown {branch_word}"),
+            theme::AMBER(),
+        ),
+        (true, 0, false) => (
+            "daily care done, next watering tomorrow".to_string(),
+            theme::SUCCESS(),
+        ),
+        (true, 0, true) => (
+            "daily care done, water again anytime".to_string(),
+            theme::SUCCESS(),
+        ),
+        (true, n, false) => (
+            format!("cut {n} overgrown {branch_word} before midnight"),
+            theme::AMBER(),
+        ),
+        (true, n, true) => (
+            format!("water anytime, cut {n} overgrown {branch_word}"),
+            theme::AMBER(),
+        ),
+    }
+}
+
+fn draw_footer(frame: &mut Frame, area: Rect) {
+    let line = Line::from(vec![
+        key("w"),
+        text(" water"),
+        gap(),
+        key("x"),
+        text(" cut"),
+        gap(),
+        key("p"),
+        text(" reshape"),
+        gap(),
+        key("hjkl/←↑↓→"),
+        text(" move"),
+        gap(),
+        key("q"),
+        text(" close"),
+    ])
+    .centered();
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn key(label: &str) -> Span<'static> {
@@ -223,6 +195,14 @@ fn key(label: &str) -> Span<'static> {
 
 fn text(label: &str) -> Span<'static> {
     Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM()))
+}
+
+fn dot() -> Span<'static> {
+    Span::styled("  ·  ", Style::default().fg(theme::BORDER_DIM()))
+}
+
+fn gap() -> Span<'static> {
+    Span::raw("   ")
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

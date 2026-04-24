@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, time::SystemTime};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -17,7 +17,8 @@ use crate::app::common::theme;
 pub(crate) struct TreeOverlay<'a> {
     pub targets: &'a [BranchTarget],
     pub cut_branch_ids: &'a BTreeSet<i32>,
-    pub selected_id: Option<i32>,
+    pub cursor_x: usize,
+    pub cursor_y: usize,
     pub show_selection: bool,
 }
 
@@ -149,6 +150,10 @@ pub(crate) fn render_tree_art_lines(
         let mut spans = Vec::new();
         let chars: Vec<char> = art_line.chars().collect();
         for (x, ch) in chars.iter().copied().enumerate() {
+            let cursor_here = overlay.as_ref().is_some_and(|overlay| {
+                overlay.show_selection && overlay.cursor_x == x && overlay.cursor_y == _i
+            });
+
             if let Some(target) = overlay.as_ref().and_then(|overlay| {
                 overlay
                     .targets
@@ -158,16 +163,13 @@ pub(crate) fn render_tree_art_lines(
                 let cut = overlay
                     .as_ref()
                     .is_some_and(|overlay| overlay.cut_branch_ids.contains(&target.id));
-                let selected = overlay.as_ref().is_some_and(|overlay| {
-                    overlay.show_selection && overlay.selected_id == Some(target.id)
-                });
                 let display = if cut { ch } else { target.glyph };
                 let mut style = Style::default().fg(if cut {
                     theme::TEXT_FAINT()
                 } else {
-                    trunk_color
+                    target_color(target.id)
                 });
-                if selected {
+                if cursor_here {
                     style = style
                         .fg(theme::AMBER_GLOW())
                         .bg(theme::BG_SELECTION())
@@ -183,7 +185,14 @@ pub(crate) fn render_tree_art_lines(
                 '[' | ']' | '=' => theme::TEXT_DIM(), // pot
                 _ => theme::TEXT_FAINT(),
             };
-            spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+            let mut style = Style::default().fg(color);
+            if cursor_here {
+                style = style
+                    .fg(theme::AMBER_GLOW())
+                    .bg(theme::BG_SELECTION())
+                    .add_modifier(Modifier::BOLD);
+            }
+            spans.push(Span::styled(cursor_display(ch, cursor_here), style));
         }
 
         // Manual centering with sway offset
@@ -195,6 +204,23 @@ pub(crate) fn render_tree_art_lines(
         lines.push(Line::from(spans));
     }
     lines
+}
+
+fn target_color(id: i32) -> Color {
+    match id.rem_euclid(4) {
+        0 => theme::ERROR(),
+        1 => theme::AMBER_GLOW(),
+        2 => theme::BONSAI_BLOOM(),
+        _ => theme::SUCCESS(),
+    }
+}
+
+fn cursor_display(ch: char, cursor_here: bool) -> String {
+    if cursor_here && ch == ' ' {
+        "+".to_string()
+    } else {
+        ch.to_string()
+    }
 }
 
 fn status_lines(state: &BonsaiState) -> Vec<Line<'static>> {

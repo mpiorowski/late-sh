@@ -118,14 +118,14 @@ impl Tree {
         Ok(())
     }
 
-    pub async fn decay_growth_percent(client: &Client, user_id: Uuid, percent: i32) -> Result<()> {
+    pub async fn lose_growth(client: &Client, user_id: Uuid, points: i32) -> Result<()> {
         client
             .execute(
                 "UPDATE bonsai_trees
-                 SET growth_points = GREATEST(growth_points - CEIL(growth_points::numeric * $2::numeric / 100.0)::int, 0),
+                 SET growth_points = GREATEST(growth_points - $2, 0),
                      updated = current_timestamp
                  WHERE user_id = $1",
-                &[&user_id, &percent],
+                &[&user_id, &points],
             )
             .await?;
         Ok(())

@@ -567,6 +567,7 @@ impl App {
                 config.user_id,
                 config.bonsai_service.clone(),
                 tree,
+                config.is_admin,
             )
         } else {
             // Fallback: create a default dead-ish state (should not happen in practice)
@@ -583,17 +584,23 @@ impl App {
                     seed: config.user_id.as_u128() as i64,
                     is_alive: true,
                 },
+                config.is_admin,
             )
         };
         let bonsai_care_state = config
             .initial_bonsai_care
             .map(|care| {
-                crate::app::bonsai::care::BonsaiCareState::from_daily(care, bonsai_state.seed)
+                crate::app::bonsai::care::BonsaiCareState::from_daily(
+                    care,
+                    bonsai_state.seed,
+                    bonsai_state.stage(),
+                )
             })
             .unwrap_or_else(|| {
                 crate::app::bonsai::care::BonsaiCareState::fallback(
                     chrono::Utc::now().date_naive(),
                     bonsai_state.seed,
+                    bonsai_state.stage(),
                 )
             });
 
