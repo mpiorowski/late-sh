@@ -933,6 +933,15 @@ impl ChatState {
             return Some(Banner::success(&format!("Deleting #{slug}...")));
         }
 
+        if let Some(slug) = parse_fill_room_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("Admin only: /fill-room"));
+            }
+            self.service.fill_room_task(self.user_id, slug.to_string());
+            return Some(Banner::success(&format!("Filling #{slug}...")));
+        }
+
         if let Some(command) = unknown_slash_command(&body) {
             self.clear_composer_after_submit();
             return Some(Banner::error(&format!("Unknown command: {command}")));
@@ -1370,6 +1379,16 @@ impl ChatState {
                     self.request_list();
                     banner = Some(Banner::success(&format!("Deleted permanent #{slug}")));
                 }
+                ChatEvent::RoomFilled {
+                    user_id,
+                    slug,
+                    users_added,
+                } if self.user_id == user_id => {
+                    self.request_list();
+                    banner = Some(Banner::success(&format!(
+                        "Filled #{slug} ({users_added} users added)"
+                    )));
+                }
                 ChatEvent::AdminFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
@@ -1698,6 +1717,16 @@ fn parse_delete_room_command(input: &str) -> Option<&str> {
     Some(slug)
 }
 
+/// Parse `/fill-room <slug>` from the composer text (admin only).
+fn parse_fill_room_command(input: &str) -> Option<&str> {
+    let rest = input.strip_prefix("/fill-room ")?.trim_start();
+    let slug = rest.strip_prefix('#').unwrap_or(rest).trim();
+    if slug.is_empty() {
+        return None;
+    }
+    Some(slug)
+}
+
 fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Option<String> {
     rooms
         .iter()
@@ -1903,19 +1932,30 @@ pub(crate) fn new_chat_textarea() -> TextArea<'static> {
     ta.set_style(Style::default().fg(theme::TEXT()));
     ta.set_placeholder_text("Type a message...");
     ta.set_placeholder_style(Style::default().fg(theme::TEXT_DIM()));
-    ta.set_cursor_line_style(Style::default());
-    ta.set_cursor_style(Style::default());
+    ta.set_cursor_line_style(Style::default().fg(theme::TEXT()));
+    ta.set_cursor_style(hidden_composer_cursor_style());
     ta.set_wrap_mode(WrapMode::Word);
     ta
 }
 
 fn set_composer_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
     let style = if visible {
-        Style::default().add_modifier(Modifier::REVERSED)
+        visible_composer_cursor_style()
     } else {
-        Style::default()
+        hidden_composer_cursor_style()
     };
     ta.set_cursor_style(style);
+}
+
+fn hidden_composer_cursor_style() -> Style {
+    Style::default().fg(theme::TEXT())
+}
+
+fn visible_composer_cursor_style() -> Style {
+    Style::default()
+        .fg(theme::BG_CANVAS())
+        .bg(theme::TEXT())
+        .add_modifier(Modifier::BOLD)
 }
 
 fn news_reply_preview_text(body: &str) -> Option<String> {
@@ -2170,6 +2210,26 @@ mod tests {
     fn new_chat_textarea_uses_theme_text_color() {
         let textarea = new_chat_textarea();
         assert_eq!(textarea.style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().bg, None);
+    }
+
+    #[test]
+    fn composer_cursor_visible_uses_explicit_theme_colors() {
+        let mut textarea = new_chat_textarea();
+        set_composer_cursor_visible(&mut textarea, true);
+        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
+        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
+    }
+
+    #[test]
+    fn composer_cursor_hidden_restores_plain_text_color() {
+        let mut textarea = new_chat_textarea();
+        set_composer_cursor_visible(&mut textarea, true);
+        set_composer_cursor_visible(&mut textarea, false);
+        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().bg, None);
     }
 
     #[test]
@@ -2411,6 +2471,34 @@ mod tests {
     #[test]
     fn parse_delete_room_not_command() {
         assert_eq!(parse_delete_room_command("hello"), None);
+    }
+
+    #[test]
+    fn parse_fill_room_with_hash() {
+        assert_eq!(
+            parse_fill_room_command("/fill-room #announcements"),
+            Some("announcements")
+        );
+    }
+
+    #[test]
+    fn parse_fill_room_without_hash() {
+        assert_eq!(
+            parse_fill_room_command("/fill-room announcements"),
+            Some("announcements")
+        );
+    }
+
+    #[test]
+    fn parse_fill_room_empty() {
+        assert_eq!(parse_fill_room_command("/fill-room "), None);
+        assert_eq!(parse_fill_room_command("/fill-room #"), None);
+    }
+
+    #[test]
+    fn parse_fill_room_not_command() {
+        assert_eq!(parse_fill_room_command("hello"), None);
+        assert_eq!(parse_fill_room_command("/fill-rooms foo"), None);
     }
 
     #[test]

@@ -489,6 +489,7 @@ impl App {
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
+        frame.render_widget(Clear, inner);
 
         let (content_area, sidebar_area) = if ctx.show_right_sidebar {
             let main_layout =
@@ -534,7 +535,6 @@ impl App {
                 frame,
                 sidebar_area,
                 &SidebarProps {
-                    screen,
                     game_selection: ctx.game_selection,
                     is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
@@ -625,13 +625,38 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .add_modifier(Modifier::BOLD),
     )];
 
+    spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
+    let tabs = [
+        (Screen::Dashboard, "1"),
+        (Screen::Chat, "2"),
+        (Screen::Games, "3"),
+        (Screen::Artboard, "4"),
+    ];
+    for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let style = if *tab_screen == screen {
+            Style::default()
+                .fg(theme::BG_SELECTION())
+                .bg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        spans.push(Span::styled(*key, style));
+    }
+
     let page_title = match screen {
         Screen::Dashboard => "Dashboard",
         Screen::Chat => "Chat",
         Screen::Games => "The Arcade",
         Screen::Artboard => "Artboard",
     };
-    spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
+    spans.push(Span::styled(
+        " | ",
+        Style::default().fg(theme::BORDER_DIM()),
+    ));
     spans.push(Span::styled(
         format!("{page_title} "),
         Style::default().fg(theme::TEXT_MUTED()),

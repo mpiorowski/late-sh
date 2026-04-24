@@ -5,9 +5,11 @@ use std::{
 };
 
 use anyhow::Context;
-use dartboard_core::Canvas;
+use chrono::{Datelike, NaiveDate, Utc};
+use dartboard_core::{Canvas, CanvasOp};
 use dartboard_local::{CanvasStore, ColorSelectionMode, ServerHandle};
 use late_core::{MutexRecover, db::Db, models::artboard::Snapshot};
+use tokio::time::{Instant as TokioInstant, sleep, sleep_until};
 
 use crate::app::artboard::provenance::{
     ArtboardProvenance, SharedArtboardProvenance, clone_shared_provenance,
@@ -16,6 +18,12 @@ use crate::app::artboard::provenance::{
 pub const CANVAS_WIDTH: usize = 384;
 pub const CANVAS_HEIGHT: usize = 192;
 const DEFAULT_PERSIST_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const DAILY_SNAPSHOT_PREFIX: &str = "daily:";
+const MONTHLY_SNAPSHOT_PREFIX: &str = "monthly:";
+const MAX_DAILY_SNAPSHOTS: usize = 7;
+const SYSTEM_ROLLOVER_USER_ID: u64 = 0;
+const SYSTEM_ROLLOVER_CLIENT_OP_ID: u64 = 0;
+const ROLLOVER_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 struct LateShCanvasStore;
@@ -136,7 +144,50 @@ pub async fn flush_server_snapshot(
 ) -> anyhow::Result<()> {
     let canvas = server.canvas_snapshot();
     let provenance = clone_shared_provenance(shared_provenance);
-    save_canvas_snapshot(db, &canvas, &provenance).await
+    save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &canvas, &provenance).await
+}
+
+pub async fn run_daily_snapshot_rollover_task(
+    db: Db,
+    server: ServerHandle,
+    shared_provenance: SharedArtboardProvenance,
+    shutdown: late_core::shutdown::CancellationToken,
+) {
+    let mut rollover_day = next_utc_day(Utc::now().date_naive());
+
+    loop {
+        let wake_at = utc_day_wake_instant(rollover_day);
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            _ = sleep_until(wake_at) => {}
+        }
+
+        loop {
+            if Utc::now().date_naive() < rollover_day {
+                break;
+            }
+
+            match rollover_daily_snapshot_for_day(&db, &server, &shared_provenance, rollover_day)
+                .await
+            {
+                Ok(()) => {
+                    rollover_day = next_utc_day(rollover_day);
+                    break;
+                }
+                Err(error) => {
+                    tracing::error!(
+                        error = ?error,
+                        rollover_day = %rollover_day,
+                        "failed to roll over artboard snapshots; retrying"
+                    );
+                    tokio::select! {
+                        _ = shutdown.cancelled() => return,
+                        _ = sleep(ROLLOVER_RETRY_INTERVAL) => {}
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn spawn_server() -> ServerHandle {
@@ -179,6 +230,109 @@ pub struct PersistedArtboard {
 
 fn blank_canvas() -> Canvas {
     Canvas::with_size(CANVAS_WIDTH, CANVAS_HEIGHT)
+}
+
+fn daily_board_key(date: NaiveDate) -> String {
+    format!("{DAILY_SNAPSHOT_PREFIX}{date}")
+}
+
+fn monthly_board_key(date: NaiveDate) -> String {
+    format!(
+        "{MONTHLY_SNAPSHOT_PREFIX}{:04}-{:02}",
+        date.year(),
+        date.month()
+    )
+}
+
+fn next_utc_day(date: NaiveDate) -> NaiveDate {
+    date.succ_opt().expect("UTC date overflow")
+}
+
+fn utc_day_wake_instant(date: NaiveDate) -> TokioInstant {
+    let target = date
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is a valid time")
+        .and_utc();
+    let delay = target
+        .signed_duration_since(Utc::now())
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    TokioInstant::now() + delay
+}
+
+fn decode_persisted_artboard(snapshot: Snapshot) -> anyhow::Result<PersistedArtboard> {
+    let canvas =
+        serde_json::from_value(snapshot.canvas).context("failed to decode artboard snapshot")?;
+    let provenance = serde_json::from_value(snapshot.provenance)
+        .context("failed to decode artboard provenance")?;
+    Ok(PersistedArtboard { canvas, provenance })
+}
+
+pub async fn rollover_daily_snapshot_for_day(
+    db: &Db,
+    server: &ServerHandle,
+    shared_provenance: &SharedArtboardProvenance,
+    rollover_day: NaiveDate,
+) -> anyhow::Result<()> {
+    let archived_day = rollover_day
+        .pred_opt()
+        .context("failed to compute previous UTC date for artboard rollover")?;
+    let daily_key = daily_board_key(archived_day);
+
+    let daily = {
+        let client = db.get().await.context("failed to get db client")?;
+        Snapshot::find_by_board_key(&client, &daily_key)
+            .await
+            .context("failed to check existing daily artboard snapshot")?
+    };
+
+    let archived = if let Some(snapshot) = daily {
+        decode_persisted_artboard(snapshot)
+            .with_context(|| format!("failed to decode existing {daily_key} snapshot"))?
+    } else {
+        let canvas = server.canvas_snapshot();
+        let provenance = clone_shared_provenance(shared_provenance);
+        save_canvas_snapshot_for_key(db, &daily_key, &canvas, &provenance).await?;
+        prune_daily_snapshots(db, MAX_DAILY_SNAPSHOTS).await?;
+        tracing::info!(board_key = %daily_key, "saved daily artboard snapshot");
+        PersistedArtboard { canvas, provenance }
+    };
+
+    if rollover_day.day() == 1 {
+        let monthly_key = monthly_board_key(archived_day);
+        {
+            let client = db.get().await.context("failed to get db client")?;
+            if Snapshot::find_by_board_key(&client, &monthly_key)
+                .await
+                .context("failed to check existing monthly artboard snapshot")?
+                .is_some()
+            {
+                return Ok(());
+            }
+        }
+
+        let blank = blank_canvas();
+        let blank_provenance = ArtboardProvenance::default();
+        {
+            let mut shared = shared_provenance.lock_recover();
+            *shared = blank_provenance.clone();
+        }
+        server.submit_op_for(
+            SYSTEM_ROLLOVER_USER_ID,
+            SYSTEM_ROLLOVER_CLIENT_OP_ID,
+            CanvasOp::Replace {
+                canvas: blank.clone(),
+            },
+        );
+        save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &blank, &blank_provenance)
+            .await?;
+        save_canvas_snapshot_for_key(db, &monthly_key, &archived.canvas, &archived.provenance)
+            .await?;
+        tracing::info!(board_key = %monthly_key, "saved monthly artboard snapshot");
+        tracing::info!("blanked live artboard for UTC month rollover");
+    }
+
+    Ok(())
 }
 
 fn run_persist_loop(
@@ -272,12 +426,73 @@ async fn save_canvas_snapshot(
     let canvas = serde_json::to_value(canvas).context("failed to serialize artboard canvas")?;
     let provenance =
         serde_json::to_value(provenance).context("failed to serialize artboard provenance")?;
+    save_canvas_snapshot_value(db, Snapshot::MAIN_BOARD_KEY, canvas, provenance).await
+}
+
+async fn save_canvas_snapshot_for_key(
+    db: &Db,
+    board_key: &str,
+    canvas: &Canvas,
+    provenance: &ArtboardProvenance,
+) -> anyhow::Result<()> {
+    let canvas = serde_json::to_value(canvas).context("failed to serialize artboard canvas")?;
+    let provenance =
+        serde_json::to_value(provenance).context("failed to serialize artboard provenance")?;
+    save_canvas_snapshot_value(db, board_key, canvas, provenance).await
+}
+
+async fn save_canvas_snapshot_value(
+    db: &Db,
+    board_key: &str,
+    canvas: serde_json::Value,
+    provenance: serde_json::Value,
+) -> anyhow::Result<()> {
     let client = db
         .get()
         .await
         .context("failed to get db client for artboard save")?;
-    Snapshot::upsert(&client, Snapshot::MAIN_BOARD_KEY, canvas, provenance)
+    Snapshot::upsert(&client, board_key, canvas, provenance)
         .await
         .context("failed to upsert artboard snapshot")?;
     Ok(())
+}
+
+async fn prune_daily_snapshots(db: &Db, keep: usize) -> anyhow::Result<()> {
+    let client = db
+        .get()
+        .await
+        .context("failed to get db client for daily artboard prune")?;
+    let snapshots = Snapshot::list_by_board_key_prefix(&client, DAILY_SNAPSHOT_PREFIX)
+        .await
+        .context("failed to list daily artboard snapshots")?;
+    for snapshot in snapshots.into_iter().skip(keep) {
+        Snapshot::delete_by_board_key(&client, &snapshot.board_key)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to delete old artboard snapshot {}",
+                    snapshot.board_key
+                )
+            })?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDate;
+
+    use super::{daily_board_key, monthly_board_key};
+
+    #[test]
+    fn daily_board_key_uses_iso_date() {
+        let date = NaiveDate::from_ymd_opt(2026, 4, 30).expect("valid date");
+        assert_eq!(daily_board_key(date), "daily:2026-04-30");
+    }
+
+    #[test]
+    fn monthly_board_key_uses_year_month() {
+        let date = NaiveDate::from_ymd_opt(2026, 4, 30).expect("valid date");
+        assert_eq!(monthly_board_key(date), "monthly:2026-04");
+    }
 }
