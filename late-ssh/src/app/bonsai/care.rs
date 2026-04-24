@@ -158,11 +158,14 @@ pub(crate) fn branch_targets_for(
     _stage: Stage,
     seed: i64,
     date: NaiveDate,
-    art: &[&str],
+    art: &[impl AsRef<str>],
     goal: usize,
 ) -> Vec<BranchTarget> {
     let mut candidates = Vec::new();
-    let rows: Vec<Vec<char>> = art.iter().map(|line| line.chars().collect()).collect();
+    let rows: Vec<Vec<char>> = art
+        .iter()
+        .map(|line| line.as_ref().chars().collect())
+        .collect();
     for (y, chars) in rows.iter().enumerate() {
         let line: String = chars.iter().collect();
         if line.contains("[===") {

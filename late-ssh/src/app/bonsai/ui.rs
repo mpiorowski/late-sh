@@ -14,6 +14,8 @@ use super::{
 };
 use crate::app::common::theme;
 
+const HIGH_STAGE_FORM_VARIANTS: usize = 3;
+
 pub(crate) struct TreeOverlay<'a> {
     pub targets: &'a [BranchTarget],
     pub cut_branch_ids: &'a BTreeSet<i32>,
@@ -314,7 +316,7 @@ pub fn tree_variant_name(stage: Stage, seed: i64) -> Option<(&'static str, &'sta
             4 => ("Han-kengai", "semi-cascade"),
             _ => ("Futago", "twin shoot"),
         },
-        Stage::Young => match v % 7 {
+        Stage::Young => match style_variant(seed, 7) {
             0 => ("Chokkan", "formal upright"),
             1 => ("Moyogi", "informal upright"),
             2 => ("Shakan", "slanting"),
@@ -323,7 +325,7 @@ pub fn tree_variant_name(stage: Stage, seed: i64) -> Option<(&'static str, &'sta
             5 => ("Sokan", "twin trunk"),
             _ => ("Bunjingi", "literati"),
         },
-        Stage::Mature | Stage::Ancient => match v % 8 {
+        Stage::Mature | Stage::Ancient => match style_variant(seed, 8) {
             0 => ("Chokkan", "formal upright"),
             1 => ("Moyogi", "informal upright"),
             2 => ("Shakan", "slanting"),
@@ -333,7 +335,7 @@ pub fn tree_variant_name(stage: Stage, seed: i64) -> Option<(&'static str, &'sta
             6 => ("Bunjingi", "literati"),
             _ => ("Neagari", "exposed root"),
         },
-        Stage::Blossom => match v % 8 {
+        Stage::Blossom => match style_variant(seed, 8) {
             0 => ("Chokkan", "flowering upright"),
             1 => ("Moyogi", "flowering curve"),
             2 => ("Shakan", "flowering slant"),
@@ -347,7 +349,7 @@ pub fn tree_variant_name(stage: Stage, seed: i64) -> Option<(&'static str, &'sta
     Some(style)
 }
 
-pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'static str> {
+pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String> {
     // Seed → per-stage variant picker. Each stage applies its own modulo so we
     // can add variants stage-by-stage without shifting the others around.
     // Design language for mature stages: discrete "foliage pads" with visible
@@ -355,16 +357,27 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
     // bonsai silhouette, not a blob on a stick.
     let v = seed.unsigned_abs() as usize;
 
-    match stage {
+    let style_count = high_stage_style_count(stage);
+    let form = style_count.map_or(0, |count| form_variant(seed, count));
+
+    let lines = match stage {
         Stage::Dead => match v % 4 {
             // bare stick
-            0 => vec!["   .   ", "  /|   ", " / |   ", "   |`  ", "  .|.  ", " [===] "],
+            0 => vec![
+                "   .   ", "  /|   ", " / |   ", "   |`  ", "  .|.  ", " [===] ",
+            ],
             // withered stump
-            1 => vec!["       ", "   ,.  ", "    \\  ", "   .|  ", "  .|.  ", " [===] "],
+            1 => vec![
+                "       ", "   ,.  ", "    \\  ", "   .|  ", "  .|.  ", " [===] ",
+            ],
             // snapped twig
-            2 => vec!["  .    ", "   `   ", "   |   ", "  .|   ", "  .|.  ", " [===] "],
+            2 => vec![
+                "  .    ", "   `   ", "   |   ", "  .|   ", "  .|.  ", " [===] ",
+            ],
             // leafless claw
-            _ => vec![" .   . ", "  \\ /  ", "   V   ", "   |   ", "  .|.  ", " [===] "],
+            _ => vec![
+                " .   . ", "  \\ /  ", "   V   ", "   |   ", "  .|.  ", " [===] ",
+            ],
         },
         Stage::Seed => match v % 3 {
             // buried seed
@@ -376,15 +389,25 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
         },
         Stage::Sprout => match v % 5 {
             // three-leaf crown
-            0 => vec!["       ", "   ,   ", "  /|\\  ", "   |   ", "  .|.  ", " [===] "],
+            0 => vec![
+                "       ", "   ,   ", "  /|\\  ", "   |   ", "  .|.  ", " [===] ",
+            ],
             // paired leaves
-            1 => vec!["       ", "   .   ", "  '|,  ", "   |   ", "  .|.  ", " [===] "],
+            1 => vec![
+                "       ", "   .   ", "  '|,  ", "   |   ", "  .|.  ", " [===] ",
+            ],
             // upward shoots
-            2 => vec!["  ..   ", "   |   ", "   |,  ", "   |   ", "  .|.  ", " [===] "],
+            2 => vec![
+                "  ..   ", "   |   ", "   |,  ", "   |   ", "  .|.  ", " [===] ",
+            ],
             // hooked shoot
-            3 => vec!["   .   ", "   ,   ", "   |/  ", "   |   ", "  .|.  ", " [===] "],
+            3 => vec![
+                "   .   ", "   ,   ", "   |/  ", "   |   ", "  .|.  ", " [===] ",
+            ],
             // twin shoots
-            _ => vec!["  , ,  ", "  |,|  ", "  \\|/  ", "   |   ", "  .|.  ", " [===] "],
+            _ => vec![
+                "  , ,  ", "  |,|  ", "  \\|/  ", "   |   ", "  .|.  ", " [===] ",
+            ],
         },
         Stage::Sapling => match v % 6 {
             // formal upright
@@ -398,12 +421,7 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
             ],
             // slanting (Shakan)
             1 => vec![
-                "   .,   ",
-                "   ,.,  ",
-                "    |/  ",
-                "    /   ",
-                "   .|.  ",
-                "  [===] ",
+                "   .,   ", "   ,.,  ", "    |/  ", "    /   ", "   .|.  ", "  [===] ",
             ],
             // broom start (Hokidachi)
             2 => vec![
@@ -416,12 +434,7 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
             ],
             // lateral bud — tiny side pad
             3 => vec![
-                "   ,.,  ",
-                "  .'.,  ",
-                " ~.|    ",
-                "    |~. ",
-                "   .|.  ",
-                "  [===] ",
+                "   ,.,  ", "  .'.,  ", " ~.|    ", "    |~. ", "   .|.  ", "  [===] ",
             ],
             // semi-cascade (Han-kengai)
             4 => vec![
@@ -442,7 +455,7 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "  [===] ",
             ],
         },
-        Stage::Young => match v % 7 {
+        Stage::Young => match style_variant(seed, 7) {
             // Chokkan — formal upright, top + lateral pads
             0 => vec![
                 "     .###.      ",
@@ -539,7 +552,7 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "     [===]      ",
             ],
         },
-        Stage::Mature => match v % 8 {
+        Stage::Mature => match style_variant(seed, 8) {
             // Chokkan — three layered tiers, perfect symmetry
             0 => vec![
                 "         .@@@.        ",
@@ -673,7 +686,7 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "        [=====]       ",
             ],
         },
-        Stage::Ancient => match v % 8 {
+        Stage::Ancient => match style_variant(seed, 8) {
             // Chokkan — five-tier classical layered
             0 => vec![
                 "          .@@@.       ",
@@ -816,7 +829,7 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "       [=======]      ",
             ],
         },
-        Stage::Blossom => match v % 8 {
+        Stage::Blossom => match style_variant(seed, 8) {
             // Chokkan — layered with petals woven through
             0 => vec![
                 "         .*@@*.       ",
@@ -958,7 +971,123 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<&'stati
                 "      [=======]       ",
             ],
         },
+    };
+
+    form_tree_art(lines, form)
+}
+
+fn high_stage_style_count(stage: Stage) -> Option<usize> {
+    match stage {
+        Stage::Young => Some(7),
+        Stage::Mature | Stage::Ancient | Stage::Blossom => Some(8),
+        _ => None,
     }
+}
+
+fn style_variant(seed: i64, style_count: usize) -> usize {
+    seed.unsigned_abs() as usize % style_count
+}
+
+fn form_variant(seed: i64, style_count: usize) -> usize {
+    (seed.unsigned_abs() as usize / style_count) % HIGH_STAGE_FORM_VARIANTS
+}
+
+fn form_tree_art(lines: Vec<&'static str>, form: usize) -> Vec<String> {
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(y, line)| match form {
+            1 => slim_canopy_line(line, y),
+            2 => full_canopy_line(line),
+            _ => line.to_string(),
+        })
+        .collect()
+}
+
+fn slim_canopy_line(line: &str, y: usize) -> String {
+    if !is_canopy_line(line) {
+        return line.to_string();
+    }
+
+    let mut chars: Vec<char> = line.chars().collect();
+    let foliage: Vec<usize> = chars
+        .iter()
+        .enumerate()
+        .filter_map(|(x, ch)| is_foliage(*ch).then_some(x))
+        .collect();
+    if foliage.len() <= 3 {
+        return line.to_string();
+    }
+
+    chars[foliage[0]] = ' ';
+    if let Some(last) = foliage.last().copied()
+        && last != foliage[0]
+    {
+        chars[last] = ' ';
+    }
+
+    let shift = if y % 2 == 0 { -1 } else { 1 };
+    shift_visible(chars, shift)
+}
+
+fn full_canopy_line(line: &str) -> String {
+    if !is_canopy_line(line) {
+        return line.to_string();
+    }
+
+    let mut chars: Vec<char> = line.chars().collect();
+    let Some(first) = chars.iter().position(|ch| *ch != ' ') else {
+        return line.to_string();
+    };
+    let Some(last) = chars.iter().rposition(|ch| *ch != ' ') else {
+        return line.to_string();
+    };
+    let leaf = if line.contains('*') {
+        '*'
+    } else if line.contains('#') {
+        '#'
+    } else {
+        '@'
+    };
+
+    if first > 0 && chars[first - 1] == ' ' {
+        chars[first - 1] = leaf;
+    }
+    if last + 1 < chars.len() && chars[last + 1] == ' ' {
+        chars[last + 1] = leaf;
+    }
+    chars.into_iter().collect()
+}
+
+fn shift_visible(chars: Vec<char>, dx: isize) -> String {
+    if dx == 0 || chars.is_empty() {
+        return chars.into_iter().collect();
+    }
+
+    let Some(first) = chars.iter().position(|ch| *ch != ' ') else {
+        return chars.into_iter().collect();
+    };
+    let Some(last) = chars.iter().rposition(|ch| *ch != ' ') else {
+        return chars.into_iter().collect();
+    };
+    if dx < 0 && first == 0 || dx > 0 && last + 1 == chars.len() {
+        return chars.into_iter().collect();
+    }
+
+    let mut shifted = vec![' '; chars.len()];
+    for x in first..=last {
+        let shifted_x = (x as isize + dx) as usize;
+        shifted[shifted_x] = chars[x];
+    }
+    shifted.into_iter().collect()
+}
+
+fn is_canopy_line(line: &str) -> bool {
+    line.chars().any(is_foliage)
+}
+
+fn is_foliage(ch: char) -> bool {
+    matches!(ch, '@' | '#' | '*')
 }
 
 #[cfg(test)]
@@ -997,6 +1126,21 @@ mod tests {
         let c = tree_ascii(Stage::Young, 2, false);
 
         assert!(a != b || b != c || a != c);
+    }
+
+    #[test]
+    fn high_stage_seeds_can_keep_style_with_different_forms() {
+        let style = tree_variant_name(Stage::Mature, 0);
+        assert_eq!(style, tree_variant_name(Stage::Mature, 8));
+        assert_eq!(style, tree_variant_name(Stage::Mature, 16));
+
+        let upright = tree_ascii(Stage::Mature, 0, false);
+        let slim = tree_ascii(Stage::Mature, 8, false);
+        let full = tree_ascii(Stage::Mature, 16, false);
+
+        assert_ne!(upright, slim);
+        assert_ne!(upright, full);
+        assert_ne!(slim, full);
     }
 
     #[test]
