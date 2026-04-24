@@ -358,7 +358,9 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
     let v = seed.unsigned_abs() as usize;
 
     let style_count = high_stage_style_count(stage);
-    let form = style_count.map_or(0, |count| form_variant(seed, count));
+    let shape_count = high_stage_shape_count(stage);
+    let shape = style_count.map_or(0, |sc| shape_variant(seed, sc, shape_count));
+    let form = style_count.map_or(0, |sc| form_variant(seed, sc, shape_count));
 
     let lines = match stage {
         Stage::Dead => match v % 4 {
@@ -552,9 +554,9 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "     [===]      ",
             ],
         },
-        Stage::Mature => match style_variant(seed, 8) {
-            // Chokkan — three layered tiers, perfect symmetry
-            0 => vec![
+        Stage::Mature => match (style_variant(seed, 8), shape) {
+            // Chokkan A — three layered tiers, perfect symmetry with lateral pads
+            (0, 0) => vec![
                 "         .@@@.        ",
                 "        .@@@@@.       ",
                 "         '@@@'        ",
@@ -570,8 +572,25 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "          .|.         ",
                 "         [===]        ",
             ],
-            // Moyogi — S-curve trunk, offset pads
-            1 => vec![
+            // Chokkan B — pure vertical cone, four tight tiers, no lateral spread
+            (0, _) => vec![
+                "          .@.         ",
+                "          '@'         ",
+                "           |          ",
+                "         .@@@.        ",
+                "         '@@@'        ",
+                "           |          ",
+                "        .@@@@@.       ",
+                "         '@@@'        ",
+                "           |          ",
+                "      .@@@@@@@@@.     ",
+                "       '@@@@@@@'      ",
+                "           |          ",
+                "          .|.         ",
+                "         [===]        ",
+            ],
+            // Moyogi A — gentle S-curve trunk, offset pads
+            (1, 0) => vec![
                 "          .@@@.       ",
                 "         @@@@@@@      ",
                 "          '@@@'       ",
@@ -588,8 +607,25 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "             .|.      ",
                 "            [===]     ",
             ],
-            // Shakan — leaning left, compensating right pad
-            2 => vec![
+            // Moyogi B — deeper zigzag, three offset pads
+            (1, _) => vec![
+                "            .@@.      ",
+                "           @@@@@      ",
+                "            '@'       ",
+                "            /         ",
+                "          .@/         ",
+                "         @@@@         ",
+                "          '@\\         ",
+                "             \\        ",
+                "              \\_.@@.  ",
+                "                @@@@  ",
+                "                 '@'  ",
+                "                 |    ",
+                "                .|.   ",
+                "               [===]  ",
+            ],
+            // Shakan A — moderate lean LEFT, compensating right pad
+            (2, 0) => vec![
                 "           .@@@@.     ",
                 "          .@@@@@@.    ",
                 "           '@@@@'     ",
@@ -604,8 +640,24 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "          .|.         ",
                 "         [===]        ",
             ],
-            // Fukinagashi — windswept right, trailing branches
-            3 => vec![
+            // Shakan B — steep lean RIGHT, balancing left pad
+            (2, _) => vec![
+                "   .@@@.              ",
+                "  @@@@@@@             ",
+                "   '@@@'              ",
+                "       \\              ",
+                "        \\             ",
+                "   .@@. \\             ",
+                "  @@@@@@ \\            ",
+                "   '@@'   \\           ",
+                "           \\          ",
+                "            \\         ",
+                "             \\        ",
+                "             .|.      ",
+                "            [===]     ",
+            ],
+            // Fukinagashi A — windswept, canopy leaning right, branches trailing back
+            (3, 0) => vec![
                 "         ,@@@@@@.     ",
                 "       .@@@@@@@@@@.   ",
                 "         '@@@@@@'     ",
@@ -621,8 +673,25 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "     .|.              ",
                 "    [===]             ",
             ],
-            // Sokan — twin trunk, shared pot
-            4 => vec![
+            // Fukinagashi B — mirrored, canopy leaning left, branches trailing right
+            (3, _) => vec![
+                "     .@@@@@@,         ",
+                "   .@@@@@@@@@@.       ",
+                "     '@@@@@@'         ",
+                "      \\  \\   \\        ",
+                "       \\  \\   \\       ",
+                "        \\  \\   \\      ",
+                "         \\  \\   \\     ",
+                "          \\  \\   \\    ",
+                "           \\  \\   \\   ",
+                "            \\  \\   \\  ",
+                "             \\ |    \\ ",
+                "               |      ",
+                "               .|.    ",
+                "              [===]   ",
+            ],
+            // Sokan A — twin trunks rising from shared base, separate canopies
+            (4, 0) => vec![
                 "    .@@@.    .@@@.    ",
                 "   .@@@@@.  .@@@@@.   ",
                 "    '@@@'    '@@@'    ",
@@ -637,8 +706,24 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "         .|.          ",
                 "        [===]         ",
             ],
-            // Hokidachi — broom, fan crown
-            5 => vec![
+            // Sokan B — twin trunks with merged canopy, diverging below
+            (4, _) => vec![
+                "        .@@@@@.       ",
+                "       .@@@@@@@.      ",
+                "      .@@@@@@@@@.     ",
+                "       '@@|@|@@'      ",
+                "          | |         ",
+                "         /   \\        ",
+                "         |   |        ",
+                "         |   |        ",
+                "          \\ /         ",
+                "           V          ",
+                "           |          ",
+                "          .|.         ",
+                "         [===]        ",
+            ],
+            // Hokidachi A — classic broom, symmetric fan
+            (5, 0) => vec![
                 "        .@@@@@.       ",
                 "      .@@@@@@@@@.     ",
                 "     .@@@@@@@@@@@.    ",
@@ -652,8 +737,24 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "         .|.          ",
                 "        [===]         ",
             ],
-            // Bunjingi — literati, tall bare trunk, small crown
-            6 => vec![
+            // Hokidachi B — tall conical broom, stacked canopy
+            (5, _) => vec![
+                "           .@.        ",
+                "          @@@@@       ",
+                "         @@@@@@@      ",
+                "        @@@@@@@@@     ",
+                "       @@@@@@@@@@@    ",
+                "        '@@@@@@@'     ",
+                "         \\\\|||//      ",
+                "          \\|||/       ",
+                "           \\|/        ",
+                "            |         ",
+                "            |         ",
+                "           .|.        ",
+                "          [===]       ",
+            ],
+            // Bunjingi A — literati, tall bare trunk with a single small crown
+            (6, 0) => vec![
                 "          .@@.        ",
                 "         .@@@@.       ",
                 "          '@@'        ",
@@ -669,8 +770,25 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "          .|.         ",
                 "         [===]        ",
             ],
-            // Neagari — exposed roots, layered crown
-            _ => vec![
+            // Bunjingi B — literati with multiple micro pads along the trunk
+            (6, _) => vec![
+                "           .@.        ",
+                "           @@@        ",
+                "           '@'        ",
+                "            |         ",
+                "            |         ",
+                "          .@|         ",
+                "          @@|         ",
+                "           '|         ",
+                "            |@.       ",
+                "            |@@       ",
+                "            |'        ",
+                "            |         ",
+                "           .|.        ",
+                "          [===]       ",
+            ],
+            // Neagari A — exposed roots, layered crown with lateral pads
+            (_, 0) => vec![
                 "         .@@@.        ",
                 "        .@@@@@.       ",
                 "         '@@@'        ",
@@ -685,10 +803,25 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "       /   |   \\      ",
                 "        [=====]       ",
             ],
+            // Neagari B — dramatic splayed roots under an elevated pot
+            (_, _) => vec![
+                "          .@@@.       ",
+                "         @@@@@@@      ",
+                "          '@@@'       ",
+                "           |          ",
+                "       .@@.|.@@.      ",
+                "      @@@@@|@@@@@     ",
+                "       '@@'|'@@'      ",
+                "           |          ",
+                "          .|.         ",
+                "       __/ | \\__      ",
+                "      /    |    \\     ",
+                "        [=====]       ",
+            ],
         },
-        Stage::Ancient => match style_variant(seed, 8) {
-            // Chokkan — five-tier classical layered
-            0 => vec![
+        Stage::Ancient => match (style_variant(seed, 8), shape) {
+            // Chokkan A — five-tier classical layered with lateral pads
+            (0, 0) => vec![
                 "          .@@@.       ",
                 "         .@@@@@.      ",
                 "          '@@@'       ",
@@ -705,8 +838,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "           .|.        ",
                 "          [===]       ",
             ],
-            // Moyogi — S-curve with three pads
-            1 => vec![
+            // Chokkan B — pure vertical cone, five stacked tiers
+            (0, _) => vec![
+                "           .@.        ",
+                "           @@@        ",
+                "           '@'        ",
+                "            |         ",
+                "         .@@@@@.      ",
+                "         '@@@@@'      ",
+                "            |         ",
+                "        .@@@@@@@.     ",
+                "         '@@@@@'      ",
+                "            |         ",
+                "      .@@@@@@@@@@@.   ",
+                "       '@@@@@@@@@'    ",
+                "            |         ",
+                "           .|.        ",
+                "          [===]       ",
+            ],
+            // Moyogi A — gentle S-curve with three pads
+            (1, 0) => vec![
                 "           .@@@@.     ",
                 "          .@@@@@@.    ",
                 "           '@@@@'     ",
@@ -723,8 +874,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "                .|.   ",
                 "               [===]  ",
             ],
-            // Shakan — dramatic slant, three balancing pads
-            2 => vec![
+            // Moyogi B — deeper zigzag, wider reach, three offset pads
+            (1, _) => vec![
+                "            .@@@.     ",
+                "           @@@@@@@    ",
+                "            '@@@'     ",
+                "            /         ",
+                "           /          ",
+                "         .@/          ",
+                "        @@@@@         ",
+                "         '@\\          ",
+                "            \\         ",
+                "             \\_.@@@.  ",
+                "               @@@@@  ",
+                "                '@'\\  ",
+                "                   \\  ",
+                "                  .|. ",
+                "                 [===]",
+            ],
+            // Shakan A — dramatic slant left with three balancing pads
+            (2, 0) => vec![
                 "             .@@@.    ",
                 "            .@@@@@.   ",
                 "             '@@@'    ",
@@ -740,8 +909,25 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "             .|.      ",
                 "            [===]     ",
             ],
-            // Fukinagashi — windswept right, long trailing foliage
-            3 => vec![
+            // Shakan B — steep slant right with balancing left pad
+            (2, _) => vec![
+                "  .@@@@.              ",
+                " @@@@@@@@             ",
+                "  '@@@@'              ",
+                "        \\             ",
+                "         \\            ",
+                "   .@@.   \\           ",
+                "  @@@@@@   \\          ",
+                "   '@@'     \\         ",
+                "             \\        ",
+                "              \\       ",
+                "               \\      ",
+                "                \\     ",
+                "                 .|.  ",
+                "                [===] ",
+            ],
+            // Fukinagashi A — windswept right, long trailing foliage
+            (3, 0) => vec![
                 "         ,@@@@@@@@.   ",
                 "       .@@@@@@@@@@@@. ",
                 "         '@@@@@@@@'   ",
@@ -758,8 +944,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "      .|.             ",
                 "     [===]            ",
             ],
-            // Sokan — twin trunk, overlapping canopies
-            4 => vec![
+            // Fukinagashi B — mirrored, canopy left, branches trailing right
+            (3, _) => vec![
+                "    .@@@@@@@@@.       ",
+                "  .@@@@@@@@@@@@@@.    ",
+                "    '@@@@@@@@'        ",
+                "      \\  \\  \\         ",
+                "       \\  \\  \\        ",
+                "        \\  \\  \\       ",
+                "         \\  \\  \\      ",
+                "          \\  \\  \\     ",
+                "           \\  \\  \\    ",
+                "            \\  \\  \\   ",
+                "             \\  \\  \\  ",
+                "              \\  |    ",
+                "                 |    ",
+                "                .|.   ",
+                "               [===]  ",
+            ],
+            // Sokan A — twin trunks, overlapping separate canopies
+            (4, 0) => vec![
                 "     .@@@.   .@@@.    ",
                 "    @@@@@@@ @@@@@@@   ",
                 "     '@@@'   '@@@'    ",
@@ -775,8 +979,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "          .|.         ",
                 "         [===]        ",
             ],
-            // Hokidachi — broom, wide fan crown
-            5 => vec![
+            // Sokan B — twin trunks with unified merged canopy above
+            (4, _) => vec![
+                "       .@@@@@@@.      ",
+                "      .@@@@@@@@@.     ",
+                "     .@@@@@@@@@@@.    ",
+                "      '@@|@|@@@'      ",
+                "         | |          ",
+                "         | |          ",
+                "        /   \\         ",
+                "        |   |         ",
+                "        |   |         ",
+                "        |   |         ",
+                "         \\ /          ",
+                "          V           ",
+                "          |           ",
+                "         .|.          ",
+                "        [===]         ",
+            ],
+            // Hokidachi A — classic broom, wide symmetric fan crown
+            (5, 0) => vec![
                 "      .@@@@@@@@@.     ",
                 "    .@@@@@@@@@@@@@.   ",
                 "   .@@@@@@@@@@@@@@@.  ",
@@ -792,8 +1014,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "         .|.          ",
                 "        [===]         ",
             ],
-            // Bunjingi — literati, tall stark trunk, tiny crown
-            6 => vec![
+            // Hokidachi B — tall conical broom, stacked triangular canopy
+            (5, _) => vec![
+                "            .@.       ",
+                "           @@@@@      ",
+                "          @@@@@@@     ",
+                "         @@@@@@@@@    ",
+                "        @@@@@@@@@@@   ",
+                "       @@@@@@@@@@@@@  ",
+                "        '@@@@@@@@@'   ",
+                "         \\\\\\|||///    ",
+                "          \\\\|||//     ",
+                "           \\|||/      ",
+                "            \\|/       ",
+                "             |        ",
+                "             |        ",
+                "            .|.       ",
+                "           [===]      ",
+            ],
+            // Bunjingi A — literati, tall stark trunk with single small crown
+            (6, 0) => vec![
                 "         .@@@.        ",
                 "        .@@@@@.       ",
                 "         '@@@'        ",
@@ -810,8 +1050,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "         .|.          ",
                 "        [===]         ",
             ],
-            // Neagari — exposed root, layered crown
-            _ => vec![
+            // Bunjingi B — literati with multiple micro pads along the trunk
+            (6, _) => vec![
+                "           .@.        ",
+                "           @@@        ",
+                "           '@'        ",
+                "            |         ",
+                "            |         ",
+                "          .@|         ",
+                "          @@|         ",
+                "           '|         ",
+                "            |@.       ",
+                "            |@@       ",
+                "            |'        ",
+                "          .@|         ",
+                "          @@|         ",
+                "           .|.        ",
+                "          [===]       ",
+            ],
+            // Neagari A — layered crown, exposed roots at the pot
+            (_, 0) => vec![
                 "          .@@@.       ",
                 "         .@@@@@.      ",
                 "          '@@@'       ",
@@ -828,10 +1086,27 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "        _/ .|. \\_     ",
                 "       [=======]      ",
             ],
+            // Neagari B — dramatic splayed roots under an elevated pot
+            (_, _) => vec![
+                "          .@@@.       ",
+                "         @@@@@@@      ",
+                "          '@@@'       ",
+                "           |          ",
+                "       .@@.|.@@.      ",
+                "      @@@@@|@@@@@     ",
+                "       '@@'|'@@'      ",
+                "           |          ",
+                "          .|.         ",
+                "          _|_         ",
+                "       __/ | \\__      ",
+                "      /    |    \\     ",
+                "     /     |     \\    ",
+                "        [=======]     ",
+            ],
         },
-        Stage::Blossom => match style_variant(seed, 8) {
-            // Chokkan — layered with petals woven through
-            0 => vec![
+        Stage::Blossom => match (style_variant(seed, 8), shape) {
+            // Chokkan A — layered flowering with petals woven through
+            (0, 0) => vec![
                 "         .*@@*.       ",
                 "        *@@@@@*.      ",
                 "         '@*@'        ",
@@ -848,8 +1123,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "           .|.        ",
                 "          [===]       ",
             ],
-            // Moyogi — flowering S-curve, three pads
-            1 => vec![
+            // Chokkan B — pure vertical cone of flowering tiers
+            (0, _) => vec![
+                "           .*.        ",
+                "           *@*        ",
+                "           '*'        ",
+                "            |         ",
+                "         .*@*@.       ",
+                "         '*@*'        ",
+                "            |         ",
+                "        .*@*@*.       ",
+                "         '*@*'        ",
+                "            |         ",
+                "      .*@*@*@*@*.     ",
+                "       '*@*@*@*'      ",
+                "            |         ",
+                "           .|.        ",
+                "          [===]       ",
+            ],
+            // Moyogi A — flowering S-curve, three pads
+            (1, 0) => vec![
                 "           .*@@*.     ",
                 "          *@@@*@@*    ",
                 "           '*@@'      ",
@@ -866,8 +1159,25 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "                .|.   ",
                 "               [===]  ",
             ],
-            // Shakan — slanting bloom, three cascading pads
-            2 => vec![
+            // Moyogi B — deeper flowering zigzag with three offset pads
+            (1, _) => vec![
+                "            .*@*.     ",
+                "           *@@*@@*    ",
+                "            '*@'      ",
+                "            /         ",
+                "          .*/         ",
+                "         *@@*         ",
+                "          '*\\         ",
+                "             \\        ",
+                "              \\_.*@*. ",
+                "                *@@*  ",
+                "                 '*'  ",
+                "                 |    ",
+                "                .|.   ",
+                "               [===]  ",
+            ],
+            // Shakan A — slanting flowering, three cascading pads
+            (2, 0) => vec![
                 "             .*@*.    ",
                 "            *@@@@@*   ",
                 "             '*@'     ",
@@ -883,8 +1193,25 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "             .|.      ",
                 "            [===]     ",
             ],
-            // Fukinagashi — wind-swept blossom
-            3 => vec![
+            // Shakan B — steep flowering slant the other way
+            (2, _) => vec![
+                "  .*@*.               ",
+                " *@@*@@*              ",
+                "  '*@'                ",
+                "      \\               ",
+                "       \\              ",
+                "   .*@. \\             ",
+                "  *@*@*  \\            ",
+                "   '*'    \\           ",
+                "           \\          ",
+                "            \\         ",
+                "             \\        ",
+                "              \\       ",
+                "               .|.    ",
+                "              [===]   ",
+            ],
+            // Fukinagashi A — flowering windswept, canopy right
+            (3, 0) => vec![
                 "         ,*@*@*@*.    ",
                 "       .*@@*@@*@@@*.  ",
                 "         '*@*@*@*'    ",
@@ -901,8 +1228,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "      .|.             ",
                 "     [===]            ",
             ],
-            // Sokan — twin flowering trunk
-            4 => vec![
+            // Fukinagashi B — mirrored flowering windswept, canopy left
+            (3, _) => vec![
+                "    .*@*@*@*.         ",
+                "  .*@@*@@*@@*.        ",
+                "    '*@*@*@*'         ",
+                "      \\  \\  \\         ",
+                "       \\  \\  \\        ",
+                "        \\  \\  \\       ",
+                "         \\  \\  \\      ",
+                "          \\  \\  \\     ",
+                "           \\  \\  \\    ",
+                "            \\  \\  \\   ",
+                "             \\  \\  \\  ",
+                "              \\ |     ",
+                "                |     ",
+                "               .|.    ",
+                "              [===]   ",
+            ],
+            // Sokan A — twin flowering trunks, separate canopies
+            (4, 0) => vec![
                 "    .*@*.   .*@*.     ",
                 "   *@@*@@@. *@@*@@@.  ",
                 "    '*@*'    '*@*'    ",
@@ -917,8 +1262,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "          .|.         ",
                 "         [===]        ",
             ],
-            // Hokidachi — flowering broom
-            5 => vec![
+            // Sokan B — twin trunks with unified flowering canopy
+            (4, _) => vec![
+                "       .*@*@*@*.      ",
+                "      *@@*@@*@@*.     ",
+                "     .*@*@*@*@*@*.    ",
+                "      '*@|@|@*@*'     ",
+                "         | |          ",
+                "         | |          ",
+                "        /   \\         ",
+                "        |   |         ",
+                "        |   |         ",
+                "        |   |         ",
+                "         \\ /          ",
+                "          V           ",
+                "          |           ",
+                "         .|.          ",
+                "        [===]         ",
+            ],
+            // Hokidachi A — classic flowering broom
+            (5, 0) => vec![
                 "    .*@*@*@*@*@*.     ",
                 "  .*@@@*@@@*@@@*@@*.  ",
                 "   *@*@*@*@*@*@*@*@   ",
@@ -934,8 +1297,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "         .|.          ",
                 "        [===]         ",
             ],
-            // Bunjingi — flowering literati
-            6 => vec![
+            // Hokidachi B — tall flowering cone broom
+            (5, _) => vec![
+                "            .*.       ",
+                "           *@*@*      ",
+                "          *@*@*@*     ",
+                "         *@*@*@*@*    ",
+                "        *@*@*@*@*@*   ",
+                "       *@*@*@*@*@*@*  ",
+                "        '*@*@*@*@*'   ",
+                "         \\\\\\|||///    ",
+                "          \\\\|||//     ",
+                "           \\|||/      ",
+                "            \\|/       ",
+                "             |        ",
+                "             |        ",
+                "            .|.       ",
+                "           [===]      ",
+            ],
+            // Bunjingi A — flowering literati, small single crown
+            (6, 0) => vec![
                 "         .*@*.        ",
                 "        *@@*@@*       ",
                 "         '*@'         ",
@@ -952,8 +1333,26 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "         .|.          ",
                 "        [===]         ",
             ],
-            // Neagari — blooming exposed root
-            _ => vec![
+            // Bunjingi B — flowering literati with multiple micro pads
+            (6, _) => vec![
+                "           .*.        ",
+                "           *@*        ",
+                "           '*'        ",
+                "            |         ",
+                "            |         ",
+                "          .*|         ",
+                "          *@|         ",
+                "           '|         ",
+                "            |*.       ",
+                "            |*@       ",
+                "            |'        ",
+                "          .*|         ",
+                "          *@|         ",
+                "           .|.        ",
+                "          [===]       ",
+            ],
+            // Neagari A — blooming exposed root, layered crown
+            (_, 0) => vec![
                 "         .*@*.        ",
                 "        *@@*@@*       ",
                 "         '*@'         ",
@@ -970,6 +1369,23 @@ pub(crate) fn tree_ascii(stage: Stage, seed: i64, _wilting: bool) -> Vec<String>
                 "       _/ .|. \\_      ",
                 "      [=======]       ",
             ],
+            // Neagari B — flowering with dramatic splayed roots
+            (_, _) => vec![
+                "          .*@*.       ",
+                "         *@@*@@*      ",
+                "          '*@'        ",
+                "           |          ",
+                "       .*@.|.@*.      ",
+                "      *@*@*|*@*@*     ",
+                "       '*@'|'*@'      ",
+                "           |          ",
+                "          .|.         ",
+                "          _|_         ",
+                "       __/ | \\__      ",
+                "      /    |    \\     ",
+                "     /     |     \\    ",
+                "        [=======]     ",
+            ],
         },
     };
 
@@ -984,110 +1400,55 @@ fn high_stage_style_count(stage: Stage) -> Option<usize> {
     }
 }
 
+/// Per-style hand-tuned silhouette count. Stages not listed here default to 1
+/// — they fall back to the single canonical silhouette per style.
+fn high_stage_shape_count(stage: Stage) -> usize {
+    match stage {
+        Stage::Mature | Stage::Ancient | Stage::Blossom => 2,
+        _ => 1,
+    }
+}
+
 fn style_variant(seed: i64, style_count: usize) -> usize {
     seed.unsigned_abs() as usize % style_count
 }
 
-fn form_variant(seed: i64, style_count: usize) -> usize {
-    (seed.unsigned_abs() as usize / style_count) % HIGH_STAGE_FORM_VARIANTS
+fn shape_variant(seed: i64, style_count: usize, shape_count: usize) -> usize {
+    if shape_count <= 1 {
+        return 0;
+    }
+    (seed.unsigned_abs() as usize / style_count) % shape_count
+}
+
+fn form_variant(seed: i64, style_count: usize, shape_count: usize) -> usize {
+    let divisor = style_count * shape_count.max(1);
+    (seed.unsigned_abs() as usize / divisor) % HIGH_STAGE_FORM_VARIANTS
 }
 
 fn form_tree_art(lines: Vec<&'static str>, form: usize) -> Vec<String> {
     lines
         .into_iter()
-        .enumerate()
-        .map(|(y, line)| match form {
-            1 => slim_canopy_line(line, y),
-            2 => full_canopy_line(line),
-            _ => line.to_string(),
-        })
+        .map(|line| retexture_line(line, form))
         .collect()
 }
 
-fn slim_canopy_line(line: &str, y: usize) -> String {
-    if !is_canopy_line(line) {
+/// Swap heavy foliage chars for a distinct texture per form. Edge markers
+/// (`.`, `'`, `,`) and `*` flowers pass through untouched so pad silhouettes
+/// and blossoms stay intact.
+fn retexture_line(line: &str, form: usize) -> String {
+    if form == 0 {
         return line.to_string();
     }
-
-    let mut chars: Vec<char> = line.chars().collect();
-    let foliage: Vec<usize> = chars
-        .iter()
-        .enumerate()
-        .filter_map(|(x, ch)| is_foliage(*ch).then_some(x))
-        .collect();
-    if foliage.len() <= 3 {
-        return line.to_string();
-    }
-
-    chars[foliage[0]] = ' ';
-    if let Some(last) = foliage.last().copied()
-        && last != foliage[0]
-    {
-        chars[last] = ' ';
-    }
-
-    let shift = if y % 2 == 0 { -1 } else { 1 };
-    shift_visible(chars, shift)
-}
-
-fn full_canopy_line(line: &str) -> String {
-    if !is_canopy_line(line) {
-        return line.to_string();
-    }
-
-    let mut chars: Vec<char> = line.chars().collect();
-    let Some(first) = chars.iter().position(|ch| *ch != ' ') else {
-        return line.to_string();
-    };
-    let Some(last) = chars.iter().rposition(|ch| *ch != ' ') else {
-        return line.to_string();
-    };
-    let leaf = if line.contains('*') {
-        '*'
-    } else if line.contains('#') {
-        '#'
-    } else {
-        '@'
-    };
-
-    if first > 0 && chars[first - 1] == ' ' {
-        chars[first - 1] = leaf;
-    }
-    if last + 1 < chars.len() && chars[last + 1] == ' ' {
-        chars[last + 1] = leaf;
-    }
-    chars.into_iter().collect()
-}
-
-fn shift_visible(chars: Vec<char>, dx: isize) -> String {
-    if dx == 0 || chars.is_empty() {
-        return chars.into_iter().collect();
-    }
-
-    let Some(first) = chars.iter().position(|ch| *ch != ' ') else {
-        return chars.into_iter().collect();
-    };
-    let Some(last) = chars.iter().rposition(|ch| *ch != ' ') else {
-        return chars.into_iter().collect();
-    };
-    if dx < 0 && first == 0 || dx > 0 && last + 1 == chars.len() {
-        return chars.into_iter().collect();
-    }
-
-    let mut shifted = vec![' '; chars.len()];
-    for x in first..=last {
-        let shifted_x = (x as isize + dx) as usize;
-        shifted[shifted_x] = chars[x];
-    }
-    shifted.into_iter().collect()
-}
-
-fn is_canopy_line(line: &str) -> bool {
-    line.chars().any(is_foliage)
-}
-
-fn is_foliage(ch: char) -> bool {
-    matches!(ch, '@' | '#' | '*')
+    line.chars()
+        .map(|ch| match (form, ch) {
+            // Airy: heavy foliage reads as open dots.
+            (1, '@') | (1, '#') => 'o',
+            // Dense: swap the main foliage char to the other heavy glyph.
+            (2, '@') => '#',
+            (2, '#') => '@',
+            _ => ch,
+        })
+        .collect()
 }
 
 #[cfg(test)]

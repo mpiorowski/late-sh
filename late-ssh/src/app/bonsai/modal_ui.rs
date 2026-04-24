@@ -87,15 +87,15 @@ fn draw_tree(
     }
     lines.append(&mut tree_lines);
 
-    if care.water_animation_ticks > 0 {
-        if let Some(line) = lines.last_mut() {
-            line.spans.push(Span::styled(
-                "  drip",
-                Style::default()
-                    .fg(theme::SUCCESS())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
+    if care.water_animation_ticks > 0
+        && let Some(line) = lines.last_mut()
+    {
+        line.spans.push(Span::styled(
+            "  drip",
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
     }
 
     frame.render_widget(Paragraph::new(lines), area);

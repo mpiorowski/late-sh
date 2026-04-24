@@ -235,9 +235,7 @@ fn overgrowth_glyph(rows: &[Vec<char>], x: usize, y: usize) -> Option<char> {
         Some('\\')
     } else if is_tree_char(right) {
         Some('/')
-    } else if is_tree_char(below) {
-        Some('|')
-    } else if is_tree_char(above) {
+    } else if is_tree_char(below) || is_tree_char(above) {
         Some('|')
     } else {
         None
