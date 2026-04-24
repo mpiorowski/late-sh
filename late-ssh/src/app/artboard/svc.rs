@@ -257,6 +257,8 @@ fn handle_server_msg(
             if let Some(actor) = actor_name(&snapshot, from, username) {
                 snapshot.provenance.apply_op(&before, &op, &actor);
                 apply_shared_op(shared_provenance, &before, &op, &actor);
+            } else if matches!(op, CanvasOp::Replace { .. }) {
+                snapshot.provenance = clone_shared_provenance(shared_provenance);
             }
             snapshot.last_seq = snapshot.last_seq.max(seq);
             let _ = snapshot_tx.send(snapshot);

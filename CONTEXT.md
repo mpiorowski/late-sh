@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-22 (Artboard ownership provenance + Esc/view-mode fix)
+- Last updated: 2026-04-24 (Reaction DB constraint expanded to 1..8)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, The Arcade, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..5` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), a dedicated shared multi-user ASCII artboard screen, and configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` now opens a quit-confirm modal; pressing `q` again exits and `Esc` dismisses it. `@bot` mention replies now receive compact context about online non-bot members in the active room (username plus optional bio/country/timezone, capped and truncated for prompt size).
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, The Arcade, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..8` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), a dedicated shared multi-user ASCII artboard screen, and configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` now opens a quit-confirm modal; pressing `q` again exits and `Esc` dismisses it. `@bot` mention replies now receive compact context about online non-bot members in the active room (username plus optional bio/country/timezone, capped and truncated for prompt size).
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -255,7 +255,7 @@ To maintain a buttery-smooth 15-60 FPS over SSH, the architecture strictly separ
 4. **The Paint Job (`app/render.rs` -> `ui.rs`)**
    Immediately after the tick, `App::render()` runs. It passes the purely synchronous UI state directly to the draw functions. The UI just reads local memory and draws boxes. No `.await`, no freezing.
 5. **The User Action (`app/input.rs`)**
-   Input handlers modify the synchronous UI State (like moving cursors). When an action requires I/O (like hitting `Enter` to save), the input handler fires a fire-and-forget method on the Service. The Service spawns a Tokio task to do the DB/API work, pushes the result to the channel, and the UI catches it on the next 66ms tick.
+   SSH keystrokes now first land in a per-session unbounded queue owned by the render task (`late-ssh/src/ssh.rs`). Right before each render, the task drains queued bytes into `App::handle_input()`, then runs `tick()` / `render()`. That keeps the input handler off the app mutex entirely for ordinary keystrokes while preserving the same synchronous UI state model. When an action requires I/O (like hitting `Enter` to save), the input handler fires a fire-and-forget method on the Service. The Service spawns a Tokio task to do the DB/API work, pushes the result to the channel, and the UI catches it on the next 66ms tick.
 
 ### 2.6 Render loop timing (world tick + input-driven)
 
@@ -268,7 +268,7 @@ The select loop picks which branch to act on:
 
 ```mermaid
 flowchart TD
-    INPUT["data() / window_change_request()<br/>(keystroke, resize)"] -->|"set dirty=true<br/>(under app mutex)"| SIGNAL
+    INPUT["data() / window_change_request()<br/>(keystroke, resize)"] -->|"queue keystrokes or apply resize / set dirty=true"| SIGNAL
     SIGNAL["RenderSignal<br/>dirty: AtomicBool<br/>notify: tokio::Notify"] -->|"notify_one()<br/>(after mutex released)"| LOOP
     WT["world_tick.tick()<br/>every 66ms"] --> LOOP
     LOOP{"biased select!"}
@@ -305,7 +305,7 @@ Two keystrokes → one render at t=15. No spurious trailing frame.
 - `Notify` — alarm clock. Wakes the task.
 - `dirty` — sticky note. Source of truth for "there is unrendered state".
 
-Both `dirty` writes (input path) and `dirty` clears (render path) happen under the same `TokioMutex<App>` that guards state mutations. Invariant: a render that acquires the mutex after an input either already covered it, or observes `dirty=true` and will cover it on the next iteration.
+The input path now sets `dirty` immediately after enqueueing bytes for the render task, without taking the app mutex. The render task clears `dirty` immediately before draining that queue under the mutex. Invariant: input that lands during a render flips `dirty` back to `true`, so the current frame may miss it, but the next loop iteration must pick it up.
 
 The stored-permit regression is locked down by `ssh::tests::stale_permit_does_not_arm_throttle`; the surrounding tests cover throttle timing, `biased` wins, and the idle/active paths.
 
@@ -507,6 +507,8 @@ Important operational note:
 Persistence behavior:
 - The shared server boots from the last saved snapshot if one exists; otherwise it starts with a blank `384 x 192` canvas.
 - Canvas saves are coalesced and persisted in the background every 5 minutes while dirty.
+- A server-side UTC rollover task wakes at each UTC day boundary, archives one daily snapshot under `daily:YYYY-MM-DD`, keeps only the newest 7 daily rows, and retries the same pending rollover on failure instead of advancing the date.
+- On UTC month rollover, the archived prior-day daily snapshot is also saved as `monthly:YYYY-MM`, then the live `main` board is blanked in-memory and persisted back as a fresh empty board.
 - Provenance is persisted alongside the canvas in `artboard_snapshots.provenance` as JSONB. The minimal schema is username-based (`Pos -> username`), not stable user UUIDs.
 - Shutdown/drain explicitly flushes the latest in-memory artboard snapshot before process exit.
 - Tests cover both periodic persistence and explicit flush-on-demand (`late-ssh/tests/games/artboard.rs`).
@@ -978,7 +980,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Ignore is keyed by user id, not username:** `users.settings.ignored_user_ids` stores UUIDs, so a `/ignore @alice` survives @alice renaming herself to @alice2. Storing usernames there would silently break on rename and could re-attach a stale ignore to a different person if usernames are ever reused.
 - **Ignore re-filter is local-only:** `ChatEvent::IgnoreListUpdated` triggers an in-place retain across every non-DM room — no `request_list()` refetch. Side effect: `unignore` does **not** retroactively re-fetch already-dropped messages; they reappear on the next natural snapshot/refresh.
 - **Dashboard shares one chat store with the chat page:** #general lives inside `ChatState.rooms` like every other room; the dashboard card just looks it up by `general_room_id`. There is no parallel `general_messages` vec. Every member-room stays warm from broadcasts regardless of selection — `push_message` only gates the "mark-as-read" side effect on whether the user is actually viewing the room. **Message operations on `ChatState` are room-explicit**: the canonical methods are `select_message_in_room`, `begin_reply_to_selected_in_room`, `begin_edit_selected_in_room`, `delete_selected_message_in_room`, `start_composing_in_room`, all taking a concrete `Uuid`. There are no implicit-room variants — callers resolve the target room at the boundary. Wire new message actions *once* in three places and they work on both dashboard and chat page automatically: (a) `chat::input::handle_message_action_in_room(app, room_id, byte)` for the keybinding, (b) the room-explicit `ChatState` helpers (`find_message_in_room`, `replace_message`, `remove_message`, etc.) for state mutation, (c) `chat::ui::draw_composer_block` / `ComposerBlockView` for any new composer state label (reply, edit, …). Chat-screen entry points (`handle_message_action`, `handle_message_arrow`, `handle_scroll`) are thin wrappers that resolve `selected_room_id` at the top and delegate to the `_in_room` variant; dashboard input passes `App::dashboard_active_room_id()` directly (which equals `general_room_id()` when no favorites are pinned, otherwise the active favorite — see the "Dashboard favorites quick-switch" flow). The composer also pins its own `composer_room_id` in `start_composing_in_room` so submit never falls back to `selected_room_id` — switching rooms mid-compose can't redirect an in-flight message.
-- **Message reactions are per-user and footer-scoped:** `chat_message_reactions` stores at most one numeric reaction (`1..5`) per `(message_id, user_id)`; shifted `!..%` still react directly, and `v` then `1..5` is the layout-safe fallback when a message is selected. Rendering keeps reactions inside the selected message block as footer chips below the body, so grouped messages still read top-to-bottom with reactions "between" adjacent messages rather than in the composer or sidebar.
+- **Message reactions are per-user and footer-scoped:** `chat_message_reactions` stores at most one numeric reaction (`1..8`) per `(message_id, user_id)`; `f` then `1..8` reacts to the selected message. Rendering keeps reactions inside the selected message block as footer chips below the body, so grouped messages still read top-to-bottom with reactions "between" adjacent messages rather than in the composer or sidebar.
 - **Snapshot merge for empty rooms:** `ChatState::merge_rooms` preserves cached messages when snapshot arrives with empty message list for a room - prevents flash-clear on out-of-order snapshots
 - **Unread count merge:** `merge_unread_counts` tracks `pending_read_rooms` to suppress stale unread counts after marking read (avoids flicker)
 - **Render loop missed ticks:** 66ms interval with `MissedTickBehavior::Skip` - if a frame takes too long, next ticks are skipped rather than queued (prevents snowball lag)
@@ -1023,14 +1025,14 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 ## 8.5 Input Lag Investigation (~60 concurrent users) [VOLATILE]
 
-Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI (chat composer, screen switches). Findings from two independent code reads, grouped and deduplicated below. Ordered by likely impact. None of these have been fixed yet — keep this list current as work lands.
+Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI (chat composer, screen switches). Findings from two independent code reads, grouped and deduplicated below. Ordered by likely impact. This section now mixes landed fixes and still-open follow-ups — keep it current as work lands.
 
-### A. Render lock blocks input (partially addressed)
-- The SSH `data` handler and the render task both take the same `TokioMutex<App>` (see `late-ssh/src/ssh.rs`).
-- `render_once` holds the lock across the whole synchronous `app.tick()` + `app.render()` (full ratatui draw + diff). The lock is only released before `handle.data(...)` is awaited, so any single expensive frame stalls every keystroke that arrives during it.
+### A. Render lock blocks input (mostly addressed for keystrokes)
+- `render_once` still holds the lock across the whole synchronous `app.tick()` + `app.render()` (full ratatui draw + diff).
 - With 60 sessions × 15 FPS = ~900 frame builds/sec sharing tokio worker threads, even modestly expensive frames push input latency into the felt range.
 - **Cadence gap closed (§2.6):** the render loop now wakes on input via `RenderSignal` within ~15ms instead of waiting up to 66ms for the next world tick. This removes the "input lands right after a world tick → 60ms dead zone" case entirely. Typical input-to-frame latency is now bounded by the mutex contention tail, not the world-tick cadence.
-- **Still open — lock contention:** `data()` still awaits the app mutex. A slow render on another task will block input. Further fix (not yet done): `data()` pushes raw bytes into a per-session `mpsc::UnboundedSender<Vec<u8>>`; the render task drains it at the top of each tick. Input never blocks on the render lock again.
+- **Keystroke path fixed:** `data()` now pushes raw bytes into a per-session `mpsc::UnboundedSender<Vec<u8>>`; the render task drains that queue immediately before `app.tick()` / `app.render()`. Ordinary SSH input no longer waits on the render mutex.
+- **Still open — render cost:** expensive frames still hold the app mutex longer, which affects resize handling and increases time-to-paint, but no longer blocks the `data()` ingress path itself.
 
 ### B. Chat row cache is expensive even on hits
 - `ensure_chat_rows_cache` (`late-ssh/src/app/chat/ui.rs:324`) calls `chat_rows_fingerprint` (`late-ssh/src/app/chat/ui.rs:297`) every render. The fingerprint hashes message id, user_id, created, **body string**, plus username/badge/glyph lookups for every visible message.
@@ -1226,6 +1228,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 6. Now-playing shows "Unknown" → Check Icecast `/status-json.xsl`, metadata format: `"Artist - Title | Duration"` (duration is absent for internet streams — this is expected)
 7. Liquidsoap debugging → `docker run --rm savonet/liquidsoap:v2.4.0 liquidsoap -h <topic>`
 8. Music missing from PVC → Re-run infra deploy to trigger `sync_music` job (syncs from R2). For manual recovery: `aws s3 sync s3://$MUSIC_BUCKET/ ./music/ --endpoint-url $S3_ENDPOINT` then `kubectl cp` each genre dir individually into the pod.
+9. Repeated Postgres `role "root" does not exist` lines in GitHub Actions are often service-log noise, not the failure. They’re misleading because Actions prints service container logs after a job fails. Generally check for other errors before stopping to try and fix this probable red-herring.
 
 ## 11. TUI Screens Reference [STABLE]
 
@@ -1234,7 +1237,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/settings`, `/help`) with grouped room sections and synthetic `news`, `mentions`, and `discover` entries in the room list. `discover` shows public rooms you have not joined yet with member/message counts; Enter joins the selected room. `/public #room` opens or creates an opt-in public room and joins only the caller. |
+| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/settings`, `/help`) with grouped room sections and synthetic `news`, `mentions`, and `discover` entries in the room list. Admin-only room management commands include `/create-room #room`, `/delete-room #room`, and `/fill-room #room`; `/fill-room` works only for public rooms, bulk-adds all users, and flips the room to `auto_join = true` for future joins. `discover` shows public rooms you have not joined yet with member/message counts; Enter joins the selected room. `/public #room` opens or creates an opt-in public room and joins only the caller. |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
 | **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 
@@ -1329,7 +1332,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `Esc` | Chat (`news` composing) | Cancel URL compose |
 | `i` / `Enter` | Dashboard | Start composing chat |
 | `j` / `k` | Chat | Move message selection newer/older |
-| `v` then `1` / `2` / `3` / `4` / `5` | Dashboard / Chat message selection | Layout-safe reaction fallback |
+| `f` then `1`..`8` | Dashboard / Chat message selection | React to selected message |
 | `p` | Chat | Open selected user's read-only profile modal |
 | `r` | Chat | Reply to selected message |
 | `P` | Global | Show browser-pairing QR (copies pairing URL) |

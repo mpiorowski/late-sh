@@ -491,6 +491,55 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
 }
 
 #[tokio::test]
+async fn chat_reaction_leader_persists_extended_reaction_digits() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-react-extended-viewer").await;
+    let author = create_test_user(&test_db.db, "f-react-extended-author").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general.id, author.id)
+        .await
+        .expect("join author");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: author.id,
+            body: "extended reaction target".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-react-extended-flow-it");
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "extended reaction target").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "8 🤔").await;
+    app.handle_input(b"8");
+
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_until(
+        || async {
+            ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
+                .await
+                .expect("load reaction")
+                .is_some_and(|reaction| reaction.kind == 8)
+        },
+        "extended f leader reaction to persist",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn chat_reaction_leader_cancels_and_consumes_non_digit_input() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "f-cancel-viewer").await;
