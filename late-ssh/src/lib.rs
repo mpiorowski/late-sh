@@ -1,6 +1,7 @@
 pub mod api;
 pub mod app;
 pub mod config;
+pub mod dartboard;
 pub mod metrics;
 pub mod session;
 pub mod ssh;

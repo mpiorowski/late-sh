@@ -1,4 +1,4 @@
-use crate::app::input::{ParsedInput, sanitize_paste_markers};
+use crate::app::input::{MouseEventKind, ParsedInput, sanitize_paste_markers};
 use crate::app::state::App;
 
 use super::state::{PickerKind, Row, Tab};
@@ -244,7 +244,11 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
                 .max(1) as isize;
             app.settings_modal_state.picker_move(-page);
         }
-        ParsedInput::Scroll(delta) => app.settings_modal_state.picker_move(-delta * 3),
+        ParsedInput::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => app.settings_modal_state.picker_move(-3),
+            MouseEventKind::ScrollDown => app.settings_modal_state.picker_move(3),
+            _ => {}
+        },
         ParsedInput::Char(ch) if !ch.is_control() => app.settings_modal_state.picker_push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             app.settings_modal_state.picker_push(byte as char)

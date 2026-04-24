@@ -49,7 +49,7 @@ fn jump_to_selected(app: &mut App) {
     app.chat.selected_room_id = Some(room_id);
     app.chat.selected_message_id = Some(message_id);
     app.chat.highlighted_message_id = Some(message_id);
+    app.sync_visible_chat_room();
     app.chat.request_list();
-    app.chat.mark_selected_room_read();
     app.banner = Some(Banner::success(&format!("Jumped to {room_label}")));
 }

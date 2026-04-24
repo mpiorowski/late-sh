@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use late_core::{
@@ -137,6 +137,11 @@ pub enum ChatEvent {
         user_id: Uuid,
         slug: String,
     },
+    RoomFilled {
+        user_id: Uuid,
+        slug: String,
+        users_added: u64,
+    },
     AdminFailed {
         user_id: Uuid,
         message: String,
@@ -220,6 +225,7 @@ impl ChatService {
         let rooms = ChatRoom::list_for_user(client, user_id).await?;
         let discover_rooms = self.list_discover_rooms(client, user_id).await?;
         let unread_counts = ChatRoomMember::unread_counts_for_user(client, user_id).await?;
+        let favorite_room_ids = User::favorite_room_ids(client, user_id).await?;
         let general_room_id = rooms
             .iter()
             .find(|room| room.kind == "general" && room.slug.as_deref() == Some("general"))
@@ -228,31 +234,38 @@ impl ChatService {
             .filter(|selected| rooms.iter().any(|room| room.id == *selected))
             .or_else(|| rooms.first().map(|room| room.id));
 
-        let selected_messages = if let Some(room_id) = active_room_id {
-            ChatMessage::list_recent(client, room_id, HISTORY_LIMIT).await?
-        } else {
-            Vec::new()
-        };
-        let general_messages = if let Some(room_id) = general_room_id {
-            if Some(room_id) == active_room_id {
-                selected_messages.clone()
-            } else {
-                ChatMessage::list_recent(client, room_id, HISTORY_LIMIT).await?
+        // Preload the same histories regardless of whether the room is opened
+        // from the chat page or surfaced on the dashboard: active room,
+        // `#general`, and any currently-joined pinned favorites.
+        let joined_ids: HashSet<Uuid> = rooms.iter().map(|room| room.id).collect();
+        let mut preload_room_ids = Vec::new();
+        let mut seen = HashSet::new();
+        let mut push_preload = |room_id: Uuid| {
+            if joined_ids.contains(&room_id) && seen.insert(room_id) {
+                preload_room_ids.push(room_id);
             }
-        } else {
-            Vec::new()
         };
-        let message_ids: Vec<Uuid> = selected_messages
-            .iter()
-            .chain(general_messages.iter())
-            .map(|message| message.id)
+        if let Some(room_id) = active_room_id {
+            push_preload(room_id);
+        }
+        if let Some(room_id) = general_room_id {
+            push_preload(room_id);
+        }
+        for room_id in favorite_room_ids {
+            push_preload(room_id);
+        }
+
+        let recent_messages =
+            ChatMessage::list_recent_for_rooms(client, &preload_room_ids, HISTORY_LIMIT).await?;
+        let message_ids: Vec<Uuid> = recent_messages
+            .values()
+            .flat_map(|messages| messages.iter().map(|message| message.id))
             .collect();
         let message_reactions =
             ChatMessageReaction::list_summaries_for_messages(client, &message_ids).await?;
-        // General is the dashboard's permanent room — it must always carry
-        // its tail in the snapshot so the dashboard card stays warm even when
-        // the chat page has another room selected. Other non-selected rooms
-        // ride on broadcasts + a backfill on first open per session.
+        // General stays warm for the dashboard even when another room is
+        // selected. Favorites ride in the same preload set so the dashboard
+        // quick-switch never depends on a prior manual visit or lucky delta.
         let usernames = User::list_all_username_map(client).await?;
         let countries = User::list_all_country_map(client).await?;
         let mut all_usernames: Vec<String> = usernames.values().cloned().collect();
@@ -274,13 +287,7 @@ impl ChatService {
         let rooms = rooms
             .into_iter()
             .map(|chat| {
-                let messages = if Some(chat.id) == active_room_id {
-                    selected_messages.clone()
-                } else if Some(chat.id) == general_room_id {
-                    general_messages.clone()
-                } else {
-                    Vec::new()
-                };
+                let messages = recent_messages.get(&chat.id).cloned().unwrap_or_default();
                 (chat, messages)
             })
             .collect();
@@ -559,6 +566,19 @@ impl ChatService {
         let is_member = ChatRoomMember::is_member(client, room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("user is not a member of room");
+        }
+        let room = ChatRoom::get(client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("room not found"))?;
+        if room.kind == "dm" {
+            let user_a = room
+                .dm_user_a
+                .ok_or_else(|| anyhow::anyhow!("dm room is missing first participant"))?;
+            let user_b = room
+                .dm_user_b
+                .ok_or_else(|| anyhow::anyhow!("dm room is missing second participant"))?;
+            ChatRoomMember::join(client, room_id, user_a).await?;
+            ChatRoomMember::join(client, room_id, user_b).await?;
         }
 
         let message = ChatMessageParams {
@@ -1172,6 +1192,48 @@ impl ChatService {
         let added = ChatRoom::add_all_users(client, room.id).await?;
         tracing::info!(slug = %slug, room_id = %room.id, users_added = added, "permanent room created");
         Ok(())
+    }
+
+    pub fn fill_room_task(&self, user_id: Uuid, slug: String) {
+        let service = self.clone();
+        let span = info_span!("chat.fill_room", user_id = %user_id, slug = %slug);
+        tokio::spawn(
+            async move {
+                match service.fill_room(&slug).await {
+                    Ok(users_added) => {
+                        let _ = service.evt_tx.send(ChatEvent::RoomFilled {
+                            user_id,
+                            slug,
+                            users_added,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::AdminFailed {
+                            user_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn fill_room(&self, slug: &str) -> Result<u64> {
+        let client = &self.db.get().await?;
+        if let Some(room) = ChatRoom::find_topic_room(client, "public", slug).await? {
+            ChatRoom::set_auto_join(client, room.id, true).await?;
+            let users_added = ChatRoom::add_all_users(client, room.id).await?;
+            tracing::info!(slug = %slug, room_id = %room.id, users_added, "room filled and auto-join enabled");
+            return Ok(users_added);
+        }
+        if ChatRoom::find_topic_room(client, "private", slug)
+            .await?
+            .is_some()
+        {
+            anyhow::bail!("Only public rooms can be filled");
+        }
+        anyhow::bail!("Public room #{slug} not found")
     }
 
     pub fn invite_user_to_room_task(&self, user_id: Uuid, room_id: Uuid, target_username: String) {

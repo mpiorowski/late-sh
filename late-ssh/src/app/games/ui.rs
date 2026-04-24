@@ -8,7 +8,14 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::common::theme;
+use crate::app::{
+    common::theme,
+    state::{
+        GAME_SELECTION_2048, GAME_SELECTION_BLACKJACK, GAME_SELECTION_MINESWEEPER,
+        GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
+        GAME_SELECTION_TETRIS,
+    },
+};
 use late_core::models::leaderboard::{BadgeTier, LeaderboardData};
 
 // ── Shared game frame ──────────────────────────────────────────
@@ -173,7 +180,7 @@ pub struct GamesHubView<'a> {
 
 pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     if view.is_playing_game {
-        if view.game_selection == 0 {
+        if view.game_selection == GAME_SELECTION_2048 {
             super::twenty_forty_eight::ui::draw_game(
                 frame,
                 area,
@@ -181,16 +188,16 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
                 view.show_sidebar,
             );
             return;
-        } else if view.game_selection == 1 {
+        } else if view.game_selection == GAME_SELECTION_TETRIS {
             super::tetris::ui::draw_game(frame, area, view.tetris_state, view.show_sidebar);
             return;
-        } else if view.game_selection == 2 {
+        } else if view.game_selection == GAME_SELECTION_SUDOKU {
             super::sudoku::ui::draw_game(frame, area, view.sudoku_state, view.show_sidebar);
             return;
-        } else if view.game_selection == 3 {
+        } else if view.game_selection == GAME_SELECTION_NONOGRAMS {
             super::nonogram::ui::draw_game(frame, area, view.nonogram_state, view.show_sidebar);
             return;
-        } else if view.game_selection == 4 {
+        } else if view.game_selection == GAME_SELECTION_MINESWEEPER {
             super::minesweeper::ui::draw_game(
                 frame,
                 area,
@@ -198,33 +205,25 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
                 view.show_sidebar,
             );
             return;
-        } else if view.game_selection == 5 {
+        } else if view.game_selection == GAME_SELECTION_SOLITAIRE {
             super::solitaire::ui::draw_game(frame, area, view.solitaire_state, view.show_sidebar);
             return;
-        } else if view.game_selection == 6 && view.is_admin {
+        } else if view.game_selection == GAME_SELECTION_BLACKJACK && view.is_admin {
             super::blackjack::ui::draw_game(frame, area, view.blackjack_state, view.show_sidebar);
             return;
         }
     }
 
-    let block = Block::default()
-        .title(" The Arcade ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 10 || inner.width < 50 {
+    if area.height < 10 || area.width < 50 {
         frame.render_widget(
             Paragraph::new("Terminal too small for The Arcade").alignment(Alignment::Center),
-            inner,
+            area,
         );
         return;
     }
 
     // Two-column layout: game list (left) + leaderboard (right)
-    let (content_area, sidebar_area) = games_sidebar_layout(inner, view.show_sidebar);
+    let (content_area, sidebar_area) = games_sidebar_layout(area, view.show_sidebar);
 
     let show_header = content_area.height >= 25;
     let layout = if show_header {
@@ -260,7 +259,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
 
 fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
     let (art, subtitle, subtitle_indent) = match selection {
-        0 => (
+        GAME_SELECTION_2048 => (
             vec![
                 r#"     ██████╗  ██████╗ ██╗  ██╗ █████╗ "#,
                 r#"     ╚════██╗██╔═████╗██║  ██║██╔══██╗"#,
@@ -272,7 +271,7 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Slide, merge, and chase the warmest tile on the board.",
             "     ",
         ),
-        1 => (
+        GAME_SELECTION_TETRIS => (
             vec![
                 r#"     ████████╗███████╗████████╗██████╗ ██╗███████╗"#,
                 r#"     ╚══██╔══╝██╔════╝╚══██╔══╝██╔══██╗██║██╔════╝"#,
@@ -284,7 +283,7 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Endless falling blocks. Speed rises as you survive.",
             "     ",
         ),
-        2 => (
+        GAME_SELECTION_SUDOKU => (
             vec![
                 r#"     ███████╗██╗   ██╗██████╗  ██████╗ ██╗  ██╗██╗   ██╗"#,
                 r#"     ██╔════╝██║   ██║██╔══██╗██╔═══██╗██║ ██╔╝██║   ██║"#,
@@ -296,7 +295,7 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Classic newspaper puzzle, rebuilt for the terminal.",
             "     ",
         ),
-        3 => (
+        GAME_SELECTION_NONOGRAMS => (
             vec![
                 r#"     ███╗   ██╗ ██████╗ ███╗   ██╗ ██████╗  ██████╗ ██████╗  █████╗ ███╗   ███╗███████╗"#,
                 r#"     ████╗  ██║██╔═══██╗████╗  ██║██╔═══██╗██╔════╝ ██╔══██╗██╔══██╗████╗ ████║██╔════╝"#,
@@ -308,7 +307,7 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Pixel puzzles painted by logic, one clue at a time.",
             "     ",
         ),
-        4 => (
+        GAME_SELECTION_MINESWEEPER => (
             vec![
                 r#"     ███╗   ███╗██╗███╗   ██╗███████╗███████╗"#,
                 r#"     ████╗ ████║██║████╗  ██║██╔════╝██╔════╝"#,
@@ -320,7 +319,7 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Flag mines, clear the field. Three lives, no guessing around.",
             "     ",
         ),
-        5 => (
+        GAME_SELECTION_SOLITAIRE => (
             vec![
                 r#"     ███████╗ ██████╗ ██╗     ██╗████████╗ █████╗ ██╗██████╗ ███████╗"#,
                 r#"     ██╔════╝██╔═══██╗██║     ██║╚══██╔══╝██╔══██╗██║██╔══██╗██╔════╝"#,
@@ -332,7 +331,7 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Classic Klondike, dealt fresh every day.",
             "     ",
         ),
-        6 => (
+        GAME_SELECTION_BLACKJACK => (
             vec![
                 r#"     ██████╗ ██╗      █████╗  ██████╗██╗  ██╗     ██╗ █████╗  ██████╗██╗  ██╗"#,
                 r#"     ██╔══██╗██║     ██╔══██╗██╔════╝██║ ██╔╝     ██║██╔══██╗██╔════╝██║ ██╔╝"#,
@@ -378,90 +377,51 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
 }
 
 fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
-    let mut lines = Vec::new();
+    let mut lines: Vec<Line<'static>> = Vec::new();
     let selection = view.game_selection;
     let mut selected_line: usize = 0;
 
-    // ── High Score Games ──
-    lines.push(Line::from(Span::styled(
-        "─── High Score Games ───",
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    )));
+    push_game_section(&mut lines, "─── High Score Games ───");
     lines.push(Line::from(""));
 
-    for (idx, name, desc, available, status) in [
+    for (idx, name, desc, status) in [
         (
-            0,
+            GAME_SELECTION_2048,
             "2048",
             "Slide, merge, and chase the warmest tile.",
-            true,
-            Some(format!(
+            format!(
                 "Best {}",
                 view.twenty_forty_eight_state
                     .best_score
                     .max(view.twenty_forty_eight_state.score)
-            )),
+            ),
         ),
         (
-            1,
+            GAME_SELECTION_TETRIS,
             "Tetris",
             "Endless falling blocks. Speed rises as you survive.",
-            true,
-            Some(format!("Best {}", view.tetris_state.best_score)),
+            format!("Best {}", view.tetris_state.best_score),
         ),
     ] {
-        let is_selected = idx == selection;
-        if is_selected {
-            selected_line = lines.len();
-        }
-
-        let marker = if is_selected { "> " } else { "  " };
-        let style = if is_selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD)
-        } else if available {
-            Style::default().fg(theme::TEXT())
-        } else {
-            Style::default().fg(theme::TEXT_MUTED())
-        };
-
-        let mut title_line = vec![
-            Span::styled(marker, style),
-            Span::styled(format!("[ {} ]", name), style),
-        ];
-
-        let padding_len = 16_usize.saturating_sub(name.len() + 4);
-        title_line.push(Span::raw(" ".repeat(padding_len)));
-
-        if available {
-            if let Some(status) = status {
-                title_line.push(Span::styled(status, Style::default().fg(theme::SUCCESS())));
-            }
-        } else {
-            title_line.push(Span::styled(
-                "Coming Soon",
-                Style::default().fg(theme::TEXT_DIM()),
-            ));
-        }
-
-        lines.push(Line::from(title_line));
-        lines.push(Line::from(vec![
-            Span::raw("      "),
-            Span::styled(desc, Style::default().fg(theme::TEXT_DIM())),
-        ]));
-        lines.push(Line::from(""));
+        draw_game_entry(
+            &mut lines,
+            &mut selected_line,
+            selection,
+            GameEntry {
+                idx,
+                name,
+                descriptions: &[desc],
+                selected_style: Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+                normal_style: Style::default().fg(theme::TEXT()),
+                description_style: Style::default().fg(theme::TEXT_DIM()),
+                status: Some((status, Style::default().fg(theme::SUCCESS()))),
+            },
+        );
     }
 
-    // ── Daily Games ──
-    lines.push(Line::from(Span::styled(
-        "─── Daily Games ───",
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    )));
+    push_game_section(&mut lines, "─── Daily Games ───");
     lines.push(Line::from(""));
 
     lines.push(Line::from(vec![
@@ -475,7 +435,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
 
     for (idx, name, desc, available, status) in [
         (
-            2,
+            GAME_SELECTION_SUDOKU,
             "Sudoku",
             "Classic newspaper puzzle, rebuilt for the terminal.",
             true,
@@ -489,7 +449,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             },
         ),
         (
-            3,
+            GAME_SELECTION_NONOGRAMS,
             "Nonograms",
             "Pixel puzzles painted by logic, one clue at a time.",
             view.nonogram_state.has_puzzles(),
@@ -506,7 +466,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             },
         ),
         (
-            4,
+            GAME_SELECTION_MINESWEEPER,
             "Minesweeper",
             "Flag mines, clear the field. Three lives.",
             true,
@@ -520,7 +480,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             },
         ),
         (
-            5,
+            GAME_SELECTION_SOLITAIRE,
             "Solitaire",
             "Klondike with daily and personal deals over SSH.",
             true,
@@ -534,165 +494,101 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             },
         ),
     ] {
-        let is_selected = idx == selection;
-        if is_selected {
-            selected_line = lines.len();
-        }
-
-        let marker = if is_selected { "> " } else { "  " };
-        let style = if is_selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD)
-        } else if available {
+        let title_style = Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD);
+        let normal_style = if available {
             Style::default().fg(theme::TEXT())
         } else {
             Style::default().fg(theme::TEXT_MUTED())
         };
-
-        let mut title_line = vec![
-            Span::styled(marker, style),
-            Span::styled(format!("[ {} ]", name), style),
-        ];
-
-        let padding_len = 16_usize.saturating_sub(name.len() + 4);
-        title_line.push(Span::raw(" ".repeat(padding_len)));
-
-        if available {
-            title_line.push(Span::styled(status, Style::default().fg(theme::SUCCESS())));
+        let desc_style = if available {
+            Style::default().fg(theme::TEXT_DIM())
         } else {
-            title_line.push(Span::styled(
-                "Coming Soon",
-                Style::default().fg(theme::TEXT_DIM()),
-            ));
-        }
+            Style::default().fg(theme::TEXT_MUTED())
+        };
+        let status_style = if available {
+            Style::default().fg(theme::SUCCESS())
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        let status = if available {
+            status
+        } else {
+            "Coming Soon".to_string()
+        };
 
-        lines.push(Line::from(title_line));
-        lines.push(Line::from(vec![
-            Span::raw("      "),
-            Span::styled(desc, Style::default().fg(theme::TEXT_DIM())),
-        ]));
-        lines.push(Line::from(""));
+        draw_game_entry(
+            &mut lines,
+            &mut selected_line,
+            selection,
+            GameEntry {
+                idx,
+                name,
+                descriptions: &[desc],
+                selected_style: title_style,
+                normal_style,
+                description_style: desc_style,
+                status: Some((status, status_style)),
+            },
+        );
     }
 
-    // ── Multiplayer ──
-    lines.push(Line::from(Span::styled(
-        "─── Multiplayer ───",
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    )));
+    push_game_section(&mut lines, "─── Multiplayer ───");
     lines.push(Line::from(""));
 
-    for (idx, name, desc, available, status) in [
-        (
-            6,
-            "Blackjack",
-            "Hit or stand against the house. Single-player chips table.",
-            view.is_admin,
-            if view.is_admin {
-                Some(format!("Balance {}", view.blackjack_state.balance))
-            } else {
-                None
+    if view.is_admin {
+        draw_game_entry(
+            &mut lines,
+            &mut selected_line,
+            selection,
+            GameEntry {
+                idx: GAME_SELECTION_BLACKJACK,
+                name: "Blackjack",
+                descriptions: &["Hit or stand against the house. Single-player chips table."],
+                selected_style: Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+                normal_style: Style::default().fg(theme::TEXT()),
+                description_style: Style::default().fg(theme::TEXT_DIM()),
+                status: Some((
+                    format!("Balance {}", view.blackjack_state.balance),
+                    Style::default().fg(theme::SUCCESS()),
+                )),
             },
-        ),
+        );
+    } else {
+        draw_game_entry(
+            &mut lines,
+            &mut selected_line,
+            selection,
+            GameEntry {
+                idx: GAME_SELECTION_BLACKJACK,
+                name: "Blackjack",
+                descriptions: &["Hit or stand against the house. Single-player chips table."],
+                selected_style: Style::default().fg(theme::TEXT_MUTED()),
+                normal_style: Style::default().fg(theme::TEXT_MUTED()),
+                description_style: Style::default().fg(theme::TEXT_MUTED()),
+                status: Some((
+                    "Admin Only".to_string(),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )),
+            },
+        );
+    }
+
+    for (name, desc) in [
+        ("Texas Hold'em", "The ultimate late-night poker table."),
         (
-            7,
-            "Texas Hold'em",
-            "The ultimate late-night poker table.",
-            false,
-            None,
-        ),
-        (
-            8,
             "Bridge",
             "Classic trick-taking for four. Deep strategy, cozy pace.",
-            false,
-            None,
         ),
         (
-            9,
             "Thousand",
             "Polish card classic. Bid, meld, and outsmart your rivals.",
-            false,
-            None,
-        ),
-        (
-            10,
-            "Chess",
-            "Async correspondence chess. Move at your own pace.",
-            false,
-            None,
-        ),
-        (
-            11,
-            "Battleship",
-            "Fire a shot, check back tomorrow.",
-            false,
-            None,
-        ),
-        (
-            12,
-            "Tron",
-            "Real-time lightbike arena. Last one standing wins.",
-            false,
-            None,
         ),
     ] {
-        if available {
-            let is_selected = idx == selection;
-            if is_selected {
-                selected_line = lines.len();
-            }
-            let marker = if is_selected { "> " } else { "  " };
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let mut title_line = vec![
-                Span::styled(marker, style),
-                Span::styled(format!("[ {} ]", name), style),
-            ];
-            let padding_len = 16_usize.saturating_sub(name.len() + 4);
-            title_line.push(Span::raw(" ".repeat(padding_len)));
-            if let Some(status) = status {
-                title_line.push(Span::styled(status, Style::default().fg(theme::SUCCESS())));
-            }
-            lines.push(Line::from(title_line));
-            lines.push(Line::from(vec![
-                Span::raw("      "),
-                Span::styled(desc, Style::default().fg(theme::TEXT_DIM())),
-            ]));
-            lines.push(Line::from(""));
-        } else if idx == 6 {
-            let is_selected = idx == selection;
-            if is_selected {
-                selected_line = lines.len();
-            }
-            let padding_len = 16_usize.saturating_sub(name.len() + 4);
-            lines.push(Line::from(vec![
-                Span::styled(
-                    if is_selected { "> " } else { "  " },
-                    Style::default().fg(theme::TEXT_MUTED()),
-                ),
-                Span::styled(
-                    format!("[ {} ]", name),
-                    Style::default().fg(theme::TEXT_MUTED()),
-                ),
-                Span::raw(" ".repeat(padding_len)),
-                Span::styled("Admin Only", Style::default().fg(theme::TEXT_DIM())),
-            ]));
-            lines.push(Line::from(vec![
-                Span::raw("      "),
-                Span::styled(desc, Style::default().fg(theme::TEXT_MUTED())),
-            ]));
-            lines.push(Line::from(""));
-        } else {
-            draw_coming_soon_entry(&mut lines, name, desc);
-        }
+        draw_coming_soon_entry(&mut lines, name, desc);
     }
 
     // Scroll so the selected game stays at the vertical center of the viewport.
@@ -720,6 +616,61 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         .split(area);
 
     frame.render_widget(paragraph, layout[1]);
+}
+
+fn push_game_section(lines: &mut Vec<Line<'static>>, title: &str) {
+    lines.push(Line::from(Span::styled(
+        title.to_string(),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    )));
+}
+
+struct GameEntry<'a> {
+    idx: usize,
+    name: &'a str,
+    descriptions: &'a [&'a str],
+    selected_style: Style,
+    normal_style: Style,
+    description_style: Style,
+    status: Option<(String, Style)>,
+}
+
+fn draw_game_entry(
+    lines: &mut Vec<Line<'static>>,
+    selected_line: &mut usize,
+    selection: usize,
+    entry: GameEntry<'_>,
+) {
+    let is_selected = entry.idx == selection;
+    if is_selected {
+        *selected_line = lines.len();
+    }
+
+    let title_style = if is_selected {
+        entry.selected_style
+    } else {
+        entry.normal_style
+    };
+    let mut title_line = vec![
+        Span::styled(if is_selected { "> " } else { "  " }, title_style),
+        Span::styled(format!("[ {} ]", entry.name), title_style),
+    ];
+    let padding_len = 16_usize.saturating_sub(entry.name.len() + 4);
+    title_line.push(Span::raw(" ".repeat(padding_len)));
+    if let Some((status, style)) = entry.status {
+        title_line.push(Span::styled(status, style));
+    }
+    lines.push(Line::from(title_line));
+
+    for description in entry.descriptions {
+        lines.push(Line::from(vec![
+            Span::raw("      "),
+            Span::styled((*description).to_string(), entry.description_style),
+        ]));
+    }
+    lines.push(Line::from(""));
 }
 
 fn draw_coming_soon_entry<'a>(lines: &mut Vec<Line<'a>>, name: &'a str, desc: &'a str) {

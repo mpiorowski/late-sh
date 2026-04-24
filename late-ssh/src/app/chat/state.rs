@@ -7,14 +7,13 @@ use late_core::{
         chat_message_reaction::ChatMessageReactionSummary, chat_room::ChatRoom,
     },
 };
-use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
 
-use crate::app::common::{primitives::Banner, theme};
+use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
 use crate::state::{ActiveUser, ActiveUsers};
 
@@ -70,7 +69,7 @@ pub struct ChatState {
     overlay: Option<Overlay>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
-    primed_room_ids: HashSet<Uuid>,
+    visible_room_id: Option<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
     pub(crate) selected_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
@@ -105,6 +104,7 @@ pub struct ChatState {
     pub(crate) pending_notifications: Vec<PendingNotification>,
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
+    requested_quit: bool,
 }
 
 pub(crate) struct PendingNotification {
@@ -148,7 +148,7 @@ impl ChatState {
             overlay: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
-            primed_room_ids: HashSet::new(),
+            visible_room_id: None,
             room_tx,
             selected_room_id: None,
             room_jump_active: false,
@@ -176,11 +176,17 @@ impl ChatState {
             pending_notifications: Vec::new(),
             requested_help_topic: None,
             requested_settings_modal: false,
+            requested_quit: false,
         }
     }
 
     pub(crate) fn composer(&self) -> &TextArea<'static> {
         &self.composer
+    }
+
+    pub(crate) fn refresh_composer_theme(&mut self) {
+        composer::apply_themed_textarea_style(&mut self.composer, self.composing);
+        self.news.refresh_composer_theme();
     }
 
     pub fn is_composing(&self) -> bool {
@@ -200,7 +206,7 @@ impl ChatState {
         self.selected_message_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
-        set_composer_cursor_visible(&mut self.composer, true);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
     }
 
     pub fn request_list(&self) {
@@ -224,31 +230,26 @@ impl ChatState {
         self.selected_room_id = Some(self.rooms[0].0.id);
     }
 
-    pub fn mark_selected_room_read(&mut self) {
-        let Some(room_id) = self.selected_room_id else {
-            return;
-        };
-
+    pub fn mark_room_read(&mut self, room_id: Uuid) {
         self.pending_read_rooms.insert(room_id);
         self.unread_counts.insert(room_id, 0);
         self.service.mark_room_read_task(self.user_id, room_id);
     }
 
-    /// Warm a room's history exactly once per session when some other UI
-    /// surface (the dashboard card) wants to render it without making it
-    /// the chat page's selected room.
-    pub fn prime_room_if_empty(&mut self, room_id: Uuid) {
-        let Some((_, messages)) = self.rooms.iter().find(|(room, _)| room.id == room_id) else {
+    pub fn mark_selected_room_read(&mut self) {
+        let Some(room_id) = self.selected_room_id else {
             return;
         };
-        if !messages.is_empty() {
-            self.primed_room_ids.insert(room_id);
-            return;
-        }
-        if !self.primed_room_ids.insert(room_id) {
-            return;
-        }
-        self.service.list_chats_task(self.user_id, Some(room_id));
+
+        self.mark_room_read(room_id);
+    }
+
+    pub fn visible_room_id(&self) -> Option<Uuid> {
+        self.visible_room_id
+    }
+
+    pub fn set_visible_room_id(&mut self, room_id: Option<Uuid>) {
+        self.visible_room_id = room_id;
     }
 
     /// Returns visible messages for the given room.
@@ -284,6 +285,10 @@ impl ChatState {
 
     pub fn take_requested_settings_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_settings_modal)
+    }
+
+    pub fn take_requested_quit(&mut self) -> bool {
+        std::mem::take(&mut self.requested_quit)
     }
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
@@ -359,7 +364,7 @@ impl ChatState {
         self.composing = true;
         self.composer_room_id = Some(room_id);
         self.edited_message_id = None;
-        set_composer_cursor_visible(&mut self.composer, true);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
         None
     }
 
@@ -391,7 +396,7 @@ impl ChatState {
         self.composer.insert_str(body);
         self.composing = true;
         self.composer_room_id = Some(room_id);
-        set_composer_cursor_visible(&mut self.composer, true);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
         None
     }
 
@@ -463,6 +468,10 @@ impl ChatState {
             .iter()
             .find(|(room, _)| room.id == room_id)
             .and_then(|(_, msgs)| msgs.iter().find(|m| m.id == message_id))
+    }
+
+    fn room_slug(&self, room_id: Uuid) -> Option<String> {
+        room_slug_for(&self.rooms, room_id)
     }
 
     fn selected_room_slug(&self) -> Option<String> {
@@ -595,7 +604,7 @@ impl ChatState {
         )
     }
 
-    fn select_room_slot(&mut self, slot: RoomSlot) -> bool {
+    pub(crate) fn select_room_slot(&mut self, slot: RoomSlot) -> bool {
         self.selected_message_id = None;
         self.reaction_leader_active = false;
         self.highlighted_message_id = None;
@@ -653,7 +662,8 @@ impl ChatState {
         self.reply_target = None;
         self.edited_message_id = None;
         self.composer_room_id = Some(next_room_id);
-        self.mark_selected_room_read();
+        self.visible_room_id = Some(next_room_id);
+        self.mark_room_read(next_room_id);
         self.request_list();
         true
     }
@@ -708,7 +718,7 @@ impl ChatState {
         self.composer_room_id = None;
         self.reaction_leader_active = false;
         self.reply_target = None;
-        set_composer_cursor_visible(&mut self.composer, false);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, false);
     }
 
     pub fn reset_composer(&mut self) {
@@ -734,7 +744,7 @@ impl ChatState {
 
     fn clear_composer_after_send(&mut self) {
         self.composer = new_chat_textarea();
-        set_composer_cursor_visible(&mut self.composer, self.composing);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, self.composing);
         self.room_jump_active = false;
         self.reaction_leader_active = false;
         self.reply_target = None;
@@ -806,6 +816,12 @@ impl ChatState {
         if body.trim() == "/settings" {
             self.clear_composer_after_submit();
             self.requested_settings_modal = true;
+            return None;
+        }
+
+        if body.trim() == "/exit" {
+            self.clear_composer_after_submit();
+            self.requested_quit = true;
             return None;
         }
 
@@ -921,6 +937,20 @@ impl ChatState {
             return Some(Banner::success(&format!("Deleting #{slug}...")));
         }
 
+        if let Some(slug) = parse_fill_room_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("Admin only: /fill-room"));
+            }
+            self.service.fill_room_task(self.user_id, slug.to_string());
+            return Some(Banner::success(&format!("Filling #{slug}...")));
+        }
+
+        if let Some(command) = unknown_slash_command(&body) {
+            self.clear_composer_after_submit();
+            return Some(Banner::error(&format!("Unknown command: {command}")));
+        }
+
         if let Some(room_id) = self.composer_room_id
             && !body.is_empty()
         {
@@ -942,7 +972,7 @@ impl ChatState {
                 self.service.send_message_task(
                     self.user_id,
                     room_id,
-                    self.selected_room_slug(),
+                    self.room_slug(room_id),
                     body,
                     request_id,
                     self.is_admin,
@@ -961,7 +991,7 @@ impl ChatState {
     pub fn composer_clear(&mut self) {
         let composing = self.composing;
         self.composer = new_chat_textarea();
-        set_composer_cursor_visible(&mut self.composer, composing);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
     pub fn composer_backspace(&mut self) {
@@ -1155,7 +1185,7 @@ impl ChatState {
         let composing = self.composing;
         self.composer = new_chat_textarea();
         self.composer.insert_str(next);
-        set_composer_cursor_visible(&mut self.composer, composing);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
         self.mention_ac = MentionAutocomplete::default();
     }
 
@@ -1232,6 +1262,14 @@ impl ChatState {
                         && !targets.contains(&self.user_id)
                     {
                         continue;
+                    }
+                    if is_targeted
+                        && !self
+                            .rooms
+                            .iter()
+                            .any(|(room, _)| room.id == message.room_id)
+                    {
+                        self.request_list();
                     }
                     // Desktop notification queueing. target_user_ids is Some for
                     // DM/private rooms, None for public rooms. Don't notify on
@@ -1352,6 +1390,16 @@ impl ChatState {
                 ChatEvent::PermanentRoomDeleted { user_id, slug } if self.user_id == user_id => {
                     self.request_list();
                     banner = Some(Banner::success(&format!("Deleted permanent #{slug}")));
+                }
+                ChatEvent::RoomFilled {
+                    user_id,
+                    slug,
+                    users_added,
+                } if self.user_id == user_id => {
+                    self.request_list();
+                    banner = Some(Banner::success(&format!(
+                        "Filled #{slug} ({users_added} users added)"
+                    )));
                 }
                 ChatEvent::AdminFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
@@ -1476,7 +1524,7 @@ impl ChatState {
             return;
         }
 
-        let is_viewing_room = Some(message.room_id) == self.selected_room_id;
+        let is_viewing_room = Some(message.room_id) == self.visible_room_id;
 
         let Some((_, messages)) = self
             .rooms
@@ -1681,6 +1729,37 @@ fn parse_delete_room_command(input: &str) -> Option<&str> {
     Some(slug)
 }
 
+/// Parse `/fill-room <slug>` from the composer text (admin only).
+fn parse_fill_room_command(input: &str) -> Option<&str> {
+    let rest = input.strip_prefix("/fill-room ")?.trim_start();
+    let slug = rest.strip_prefix('#').unwrap_or(rest).trim();
+    if slug.is_empty() {
+        return None;
+    }
+    Some(slug)
+}
+
+fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Option<String> {
+    rooms
+        .iter()
+        .find(|(room, _)| room.id == room_id)
+        .and_then(|(room, _)| room.slug.clone())
+}
+
+fn unknown_slash_command(input: &str) -> Option<&str> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed.contains('\n') || !trimmed.starts_with('/') {
+        return None;
+    }
+
+    let command = trimmed.split_whitespace().next()?;
+    if command.len() <= 1 || command == "//" {
+        return None;
+    }
+
+    Some(command)
+}
+
 fn online_username_set(active_users: Option<&ActiveUsers>) -> HashSet<String> {
     let Some(active_users) = active_users else {
         return HashSet::new();
@@ -1846,10 +1925,12 @@ fn reply_preview_text(body: &str) -> String {
             (!trimmed.is_empty()).then_some(trimmed)
         })
         .unwrap_or("");
-    let preview = first_content_line
-        .strip_prefix("> ")
-        .unwrap_or(first_content_line)
-        .trim();
+    let preview = strip_markdown_preview_markers(
+        first_content_line
+            .strip_prefix("> ")
+            .unwrap_or(first_content_line)
+            .trim(),
+    );
     let preview: String = preview.chars().take(48).collect();
     if preview.chars().count() == 48 {
         format!("{}...", preview.trim_end())
@@ -1859,22 +1940,7 @@ fn reply_preview_text(body: &str) -> String {
 }
 
 pub(crate) fn new_chat_textarea() -> TextArea<'static> {
-    let mut ta = TextArea::default();
-    ta.set_placeholder_text("Type a message...");
-    ta.set_placeholder_style(Style::default().fg(theme::TEXT_DIM()));
-    ta.set_cursor_line_style(Style::default());
-    ta.set_cursor_style(Style::default());
-    ta.set_wrap_mode(WrapMode::Word);
-    ta
-}
-
-fn set_composer_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
-    let style = if visible {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default()
-    };
-    ta.set_cursor_style(style);
+    composer::new_themed_textarea("Type a message...", WrapMode::Word, false)
 }
 
 fn news_reply_preview_text(body: &str) -> Option<String> {
@@ -1898,9 +1964,73 @@ fn news_reply_preview_text(body: &str) -> Option<String> {
         preview
     })
 }
+
+fn strip_markdown_preview_markers(text: &str) -> String {
+    let mut text = text.trim();
+
+    if let Some(rest) = text.strip_prefix("> ") {
+        text = rest.trim();
+    }
+    if let Some(rest) = text.strip_prefix("- ") {
+        text = rest.trim();
+    }
+
+    let heading_level = text.chars().take_while(|ch| *ch == '#').count();
+    if (1..=3).contains(&heading_level)
+        && let Some(rest) = text[heading_level..].strip_prefix(' ')
+    {
+        text = rest.trim();
+    }
+
+    let digits = text.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits > 0
+        && let Some(rest) = text[digits..].strip_prefix(". ")
+    {
+        text = rest.trim();
+    }
+
+    let mut out = String::new();
+    let mut idx = 0;
+    while idx < text.len() {
+        let rest = &text[idx..];
+
+        if rest.starts_with('[')
+            && let Some(bracket_pos) = rest[1..].find(']')
+            && bracket_pos > 0
+            && let Some(paren_inner) = rest[1 + bracket_pos + 1..].strip_prefix('(')
+            && let Some(close_paren) = paren_inner.find(')')
+            && close_paren > 0
+        {
+            out.push_str(&rest[1..1 + bracket_pos]);
+            idx += 1 + bracket_pos + 2 + close_paren + 1;
+            continue;
+        }
+
+        let mut stripped_marker = false;
+        for marker in ["***", "**", "~~", "`", "*"] {
+            if rest.starts_with(marker) {
+                idx += marker.len();
+                stripped_marker = true;
+                break;
+            }
+        }
+        if stripped_marker {
+            continue;
+        }
+
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        out.push(ch);
+        idx += ch.len_utf8();
+    }
+
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::common::theme;
 
     fn names(matches: &[MentionMatch]) -> Vec<&str> {
         matches.iter().map(|m| m.name.as_str()).collect()
@@ -2022,6 +2152,12 @@ mod tests {
     }
 
     #[test]
+    fn reply_preview_text_strips_markdown_markers() {
+        let preview = reply_preview_text("**bold** `@graybeard` [docs](https://late.sh)");
+        assert_eq!(preview, "bold @graybeard docs");
+    }
+
+    #[test]
     fn news_marker_detection_matches_announcement_messages() {
         assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
         assert!(news_reply_preview_text("regular chat message").is_none());
@@ -2054,6 +2190,50 @@ mod tests {
     #[test]
     fn parse_dm_trims_whitespace() {
         assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
+    }
+
+    #[test]
+    fn new_chat_textarea_uses_theme_text_color() {
+        let textarea = new_chat_textarea();
+        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().bg, None);
+    }
+
+    #[test]
+    fn composer_cursor_visible_uses_explicit_theme_colors() {
+        let mut textarea = new_chat_textarea();
+        composer::set_themed_textarea_cursor_visible(&mut textarea, true);
+        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
+        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
+    }
+
+    #[test]
+    fn composer_cursor_hidden_restores_plain_text_color() {
+        let mut textarea = new_chat_textarea();
+        composer::set_themed_textarea_cursor_visible(&mut textarea, true);
+        composer::set_themed_textarea_cursor_visible(&mut textarea, false);
+        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().bg, None);
+    }
+
+    #[test]
+    fn common_textarea_theme_refreshes_existing_chat_textarea_colors() {
+        theme::set_current_by_id("late");
+        let mut textarea = new_chat_textarea();
+        let late_text = textarea.style().fg;
+
+        theme::set_current_by_id("contrast");
+        composer::apply_themed_textarea_style(&mut textarea, true);
+
+        assert_ne!(textarea.style().fg, late_text);
+        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
+        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
+
+        theme::set_current_by_id("late");
     }
 
     #[test]
@@ -2100,6 +2280,55 @@ mod tests {
     fn adjacent_composer_room_returns_none_without_real_rooms() {
         let order = vec![RoomSlot::News, RoomSlot::Notifications, RoomSlot::Discover];
         assert_eq!(adjacent_composer_room(&order, None, 1), None);
+    }
+
+    #[test]
+    fn room_slug_for_uses_explicit_room_id() {
+        let general_id = Uuid::from_u128(11);
+        let announcements_id = Uuid::from_u128(12);
+        let rooms = vec![
+            (
+                ChatRoom {
+                    id: general_id,
+                    created: chrono::Utc::now(),
+                    updated: chrono::Utc::now(),
+                    kind: "general".to_string(),
+                    visibility: "public".to_string(),
+                    auto_join: true,
+                    permanent: true,
+                    slug: Some("general".to_string()),
+                    language_code: None,
+                    dm_user_a: None,
+                    dm_user_b: None,
+                },
+                vec![],
+            ),
+            (
+                ChatRoom {
+                    id: announcements_id,
+                    created: chrono::Utc::now(),
+                    updated: chrono::Utc::now(),
+                    kind: "topic".to_string(),
+                    visibility: "public".to_string(),
+                    auto_join: true,
+                    permanent: true,
+                    slug: Some("announcements".to_string()),
+                    language_code: None,
+                    dm_user_a: None,
+                    dm_user_b: None,
+                },
+                vec![],
+            ),
+        ];
+
+        assert_eq!(
+            room_slug_for(&rooms, general_id),
+            Some("general".to_string())
+        );
+        assert_eq!(
+            room_slug_for(&rooms, announcements_id),
+            Some("announcements".to_string())
+        );
     }
 
     #[test]
@@ -2246,6 +2475,47 @@ mod tests {
     #[test]
     fn parse_delete_room_not_command() {
         assert_eq!(parse_delete_room_command("hello"), None);
+    }
+
+    #[test]
+    fn parse_fill_room_with_hash() {
+        assert_eq!(
+            parse_fill_room_command("/fill-room #announcements"),
+            Some("announcements")
+        );
+    }
+
+    #[test]
+    fn parse_fill_room_without_hash() {
+        assert_eq!(
+            parse_fill_room_command("/fill-room announcements"),
+            Some("announcements")
+        );
+    }
+
+    #[test]
+    fn parse_fill_room_empty() {
+        assert_eq!(parse_fill_room_command("/fill-room "), None);
+        assert_eq!(parse_fill_room_command("/fill-room #"), None);
+    }
+
+    #[test]
+    fn parse_fill_room_not_command() {
+        assert_eq!(parse_fill_room_command("hello"), None);
+        assert_eq!(parse_fill_room_command("/fill-rooms foo"), None);
+    }
+
+    #[test]
+    fn unknown_slash_command_detects_typo() {
+        assert_eq!(unknown_slash_command("/lsit"), Some("/lsit"));
+        assert_eq!(unknown_slash_command("/lsit #general"), Some("/lsit"));
+    }
+
+    #[test]
+    fn unknown_slash_command_ignores_regular_messages_and_multiline_text() {
+        assert_eq!(unknown_slash_command("hello"), None);
+        assert_eq!(unknown_slash_command("// not a command"), None);
+        assert_eq!(unknown_slash_command("/bin/ls\nstill talking"), None);
     }
 
     #[test]

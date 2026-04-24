@@ -1151,6 +1151,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "dartboard-core"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13bd9ba2233fb309f1be774da820be06bcad0a9b77c533eef6838d40d46bee0c"
+dependencies = [
+ "serde",
+ "unicode-width",
+]
+
+[[package]]
+name = "dartboard-editor"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e8962b1d1da9d8d50063fff642a8a9588fd3acdb86bdb08f674c3071019fbde"
+dependencies = [
+ "dartboard-core",
+]
+
+[[package]]
+name = "dartboard-local"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "302c51e3953afdcda7f52ca13d03f91ef1591f41678a348818d043f256840869"
+dependencies = [
+ "dartboard-core",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "dartboard-tui"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "973bdd9a26d69b1a6c3e6ffcf63e8835d74aa661324a4ff0b5d5ff180eaa9946"
+dependencies = [
+ "dartboard-core",
+ "ratatui",
+ "unicode-width",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1473,7 +1513,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2571,6 +2611,10 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "crossterm",
+ "dartboard-core",
+ "dartboard-editor",
+ "dartboard-local",
+ "dartboard-tui",
  "emojis",
  "ipnet",
  "late-core",
@@ -2593,6 +2637,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "unicode-width",
+ "unicode_names2",
  "uuid",
  "vte",
 ]
@@ -2974,7 +3019,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4573,7 +4618,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4641,7 +4686,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6044,6 +6089,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
+name = "unicode_names2"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d189085656ca1203291e965444e7f6a2723fbdd1dd9f34f8482e79bafd8338a0"
+dependencies = [
+ "phf 0.11.3",
+ "unicode_names2_generator",
+]
+
+[[package]]
+name = "unicode_names2_generator"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1262662dc96937c71115228ce2e1d30f41db71a7a45d3459e98783ef94052214"
+dependencies = [
+ "phf_codegen",
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "universal-hash"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6425,7 +6490,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

@@ -2,6 +2,7 @@ use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::{ChatRoom, ChatRoomParams},
     chat_room_member::ChatRoomMember,
+    profile::{Profile, ProfileParams},
     user::User,
 };
 use late_ssh::app::chat::notifications::svc::NotificationService;
@@ -110,6 +111,94 @@ async fn emits_message_created_and_send_succeeded_when_sender_is_member() {
     }
     assert!(saw_created, "expected MessageCreated event");
     assert!(saw_success, "expected SendSucceeded event");
+}
+
+#[tokio::test]
+async fn dm_message_rejoins_recipient_who_left() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let sender = create_test_user(&test_db.db, "dm_reopen_sender").await;
+    let recipient = create_test_user(&test_db.db, "dm_reopen_recipient").await;
+    let room = ChatRoom::get_or_create_dm(&client, sender.id, recipient.id)
+        .await
+        .expect("dm room");
+    ChatRoomMember::join(&client, room.id, sender.id)
+        .await
+        .expect("join sender");
+    ChatRoomMember::join(&client, room.id, recipient.id)
+        .await
+        .expect("join recipient");
+    ChatRoomMember::leave(&client, room.id, recipient.id)
+        .await
+        .expect("recipient leaves");
+
+    assert!(
+        !ChatRoomMember::is_member(&client, room.id, recipient.id)
+            .await
+            .expect("recipient membership check"),
+        "recipient should start outside the DM"
+    );
+
+    let request_id = Uuid::now_v7();
+    service.send_message_task(
+        sender.id,
+        room.id,
+        room.slug.clone(),
+        "ping after leave".to_string(),
+        request_id,
+        false,
+    );
+
+    let first = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("first event timeout")
+        .expect("first event");
+    let second = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("second event timeout")
+        .expect("second event");
+
+    let mut saw_created = false;
+    let mut saw_success = false;
+    for event in [first, second] {
+        match event {
+            ChatEvent::MessageCreated {
+                message,
+                target_user_ids,
+            } => {
+                saw_created = true;
+                assert_eq!(message.room_id, room.id);
+                assert_eq!(message.user_id, sender.id);
+                let targets = target_user_ids.expect("dm message should be targeted");
+                assert!(targets.contains(&sender.id));
+                assert!(targets.contains(&recipient.id));
+            }
+            ChatEvent::SendSucceeded {
+                user_id,
+                request_id: got_request,
+            } => {
+                saw_success = true;
+                assert_eq!(user_id, sender.id);
+                assert_eq!(got_request, request_id);
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_created, "expected MessageCreated event");
+    assert!(saw_success, "expected SendSucceeded event");
+    assert!(
+        ChatRoomMember::is_member(&client, room.id, recipient.id)
+            .await
+            .expect("recipient membership check"),
+        "recipient should be rejoined when a DM arrives"
+    );
 }
 
 #[tokio::test]
@@ -401,6 +490,95 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
 }
 
 #[tokio::test]
+async fn publishes_snapshot_with_favorite_room_history() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut state_rx = service.subscribe_state();
+    let client = test_db.db.get().await.expect("db client");
+
+    let target_user = create_test_user(&test_db.db, "favorite_target").await;
+    let author_user = create_test_user(&test_db.db, "favorite_author").await;
+
+    let general_room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    let favorite_room = ChatRoom::get_or_create_public_room(&client, "favorites")
+        .await
+        .expect("favorite room");
+
+    ChatRoomMember::join(&client, general_room.id, target_user.id)
+        .await
+        .expect("join target general");
+    ChatRoomMember::join(&client, favorite_room.id, target_user.id)
+        .await
+        .expect("join target favorite");
+    ChatRoomMember::join(&client, general_room.id, author_user.id)
+        .await
+        .expect("join author general");
+    ChatRoomMember::join(&client, favorite_room.id, author_user.id)
+        .await
+        .expect("join author favorite");
+
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: favorite_room.id,
+            user_id: author_user.id,
+            body: "favorite backlog".to_string(),
+        },
+    )
+    .await
+    .expect("favorite message");
+
+    Profile::update(
+        &client,
+        target_user.id,
+        ProfileParams {
+            username: "favorite_target".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            notify_kinds: Vec::new(),
+            notify_bell: false,
+            notify_cooldown_mins: 0,
+            notify_format: None,
+            theme_id: Some("late".to_string()),
+            enable_background_color: false,
+            show_dashboard_header: true,
+            show_right_sidebar: true,
+            show_games_sidebar: true,
+            favorite_room_ids: vec![favorite_room.id],
+        },
+    )
+    .await
+    .expect("update favorites");
+
+    service.list_chats_task(target_user.id, Some(general_room.id));
+
+    timeout(Duration::from_secs(2), state_rx.changed())
+        .await
+        .expect("state timeout")
+        .expect("watch changed");
+    let snapshot = state_rx.borrow_and_update().clone();
+
+    let favorite_in_snapshot = snapshot
+        .chat_rooms
+        .iter()
+        .find(|(room, _)| room.id == favorite_room.id)
+        .expect("favorite room present");
+    assert!(
+        favorite_in_snapshot
+            .1
+            .iter()
+            .any(|message| message.body == "favorite backlog"),
+        "favorite room should preload its history in the snapshot"
+    );
+}
+
+#[tokio::test]
 async fn publishes_snapshot_with_persisted_ignored_user_ids() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
@@ -555,6 +733,111 @@ async fn join_public_room_task_only_adds_requesting_user() {
 
     assert!(
         ChatRoomMember::is_member(&client, room.id, target_user.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !ChatRoomMember::is_member(&client, room.id, untouched_user.id)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn fill_room_task_adds_all_users_to_public_room() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let admin = create_test_user(&test_db.db, "fill_public_admin").await;
+    let existing_member = create_test_user(&test_db.db, "fill_public_existing").await;
+    let untouched_user = create_test_user(&test_db.db, "fill_public_untouched").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "ops")
+        .await
+        .expect("create room");
+    assert!(!room.auto_join);
+
+    ChatRoomMember::join(&client, room.id, existing_member.id)
+        .await
+        .expect("join existing member");
+
+    service.fill_room_task(admin.id, "ops".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::RoomFilled {
+            user_id,
+            slug,
+            users_added,
+        } => {
+            assert_eq!(user_id, admin.id);
+            assert_eq!(slug, "ops");
+            assert_eq!(users_added, 2);
+        }
+        other => panic!("expected RoomFilled, got {other:?}"),
+    }
+
+    assert!(
+        ChatRoomMember::is_member(&client, room.id, admin.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        ChatRoomMember::is_member(&client, room.id, existing_member.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        ChatRoomMember::is_member(&client, room.id, untouched_user.id)
+            .await
+            .unwrap()
+    );
+    let refreshed_room = ChatRoom::get(&client, room.id)
+        .await
+        .expect("reload room")
+        .expect("room exists");
+    assert!(refreshed_room.auto_join);
+}
+
+#[tokio::test]
+async fn fill_room_task_rejects_private_room() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let admin = create_test_user(&test_db.db, "fill_private_admin").await;
+    let untouched_user = create_test_user(&test_db.db, "fill_private_untouched").await;
+    let room = ChatRoom::create_private_room(&client, "staff")
+        .await
+        .expect("create private room");
+
+    service.fill_room_task(admin.id, "staff".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::AdminFailed { user_id, message } => {
+            assert_eq!(user_id, admin.id);
+            assert_eq!(message, "Only public rooms can be filled");
+        }
+        other => panic!("expected AdminFailed, got {other:?}"),
+    }
+
+    assert!(
+        !ChatRoomMember::is_member(&client, room.id, admin.id)
             .await
             .unwrap()
     );

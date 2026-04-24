@@ -3,7 +3,8 @@
 mod helpers;
 
 use helpers::{
-    make_app, make_app_with_paired_client, new_test_db, wait_for_render_contains, wait_until,
+    make_app, make_app_with_paired_client, new_test_db, render_plain, wait_for_render_contains,
+    wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -233,4 +234,173 @@ async fn dashboard_lazy_primes_favorite_histories_without_opening_chat() {
 
     app.handle_input(b"]");
     wait_for_render_contains(&mut app, "beta backlog").await;
+}
+
+#[tokio::test]
+async fn dashboard_switching_to_favorite_clears_strip_unread_count() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "dashboard-unread-user-it").await;
+    let author = create_test_user(&test_db.db, "dashboard-unread-author-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    let alpha = ChatRoom::get_or_create_public_room(&client, "alpha-unread")
+        .await
+        .expect("create alpha room");
+    let beta = ChatRoom::get_or_create_public_room(&client, "beta-unread")
+        .await
+        .expect("create beta room");
+
+    for room in [general.id, alpha.id, beta.id] {
+        ChatRoomMember::join(&client, room, user.id)
+            .await
+            .expect("join viewer");
+        ChatRoomMember::join(&client, room, author.id)
+            .await
+            .expect("join author");
+    }
+
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: beta.id,
+            user_id: author.id,
+            body: "beta unread seed".to_string(),
+        },
+    )
+    .await
+    .expect("create beta message");
+
+    Profile::update(
+        &client,
+        user.id,
+        ProfileParams {
+            username: "dashboard-unread-user-it".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            notify_kinds: Vec::new(),
+            notify_bell: false,
+            notify_cooldown_mins: 0,
+            notify_format: None,
+            theme_id: Some("late".to_string()),
+            enable_background_color: false,
+            show_dashboard_header: true,
+            show_right_sidebar: true,
+            show_games_sidebar: true,
+            favorite_room_ids: vec![alpha.id, beta.id],
+        },
+    )
+    .await
+    .expect("update favorites");
+
+    let mut app = make_app(test_db.db.clone(), user.id, "dashboard-unread-flow-it");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut saw_unread = false;
+    while Instant::now() < deadline {
+        if render_plain(&mut app).contains("2:#beta-unread (1)") {
+            saw_unread = true;
+            break;
+        }
+        sleep(Duration::from_millis(30)).await;
+    }
+    assert!(
+        saw_unread,
+        "dashboard strip should show beta unread count before switching"
+    );
+
+    app.handle_input(b"]");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut cleared = false;
+    while Instant::now() < deadline {
+        let plain = render_plain(&mut app);
+        if plain.contains("2:#beta-unread") && !plain.contains("2:#beta-unread (1)") {
+            cleared = true;
+            break;
+        }
+        sleep(Duration::from_millis(30)).await;
+    }
+    assert!(cleared, "dashboard switch should clear beta unread count");
+}
+
+#[tokio::test]
+async fn dashboard_favorites_strip_is_mouse_clickable() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "dashboard-mouse-user-it").await;
+    let author = create_test_user(&test_db.db, "dashboard-mouse-author-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    let alpha = ChatRoom::get_or_create_public_room(&client, "alpha")
+        .await
+        .expect("create alpha room");
+    let beta = ChatRoom::get_or_create_public_room(&client, "beta")
+        .await
+        .expect("create beta room");
+
+    for room in [general.id, alpha.id, beta.id] {
+        ChatRoomMember::join(&client, room, user.id)
+            .await
+            .expect("join viewer");
+        ChatRoomMember::join(&client, room, author.id)
+            .await
+            .expect("join author");
+    }
+
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: alpha.id,
+            user_id: author.id,
+            body: "alpha click backlog".to_string(),
+        },
+    )
+    .await
+    .expect("create alpha message");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: beta.id,
+            user_id: author.id,
+            body: "beta click backlog".to_string(),
+        },
+    )
+    .await
+    .expect("create beta message");
+
+    Profile::update(
+        &client,
+        user.id,
+        ProfileParams {
+            username: "dashboard-mouse-user-it".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            notify_kinds: Vec::new(),
+            notify_bell: false,
+            notify_cooldown_mins: 0,
+            notify_format: None,
+            theme_id: Some("late".to_string()),
+            enable_background_color: false,
+            show_dashboard_header: true,
+            show_right_sidebar: true,
+            show_games_sidebar: true,
+            favorite_room_ids: vec![alpha.id, beta.id],
+        },
+    )
+    .await
+    .expect("update favorites");
+
+    let mut app = make_app(test_db.db.clone(), user.id, "dashboard-mouse-flow-it");
+
+    wait_for_render_contains(&mut app, "alpha click backlog").await;
+
+    let click = "\x1b[<0;16;7M";
+    app.handle_input(click.as_bytes());
+
+    wait_for_render_contains(&mut app, "beta click backlog").await;
 }

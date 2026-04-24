@@ -143,7 +143,7 @@ fn status_lines(state: &BonsaiState) -> Vec<Line<'static>> {
         .into_iter()
         .map(|spec| match spec {
             StatusLineSpec::DeadHint => Line::from(Span::styled(
-                "Press r to plant anew",
+                "Press w to plant anew",
                 Style::default().fg(theme::TEXT_FAINT()),
             ))
             .centered(),

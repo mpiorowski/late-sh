@@ -19,6 +19,9 @@ fn leader_reaction_kind(byte: u8) -> Option<i16> {
         b'3' => Some(3),
         b'4' => Some(4),
         b'5' => Some(5),
+        b'6' => Some(6),
+        b'7' => Some(7),
+        b'8' => Some(8),
         _ => None,
     }
 }
@@ -49,12 +52,7 @@ pub fn handle_compose_input(
             if let Some(b) = app.chat.submit_composer(false, from_dashboard) {
                 app.banner = Some(b);
             }
-            if let Some(topic) = app.chat.take_requested_help_topic() {
-                open_help_modal(app, topic);
-            }
-            if app.chat.take_requested_settings_modal() {
-                open_settings_modal(app);
-            }
+            handle_post_submit_requests(app);
         }
         0x15 => {
             // Readline ^U: kill from cursor to start of current line.
@@ -77,11 +75,15 @@ pub fn handle_compose_input(
         // text and cursor survive. Shadows ratatui-textarea's cursor-
         // down/up, which is rarely useful in a chat composer.
         0x0E if allow_room_switch => {
-            app.chat.switch_room_preserving_draft(1);
+            if app.chat.switch_room_preserving_draft(1) {
+                app.sync_visible_chat_room();
+            }
             app.chat.update_autocomplete();
         }
         0x10 if allow_room_switch => {
-            app.chat.switch_room_preserving_draft(-1);
+            if app.chat.switch_room_preserving_draft(-1) {
+                app.sync_visible_chat_room();
+            }
             app.chat.update_autocomplete();
         }
         b => {
@@ -111,6 +113,18 @@ fn open_settings_modal(app: &mut App) {
     app.show_settings = true;
 }
 
+pub(crate) fn handle_post_submit_requests(app: &mut App) {
+    if app.chat.take_requested_quit() {
+        crate::app::input::trigger_global_quit(app);
+    }
+    if let Some(topic) = app.chat.take_requested_help_topic() {
+        open_help_modal(app, topic);
+    }
+    if app.chat.take_requested_settings_modal() {
+        open_settings_modal(app);
+    }
+}
+
 pub fn handle_compose_char(app: &mut App, ch: char) {
     app.chat.composer_push(ch);
     app.chat.update_autocomplete();
@@ -138,7 +152,7 @@ pub fn handle_scroll_in_room(app: &mut App, room_id: Uuid, delta: isize) {
 fn switch_room(app: &mut App, delta: isize) {
     if app.chat.move_selection(delta) {
         app.chat.reset_composer();
-        app.chat.mark_selected_room_read();
+        app.sync_visible_chat_room();
         app.chat.request_list();
     }
 }
@@ -164,6 +178,7 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         app.chat.cancel_reaction_leader();
+        return true;
     }
 
     // `d` deletes and keeps the cursor on the adjacent message so you can
@@ -315,7 +330,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                 let changed = app.chat.handle_room_jump_key(byte);
                 if changed {
                     app.chat.reset_composer();
-                    app.chat.mark_selected_room_read();
+                    app.sync_visible_chat_room();
                     app.chat.request_list();
                 }
                 return true;
@@ -425,6 +440,9 @@ mod tests {
     fn leader_reaction_keys_are_plain_digits() {
         assert_eq!(leader_reaction_kind(b'1'), Some(1));
         assert_eq!(leader_reaction_kind(b'5'), Some(5));
+        assert_eq!(leader_reaction_kind(b'6'), Some(6));
+        assert_eq!(leader_reaction_kind(b'7'), Some(7));
+        assert_eq!(leader_reaction_kind(b'8'), Some(8));
         assert_eq!(leader_reaction_kind(b'!'), None);
     }
 }

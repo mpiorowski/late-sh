@@ -85,7 +85,7 @@ jobs:
           TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
           case "${{ matrix.target }}" in
             aarch64-linux-android)
-              linker="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
+              linker="$TOOLCHAIN/bin/aarch64-linux-android26-clang"
               echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
               echo "CC_aarch64_linux_android=$linker" >> "$GITHUB_ENV"
               echo "AR_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
@@ -94,7 +94,7 @@ jobs:
               ln -sf "$TOOLCHAIN/bin/llvm-ar" "$TOOLCHAIN/bin/aarch64-linux-android-ar"
               ;;
             x86_64-linux-android)
-              linker="$TOOLCHAIN/bin/x86_64-linux-android24-clang"
+              linker="$TOOLCHAIN/bin/x86_64-linux-android26-clang"
               echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
               echo "CC_x86_64_linux_android=$linker" >> "$GITHUB_ENV"
               echo "AR_x86_64_linux_android=$TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"

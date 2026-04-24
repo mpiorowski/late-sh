@@ -3,8 +3,8 @@
 mod helpers;
 
 use helpers::{
-    chat_compose_app, make_app, make_app_with_chat_service, new_test_db, render_plain,
-    wait_for_render_contains, wait_until,
+    assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
+    new_test_db, render_plain, wait_for_render_contains, wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -52,7 +52,52 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
 }
 
 #[tokio::test]
-async fn screen_number_keys_switch_between_dashboard_games_and_chat() {
+async fn q_opens_quit_confirm_and_escape_dismisses_it() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "quit-confirm-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "quit-confirm-flow-it");
+
+    app.handle_input(b"q");
+    wait_for_render_contains(&mut app, " Quit? ").await;
+    wait_for_render_contains(&mut app, "Clicked by mistake, right?").await;
+    wait_for_render_contains(&mut app, "bye, I'll be back").await;
+    wait_for_render_contains(&mut app, "yeah, my bad, stay").await;
+
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Clicked by mistake, right?"),
+        "expected quit confirm to dismiss after Esc; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn ctrl_c_does_not_quit_the_app() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-c-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-c-flow-it");
+
+    app.handle_input(b"\x03");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    assert!(
+        app.is_running(),
+        "expected Ctrl+C to no longer quit the app"
+    );
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" Dashboard "),
+        "expected app to remain on the dashboard after Ctrl+C; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Quit? "),
+        "expected Ctrl+C to stay inert rather than opening quit confirm; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn screen_number_keys_switch_between_dashboard_games_chat_and_artboard() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -69,6 +114,9 @@ async fn screen_number_keys_switch_between_dashboard_games_and_chat() {
 
     app.handle_input(b"3");
     wait_for_render_contains(&mut app, " The Arcade ").await;
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Dashboard ").await;
@@ -88,7 +136,7 @@ async fn shift_tab_cycles_screens_backwards() {
     let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Profile ").await;
+    wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " The Arcade ").await;
@@ -101,19 +149,159 @@ async fn shift_tab_cycles_screens_backwards() {
 }
 
 #[tokio::test]
-async fn active_game_blocks_screen_number_hotkeys() {
+async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "games-hotkey-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "games-hotkey-flow-it");
+    let user = create_test_user(&test_db.db, "artboard-view-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-view-flow-it");
 
-    app.handle_input(b"3");
-    wait_for_render_contains(&mut app, " The Arcade ").await;
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    wait_for_render_contains(&mut app, "Cursor     0,0").await;
 
-    app.handle_input(b"\n");
-    wait_for_render_contains(&mut app, " 2048 ").await;
+    app.handle_input(b"\x1b[C");
+    wait_for_render_contains(&mut app, "Cursor     1,0").await;
 
     app.handle_input(b"1");
-    wait_for_render_contains(&mut app, " 2048 ").await;
+    wait_for_render_contains(&mut app, " Dashboard ").await;
+}
+
+#[tokio::test]
+async fn artboard_view_mode_click_enters_active_mode_at_clicked_canvas_cell() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-click-enter-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-click-enter-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    wait_for_render_contains(&mut app, "Cursor     0,0").await;
+
+    app.handle_input(b"\x1b[<0;10;5M");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+    wait_for_render_contains(&mut app, "Cursor     8,3").await;
+}
+
+#[tokio::test]
+async fn active_artboard_blocks_screen_number_hotkeys_until_escape() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-active-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-active-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+
+    app.handle_input(b"1");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Mode       active"),
+        "expected active artboard mode to keep focus after numeric hotkeys; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Dashboard "),
+        "expected active artboard mode to block screen switching; frame={frame:?}"
+    );
+
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    app.handle_input(b"1");
+    wait_for_render_contains(&mut app, " Dashboard ").await;
+}
+
+#[tokio::test]
+async fn active_artboard_ctrl_c_copies_without_quitting() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-ctrl-c-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-ctrl-c-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+
+    app.handle_input(b"\x03");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Mode       active"),
+        "expected Ctrl+C to stay inside active artboard; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Quit? "),
+        "expected Ctrl+C to avoid the global quit flow; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn artboard_help_modal_tab_switches_help_tabs_instead_of_pages() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-help-tab-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-help-tab-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    app.handle_input(b"\x10");
+    wait_for_render_contains(&mut app, "Two modes").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, "Draw / erase").await;
+
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains(" Dashboard "),
+        "expected Artboard help Tab to stay on Artboard instead of switching page; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn artboard_view_mode_question_mark_opens_local_help() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-view-help-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-view-help-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Two modes").await;
+
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains(" Guide "),
+        "expected ? on Artboard view mode to open local help, not the global guide; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn active_artboard_question_mark_types_into_canvas_instead_of_opening_help() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-questionmark-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-questionmark-flow-it");
+
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    wait_for_render_contains(&mut app, "Cursor     0,0").await;
+
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Cursor     1,0").await;
+
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Mode       active"),
+        "expected ? to stay inside active artboard mode; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Guide "),
+        "expected ? in active artboard mode to avoid the global guide; frame={frame:?}"
+    );
 }
 
 #[tokio::test]
@@ -202,8 +390,8 @@ async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
     app.handle_input(b"\x7f");
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("│one │"),
-        "expected split Alt+Backspace to leave the composer in the explicit intermediate state `one `; frame={frame:?}"
+        frame.contains("│one │") || frame.contains("│one  │"),
+        "expected split Alt+Backspace to leave the composer in the intermediate `one ` state (allowing for the cursor cell to render as an extra blank); frame={frame:?}"
     );
     assert!(
         !frame.contains("two"),
@@ -216,8 +404,12 @@ async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
     app.handle_input(b"x\x7f!");
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("one!") && !frame.contains("x"),
-        "expected composer to keep accepting backspace and text after Alt+Backspace split from the intermediate `one ` state; frame={frame:?}"
+        (frame.contains("│one!│")
+            || frame.contains("│one !│")
+            || frame.contains("│one ! │")
+            || frame.contains("│one! │"))
+            && !frame.contains("x"),
+        "expected composer to keep accepting backspace and text after Alt+Backspace split, allowing for cursor-cell spacing in the rendered composer; frame={frame:?}"
     );
     assert!(
         !frame.contains("two"),
@@ -281,7 +473,9 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     wait_for_render_contains(&mut app, "reaction target").await;
 
     app.handle_input(b"j");
-    app.handle_input(b"f1");
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "1 👍").await;
+    app.handle_input(b"1");
 
     wait_for_render_contains(&mut app, " Rooms ").await;
     wait_until(
@@ -294,6 +488,154 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
         "f leader reaction to persist",
     )
     .await;
+}
+
+#[tokio::test]
+async fn chat_room_list_is_mouse_clickable() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "chat-room-mouse-it").await;
+    let author = create_test_user(&test_db.db, "chat-room-mouse-author-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    let rust = ChatRoom::get_or_create_public_room(&client, "rust")
+        .await
+        .expect("create rust room");
+    for room in [general.id, rust.id] {
+        ChatRoomMember::join(&client, room, user.id)
+            .await
+            .expect("join viewer");
+        ChatRoomMember::join(&client, room, author.id)
+            .await
+            .expect("join author");
+    }
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: rust.id,
+            user_id: author.id,
+            body: "rust room backlog".to_string(),
+        },
+    )
+    .await
+    .expect("create rust message");
+
+    let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "rust").await;
+
+    let click = "\x1b[<0;5;10M";
+    app.handle_input(click.as_bytes());
+
+    wait_for_render_contains(&mut app, "rust room backlog").await;
+}
+
+#[tokio::test]
+async fn chat_reaction_leader_persists_extended_reaction_digits() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-react-extended-viewer").await;
+    let author = create_test_user(&test_db.db, "f-react-extended-author").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general.id, author.id)
+        .await
+        .expect("join author");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: author.id,
+            body: "extended reaction target".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-react-extended-flow-it");
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "extended reaction target").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "8 🤔").await;
+    app.handle_input(b"8");
+
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_until(
+        || async {
+            ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
+                .await
+                .expect("load reaction")
+                .is_some_and(|reaction| reaction.kind == 8)
+        },
+        "extended f leader reaction to persist",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn chat_reaction_leader_cancels_and_consumes_non_digit_input() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-cancel-viewer").await;
+    let author = create_test_user(&test_db.db, "f-cancel-author").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, general.id, author.id)
+        .await
+        .expect("join author");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: author.id,
+            body: "cancel target".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-cancel-flow-it");
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, "cancel target").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "1 👍").await;
+
+    app.handle_input(b"r");
+    assert_render_not_contains_for(
+        &mut app,
+        "Reply to @f-cancel-author",
+        Duration::from_millis(250),
+    )
+    .await;
+
+    let plain = render_plain(&mut app);
+    assert!(!plain.contains("1 👍"), "picker should close: {plain:?}");
+    assert!(
+        plain.contains("cancel target"),
+        "message should remain selected: {plain:?}"
+    );
+    assert!(
+        ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
+            .await
+            .expect("load reaction")
+            .is_none(),
+        "non-digit input should not react",
+    );
 }
 
 #[tokio::test]
@@ -368,6 +710,33 @@ async fn members_command_shows_room_members_without_persisting_message() {
         .await
         .expect("list recent messages");
     assert!(messages.is_empty(), "expected /members to stay client-side");
+}
+
+#[tokio::test]
+async fn exit_command_opens_quit_confirm_and_stays_client_side() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "exit-command-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join user to general");
+
+    let mut app = make_app(test_db.db.clone(), user.id, "exit-command-flow-it");
+
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "> general").await;
+
+    app.handle_input(b"i/exit\r");
+    wait_for_render_contains(&mut app, " Quit? ").await;
+
+    let messages = ChatMessage::list_recent(&client, general.id, 20)
+        .await
+        .expect("list recent messages");
+    assert!(messages.is_empty(), "expected /exit to stay client-side");
 }
 
 #[tokio::test]

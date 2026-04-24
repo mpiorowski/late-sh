@@ -29,13 +29,20 @@ pub(crate) fn valid_mention_start(text: &str, at: usize) -> bool {
 pub(crate) fn extract_mentions(body: &str) -> Vec<String> {
     let mut usernames = Vec::new();
     let mut idx = 0;
+    let mut in_code = false;
 
     while idx < body.len() {
         let Some(ch) = body[idx..].chars().next() else {
             break;
         };
 
-        if ch == '@' && valid_mention_start(body, idx) {
+        if ch == '`' {
+            idx = advance_past_backticks(body, idx);
+            in_code = !in_code;
+            continue;
+        }
+
+        if !in_code && ch == '@' && valid_mention_start(body, idx) {
             let mut end = idx + ch.len_utf8();
             let mut has_mention_chars = false;
 
@@ -72,13 +79,20 @@ pub(crate) fn mention_spans(text: &str, body_style: Style) -> Vec<Span<'static>>
     let mut spans = Vec::new();
     let mut idx = 0;
     let mut segment_start = 0;
+    let mut in_code = false;
 
     while idx < text.len() {
         let Some(ch) = text[idx..].chars().next() else {
             break;
         };
 
-        if ch == '@' && valid_mention_start(text, idx) {
+        if ch == '`' {
+            idx = advance_past_backticks(text, idx);
+            in_code = !in_code;
+            continue;
+        }
+
+        if !in_code && ch == '@' && valid_mention_start(text, idx) {
             let mut end = idx + ch.len_utf8();
             let mut has_mention_chars = false;
 
@@ -118,6 +132,13 @@ pub(crate) fn mention_spans(text: &str, body_style: Style) -> Vec<Span<'static>>
     }
 
     spans
+}
+
+fn advance_past_backticks(text: &str, mut idx: usize) -> usize {
+    while idx < text.len() && text[idx..].starts_with('`') {
+        idx += '`'.len_utf8();
+    }
+    idx
 }
 
 #[cfg(test)]
@@ -165,6 +186,12 @@ mod tests {
     }
 
     #[test]
+    fn extract_ignores_mentions_inside_inline_code() {
+        assert!(extract_mentions("ping `@alice` later").is_empty());
+        assert_eq!(extract_mentions("ping `@alice` then @bob"), vec!["bob"]);
+    }
+
+    #[test]
     fn mention_spans_highlight_mentions() {
         let spans = mention_spans("hey @alice and @bob", Style::default());
         assert_eq!(spans.len(), 4);
@@ -191,5 +218,13 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content.as_ref(), "@alice");
         assert_eq!(spans[1].content.as_ref(), ", nice one");
+    }
+
+    #[test]
+    fn mention_spans_ignore_mentions_inside_inline_code() {
+        let spans = mention_spans("`@alice` and @bob", Style::default());
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content.as_ref(), "`@alice` and ");
+        assert_eq!(spans[1].content.as_ref(), "@bob");
     }
 }

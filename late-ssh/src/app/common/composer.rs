@@ -1,6 +1,13 @@
 //! Legacy word-wrap helpers used for composer-height estimation and for
 //! rendering read-only wrapped text (e.g. the profile bio). The interactive
-//! composer/editor state lives in `ratatui_textarea::TextArea`.
+//! composer/editor state lives in `ratatui_textarea::TextArea`, but common
+//! theme styling for those text areas belongs here so every composer can
+//! refresh after the active theme changes.
+
+use ratatui::style::{Modifier, Style};
+use ratatui_textarea::{TextArea, WrapMode};
+
+use super::theme;
 
 #[derive(Clone, Debug)]
 pub struct ComposerRow {
@@ -83,6 +90,45 @@ pub fn composer_line_count(text: &str, width: usize) -> usize {
     }
 }
 
+pub fn new_themed_textarea(
+    placeholder: impl Into<String>,
+    wrap_mode: WrapMode,
+    cursor_visible: bool,
+) -> TextArea<'static> {
+    let mut ta = TextArea::default();
+    apply_themed_textarea_style(&mut ta, cursor_visible);
+    ta.set_placeholder_text(placeholder);
+    ta.set_wrap_mode(wrap_mode);
+    ta
+}
+
+pub fn apply_themed_textarea_style(ta: &mut TextArea<'static>, cursor_visible: bool) {
+    ta.set_style(Style::default().fg(theme::TEXT()));
+    ta.set_placeholder_style(Style::default().fg(theme::TEXT_DIM()));
+    ta.set_cursor_line_style(Style::default().fg(theme::TEXT()));
+    set_themed_textarea_cursor_visible(ta, cursor_visible);
+}
+
+pub fn set_themed_textarea_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
+    let style = if visible {
+        visible_textarea_cursor_style()
+    } else {
+        hidden_textarea_cursor_style()
+    };
+    ta.set_cursor_style(style);
+}
+
+fn hidden_textarea_cursor_style() -> Style {
+    Style::default().fg(theme::TEXT())
+}
+
+fn visible_textarea_cursor_style() -> Style {
+    Style::default()
+        .fg(theme::BG_CANVAS())
+        .bg(theme::TEXT())
+        .add_modifier(Modifier::BOLD)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +138,39 @@ mod tests {
         let rows = build_composer_rows("hello wide world", 8);
         let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
         assert_eq!(texts, vec!["hello", "wide", "world"]);
+    }
+
+    #[test]
+    fn themed_textarea_uses_theme_text_color() {
+        let textarea = new_themed_textarea("Type a message...", WrapMode::Word, false);
+        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().bg, None);
+    }
+
+    #[test]
+    fn themed_textarea_visible_cursor_uses_explicit_theme_colors() {
+        let textarea = new_themed_textarea("Type a message...", WrapMode::Word, true);
+        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
+        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
+    }
+
+    #[test]
+    fn apply_themed_textarea_style_refreshes_existing_textarea_colors() {
+        theme::set_current_by_id("late");
+        let mut textarea = new_themed_textarea("Type a message...", WrapMode::Word, false);
+        let late_text = textarea.style().fg;
+
+        theme::set_current_by_id("contrast");
+        apply_themed_textarea_style(&mut textarea, true);
+
+        assert_ne!(textarea.style().fg, late_text);
+        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
+        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
+
+        theme::set_current_by_id("late");
     }
 }

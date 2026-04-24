@@ -37,7 +37,7 @@ impl HelpModalState {
 
     pub fn move_topic(&mut self, delta: isize) {
         let len = HelpTopic::ALL.len() as isize;
-        let next = (self.selected_topic.index() as isize + delta).clamp(0, len - 1) as usize;
+        let next = (self.selected_topic.index() as isize + delta).rem_euclid(len) as usize;
         self.selected_topic = HelpTopic::ALL[next];
     }
 
@@ -45,5 +45,23 @@ impl HelpModalState {
         let idx = self.selected_topic.index();
         let current = self.scroll_offsets[idx] as i32;
         self.scroll_offsets[idx] = (current + delta as i32).max(0) as u16;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn move_topic_wraps_at_both_ends() {
+        let mut state = HelpModalState::new();
+        state.move_topic(-1);
+        assert_eq!(
+            state.selected_topic(),
+            HelpTopic::ALL[HelpTopic::ALL.len() - 1]
+        );
+
+        state.move_topic(1);
+        assert_eq!(state.selected_topic(), HelpTopic::Overview);
     }
 }

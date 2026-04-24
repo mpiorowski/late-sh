@@ -284,7 +284,10 @@ fn inline_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
                 .fg(theme::TEXT_BRIGHT())
                 .bg(theme::BG_HIGHLIGHT());
             spans.push(Span::styled(" ", code_style));
-            push_plain(&mut spans, &text[inner_start..inner_end], code_style);
+            spans.push(Span::styled(
+                text[inner_start..inner_end].to_string(),
+                code_style,
+            ));
             spans.push(Span::styled(" ", code_style));
             idx = inner_end + 1;
             plain_start = idx;
@@ -626,6 +629,19 @@ mod tests {
                     .any(|s| s.style.bg == Some(theme::BG_HIGHLIGHT()))
             );
         }
+    }
+
+    #[test]
+    fn renders_inline_code_without_mention_highlight() {
+        let lines =
+            render_body_to_lines("look at `@graybeard`", 80, Span::raw(""), Style::default());
+        let code_span = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.contains("@graybeard"))
+            .expect("code span");
+        assert!(!code_span.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(code_span.style.bg, Some(theme::BG_HIGHLIGHT()));
     }
 
     #[test]

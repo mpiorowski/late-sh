@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod artboard;
 pub mod bonsai;
 pub mod chat;
 pub mod common;
@@ -11,6 +12,7 @@ pub mod multiplayer_rooms;
 pub mod profile;
 pub(crate) mod profile_modal;
 pub mod qr;
+pub(crate) mod quit_confirm;
 mod render;
 pub(crate) mod settings_modal;
 pub mod state;
