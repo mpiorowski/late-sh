@@ -8,14 +8,14 @@ This file tracks the local music catalog used by `late.sh` radio.
 
 ## Library Status
 
-- `lofi`: done, 100-track manifest, mixed `CC0` and `CC-BY 4.0`
+- `lofi`: done, 121-track manifest, mixed `CC0` and `CC-BY 4.0`
 - `ambient`: done, 93 tracks, mixed `CC0` and `CC-BY 4.0`
 - `classic`: done, 100-track calm-first manifest, public domain via Musopen / Internet Archive
 - `jazz`: pending
 
 ## Lofi
 
-This section documents the current 100-track lofi manifest used by the regenerated playlist files. The dev Liquidsoap stack now mounts `tmp/music/lofi` onto `/music/lofi`, so the local runtime playlist resolves against the refreshed temp library.
+This section documents the current 121-track lofi manifest used by the regenerated playlist files. The dev Liquidsoap stack now mounts `tmp/music/lofi` onto `/music/lofi`, so the local runtime playlist resolves against the refreshed temp library.
 
 ### HoliznaCC0 - Lofi And Chill
 
@@ -44,6 +44,34 @@ This section documents the current 100-track lofi manifest used by the regenerat
 - License: CC0
 - Source: https://holiznacc0.bandcamp.com/album/city-slacker
 - Tracks: Busking In The SunLight; Bus Stop; Busted Ac Unit; Nowhere To Be, Nothing To Do
+
+### HoliznaCC0 - Only In The Milky Way
+
+- Count: 8
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/only-in-the-milky-way
+- Tracks: Anxiety; Boredom; Deja Vu; Love; Memories; Childhood; Dancing; Day Jobs
+
+### HoliznaCC0 - We Drove All Night
+
+- Count: 5
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/we-drove-all-night
+- Tracks: City In The Rearview; I Thought You Were Cool; Quiet Moonlit Countrysides; Stealing Glimpses Of Your Face; Morning Light
+
+### HoliznaCC0 - Bassic
+
+- Count: 5
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/bassic
+- Tracks: Eat; Sleep; Breath; Make Money; Make Love
+
+### HoliznaCC0 - Gamer Beats!
+
+- Count: 3
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/gamer-beats
+- Tracks: Final Level; Coins; Legends
 
 ### Ketsa - Lofi Downtempo
 
