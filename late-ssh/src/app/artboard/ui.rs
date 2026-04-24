@@ -39,6 +39,9 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool
     if state.is_help_open() {
         draw_help(frame, area, state);
     }
+    if state.is_snapshot_browser_open() {
+        draw_snapshot_browser(frame, area, state);
+    }
     if state.is_glyph_picker_open()
         && let Some(catalog) = state.glyph_catalog()
     {
@@ -77,19 +80,28 @@ fn draw_artboard_sidebar(frame: &mut Frame, info_area: Option<Rect>, info_lines:
 }
 
 fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
-    let mut lines = vec![info_label_value(
-        "Mode",
-        if interacting {
-            "active".to_string()
-        } else {
-            "view".to_string()
-        },
-        if interacting {
-            theme::AMBER()
-        } else {
-            theme::TEXT_BRIGHT()
-        },
-    )];
+    let mode = if state.is_archive_view_active() {
+        "snapshot".to_string()
+    } else if interacting {
+        "active".to_string()
+    } else {
+        "view".to_string()
+    };
+    let mode_color = if state.is_archive_view_active() {
+        theme::SUCCESS()
+    } else if interacting {
+        theme::AMBER()
+    } else {
+        theme::TEXT_BRIGHT()
+    };
+    let mut lines = vec![info_label_value("Mode", mode, mode_color)];
+    if let Some(active) = state.active_archive_snapshot() {
+        lines.push(info_label_value(
+            "Archive",
+            format!("{} {}", active.kind.label(), active.label),
+            theme::TEXT_BRIGHT(),
+        ));
+    }
     lines.push(info_label_value(
         "Cursor",
         format!("{},{}", state.cursor().x, state.cursor().y),
@@ -109,6 +121,15 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
         theme::AMBER(),
     ));
     lines.push(pan_indicator_line(state));
+    lines.push(info_label_value(
+        "Snapshots",
+        if state.is_archive_view_active() {
+            "g live".to_string()
+        } else {
+            "g open".to_string()
+        },
+        theme::TEXT_BRIGHT(),
+    ));
 
     let (brush, brush_color) = match state.brush_mode() {
         BrushMode::None => ("none".to_string(), theme::TEXT_FAINT()),
@@ -153,7 +174,7 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
             .into_iter()
             .map(|peer| (peer.name, rgb(peer.color), false)),
     );
-    if !users.is_empty() {
+    if !state.is_archive_view_active() && !users.is_empty() {
         lines.push(Line::from(""));
         lines.push(section_label("Users"));
         for (name, color, is_you) in users {
@@ -384,6 +405,9 @@ fn render_swatch_strip(
     info_area: Option<Rect>,
     state: &State,
 ) -> [Option<Rect>; SWATCH_CAPACITY] {
+    if state.is_archive_view_active() {
+        return [None; SWATCH_CAPACITY];
+    }
     let rects = swatch_box_rects_in_game_area(game_area, info_area, state.private_notice.is_some());
     let active_idx = state.active_swatch_index();
     let is_transparent = state.floating_is_transparent();
@@ -734,6 +758,10 @@ fn help_popup_area(area: Rect) -> Rect {
     centered_rect(96, 34, area)
 }
 
+fn snapshot_browser_popup_area(area: Rect) -> Rect {
+    centered_rect(74, 24, area)
+}
+
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
         .flex(Flex::Center)
@@ -842,14 +870,147 @@ fn draw_help(frame: &mut Frame, area: Rect, state: &State) {
     );
 
     let footer = Line::from(vec![
-        Span::styled("  Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("  ↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[4]);
+}
+
+fn draw_snapshot_browser(frame: &mut Frame, area: Rect, state: &State) {
+    let popup = snapshot_browser_popup_area(area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Artboard Snapshots ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.width < 12 || inner.height < 5 {
+        return;
+    }
+
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    let active_label = state
+        .active_archive_snapshot()
+        .map(|snapshot| format!("{} {}", snapshot.kind.label(), snapshot.label))
+        .unwrap_or_else(|| "live".to_string());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  Viewing ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(active_label, Style::default().fg(theme::TEXT_BRIGHT())),
+        ])),
+        layout[0],
+    );
+
+    let list_area = layout[1].inner(Margin::new(2, 0));
+    let visible_height = list_area.height as usize;
+    state.set_snapshot_browser_visible_height(visible_height);
+    let lines = snapshot_browser_lines(state, visible_height, list_area.width as usize);
+    frame.render_widget(Paragraph::new(Text::from(lines)), list_area);
+
+    let footer = Line::from(vec![
+        Span::styled("  ↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" view  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" close  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("top row", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" live", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(footer), layout[2]);
+}
+
+fn snapshot_browser_lines(
+    state: &State,
+    visible_height: usize,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let total = state.snapshot_browser_items().len() + 1;
+    let start = state.snapshot_browser_scroll_offset().min(total);
+    let end = (start + visible_height).min(total);
+    let mut lines = Vec::new();
+
+    for option_idx in start..end {
+        let selected = option_idx == state.snapshot_browser_selected_index();
+        if option_idx == 0 {
+            lines.push(snapshot_browser_row(
+                selected,
+                "live",
+                "Current artboard",
+                "editable after closing",
+                width,
+            ));
+            continue;
+        }
+        let snapshot = &state.snapshot_browser_items()[option_idx - 1];
+        lines.push(snapshot_browser_row(
+            selected,
+            snapshot.kind.label(),
+            &snapshot.label,
+            &snapshot.board_key,
+            width,
+        ));
+    }
+
+    if state.snapshot_browser_loading() {
+        lines.push(Line::from(Span::styled(
+            "  loading snapshots...",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    } else if let Some(error) = state.snapshot_browser_error() {
+        lines.push(Line::from(Span::styled(
+            format!("  {error}"),
+            Style::default().fg(theme::AMBER_DIM()),
+        )));
+    } else if total == 1 {
+        lines.push(Line::from(Span::styled(
+            "  no daily or monthly snapshots yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+
+    lines
+}
+
+fn snapshot_browser_row(
+    selected: bool,
+    kind: &str,
+    label: &str,
+    detail: &str,
+    width: usize,
+) -> Line<'static> {
+    let marker = if selected { ">" } else { " " };
+    let mut text = format!(" {marker} {kind:<7} {label:<10} {detail}");
+    if text.chars().count() > width {
+        text = text.chars().take(width).collect();
+    }
+    let style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_HIGHLIGHT())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT())
+    };
+    Line::from(Span::styled(text, style))
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTab) {
@@ -879,7 +1040,7 @@ mod tests {
     use dartboard_editor::Clipboard;
     use ratatui::buffer::Buffer;
 
-    use super::super::svc::{DartboardService, DartboardSnapshot};
+    use super::super::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
 
     #[test]
     fn canvas_area_matches_artboard_frame_layout() {
@@ -891,7 +1052,7 @@ mod tests {
         let state = test_state();
         assert_eq!(
             artboard_info_area_for_screen((80, 24), &state),
-            Some(Rect::new(27, 1, 28, 12))
+            Some(Rect::new(27, 1, 28, 13))
         );
     }
 
@@ -972,7 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn info_lines_include_mode_and_pan_rows_before_brush() {
+    fn info_lines_include_mode_pan_and_snapshot_rows_before_brush() {
         let state = test_state();
         let lines = artboard_info_lines(&state, false);
 
@@ -981,11 +1142,12 @@ mod tests {
         assert_eq!(lines[2].to_string(), "Owner      ?");
         assert_eq!(lines[3].to_string(), "Cell       0,0");
         assert_eq!(lines[4].to_string(), "Pan        ◀ ▲ ▼ ▶");
-        assert_eq!(lines[5].to_string(), "Brush      none");
-        assert_eq!(lines[6].to_string(), "Selection  none");
-        assert_eq!(lines[7].to_string(), "");
-        assert_eq!(lines[8].to_string(), "Users");
-        assert_eq!(lines[9].to_string(), "• painter (you)");
+        assert_eq!(lines[5].to_string(), "Snapshots  g open");
+        assert_eq!(lines[6].to_string(), "Brush      none");
+        assert_eq!(lines[7].to_string(), "Selection  none");
+        assert_eq!(lines[8].to_string(), "");
+        assert_eq!(lines[9].to_string(), "Users");
+        assert_eq!(lines[10].to_string(), "• painter (you)");
     }
 
     #[test]
@@ -999,7 +1161,7 @@ mod tests {
 
         let lines = artboard_info_lines(&state, true);
         assert_eq!(lines[0].to_string(), "Mode       active");
-        assert_eq!(lines[6].to_string(), "Selection  3x2");
+        assert_eq!(lines[7].to_string(), "Selection  3x2");
     }
 
     #[test]
@@ -1048,7 +1210,7 @@ mod tests {
         let mut state = test_state();
         state.private_notice = Some("Heads up".to_string());
         let rects = swatch_box_rects((80, 24), &state);
-        assert_eq!(rects[0], Some(Rect::new(9, 13, 16, 8)));
+        assert_eq!(rects[0], Some(Rect::new(11, 13, 16, 8)));
     }
 
     #[test]
@@ -1193,6 +1355,11 @@ mod tests {
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);
-        State::new(svc, "painter".to_string(), shared_provenance)
+        State::new(
+            svc,
+            ArtboardSnapshotService::disabled(),
+            "painter".to_string(),
+            shared_provenance,
+        )
     }
 }

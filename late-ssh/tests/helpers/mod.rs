@@ -220,6 +220,9 @@ pub fn make_app_with_chat_service(
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
+        artboard_snapshot_service: late_ssh::app::artboard::svc::ArtboardSnapshotService::new(
+            db.clone(),
+        ),
         username: "test-user".to_string(),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
@@ -314,6 +317,9 @@ pub fn make_app_with_paired_client(
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
+        artboard_snapshot_service: late_ssh::app::artboard::svc::ArtboardSnapshotService::new(
+            db.clone(),
+        ),
         username: "test-user".to_string(),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,

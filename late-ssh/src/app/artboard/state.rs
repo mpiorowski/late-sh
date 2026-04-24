@@ -12,14 +12,17 @@ use dartboard_editor::{
 };
 use dartboard_tui::{FloatingView, SelectionShape as TuiSelectionShape, SelectionView};
 use ratatui::layout::Rect;
-use std::time::Instant;
+use std::{cell::Cell, time::Instant};
 use tokio::sync::{
     broadcast::{self, error::TryRecvError},
-    watch,
+    mpsc as tokio_mpsc, watch,
 };
 
 use super::provenance::{SharedArtboardProvenance, apply_shared_op};
-use super::svc::{DartboardEvent, DartboardService, DartboardSnapshot};
+use super::svc::{
+    ArtboardArchiveResult, ArtboardArchiveSnapshot, ArtboardSnapshotService, DartboardEvent,
+    DartboardService, DartboardSnapshot,
+};
 use crate::app::icon_picker::{self, catalog::IconCatalogData};
 
 const DOUBLE_CLICK_WINDOW_MS: u128 = 400;
@@ -48,17 +51,23 @@ pub struct State {
     hover_pos: Option<Pos>,
     snapshot_rx: watch::Receiver<DartboardSnapshot>,
     event_rx: broadcast::Receiver<DartboardEvent>,
+    snapshot_service: ArtboardSnapshotService,
+    archive_rx: tokio_mpsc::UnboundedReceiver<ArtboardArchiveResult>,
+    archive_tx: tokio_mpsc::UnboundedSender<ArtboardArchiveResult>,
+    snapshot_browser: SnapshotBrowserState,
 }
 
 impl State {
     pub fn new(
         svc: DartboardService,
+        snapshot_service: ArtboardSnapshotService,
         username: String,
         shared_provenance: SharedArtboardProvenance,
     ) -> Self {
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
         let event_rx = svc.subscribe_events();
+        let (archive_tx, archive_rx) = tokio_mpsc::unbounded_channel();
         Self {
             snapshot,
             private_notice: None,
@@ -81,11 +90,17 @@ impl State {
             hover_pos: None,
             snapshot_rx,
             event_rx,
+            snapshot_service,
+            archive_rx,
+            archive_tx,
+            snapshot_browser: SnapshotBrowserState::default(),
         }
     }
 
     pub fn tick(&mut self) {
-        if self.snapshot_rx.has_changed().unwrap_or(false) {
+        self.drain_archive_results();
+
+        if !self.is_archive_view_active() && self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.editor.clamp_cursor(&self.snapshot.canvas);
             self.editor.clamp_viewport_origin(&self.snapshot.canvas);
@@ -671,11 +686,137 @@ impl State {
         self.last_canvas_click = None;
     }
 
+    pub fn is_snapshot_browser_open(&self) -> bool {
+        self.snapshot_browser.open
+    }
+
+    pub fn is_archive_view_active(&self) -> bool {
+        self.snapshot_browser.active.is_some()
+    }
+
+    pub fn active_archive_snapshot(&self) -> Option<&ArtboardArchiveSnapshot> {
+        self.snapshot_browser.active.as_ref()
+    }
+
+    pub fn snapshot_browser_items(&self) -> &[ArtboardArchiveSnapshot] {
+        &self.snapshot_browser.items
+    }
+
+    pub fn snapshot_browser_selected_index(&self) -> usize {
+        self.snapshot_browser.selected_index
+    }
+
+    pub fn snapshot_browser_scroll_offset(&self) -> usize {
+        self.snapshot_browser.scroll_offset
+    }
+
+    pub fn snapshot_browser_loading(&self) -> bool {
+        self.snapshot_browser.loading
+    }
+
+    pub fn snapshot_browser_error(&self) -> Option<&str> {
+        self.snapshot_browser.error.as_deref()
+    }
+
+    pub fn set_snapshot_browser_visible_height(&self, height: usize) {
+        self.snapshot_browser.visible_height.set(height);
+    }
+
+    pub fn toggle_snapshot_browser_or_live(&mut self) {
+        if self.snapshot_browser.open {
+            self.close_snapshot_browser();
+        } else if self.is_archive_view_active() {
+            self.exit_archive_view();
+        } else {
+            self.open_snapshot_browser();
+        }
+    }
+
+    pub fn open_snapshot_browser(&mut self) {
+        self.close_help();
+        self.close_glyph_picker();
+        self.clear_local_state();
+        self.snapshot_browser.open = true;
+        self.snapshot_browser.error = None;
+        self.snapshot_browser.loading = true;
+        self.snapshot_browser.selected_index = self
+            .snapshot_browser
+            .active
+            .as_ref()
+            .and_then(|active| {
+                self.snapshot_browser
+                    .items
+                    .iter()
+                    .position(|item| item.board_key == active.board_key)
+                    .map(|idx| idx + 1)
+            })
+            .unwrap_or(0);
+        self.clamp_snapshot_browser_selection();
+        self.snapshot_service
+            .list_archives_task(self.archive_tx.clone());
+    }
+
+    pub fn close_snapshot_browser(&mut self) {
+        self.snapshot_browser.open = false;
+    }
+
+    pub fn move_snapshot_browser_selection(&mut self, delta: isize) {
+        if !self.snapshot_browser.open {
+            return;
+        }
+        let last = self.snapshot_browser_option_count().saturating_sub(1) as isize;
+        self.snapshot_browser.selected_index =
+            (self.snapshot_browser.selected_index as isize + delta).clamp(0, last) as usize;
+        self.ensure_snapshot_browser_selection_visible();
+    }
+
+    pub fn snapshot_browser_home(&mut self) {
+        self.snapshot_browser.selected_index = 0;
+        self.snapshot_browser.scroll_offset = 0;
+    }
+
+    pub fn snapshot_browser_page(&mut self, delta_pages: isize) {
+        let page = self.snapshot_browser.visible_height.get().max(1) as isize;
+        self.move_snapshot_browser_selection(delta_pages.saturating_mul(page));
+    }
+
+    pub fn activate_snapshot_browser_selection(&mut self) {
+        if !self.snapshot_browser.open {
+            return;
+        }
+        if self.snapshot_browser.selected_index == 0 {
+            self.exit_archive_view();
+            self.snapshot_browser.open = false;
+            return;
+        }
+        let Some(item) = self
+            .snapshot_browser
+            .items
+            .get(self.snapshot_browser.selected_index - 1)
+            .cloned()
+        else {
+            return;
+        };
+        self.activate_archive_snapshot(item);
+        self.snapshot_browser.open = false;
+    }
+
+    pub fn exit_archive_view(&mut self) {
+        self.snapshot_browser.active = None;
+        self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+        self.editor.clamp_cursor(&self.snapshot.canvas);
+        self.editor.clamp_viewport_origin(&self.snapshot.canvas);
+        self.clear_local_state();
+    }
+
     pub fn is_help_open(&self) -> bool {
         self.help_open
     }
 
     pub fn toggle_help(&mut self) {
+        if self.is_archive_view_active() {
+            return;
+        }
         self.help_open = !self.help_open;
     }
 
@@ -730,6 +871,9 @@ impl State {
     }
 
     pub fn open_glyph_picker(&mut self) {
+        if self.is_archive_view_active() {
+            return;
+        }
         // Enforce the "at most one of {selection, floating, picker}" invariant:
         // opening dismisses any floating preview and clears any selection.
         let _ = self.dismiss_floating();
@@ -836,6 +980,56 @@ impl State {
         true
     }
 
+    fn drain_archive_results(&mut self) {
+        while let Ok(result) = self.archive_rx.try_recv() {
+            self.snapshot_browser.loading = false;
+            match result {
+                ArtboardArchiveResult::Loaded(items) => {
+                    self.snapshot_browser.items = items;
+                    self.snapshot_browser.error = None;
+                    self.clamp_snapshot_browser_selection();
+                }
+                ArtboardArchiveResult::Failed(error) => {
+                    self.snapshot_browser.error = Some(error);
+                    self.clamp_snapshot_browser_selection();
+                }
+            }
+        }
+    }
+
+    fn snapshot_browser_option_count(&self) -> usize {
+        self.snapshot_browser.items.len() + 1
+    }
+
+    fn clamp_snapshot_browser_selection(&mut self) {
+        let last = self.snapshot_browser_option_count().saturating_sub(1);
+        self.snapshot_browser.selected_index = self.snapshot_browser.selected_index.min(last);
+        self.ensure_snapshot_browser_selection_visible();
+    }
+
+    fn ensure_snapshot_browser_selection_visible(&mut self) {
+        let visible = self.snapshot_browser.visible_height.get().max(1);
+        if self.snapshot_browser.selected_index < self.snapshot_browser.scroll_offset {
+            self.snapshot_browser.scroll_offset = self.snapshot_browser.selected_index;
+        } else if self.snapshot_browser.selected_index
+            >= self.snapshot_browser.scroll_offset + visible
+        {
+            self.snapshot_browser.scroll_offset =
+                self.snapshot_browser.selected_index + 1 - visible;
+        }
+    }
+
+    fn activate_archive_snapshot(&mut self, item: ArtboardArchiveSnapshot) {
+        self.clear_local_state();
+        self.snapshot.canvas = item.canvas.clone();
+        self.snapshot.provenance = item.provenance.clone();
+        self.snapshot.peers.clear();
+        self.snapshot.connect_rejected = None;
+        self.editor.clamp_cursor(&self.snapshot.canvas);
+        self.editor.clamp_viewport_origin(&self.snapshot.canvas);
+        self.snapshot_browser.active = Some(item);
+    }
+
     fn active_user_color(&self) -> RgbColor {
         self.snapshot
             .your_color
@@ -860,6 +1054,9 @@ impl State {
         &mut self,
         edit: impl FnOnce(&mut EditorSession, &mut Canvas, RgbColor) -> bool,
     ) -> bool {
+        if self.is_archive_view_active() {
+            return false;
+        }
         let before = self.snapshot.canvas.clone();
         let before_provenance = self.snapshot.provenance.clone();
         let color = self.active_user_color();
@@ -875,6 +1072,9 @@ impl State {
         before: Canvas,
         before_provenance: super::provenance::ArtboardProvenance,
     ) -> bool {
+        if self.is_archive_view_active() {
+            return false;
+        }
         let Some(op) = diff_canvas_op(&before, &self.snapshot.canvas, self.active_user_color())
         else {
             return false;
@@ -1057,6 +1257,18 @@ pub enum BrushMode {
     Glyph(char),
 }
 
+#[derive(Default)]
+struct SnapshotBrowserState {
+    open: bool,
+    loading: bool,
+    error: Option<String>,
+    items: Vec<ArtboardArchiveSnapshot>,
+    selected_index: usize,
+    scroll_offset: usize,
+    visible_height: Cell<usize>,
+    active: Option<ArtboardArchiveSnapshot>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum HelpTab {
     #[default]
@@ -1194,7 +1406,7 @@ fn canvas_pos_for_screen_point(
 mod tests {
     use super::*;
     use crate::app::artboard::provenance::ArtboardProvenance;
-    use crate::app::artboard::svc::{DartboardService, DartboardSnapshot};
+    use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
     use dartboard_core::{CanvasOp, CellValue, RgbColor};
     use dartboard_editor::Clipboard;
 
@@ -1208,7 +1420,12 @@ mod tests {
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);
-        let mut state = State::new(svc, "painter".to_string(), shared_provenance);
+        let mut state = State::new(
+            svc,
+            ArtboardSnapshotService::disabled(),
+            "painter".to_string(),
+            shared_provenance,
+        );
         state.set_viewport_for_screen((80, 24));
         state
     }

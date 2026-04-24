@@ -1,10 +1,12 @@
 use std::{sync::mpsc, thread, time::Duration};
 
+use anyhow::Context;
 use dartboard_core::{
     Canvas, CanvasOp, Client, ClientOpId, Peer, RgbColor, Seq, ServerMsg, UserId,
 };
 use dartboard_local::{ConnectOutcome, Hello, LocalClient, ServerHandle};
-use tokio::sync::{broadcast, watch};
+use late_core::{db::Db, models::artboard::Snapshot};
+use tokio::sync::{broadcast, mpsc as tokio_mpsc, watch};
 use uuid::Uuid;
 
 use super::provenance::{
@@ -48,11 +50,113 @@ pub enum DartboardEvent {
     },
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ArtboardSnapshotKind {
+    Daily,
+    Monthly,
+}
+
+impl ArtboardSnapshotKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Daily => "daily",
+            Self::Monthly => "monthly",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ArtboardArchiveSnapshot {
+    pub board_key: String,
+    pub kind: ArtboardSnapshotKind,
+    pub label: String,
+    pub canvas: Canvas,
+    pub provenance: ArtboardProvenance,
+}
+
+#[derive(Debug)]
+pub enum ArtboardArchiveResult {
+    Loaded(Vec<ArtboardArchiveSnapshot>),
+    Failed(String),
+}
+
+#[derive(Clone)]
+pub struct ArtboardSnapshotService {
+    db: Option<Db>,
+}
+
+impl ArtboardSnapshotService {
+    pub fn new(db: Db) -> Self {
+        Self { db: Some(db) }
+    }
+
+    pub fn disabled() -> Self {
+        Self { db: None }
+    }
+
+    pub fn list_archives_task(&self, tx: tokio_mpsc::UnboundedSender<ArtboardArchiveResult>) {
+        let Some(db) = self.db.clone() else {
+            let _ = tx.send(ArtboardArchiveResult::Loaded(Vec::new()));
+            return;
+        };
+        tokio::spawn(async move {
+            let result = list_archive_snapshots(&db).await;
+            let msg = match result {
+                Ok(snapshots) => ArtboardArchiveResult::Loaded(snapshots),
+                Err(error) => ArtboardArchiveResult::Failed(format!("{error:#}")),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+}
+
 #[derive(Clone)]
 pub struct DartboardService {
     command_tx: mpsc::Sender<Command>,
     snapshot_rx: watch::Receiver<DartboardSnapshot>,
     event_tx: broadcast::Sender<DartboardEvent>,
+}
+
+async fn list_archive_snapshots(db: &Db) -> anyhow::Result<Vec<ArtboardArchiveSnapshot>> {
+    let client = db
+        .get()
+        .await
+        .context("failed to get db client for artboard snapshot list")?;
+    let mut snapshots = Vec::new();
+    for (prefix, kind) in [
+        ("daily:", ArtboardSnapshotKind::Daily),
+        ("monthly:", ArtboardSnapshotKind::Monthly),
+    ] {
+        let rows = Snapshot::list_by_board_key_prefix(&client, prefix)
+            .await
+            .with_context(|| format!("failed to list {prefix} artboard snapshots"))?;
+        for row in rows {
+            snapshots.push(decode_archive_snapshot(row, kind)?);
+        }
+    }
+    Ok(snapshots)
+}
+
+fn decode_archive_snapshot(
+    snapshot: Snapshot,
+    kind: ArtboardSnapshotKind,
+) -> anyhow::Result<ArtboardArchiveSnapshot> {
+    let label = snapshot
+        .board_key
+        .split_once(':')
+        .map(|(_, label)| label.to_string())
+        .unwrap_or_else(|| snapshot.board_key.clone());
+    let canvas =
+        serde_json::from_value(snapshot.canvas).context("failed to decode artboard canvas")?;
+    let provenance = serde_json::from_value(snapshot.provenance)
+        .context("failed to decode artboard provenance")?;
+    Ok(ArtboardArchiveSnapshot {
+        board_key: snapshot.board_key,
+        kind,
+        label,
+        canvas,
+        provenance,
+    })
 }
 
 enum Command {

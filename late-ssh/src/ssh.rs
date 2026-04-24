@@ -712,6 +712,9 @@ impl russh::server::Handler for ClientHandler {
             blackjack_service: self.state.blackjack_service.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
             dartboard_provenance: self.state.dartboard_provenance.clone(),
+            artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
+                self.state.db.clone(),
+            ),
             username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,

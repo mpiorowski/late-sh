@@ -543,7 +543,7 @@ fn map_button(button: MouseButton) -> Option<AppPointerButton> {
 mod tests {
     use super::*;
     use crate::app::artboard::provenance::ArtboardProvenance;
-    use crate::app::artboard::svc::{DartboardService, DartboardSnapshot};
+    use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
     use dartboard_core::{Canvas, CellValue, RgbColor};
     use dartboard_editor::Clipboard;
 
@@ -1215,6 +1215,11 @@ mod tests {
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);
-        State::new(svc, "painter".to_string(), shared_provenance)
+        State::new(
+            svc,
+            ArtboardSnapshotService::disabled(),
+            "painter".to_string(),
+            shared_provenance,
+        )
     }
 }

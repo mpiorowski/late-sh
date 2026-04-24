@@ -898,6 +898,10 @@ fn dispatch_escape(app: &mut App) {
         let Some(state) = app.dartboard_state.as_ref() else {
             return;
         };
+        if state.is_snapshot_browser_open() {
+            dispatch_screen_key(app, ctx.screen, 0x1B);
+            return;
+        }
         if state.is_glyph_picker_open() || state.is_help_open() {
             dispatch_screen_key(app, ctx.screen, 0x1B);
             return;
@@ -1125,6 +1129,14 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
 
     match byte {
         b'q' | b'Q' => {
+            if ctx.screen == Screen::Artboard
+                && app
+                    .dartboard_state
+                    .as_ref()
+                    .is_some_and(|state| state.is_snapshot_browser_open())
+            {
+                return false;
+            }
             trigger_global_quit(app);
             true
         }

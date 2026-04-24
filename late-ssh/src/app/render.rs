@@ -146,6 +146,7 @@ impl App {
             self.profile_state.theme_id().to_string()
         };
         theme::set_current_by_id(&active_theme_id);
+        self.chat.refresh_composer_theme();
 
         // Synchronize terminal background color with theme bg_canvas if enabled
         let enabled = if self.show_settings {
@@ -678,10 +679,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         } else {
             &[
                 ("view", "pan"),
-                ("Alt+arrows", "pan"),
-                ("R-drag", "pan"),
+                ("Alt+arrows/R-drag", "pan"),
                 ("i", "edit"),
-                ("Ctrl+\\", "owners"),
+                ("g", "gallery"),
             ]
         };
         for (key, desc) in hints {

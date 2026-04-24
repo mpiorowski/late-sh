@@ -19,6 +19,10 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
         return handle_action(app, action);
     }
 
+    if state.is_snapshot_browser_open() {
+        return handle_snapshot_browser_key(state, byte);
+    }
+
     if is_interacting {
         let action = super::input::handle_byte(state, size, byte);
         return handle_action(app, action);
@@ -34,7 +38,14 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             state.clear_pending_canvas_click();
             true
         }
+        b'g' | b'G' => {
+            state.toggle_snapshot_browser_or_live();
+            true
+        }
         b'i' | b'I' | b'\r' | b'\n' => {
+            if state.is_archive_view_active() {
+                return true;
+            }
             app.activate_artboard_interaction();
             true
         }
@@ -55,6 +66,10 @@ pub(crate) fn handle_arrow(app: &mut App, key: u8) -> bool {
 
     if is_interacting || state.is_help_open() || state.is_glyph_picker_open() {
         return super::input::handle_arrow(state, size, key);
+    }
+
+    if state.is_snapshot_browser_open() {
+        return handle_snapshot_browser_arrow(state, key);
     }
 
     match key {
@@ -88,6 +103,10 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if is_interacting || state.is_help_open() || state.is_glyph_picker_open() {
         let action = super::input::handle_event(state, size, event);
         return handle_action(app, action);
+    }
+
+    if state.is_snapshot_browser_open() {
+        return handle_snapshot_browser_event(state, event);
     }
 
     match event {
@@ -143,7 +162,8 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                 && matches!(mouse.button, Some(MouseButton::Left))
                 && !mouse.modifiers.shift
                 && !mouse.modifiers.alt
-                && !mouse.modifiers.ctrl =>
+                && !mouse.modifiers.ctrl
+                && !state.is_archive_view_active() =>
         {
             if swatch_hit(size, state, mouse.x, mouse.y).is_some()
                 || info_hit(size, state, mouse.x, mouse.y)
@@ -159,6 +179,36 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         ParsedInput::Mouse(mouse) => handle_view_mode_mouse(state, size, mouse),
         _ => false,
     }
+}
+
+fn handle_snapshot_browser_key(state: &mut super::state::State, byte: u8) -> bool {
+    match byte {
+        b'g' | b'G' | b'q' | b'Q' | 0x1B => state.close_snapshot_browser(),
+        b'j' | b'J' => state.move_snapshot_browser_selection(1),
+        b'k' | b'K' => state.move_snapshot_browser_selection(-1),
+        b'\r' | b'\n' => state.activate_snapshot_browser_selection(),
+        _ => return false,
+    }
+    true
+}
+
+fn handle_snapshot_browser_arrow(state: &mut super::state::State, key: u8) -> bool {
+    match key {
+        b'A' => state.move_snapshot_browser_selection(-1),
+        b'B' => state.move_snapshot_browser_selection(1),
+        _ => return false,
+    }
+    true
+}
+
+fn handle_snapshot_browser_event(state: &mut super::state::State, event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::Home => state.snapshot_browser_home(),
+        ParsedInput::PageUp => state.snapshot_browser_page(-1),
+        ParsedInput::PageDown => state.snapshot_browser_page(1),
+        _ => return false,
+    }
+    true
 }
 
 fn handle_view_mode_mouse(
@@ -205,7 +255,7 @@ mod tests {
     use crate::app::artboard::{
         provenance::ArtboardProvenance,
         state::State,
-        svc::{DartboardService, DartboardSnapshot},
+        svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot},
     };
 
     #[test]
@@ -309,6 +359,11 @@ mod tests {
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);
-        State::new(svc, "viewer".to_string(), shared_provenance)
+        State::new(
+            svc,
+            ArtboardSnapshotService::disabled(),
+            "viewer".to_string(),
+            shared_provenance,
+        )
     }
 }

@@ -1,9 +1,8 @@
-use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use crate::app::common::primitives::Banner;
+use crate::app::common::{composer, primitives::Banner};
 use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot};
 
 use super::svc::ArticleService;
@@ -79,6 +78,10 @@ impl State {
         &self.composer
     }
 
+    pub fn refresh_composer_theme(&mut self) {
+        composer::apply_themed_textarea_style(&mut self.composer, self.composing);
+    }
+
     pub fn processing(&self) -> bool {
         self.processing
     }
@@ -86,7 +89,7 @@ impl State {
     pub fn start_composing(&mut self) {
         self.composing = true;
         self.processing = false;
-        set_news_cursor_visible(&mut self.composer, true);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
     }
 
     pub fn stop_composing(&mut self) {
@@ -112,7 +115,7 @@ impl State {
     pub fn composer_clear(&mut self) {
         if !self.processing {
             self.composer = new_news_textarea();
-            set_news_cursor_visible(&mut self.composer, self.composing);
+            composer::set_themed_textarea_cursor_visible(&mut self.composer, self.composing);
         }
     }
     pub fn composer_pop(&mut self) {
@@ -196,7 +199,7 @@ impl State {
             return;
         }
         self.processing = true;
-        set_news_cursor_visible(&mut self.composer, false);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, false);
         self.current_task = Some(self.article_service.process_url(self.user_id, url.trim()));
     }
 
@@ -228,7 +231,10 @@ impl State {
                     ArticleEvent::Failed { user_id, error } if self.user_id == user_id => {
                         self.current_task = None;
                         self.processing = false;
-                        set_news_cursor_visible(&mut self.composer, self.composing);
+                        composer::set_themed_textarea_cursor_visible(
+                            &mut self.composer,
+                            self.composing,
+                        );
                         banner = Some(Banner::error(&format!("Failed: {}", error)));
                     }
                     ArticleEvent::Deleted { user_id } if self.user_id == user_id => {
@@ -283,20 +289,7 @@ fn move_index(current: usize, delta: isize, len: usize) -> usize {
 }
 
 fn new_news_textarea() -> TextArea<'static> {
-    let mut ta = TextArea::default();
-    ta.set_cursor_line_style(Style::default());
-    ta.set_cursor_style(Style::default());
-    ta.set_wrap_mode(WrapMode::Glyph);
-    ta
-}
-
-fn set_news_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
-    let style = if visible {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default()
-    };
-    ta.set_cursor_style(style);
+    composer::new_themed_textarea("", WrapMode::Glyph, false)
 }
 
 #[cfg(test)]

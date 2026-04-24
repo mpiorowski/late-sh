@@ -221,7 +221,7 @@ fn overview_lines() -> Vec<String> {
         "This modal",
         "  Tab / Shift+Tab   next / previous tab",
         "  j / k / ↑ / ↓     scroll current tab",
-        "  ? / q / Esc       close",
+        "  Esc / q / ?       close",
         "",
         "Use /help and /music in chat if you want to jump directly to those slides from the composer.",
     ]

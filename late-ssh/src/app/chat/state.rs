@@ -7,14 +7,13 @@ use late_core::{
         chat_message_reaction::ChatMessageReactionSummary, chat_room::ChatRoom,
     },
 };
-use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
 
-use crate::app::common::{primitives::Banner, theme};
+use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
 use crate::state::{ActiveUser, ActiveUsers};
 
@@ -185,6 +184,11 @@ impl ChatState {
         &self.composer
     }
 
+    pub(crate) fn refresh_composer_theme(&mut self) {
+        composer::apply_themed_textarea_style(&mut self.composer, self.composing);
+        self.news.refresh_composer_theme();
+    }
+
     pub fn is_composing(&self) -> bool {
         self.composing
     }
@@ -202,7 +206,7 @@ impl ChatState {
         self.selected_message_id = None;
         self.reply_target = None;
         self.edited_message_id = None;
-        set_composer_cursor_visible(&mut self.composer, true);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
     }
 
     pub fn request_list(&self) {
@@ -360,7 +364,7 @@ impl ChatState {
         self.composing = true;
         self.composer_room_id = Some(room_id);
         self.edited_message_id = None;
-        set_composer_cursor_visible(&mut self.composer, true);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
         None
     }
 
@@ -392,7 +396,7 @@ impl ChatState {
         self.composer.insert_str(body);
         self.composing = true;
         self.composer_room_id = Some(room_id);
-        set_composer_cursor_visible(&mut self.composer, true);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
         None
     }
 
@@ -714,7 +718,7 @@ impl ChatState {
         self.composer_room_id = None;
         self.reaction_leader_active = false;
         self.reply_target = None;
-        set_composer_cursor_visible(&mut self.composer, false);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, false);
     }
 
     pub fn reset_composer(&mut self) {
@@ -740,7 +744,7 @@ impl ChatState {
 
     fn clear_composer_after_send(&mut self) {
         self.composer = new_chat_textarea();
-        set_composer_cursor_visible(&mut self.composer, self.composing);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, self.composing);
         self.room_jump_active = false;
         self.reaction_leader_active = false;
         self.reply_target = None;
@@ -987,7 +991,7 @@ impl ChatState {
     pub fn composer_clear(&mut self) {
         let composing = self.composing;
         self.composer = new_chat_textarea();
-        set_composer_cursor_visible(&mut self.composer, composing);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
     pub fn composer_backspace(&mut self) {
@@ -1181,7 +1185,7 @@ impl ChatState {
         let composing = self.composing;
         self.composer = new_chat_textarea();
         self.composer.insert_str(next);
-        set_composer_cursor_visible(&mut self.composer, composing);
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
         self.mention_ac = MentionAutocomplete::default();
     }
 
@@ -1928,34 +1932,7 @@ fn reply_preview_text(body: &str) -> String {
 }
 
 pub(crate) fn new_chat_textarea() -> TextArea<'static> {
-    let mut ta = TextArea::default();
-    ta.set_style(Style::default().fg(theme::TEXT()));
-    ta.set_placeholder_text("Type a message...");
-    ta.set_placeholder_style(Style::default().fg(theme::TEXT_DIM()));
-    ta.set_cursor_line_style(Style::default().fg(theme::TEXT()));
-    ta.set_cursor_style(hidden_composer_cursor_style());
-    ta.set_wrap_mode(WrapMode::Word);
-    ta
-}
-
-fn set_composer_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
-    let style = if visible {
-        visible_composer_cursor_style()
-    } else {
-        hidden_composer_cursor_style()
-    };
-    ta.set_cursor_style(style);
-}
-
-fn hidden_composer_cursor_style() -> Style {
-    Style::default().fg(theme::TEXT())
-}
-
-fn visible_composer_cursor_style() -> Style {
-    Style::default()
-        .fg(theme::BG_CANVAS())
-        .bg(theme::TEXT())
-        .add_modifier(Modifier::BOLD)
+    composer::new_themed_textarea("Type a message...", WrapMode::Word, false)
 }
 
 fn news_reply_preview_text(body: &str) -> Option<String> {
@@ -2045,6 +2022,7 @@ fn strip_markdown_preview_markers(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::common::theme;
 
     fn names(matches: &[MentionMatch]) -> Vec<&str> {
         matches.iter().map(|m| m.name.as_str()).collect()
@@ -2218,7 +2196,7 @@ mod tests {
     #[test]
     fn composer_cursor_visible_uses_explicit_theme_colors() {
         let mut textarea = new_chat_textarea();
-        set_composer_cursor_visible(&mut textarea, true);
+        composer::set_themed_textarea_cursor_visible(&mut textarea, true);
         assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
         assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
     }
@@ -2226,10 +2204,28 @@ mod tests {
     #[test]
     fn composer_cursor_hidden_restores_plain_text_color() {
         let mut textarea = new_chat_textarea();
-        set_composer_cursor_visible(&mut textarea, true);
-        set_composer_cursor_visible(&mut textarea, false);
+        composer::set_themed_textarea_cursor_visible(&mut textarea, true);
+        composer::set_themed_textarea_cursor_visible(&mut textarea, false);
         assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
         assert_eq!(textarea.cursor_style().bg, None);
+    }
+
+    #[test]
+    fn common_textarea_theme_refreshes_existing_chat_textarea_colors() {
+        theme::set_current_by_id("late");
+        let mut textarea = new_chat_textarea();
+        let late_text = textarea.style().fg;
+
+        theme::set_current_by_id("contrast");
+        composer::apply_themed_textarea_style(&mut textarea, true);
+
+        assert_ne!(textarea.style().fg, late_text);
+        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
+        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
+        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
+
+        theme::set_current_by_id("late");
     }
 
     #[test]
