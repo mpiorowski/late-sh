@@ -366,6 +366,7 @@ fn artboard_help_lines() -> Vec<String> {
         "  g                 open daily/monthly snapshot browser",
         "  Ctrl+\\           toggle owner overlay",
         "  Ctrl+]            open emoji / Unicode glyph picker",
+        "  Ctrl+U / Ctrl+Y   previous / next paint color",
         "",
         "Drawing basics",
         "  arrows            move cursor / focus",
@@ -391,7 +392,7 @@ fn artboard_help_lines() -> Vec<String> {
         "  canvas cells, connected peers, your assigned color, and cell ownership provenance",
         "",
         "What stays local",
-        "  cursor, viewport, selections, swatches, brush previews, glyph search, and help scroll",
+        "  cursor, viewport, selections, swatches, selected paint color, brush previews, glyph search, and help scroll",
     ]
     .into_iter()
     .map(str::to_string)

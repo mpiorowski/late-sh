@@ -53,6 +53,10 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             let action = super::input::handle_byte(state, size, byte);
             handle_action(app, action)
         }
+        0x15 | 0x19 => {
+            let action = super::input::handle_byte(state, size, byte);
+            handle_action(app, action)
+        }
         _ => false,
     }
 }
@@ -249,12 +253,12 @@ fn handle_action(app: &mut App, action: super::input::InputAction) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use dartboard_core::{Canvas, Pos, RgbColor};
+    use dartboard_core::{Canvas, Pos};
 
     use super::*;
     use crate::app::artboard::{
         provenance::ArtboardProvenance,
-        state::State,
+        state::{PAINT_PALETTE, State},
         svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot},
     };
 
@@ -355,7 +359,7 @@ mod tests {
         let snapshot = DartboardSnapshot {
             provenance: ArtboardProvenance::default(),
             your_user_id: Some(1),
-            your_color: Some(RgbColor::new(255, 196, 64)),
+            your_color: Some(PAINT_PALETTE[1]),
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);

@@ -33,6 +33,15 @@ pub fn handle_byte(state: &mut State, screen_size: (u16, u16), byte: u8) -> Inpu
         return handle_help_byte(state, byte);
     }
     match byte {
+        // Ctrl+U / Ctrl+Y cycle paint color without claiming printable glyphs.
+        0x15 => {
+            state.cycle_paint_color(-1);
+            InputAction::Handled
+        }
+        0x19 => {
+            state.cycle_paint_color(1);
+            InputAction::Handled
+        }
         // Ctrl+] / Ctrl+5 / raw GS — open the glyph picker.
         0x1D => {
             state.open_glyph_picker();
@@ -549,8 +558,9 @@ fn map_button(button: MouseButton) -> Option<AppPointerButton> {
 mod tests {
     use super::*;
     use crate::app::artboard::provenance::ArtboardProvenance;
+    use crate::app::artboard::state::PAINT_PALETTE;
     use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
-    use dartboard_core::{Canvas, CellValue, RgbColor};
+    use dartboard_core::{Canvas, CellValue};
     use dartboard_editor::Clipboard;
 
     #[test]
@@ -1088,6 +1098,19 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_u_and_ctrl_y_cycle_paint_color() {
+        let mut state = test_state();
+
+        let prev = handle_byte(&mut state, (80, 24), 0x15);
+        assert!(matches!(prev, InputAction::Handled));
+        assert_eq!(state.active_paint_color_index(), 0);
+
+        let next = handle_byte(&mut state, (80, 24), 0x19);
+        assert!(matches!(next, InputAction::Handled));
+        assert_eq!(state.active_paint_color_index(), 1);
+    }
+
+    #[test]
     fn help_overlay_routes_navigation_keys() {
         let mut state = test_state();
         assert!(matches!(
@@ -1210,7 +1233,7 @@ mod tests {
         let snapshot = DartboardSnapshot {
             provenance: ArtboardProvenance::default(),
             your_user_id: Some(1),
-            your_color: Some(RgbColor::new(255, 196, 64)),
+            your_color: Some(PAINT_PALETTE[1]),
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);

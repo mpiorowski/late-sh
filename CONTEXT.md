@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-24 (Artboard global help/gallery context)
+- Last updated: 2026-04-24 (Artboard paint color selector context)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -475,6 +475,7 @@ Only canvas mutations are shared. Editor affordances stay local to the current S
 - Active selection anchor
 - Floating brush / floating selection preview
 - Swatch strip contents + pin state
+- Selected paint color from the 16-color local palette (`Ctrl+U` / `Ctrl+Y`)
 - Temporary sampled glyph brush
 - Help overlay tab + scroll
 - Glyph picker search state
@@ -545,11 +546,12 @@ Key behaviors:
 - Activating the currently active swatch again toggles floating-brush transparency.
 - `Enter` or `Ctrl+V` stamps the active floating brush without dismissing it.
 - `Ctrl+Shift+arrows` strokes a floating brush from the keyboard.
+- `Ctrl+U` / `Ctrl+Y` cycle previous/next paint color in a local 16-color palette. This affects subsequent typed glyphs, paste, glyph picker insertion, swatch stamping, and floating previews, but does not change the peer-list assigned color.
 - `Ctrl+]` opens the glyph picker for emoji / Unicode glyph insertion.
 - Double-clicking an existing non-space cell samples it into a temporary one-glyph brush.
 - `Ctrl+P` toggles the help overlay.
 - `Ctrl+\` toggles the ownership overlay. When on, cells render as per-author initials tinted by a deterministic username color derived from the provenance map.
-- Selection-local shape ops now stop at `Ctrl+T` (flip selection corner), `Ctrl+B` (draw border), and `Ctrl+Space` (smart-fill). The older `Ctrl+H/J/K/L` and `Ctrl+Y/U/I/O` push/pull chords are intentionally unbound.
+- Selection-local shape ops now stop at `Ctrl+T` (flip selection corner), `Ctrl+B` (draw border), and `Ctrl+Space` (smart-fill). The older `Ctrl+H/J/K/L` and `Ctrl+I/O` push/pull chords are intentionally unbound; `Ctrl+U/Y` now cycle paint color.
 - The Info sidebar always shows `Owner` and `Cell` for the current cursor/hover subject. The overlay only changes canvas rendering.
 - `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in `active` mode, and only falls back to `view` mode once there is no local editor state left to dismiss.
 
@@ -568,6 +570,7 @@ Mouse-specific extras:
 | Enter active mode | `i`, `Enter` | Switches the screen from inspect to edit |
 | Snapshot browser | `g` | View daily/monthly archives read-only; `j/k` or arrows navigate, `Enter` selects, top row returns live |
 | Draw / erase in active mode | `<type>`, `Space`, `Backspace`, `Delete` | Plain typing edits the shared canvas |
+| Paint color | `Ctrl+U`, `Ctrl+Y` | Previous/next local paint color; printable glyphs remain drawable |
 | Select | `Shift+arrows`, mouse drag | Local selection only |
 | Selection shape ops | `Ctrl+T`, `Ctrl+B`, `Ctrl+Space` | Flip corner, draw border, or smart-fill the current selection |
 | Copy / cut to swatch | `Ctrl+C`, `Ctrl+X` | Fills swatch strip; does not sync to peers |
@@ -586,7 +589,7 @@ Mouse-specific extras:
 - Artboard now lives under `late-ssh/src/app/artboard/`, not `app/games/artboard/`.
 - The Artboard screen has its own renderer and does **not** use the generic game frame/sidebar layout used by the arcade games.
 - The screen chrome exposes `view` vs `active` mode explicitly in both the frame title and the Artboard info sidebar.
-- The artboard info sidebar shows cursor position, `Owner`, `Cell`, pan availability, brush status, current selection size, and connected peers.
+- The artboard info sidebar shows cursor position, `Owner`, `Cell`, pan availability, selected paint color + palette row, brush status, current selection size, and connected peers.
 - The Artboard help overlay mirrors the global help modal style: single-row tabs, TitleCase labels, Amber active chip, `Tab` / `Shift+Tab` switches tabs, `j` / `k` / arrows scroll. Copy lives in `artboard/data.rs` (not pulled from upstream keymap).
 - The global help modal also has an `Artboard` tab. Its copy lives in `late-ssh/src/app/help_modal/data.rs` and is included in `bot_app_context()`, so `@bot` can answer common Artboard questions including daily/monthly snapshots and the web gallery URL.
 - Tab-switching keybindings were unified across modals: both the global help modal and the settings modal use `Tab` / `Shift+Tab` as the canonical tab switcher; arrow/hl routing was dropped from the help modals.

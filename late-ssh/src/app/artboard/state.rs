@@ -27,6 +27,24 @@ use crate::app::icon_picker::{self, catalog::IconCatalogData};
 
 const DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 pub(crate) const PRIMARY_SWATCH_IDX: usize = 0;
+pub(crate) const PAINT_PALETTE: [RgbColor; 16] = [
+    RgbColor::new(255, 110, 64),
+    RgbColor::new(255, 236, 96),
+    RgbColor::new(255, 214, 102),
+    RgbColor::new(145, 226, 88),
+    RgbColor::new(188, 255, 128),
+    RgbColor::new(72, 220, 170),
+    RgbColor::new(86, 245, 214),
+    RgbColor::new(84, 196, 255),
+    RgbColor::new(96, 225, 255),
+    RgbColor::new(128, 163, 255),
+    RgbColor::new(164, 146, 255),
+    RgbColor::new(192, 132, 255),
+    RgbColor::new(224, 116, 255),
+    RgbColor::new(255, 124, 196),
+    RgbColor::new(255, 142, 158),
+    RgbColor::new(238, 242, 255),
+];
 
 pub struct State {
     pub snapshot: DartboardSnapshot,
@@ -36,6 +54,7 @@ pub struct State {
     pub(crate) editor: EditorSession,
     active_brush: Option<Brush>,
     drag_brush: Option<Brush>,
+    paint_color_index: Option<usize>,
     floating_source_selection: Option<EditorSelection>,
     suppress_swatch_preview: bool,
     last_canvas_click: Option<(Instant, Pos)>,
@@ -73,6 +92,7 @@ impl State {
             editor: EditorSession::default(),
             active_brush: None,
             drag_brush: None,
+            paint_color_index: None,
             floating_source_selection: None,
             suppress_swatch_preview: false,
             last_canvas_click: None,
@@ -612,6 +632,24 @@ impl State {
         }
     }
 
+    pub fn active_paint_color(&self) -> RgbColor {
+        self.active_user_color()
+    }
+
+    pub fn active_paint_color_index(&self) -> usize {
+        self.paint_color_index
+            .or_else(|| palette_index(self.active_user_color()))
+            .unwrap_or(1)
+    }
+
+    pub fn cycle_paint_color(&mut self, delta: isize) {
+        let len = PAINT_PALETTE.len() as isize;
+        let current = self.active_paint_color_index() as isize;
+        let next = (current + delta).rem_euclid(len) as usize;
+        self.paint_color_index = Some(next);
+        self.suppress_swatch_preview = false;
+    }
+
     pub fn swatches(&self) -> &[Option<Swatch>; SWATCH_CAPACITY] {
         &self.editor.swatches
     }
@@ -1026,9 +1064,10 @@ impl State {
     }
 
     fn active_user_color(&self) -> RgbColor {
-        self.snapshot
-            .your_color
-            .unwrap_or_else(|| RgbColor::new(255, 196, 64))
+        self.paint_color_index
+            .and_then(|idx| PAINT_PALETTE.get(idx).copied())
+            .or(self.snapshot.your_color)
+            .unwrap_or(PAINT_PALETTE[1])
     }
 
     fn swatch_preview_suppressed(&self) -> bool {
@@ -1211,7 +1250,7 @@ fn owner_initial(username: &str) -> char {
 }
 
 fn owner_color(username: &str) -> RgbColor {
-    const PALETTE: [RgbColor; 8] = [
+    const OWNER_PALETTE: [RgbColor; 8] = [
         RgbColor::new(255, 110, 64),
         RgbColor::new(255, 196, 64),
         RgbColor::new(145, 226, 88),
@@ -1225,8 +1264,14 @@ fn owner_color(username: &str) -> RgbColor {
     let idx = username
         .bytes()
         .fold(0usize, |acc, byte| acc.wrapping_add(byte as usize))
-        % PALETTE.len();
-    PALETTE[idx]
+        % OWNER_PALETTE.len();
+    OWNER_PALETTE[idx]
+}
+
+fn palette_index(color: RgbColor) -> Option<usize> {
+    PAINT_PALETTE
+        .iter()
+        .position(|candidate| *candidate == color)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1411,7 +1456,7 @@ mod tests {
             provenance: ArtboardProvenance::default(),
             your_name: "painter".to_string(),
             your_user_id: Some(1),
-            your_color: Some(RgbColor::new(255, 196, 64)),
+            your_color: Some(PAINT_PALETTE[1]),
             ..Default::default()
         };
         let svc = DartboardService::disconnected_for_tests(snapshot);
@@ -1472,6 +1517,33 @@ mod tests {
         state.type_char('A', (80, 24));
         assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'A');
         assert_eq!(state.cursor(), Pos { x: 1, y: 0 });
+    }
+
+    #[test]
+    fn paint_color_cycles_and_typed_glyphs_use_selection() {
+        let mut state = test_state();
+        assert_eq!(state.active_paint_color_index(), 1);
+
+        state.cycle_paint_color(1);
+        assert_eq!(state.active_paint_color_index(), 2);
+        assert_eq!(state.active_paint_color(), PAINT_PALETTE[2]);
+
+        state.type_char('C', (80, 24));
+        assert_eq!(
+            state.snapshot.canvas.fg(Pos { x: 0, y: 0 }),
+            Some(PAINT_PALETTE[2])
+        );
+    }
+
+    #[test]
+    fn paint_color_cycle_wraps() {
+        let mut state = test_state();
+        state.cycle_paint_color(-2);
+        assert_eq!(state.active_paint_color_index(), PAINT_PALETTE.len() - 1);
+        assert_eq!(
+            state.active_paint_color(),
+            PAINT_PALETTE[PAINT_PALETTE.len() - 1]
+        );
     }
 
     #[test]
