@@ -1093,8 +1093,9 @@ async fn render_once(
         (frame, terminal_commands)
     };
 
-    match timeout(Duration::from_millis(50), handle.data(channel_id, frame)).await {
-        Ok(Ok(())) => {}
+    let frame_sent = match timeout(Duration::from_millis(50), handle.data(channel_id, frame)).await
+    {
+        Ok(Ok(())) => true,
         Ok(Err(err)) => {
             return Err(anyhow::anyhow!(
                 "render_once: handle send failed: {:?}",
@@ -1107,6 +1108,18 @@ async fn render_once(
             if drops.is_multiple_of(frame_drop_log_every) {
                 tracing::debug!(drops, "frame drops (handle busy)");
             }
+            false
+        }
+    };
+
+    if !frame_sent {
+        // `app.render()` already advanced ratatui's diff buffers. If the SSH
+        // write is dropped, force the next successful frame to repaint from a
+        // blank previous buffer so old terminal cells cannot leak through.
+        let mut app = app.lock().await;
+        app.reset_render();
+        if !signal.dirty.swap(true, Ordering::AcqRel) {
+            signal.notify.notify_one();
         }
     }
 

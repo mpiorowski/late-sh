@@ -114,6 +114,94 @@ async fn emits_message_created_and_send_succeeded_when_sender_is_member() {
 }
 
 #[tokio::test]
+async fn dm_message_rejoins_recipient_who_left() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let sender = create_test_user(&test_db.db, "dm_reopen_sender").await;
+    let recipient = create_test_user(&test_db.db, "dm_reopen_recipient").await;
+    let room = ChatRoom::get_or_create_dm(&client, sender.id, recipient.id)
+        .await
+        .expect("dm room");
+    ChatRoomMember::join(&client, room.id, sender.id)
+        .await
+        .expect("join sender");
+    ChatRoomMember::join(&client, room.id, recipient.id)
+        .await
+        .expect("join recipient");
+    ChatRoomMember::leave(&client, room.id, recipient.id)
+        .await
+        .expect("recipient leaves");
+
+    assert!(
+        !ChatRoomMember::is_member(&client, room.id, recipient.id)
+            .await
+            .expect("recipient membership check"),
+        "recipient should start outside the DM"
+    );
+
+    let request_id = Uuid::now_v7();
+    service.send_message_task(
+        sender.id,
+        room.id,
+        room.slug.clone(),
+        "ping after leave".to_string(),
+        request_id,
+        false,
+    );
+
+    let first = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("first event timeout")
+        .expect("first event");
+    let second = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("second event timeout")
+        .expect("second event");
+
+    let mut saw_created = false;
+    let mut saw_success = false;
+    for event in [first, second] {
+        match event {
+            ChatEvent::MessageCreated {
+                message,
+                target_user_ids,
+            } => {
+                saw_created = true;
+                assert_eq!(message.room_id, room.id);
+                assert_eq!(message.user_id, sender.id);
+                let targets = target_user_ids.expect("dm message should be targeted");
+                assert!(targets.contains(&sender.id));
+                assert!(targets.contains(&recipient.id));
+            }
+            ChatEvent::SendSucceeded {
+                user_id,
+                request_id: got_request,
+            } => {
+                saw_success = true;
+                assert_eq!(user_id, sender.id);
+                assert_eq!(got_request, request_id);
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_created, "expected MessageCreated event");
+    assert!(saw_success, "expected SendSucceeded event");
+    assert!(
+        ChatRoomMember::is_member(&client, room.id, recipient.id)
+            .await
+            .expect("recipient membership check"),
+        "recipient should be rejoined when a DM arrives"
+    );
+}
+
+#[tokio::test]
 async fn emits_message_reactions_updated_when_member_reacts() {
     let test_db = new_test_db().await;
     let service = ChatService::new(

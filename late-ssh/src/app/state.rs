@@ -795,8 +795,7 @@ impl App {
     }
 
     /// Reset the terminal diff state so the next `render()` emits a full frame.
-    /// Used by integration test helpers.
-    #[allow(dead_code)]
+    /// Used after dropped SSH frames and by integration test helpers.
     pub fn reset_render(&mut self) {
         let _ = self.terminal.clear();
         self.shared.take();

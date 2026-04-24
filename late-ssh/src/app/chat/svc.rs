@@ -567,6 +567,19 @@ impl ChatService {
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
+        let room = ChatRoom::get(client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("room not found"))?;
+        if room.kind == "dm" {
+            let user_a = room
+                .dm_user_a
+                .ok_or_else(|| anyhow::anyhow!("dm room is missing first participant"))?;
+            let user_b = room
+                .dm_user_b
+                .ok_or_else(|| anyhow::anyhow!("dm room is missing second participant"))?;
+            ChatRoomMember::join(client, room_id, user_a).await?;
+            ChatRoomMember::join(client, room_id, user_b).await?;
+        }
 
         let message = ChatMessageParams {
             room_id,

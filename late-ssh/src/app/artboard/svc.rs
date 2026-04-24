@@ -80,6 +80,27 @@ pub enum ArtboardArchiveResult {
     Failed(String),
 }
 
+pub struct ArtboardArchiveLoader {
+    service: ArtboardSnapshotService,
+    tx: tokio_mpsc::UnboundedSender<ArtboardArchiveResult>,
+    rx: tokio_mpsc::UnboundedReceiver<ArtboardArchiveResult>,
+}
+
+impl ArtboardArchiveLoader {
+    pub fn new(service: ArtboardSnapshotService) -> Self {
+        let (tx, rx) = tokio_mpsc::unbounded_channel();
+        Self { service, tx, rx }
+    }
+
+    pub fn request_list(&self) {
+        self.service.list_archives_task(self.tx.clone());
+    }
+
+    pub fn try_recv(&mut self) -> Option<ArtboardArchiveResult> {
+        self.rx.try_recv().ok()
+    }
+}
+
 #[derive(Clone)]
 pub struct ArtboardSnapshotService {
     db: Option<Db>,
@@ -94,7 +115,7 @@ impl ArtboardSnapshotService {
         Self { db: None }
     }
 
-    pub fn list_archives_task(&self, tx: tokio_mpsc::UnboundedSender<ArtboardArchiveResult>) {
+    fn list_archives_task(&self, tx: tokio_mpsc::UnboundedSender<ArtboardArchiveResult>) {
         let Some(db) = self.db.clone() else {
             let _ = tx.send(ArtboardArchiveResult::Loaded(Vec::new()));
             return;

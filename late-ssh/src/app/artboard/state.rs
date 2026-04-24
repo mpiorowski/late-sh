@@ -15,13 +15,13 @@ use ratatui::layout::Rect;
 use std::{cell::Cell, time::Instant};
 use tokio::sync::{
     broadcast::{self, error::TryRecvError},
-    mpsc as tokio_mpsc, watch,
+    watch,
 };
 
 use super::provenance::{SharedArtboardProvenance, apply_shared_op};
 use super::svc::{
-    ArtboardArchiveResult, ArtboardArchiveSnapshot, ArtboardSnapshotService, DartboardEvent,
-    DartboardService, DartboardSnapshot,
+    ArtboardArchiveLoader, ArtboardArchiveResult, ArtboardArchiveSnapshot, ArtboardSnapshotService,
+    DartboardEvent, DartboardService, DartboardSnapshot,
 };
 use crate::app::icon_picker::{self, catalog::IconCatalogData};
 
@@ -51,9 +51,7 @@ pub struct State {
     hover_pos: Option<Pos>,
     snapshot_rx: watch::Receiver<DartboardSnapshot>,
     event_rx: broadcast::Receiver<DartboardEvent>,
-    snapshot_service: ArtboardSnapshotService,
-    archive_rx: tokio_mpsc::UnboundedReceiver<ArtboardArchiveResult>,
-    archive_tx: tokio_mpsc::UnboundedSender<ArtboardArchiveResult>,
+    archive_loader: ArtboardArchiveLoader,
     snapshot_browser: SnapshotBrowserState,
 }
 
@@ -67,7 +65,7 @@ impl State {
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
         let event_rx = svc.subscribe_events();
-        let (archive_tx, archive_rx) = tokio_mpsc::unbounded_channel();
+        let archive_loader = ArtboardArchiveLoader::new(snapshot_service);
         Self {
             snapshot,
             private_notice: None,
@@ -90,9 +88,7 @@ impl State {
             hover_pos: None,
             snapshot_rx,
             event_rx,
-            snapshot_service,
-            archive_rx,
-            archive_tx,
+            archive_loader,
             snapshot_browser: SnapshotBrowserState::default(),
         }
     }
@@ -752,8 +748,7 @@ impl State {
             })
             .unwrap_or(0);
         self.clamp_snapshot_browser_selection();
-        self.snapshot_service
-            .list_archives_task(self.archive_tx.clone());
+        self.archive_loader.request_list();
     }
 
     pub fn close_snapshot_browser(&mut self) {
@@ -981,7 +976,7 @@ impl State {
     }
 
     fn drain_archive_results(&mut self) {
-        while let Ok(result) = self.archive_rx.try_recv() {
+        while let Some(result) = self.archive_loader.try_recv() {
             self.snapshot_browser.loading = false;
             match result {
                 ArtboardArchiveResult::Loaded(items) => {

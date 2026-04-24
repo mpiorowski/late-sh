@@ -1263,6 +1263,14 @@ impl ChatState {
                     {
                         continue;
                     }
+                    if is_targeted
+                        && !self
+                            .rooms
+                            .iter()
+                            .any(|(room, _)| room.id == message.room_id)
+                    {
+                        self.request_list();
+                    }
                     // Desktop notification queueing. target_user_ids is Some for
                     // DM/private rooms, None for public rooms. Don't notify on
                     // messages we authored ourselves.
