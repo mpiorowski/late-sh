@@ -1334,10 +1334,10 @@ mod tests {
     #[test]
     fn swatch_boxes_use_full_artboard_width_below_short_info_block() {
         let state = test_state();
-        let rects = swatch_box_rects((80, 24), &state);
-        assert_eq!(rects[0], Some(Rect::new(9, 14, 16, 8)));
-        assert_eq!(rects[1], Some(Rect::new(24, 14, 16, 8)));
-        assert_eq!(rects[2], Some(Rect::new(39, 14, 16, 8)));
+        let rects = swatch_box_rects((80, 26), &state);
+        assert_eq!(rects[0], Some(Rect::new(9, 16, 16, 8)));
+        assert_eq!(rects[1], Some(Rect::new(24, 16, 16, 8)));
+        assert_eq!(rects[2], Some(Rect::new(39, 16, 16, 8)));
         assert!(rects[3].is_none());
     }
 
@@ -1389,20 +1389,28 @@ mod tests {
             clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('B'))]),
             pinned: false,
         });
-        let rects = swatch_box_rects((80, 24), &state);
+        let screen_size = (80, 26);
+        let rects = swatch_box_rects(screen_size, &state);
+        let first = rects[0].expect("first swatch visible");
         let second = rects[1].expect("second swatch visible");
+        let first_body = swatch_body_rect(first);
         let second_pin = swatch_pin_rect(second);
 
         assert_eq!(
-            swatch_hit((80, 24), &state, 11, 16),
+            swatch_hit(screen_size, &state, first_body.x + 1, first_body.y + 1),
             Some(SwatchHit::Body(0))
         );
         assert_eq!(
-            swatch_hit((80, 24), &state, 23, 21),
+            swatch_hit(
+                screen_size,
+                &state,
+                first_body.right(),
+                first_body.bottom().saturating_sub(1),
+            ),
             Some(SwatchHit::Body(0))
         );
         assert_eq!(
-            swatch_hit((80, 24), &state, second_pin.x + 1, second_pin.y + 1),
+            swatch_hit(screen_size, &state, second_pin.x + 1, second_pin.y + 1),
             Some(SwatchHit::Pin(1))
         );
     }
