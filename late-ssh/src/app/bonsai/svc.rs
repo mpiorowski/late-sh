@@ -202,6 +202,25 @@ impl BonsaiService {
         DailyCare::clear_cut_branches(&client, user_id, care_date).await
     }
 
+    pub fn reset_daily_care_task(&self, user_id: Uuid, care_date: NaiveDate, branch_goal: i32) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.reset_daily_care(user_id, care_date, branch_goal).await {
+                tracing::error!(error = ?e, "failed to reset daily bonsai care");
+            }
+        });
+    }
+
+    async fn reset_daily_care(
+        &self,
+        user_id: Uuid,
+        care_date: NaiveDate,
+        branch_goal: i32,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        DailyCare::reset_for_respawn(&client, user_id, care_date, branch_goal).await
+    }
+
     /// Add connection-time growth (called periodically from tick)
     pub fn add_growth_task(&self, user_id: Uuid, points: i32) {
         let svc = self.clone();

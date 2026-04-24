@@ -103,6 +103,16 @@ impl BonsaiCareState {
         self.mode = CareMode::Prune;
     }
 
+    pub fn reset_for_respawn(&mut self, seed: i64) {
+        self.watered = false;
+        self.cut_branch_ids.clear();
+        self.branch_goal = branch_goal_for(Stage::Seed, seed, self.date);
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+        self.mode = CareMode::Water;
+        self.water_animation_ticks = 0;
+    }
+
     pub fn cut_at_cursor(&mut self, targets: &[BranchTarget]) -> Option<i32> {
         let Some(target) = targets
             .iter()

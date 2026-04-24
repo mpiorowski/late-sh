@@ -228,6 +228,28 @@ impl DailyCare {
         Ok(())
     }
 
+    pub async fn reset_for_respawn(
+        client: &Client,
+        user_id: Uuid,
+        care_date: NaiveDate,
+        branch_goal: i32,
+    ) -> Result<()> {
+        client
+            .execute(
+                "UPDATE bonsai_daily_care
+                 SET watered = false,
+                     cut_branch_ids = '{}',
+                     branch_goal = $3,
+                     water_penalty_applied = false,
+                     prune_penalty_applied = false,
+                     updated = current_timestamp
+                 WHERE user_id = $1 AND care_date = $2",
+                &[&user_id, &care_date, &branch_goal],
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn unapplied_before(
         client: &Client,
         user_id: Uuid,

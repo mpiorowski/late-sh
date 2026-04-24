@@ -161,6 +161,15 @@ impl BonsaiState {
             .clear_daily_branches_task(self.user_id, BonsaiService::today());
     }
 
+    pub(crate) fn reset_daily_care_for_respawn(
+        &mut self,
+        care_date: chrono::NaiveDate,
+        branch_goal: i32,
+    ) {
+        self.svc
+            .reset_daily_care_task(self.user_id, care_date, branch_goal);
+    }
+
     pub(crate) fn punish_wrong_cut(&mut self) -> i32 {
         if !self.is_alive || self.growth_points <= 0 {
             return 0;

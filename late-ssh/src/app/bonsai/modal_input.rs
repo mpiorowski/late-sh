@@ -11,9 +11,11 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     }
 
     match event {
+        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'w' | b'W') | ParsedInput::Char('w' | 'W') => water(app),
         ParsedInput::Byte(b'p' | b'P') | ParsedInput::Char('p' | 'P') => prune_tree(app),
         ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => cut_branch(app),
+        ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => copy_snippet(app),
         ParsedInput::Byte(b'h' | b'H')
         | ParsedInput::Char('h' | 'H')
         | ParsedInput::Arrow(b'D') => {
@@ -50,6 +52,12 @@ pub(crate) fn handle_escape(app: &mut App) {
 fn water(app: &mut App) {
     if !app.bonsai_state.is_alive {
         app.bonsai_state.respawn();
+        app.bonsai_care_state
+            .reset_for_respawn(app.bonsai_state.seed);
+        app.bonsai_state.reset_daily_care_for_respawn(
+            app.bonsai_care_state.date,
+            app.bonsai_care_state.branch_goal as i32,
+        );
         app.bonsai_care_state.message = Some("New seed planted".to_string());
         return;
     }
@@ -141,4 +149,17 @@ fn is_close_event(event: &ParsedInput) -> bool {
 
 fn close(app: &mut App) {
     app.show_bonsai_modal = false;
+}
+
+fn open_help(app: &mut App) {
+    app.help_modal_state
+        .open(crate::app::help_modal::data::HelpTopic::Bonsai);
+    app.show_help = true;
+}
+
+fn copy_snippet(app: &mut App) {
+    app.pending_clipboard = Some(app.bonsai_state.share_snippet());
+    app.banner = Some(crate::app::common::primitives::Banner::success(
+        "Bonsai copied to clipboard!",
+    ));
 }

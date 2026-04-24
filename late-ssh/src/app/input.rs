@@ -1350,22 +1350,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'x' | b'X' if !ctx.chat_composing && !ctx.news_composing => {
-            if app.bonsai_state.cut() {
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Bonsai pruned!",
-                ));
-            } else if !app.bonsai_state.is_alive {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Can't prune a dead tree",
-                ));
-            } else {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Not enough growth to prune",
-                ));
-            }
-            true
-        }
         b'w' | b'W' if !ctx.chat_composing && !ctx.news_composing => {
             app.show_help = false;
             app.show_profile_modal = false;
