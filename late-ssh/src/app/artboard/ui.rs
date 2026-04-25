@@ -114,7 +114,11 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
     lines.push(info_label_value("Cursor", cursor_value, cursor_color));
     lines.push(info_label_value(
         "Color",
-        format!("{}/{}", state.active_paint_color_index() + 1, PAINT_PALETTE.len()),
+        format!(
+            "{}/{}",
+            state.active_paint_color_index() + 1,
+            PAINT_PALETTE.len()
+        ),
         rgb(state.active_paint_color()),
     ));
     lines.push(info_label_value(
@@ -221,7 +225,11 @@ fn color_palette_line(
     )];
     for (idx, color) in PAINT_PALETTE[start..end].iter().copied().enumerate() {
         let palette_idx = start + idx;
-        let marker = if palette_idx == active_idx { "●" } else { "■" };
+        let marker = if palette_idx == active_idx {
+            "●"
+        } else {
+            "■"
+        };
         spans.push(Span::styled(marker, Style::default().fg(rgb(color))));
     }
     Line::from(spans)
