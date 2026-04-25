@@ -16,8 +16,8 @@ use super::data::lines_for;
 use super::state::{HelpTab, PAINT_PALETTE, PRIMARY_SWATCH_IDX, State};
 
 const INFO_WIDTH: u16 = 21;
-const SWATCH_BOX_WIDTH: u16 = 16;
-const SWATCH_BOX_HEIGHT: u16 = 8;
+const SWATCH_BOX_WIDTH: u16 = 8;
+const SWATCH_BOX_HEIGHT: u16 = 4;
 const SWATCH_BOTTOM_CLEARANCE: u16 = 1;
 const SWATCH_NOTICE_CLEARANCE: u16 = 1;
 const PIN_UNPINNED: char = '📌';
@@ -1281,10 +1281,11 @@ mod tests {
     fn swatch_boxes_use_full_artboard_width_below_short_info_block() {
         let state = test_state();
         let rects = swatch_box_rects((80, 26), &state);
-        assert_eq!(rects[0], Some(Rect::new(9, 16, 16, 8)));
-        assert_eq!(rects[1], Some(Rect::new(24, 16, 16, 8)));
-        assert_eq!(rects[2], Some(Rect::new(39, 16, 16, 8)));
-        assert!(rects[3].is_none());
+        assert_eq!(rects[0], Some(Rect::new(19, 20, 8, 4)));
+        assert_eq!(rects[1], Some(Rect::new(26, 20, 8, 4)));
+        assert_eq!(rects[2], Some(Rect::new(33, 20, 8, 4)));
+        assert_eq!(rects[3], Some(Rect::new(40, 20, 8, 4)));
+        assert_eq!(rects[4], Some(Rect::new(47, 20, 8, 4)));
     }
 
     #[test]
@@ -1298,8 +1299,9 @@ mod tests {
             })
             .collect();
         let rects = swatch_box_rects((80, 24), &state);
-        assert_eq!(rects[0], Some(Rect::new(11, 14, 16, 8)));
-        assert!(rects[1].is_none());
+        assert_eq!(rects[0], Some(Rect::new(5, 18, 8, 4)));
+        assert_eq!(rects[1], Some(Rect::new(12, 18, 8, 4)));
+        assert_eq!(rects[2], Some(Rect::new(19, 18, 8, 4)));
     }
 
     #[test]
@@ -1307,7 +1309,7 @@ mod tests {
         let mut state = test_state();
         state.private_notice = Some("Heads up".to_string());
         let rects = swatch_box_rects((80, 24), &state);
-        assert_eq!(rects[0], Some(Rect::new(11, 13, 16, 8)));
+        assert_eq!(rects[0], Some(Rect::new(19, 17, 8, 4)));
     }
 
     #[test]
