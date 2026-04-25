@@ -4,198 +4,521 @@
 
 {% block content %}
 <style>
-    .gallery-shell {
-        max-width: 92rem;
-        margin: 0 auto;
-        display: grid;
-        grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
-        gap: 1rem;
+    html, body {
+        overflow: hidden !important;
+        overscroll-behavior: none;
     }
 
-    .gallery-panel {
-        background: #111827;
-        border: 1px solid #1f2937;
+    .gal-root {
+        position: fixed;
+        inset: 0;
+        background: #020617;
+        color: #e5e7eb;
+        display: flex;
+        flex-direction: column;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        z-index: 1;
     }
 
-    .snapshot-link {
+    .gal-topbar {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.55rem 0.9rem;
+        border-bottom: 1px solid #0f172a;
+        background: #050b18;
+        flex-shrink: 0;
+        font-size: 0.8rem;
+    }
+
+    .gal-topbar a { color: inherit; text-decoration: none; }
+    .gal-topbar .crumb-sep { color: #1f2937; }
+    .gal-topbar .meta { margin-left: auto; color: #4b5563; font-size: 0.7rem; }
+
+    .gal-body {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        background: #020617;
+    }
+
+    .gal-side {
+        width: 16rem;
+        flex-shrink: 0;
+        border-right: 1px solid #0f172a;
+        background: #050b18;
+        overflow: hidden auto;
+        transition: width 0.18s ease;
+    }
+    .gal-side.collapsed {
+        width: 0;
+        border-right-width: 0;
+    }
+    .gal-side-inner {
+        width: 16rem;
+        padding: 1rem 0.85rem;
+    }
+
+    .gal-side h2 {
+        margin: 0 0 0.4rem;
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #4b5563;
+    }
+    .gal-side section + section { margin-top: 1.1rem; }
+
+    .snap-link {
         display: block;
-        padding: 0.55rem 0.7rem;
+        padding: 0.4rem 0.55rem;
+        margin: 0.15rem 0;
         border: 1px solid transparent;
         color: #9ca3af;
         text-decoration: none;
+        font-size: 0.78rem;
+        line-height: 1.2;
     }
-
-    .snapshot-link:hover,
-    .snapshot-link.active {
+    .snap-link:hover {
+        color: #e5e7eb;
+        border-color: #1f2937;
+    }
+    .snap-link.active {
         color: #f9fafb;
         border-color: #065f46;
         background: #052e26;
     }
-
-    .snapshot-meta {
+    .snap-meta {
         display: block;
         margin-top: 0.15rem;
-        color: #6b7280;
-        font-size: 0.7rem;
+        color: #4b5563;
+        font-size: 0.65rem;
+    }
+    .snap-empty {
+        font-size: 0.72rem;
+        color: #4b5563;
+        padding: 0.25rem 0.55rem;
     }
 
-    .gallery-canvas-wrap {
-        overflow: auto;
-        background: #030712;
-        border: 1px solid #1f2937;
-        max-height: 72vh;
+    .gal-stage {
+        flex: 1;
+        position: relative;
+        overflow: hidden;
+        background-color: #020617;
+        background-image:
+            linear-gradient(rgba(31, 41, 55, 0.35) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(31, 41, 55, 0.35) 1px, transparent 1px);
+        background-size: 32px 32px;
+        cursor: grab;
+        user-select: none;
+        touch-action: none;
+    }
+    .gal-stage.is-panning { cursor: grabbing; }
+    .gal-stage.is-empty { cursor: default; }
+
+    .gal-frame {
+        position: absolute;
+        top: 0;
+        left: 0;
+        transform-origin: 0 0;
+        will-change: transform;
     }
 
     #gallery-canvas {
         display: block;
         image-rendering: pixelated;
+        background: #030712;
+        box-shadow:
+            0 0 0 1px #1f2937,
+            0 30px 80px -20px rgba(0, 0, 0, 0.85),
+            0 0 60px -10px rgba(16, 185, 129, 0.08);
     }
 
-    @media (max-width: 900px) {
-        .gallery-shell {
-            grid-template-columns: 1fr;
+    .gal-toolbar {
+        position: absolute;
+        right: 0.85rem;
+        bottom: 0.85rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        z-index: 4;
+    }
+    .gal-btn {
+        width: 2.1rem;
+        height: 2.1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(11, 19, 34, 0.85);
+        border: 1px solid #1f2937;
+        color: #9ca3af;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 0.85rem;
+        backdrop-filter: blur(4px);
+        transition: color 0.15s ease, border-color 0.15s ease;
+    }
+    .gal-btn:hover {
+        color: #d1fae5;
+        border-color: #065f46;
+    }
+    .gal-btn svg { width: 14px; height: 14px; }
+
+    .gal-status {
+        position: absolute;
+        left: 0.85rem;
+        bottom: 0.85rem;
+        font-size: 0.72rem;
+        color: #6b7280;
+        background: rgba(2, 6, 23, 0.7);
+        backdrop-filter: blur(4px);
+        padding: 0.35rem 0.65rem;
+        border: 1px solid #0f172a;
+        z-index: 4;
+        pointer-events: none;
+        max-width: calc(100% - 5rem);
+    }
+    .gal-zoom {
+        position: absolute;
+        right: 0.85rem;
+        top: 0.85rem;
+        font-size: 0.7rem;
+        color: #6b7280;
+        background: rgba(2, 6, 23, 0.7);
+        backdrop-filter: blur(4px);
+        padding: 0.25rem 0.55rem;
+        border: 1px solid #0f172a;
+        z-index: 4;
+        pointer-events: none;
+    }
+
+    .gal-empty {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #4b5563;
+        font-size: 0.85rem;
+    }
+
+    @media (max-width: 768px) {
+        .gal-side {
+            position: absolute;
+            inset: 0 auto 0 0;
+            z-index: 6;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
         }
+        .gal-status { font-size: 0.65rem; }
     }
 </style>
 
-<div class="gallery-shell">
-    <aside class="gallery-panel p-4">
-        <div class="mb-5">
-            <h1 class="text-xl text-white font-semibold">Artboard Gallery</h1>
-            <p class="mt-1 text-xs text-gray-500">saved snapshots only</p>
-        </div>
+<div class="gal-root"
+     x-data="gallery()"
+     x-init="init()"
+     @keydown.window="onKey($event)">
 
-        <section class="mb-5">
-            <h2 class="mb-2 text-xs uppercase tracking-wide text-gray-500">Live</h2>
-            {% if show_live_empty %}
-            <div class="text-sm text-gray-600">not saved yet</div>
-            {% endif %}
-            {% for item in live_items %}
-            <a class="snapshot-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
-                {{ item.label }}
-                <span class="snapshot-meta">{{ item.meta }}</span>
-            </a>
-            {% endfor %}
-        </section>
-
-        <section class="mb-5">
-            <h2 class="mb-2 text-xs uppercase tracking-wide text-gray-500">Daily</h2>
-            {% if show_daily_empty %}
-            <div class="text-sm text-gray-600">none yet</div>
-            {% endif %}
-            {% for item in daily_items %}
-            <a class="snapshot-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
-                {{ item.label }}
-                <span class="snapshot-meta">{{ item.meta }}</span>
-            </a>
-            {% endfor %}
-        </section>
-
-        <section>
-            <h2 class="mb-2 text-xs uppercase tracking-wide text-gray-500">Monthly</h2>
-            {% if show_monthly_empty %}
-            <div class="text-sm text-gray-600">none yet</div>
-            {% endif %}
-            {% for item in monthly_items %}
-            <a class="snapshot-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
-                {{ item.label }}
-                <span class="snapshot-meta">{{ item.meta }}</span>
-            </a>
-            {% endfor %}
-        </section>
-    </aside>
-
-    <section class="min-w-0">
+    <header class="gal-topbar">
+        <button type="button"
+                class="gal-btn"
+                style="width: 1.9rem; height: 1.9rem;"
+                @click="sidebarHidden = !sidebarHidden"
+                aria-label="toggle snapshots panel"
+                title="toggle list (s)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+                <line x1="4" y1="6" x2="20" y2="6"></line>
+                <line x1="4" y1="12" x2="20" y2="12"></line>
+                <line x1="4" y1="18" x2="20" y2="18"></line>
+            </svg>
+        </button>
+        <a href="/" class="text-green-500 tracking-tight">late.sh</a>
+        <span class="crumb-sep">/</span>
+        <span class="text-gray-400">gallery</span>
         {% if has_selected %}
-        <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
-            <div>
-                <h2 class="text-2xl text-white font-semibold">{{ selected_title }}</h2>
-                <div class="mt-1 text-xs text-gray-500">
-                    saved {{ selected_updated }} · {{ selected_cell_count }} cells · {{ selected_author_count }} authors
-                </div>
-            </div>
-            <div id="gallery-cell-status" class="text-sm text-gray-400">move over the board</div>
-        </div>
-
-        <div class="gallery-canvas-wrap">
-            <canvas id="gallery-canvas" aria-label="{{ selected_title }}"></canvas>
-        </div>
-
-        <script id="snapshot-data" type="application/json">{{ snapshot_json|safe }}</script>
-        <script>
-            (() => {
-                const dataEl = document.getElementById('snapshot-data');
-                const canvas = document.getElementById('gallery-canvas');
-                const status = document.getElementById('gallery-cell-status');
-                if (!dataEl || !canvas || !status) return;
-
-                const snapshot = JSON.parse(dataEl.textContent);
-                const ctx = canvas.getContext('2d');
-                const cellW = 8;
-                const cellH = 16;
-                const fontSize = 14;
-                const keyFor = (x, y) => `${x},${y}`;
-                const glyphs = new Map();
-                const authors = new Map();
-
-                for (const author of snapshot.authors) {
-                    authors.set(keyFor(author.x, author.y), author.username);
-                }
-                for (const cell of snapshot.cells) {
-                    glyphs.set(keyFor(cell.x, cell.y), cell);
-                    if (cell.width === 2 && cell.x + 1 < snapshot.width) {
-                        glyphs.set(keyFor(cell.x + 1, cell.y), cell);
-                        if (cell.author) authors.set(keyFor(cell.x + 1, cell.y), cell.author);
-                    }
-                    if (cell.author) authors.set(keyFor(cell.x, cell.y), cell.author);
-                }
-
-                function renderSnapshot() {
-                    canvas.width = snapshot.width * cellW;
-                    canvas.height = snapshot.height * cellH;
-                    canvas.style.width = `${canvas.width}px`;
-                    canvas.style.height = `${canvas.height}px`;
-
-                    ctx.fillStyle = '#030712';
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
-                    ctx.textBaseline = 'top';
-
-                    for (const cell of snapshot.cells) {
-                        ctx.fillStyle = cell.fg || '#d1d5db';
-                        ctx.fillText(cell.ch, cell.x * cellW, cell.y * cellH);
-                    }
-                }
-
-                function updateStatus(event) {
-                    const rect = canvas.getBoundingClientRect();
-                    const x = Math.floor((event.clientX - rect.left) * snapshot.width / rect.width);
-                    const y = Math.floor((event.clientY - rect.top) * snapshot.height / rect.height);
-                    if (x < 0 || y < 0 || x >= snapshot.width || y >= snapshot.height) {
-                        status.textContent = 'move over the board';
-                        return;
-                    }
-
-                    const key = keyFor(x, y);
-                    const glyph = glyphs.get(key);
-                    const author = (glyph && glyph.author) || authors.get(key);
-                    const cellText = glyph ? `cell "${glyph.ch}"` : 'empty cell';
-                    const authorText = author ? `by ${author}` : 'unknown author';
-                    status.textContent = `${x},${y} · ${cellText} · ${authorText}`;
-                }
-
-                renderSnapshot();
-                canvas.addEventListener('mousemove', updateStatus);
-                canvas.addEventListener('mouseleave', () => {
-                    status.textContent = 'move over the board';
-                });
-            })();
-        </script>
+        <span class="crumb-sep">/</span>
+        <span class="text-white truncate">{{ selected_title }}</span>
+        <span class="meta">
+            saved {{ selected_updated }} · {{ selected_cell_count }} cells · {{ selected_author_count }} authors
+        </span>
         {% else %}
-        <div class="gallery-panel p-8 text-gray-500">
-            No saved artboard snapshots are available yet.
-        </div>
+        <span class="meta">no snapshots yet</span>
         {% endif %}
-    </section>
+    </header>
+
+    <div class="gal-body">
+        <aside class="gal-side" :class="sidebarHidden && 'collapsed'">
+            <div class="gal-side-inner">
+                <section>
+                    <h2>Live</h2>
+                    {% if show_live_empty %}
+                    <div class="snap-empty">not saved yet</div>
+                    {% endif %}
+                    {% for item in live_items %}
+                    <a class="snap-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
+                        {{ item.label }}
+                        <span class="snap-meta">{{ item.meta }}</span>
+                    </a>
+                    {% endfor %}
+                </section>
+
+                <section>
+                    <h2>Daily</h2>
+                    {% if show_daily_empty %}
+                    <div class="snap-empty">none yet</div>
+                    {% endif %}
+                    {% for item in daily_items %}
+                    <a class="snap-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
+                        {{ item.label }}
+                        <span class="snap-meta">{{ item.meta }}</span>
+                    </a>
+                    {% endfor %}
+                </section>
+
+                <section>
+                    <h2>Monthly</h2>
+                    {% if show_monthly_empty %}
+                    <div class="snap-empty">none yet</div>
+                    {% endif %}
+                    {% for item in monthly_items %}
+                    <a class="snap-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
+                        {{ item.label }}
+                        <span class="snap-meta">{{ item.meta }}</span>
+                    </a>
+                    {% endfor %}
+                </section>
+            </div>
+        </aside>
+
+        <div class="gal-stage"
+             :class="[panning && 'is-panning', !hasSelected && 'is-empty']"
+             x-ref="stage"
+             @mousedown="onMouseDown($event)"
+             @mousemove="onMouseMove($event)"
+             @mouseleave="onMouseLeave()"
+             @wheel.prevent="onWheel($event)"
+             @dblclick="fitToView()">
+
+            {% if has_selected %}
+            <div class="gal-frame" x-ref="frame">
+                <canvas id="gallery-canvas" aria-label="{{ selected_title }}"></canvas>
+            </div>
+
+            <div class="gal-zoom" x-text="zoomLabel"></div>
+            <div class="gal-status" x-text="statusText"></div>
+
+            <div class="gal-toolbar">
+                <button type="button" class="gal-btn" @click="zoomBy(1.25)" title="zoom in (+)">+</button>
+                <button type="button" class="gal-btn" @click="zoomBy(0.8)" title="zoom out (-)">-</button>
+                <button type="button" class="gal-btn" @click="actualSize()" title="100% (1)">1:1</button>
+                <button type="button" class="gal-btn" @click="fitToView()" title="fit (f / dbl-click)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="4 9 4 4 9 4"></polyline>
+                        <polyline points="20 9 20 4 15 4"></polyline>
+                        <polyline points="20 15 20 20 15 20"></polyline>
+                        <polyline points="4 15 4 20 9 20"></polyline>
+                    </svg>
+                </button>
+            </div>
+            {% else %}
+            <div class="gal-empty">no saved artboard snapshots yet</div>
+            {% endif %}
+        </div>
+    </div>
 </div>
+
+{% if has_selected %}
+<script id="snapshot-data" type="application/json">{{ snapshot_json|safe }}</script>
+<script>
+    function gallery() {
+        return {
+            hasSelected: true,
+            sidebarHidden: false,
+            scale: 1,
+            tx: 0,
+            ty: 0,
+            panning: false,
+            panStartX: 0,
+            panStartY: 0,
+            panStartTx: 0,
+            panStartTy: 0,
+            zoomLabel: '100%',
+            statusText: 'drag to pan · scroll to zoom · double-click to fit',
+            defaultStatus: 'drag to pan · scroll to zoom · double-click to fit',
+            cellW: 8,
+            cellH: 16,
+            fontSize: 14,
+            minScale: 0.1,
+            maxScale: 12,
+
+            init() {
+                const dataEl = document.getElementById('snapshot-data');
+                this.snapshot = JSON.parse(dataEl.textContent);
+                this.canvas = document.getElementById('gallery-canvas');
+                this.ctx = this.canvas.getContext('2d');
+
+                this.glyphs = new Map();
+                this.authors = new Map();
+                for (const author of this.snapshot.authors) {
+                    this.authors.set(this.keyFor(author.x, author.y), author.username);
+                }
+                for (const cell of this.snapshot.cells) {
+                    this.glyphs.set(this.keyFor(cell.x, cell.y), cell);
+                    if (cell.width === 2 && cell.x + 1 < this.snapshot.width) {
+                        this.glyphs.set(this.keyFor(cell.x + 1, cell.y), cell);
+                        if (cell.author) this.authors.set(this.keyFor(cell.x + 1, cell.y), cell.author);
+                    }
+                    if (cell.author) this.authors.set(this.keyFor(cell.x, cell.y), cell.author);
+                }
+
+                this.renderSnapshot();
+
+                this.$nextTick(() => {
+                    this.fitToView();
+                });
+
+                this._onUp = () => this.endPan();
+                window.addEventListener('mouseup', this._onUp);
+                this._onResize = () => this.clampView();
+                window.addEventListener('resize', this._onResize);
+            },
+
+            keyFor(x, y) { return x + ',' + y; },
+
+            renderSnapshot() {
+                const c = this.canvas;
+                c.width = this.snapshot.width * this.cellW;
+                c.height = this.snapshot.height * this.cellH;
+                c.style.width = c.width + 'px';
+                c.style.height = c.height + 'px';
+
+                const ctx = this.ctx;
+                ctx.fillStyle = '#030712';
+                ctx.fillRect(0, 0, c.width, c.height);
+                ctx.font = this.fontSize + 'px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+                ctx.textBaseline = 'top';
+
+                for (const cell of this.snapshot.cells) {
+                    ctx.fillStyle = cell.fg || '#d1d5db';
+                    ctx.fillText(cell.ch, cell.x * this.cellW, cell.y * this.cellH);
+                }
+            },
+
+            applyTransform() {
+                this.$refs.frame.style.transform =
+                    'translate(' + this.tx + 'px, ' + this.ty + 'px) scale(' + this.scale + ')';
+                this.zoomLabel = Math.round(this.scale * 100) + '%';
+            },
+
+            stageRect() {
+                return this.$refs.stage.getBoundingClientRect();
+            },
+
+            fitToView() {
+                const rect = this.stageRect();
+                const cw = this.canvas.width;
+                const ch = this.canvas.height;
+                const margin = 32;
+                const sx = Math.max(rect.width - margin * 2, 50) / cw;
+                const sy = Math.max(rect.height - margin * 2, 50) / ch;
+                this.scale = Math.min(sx, sy);
+                this.tx = (rect.width - cw * this.scale) / 2;
+                this.ty = (rect.height - ch * this.scale) / 2;
+                this.applyTransform();
+            },
+
+            actualSize() {
+                this.scale = 1;
+                this.tx = 0;
+                this.ty = 0;
+                this.applyTransform();
+            },
+
+            zoomBy(factor) {
+                const rect = this.stageRect();
+                this.zoomAt(factor, rect.width / 2, rect.height / 2);
+            },
+
+            zoomAt(factor, sx, sy) {
+                const next = Math.max(this.minScale, Math.min(this.maxScale, this.scale * factor));
+                if (next === this.scale) return;
+                const k = next / this.scale;
+                this.tx = sx - (sx - this.tx) * k;
+                this.ty = sy - (sy - this.ty) * k;
+                this.scale = next;
+                this.applyTransform();
+            },
+
+            clampView() {
+                this.applyTransform();
+            },
+
+            onMouseDown(e) {
+                if (e.button !== 0) return;
+                if (e.target.closest('.gal-toolbar')) return;
+                this.panning = true;
+                this.panStartX = e.clientX;
+                this.panStartY = e.clientY;
+                this.panStartTx = this.tx;
+                this.panStartTy = this.ty;
+                e.preventDefault();
+            },
+
+            onMouseMove(e) {
+                if (this.panning) {
+                    this.tx = this.panStartTx + (e.clientX - this.panStartX);
+                    this.ty = this.panStartTy + (e.clientY - this.panStartY);
+                    this.applyTransform();
+                    return;
+                }
+                this.updateStatus(e);
+            },
+
+            onMouseLeave() {
+                this.endPan();
+                this.statusText = this.defaultStatus;
+            },
+
+            endPan() { this.panning = false; },
+
+            onWheel(e) {
+                const rect = this.stageRect();
+                const sx = e.clientX - rect.left;
+                const sy = e.clientY - rect.top;
+                const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+                this.zoomAt(factor, sx, sy);
+            },
+
+            onKey(e) {
+                if (e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+                switch (e.key) {
+                    case 'f': case 'F': this.fitToView(); break;
+                    case '1': this.actualSize(); break;
+                    case '+': case '=': this.zoomBy(1.25); break;
+                    case '-': case '_': this.zoomBy(0.8); break;
+                    case 's': case 'S': this.sidebarHidden = !this.sidebarHidden; break;
+                }
+            },
+
+            updateStatus(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) return;
+                const x = Math.floor((e.clientX - rect.left) * this.snapshot.width / rect.width);
+                const y = Math.floor((e.clientY - rect.top) * this.snapshot.height / rect.height);
+                if (x < 0 || y < 0 || x >= this.snapshot.width || y >= this.snapshot.height) {
+                    this.statusText = this.defaultStatus;
+                    return;
+                }
+                const key = this.keyFor(x, y);
+                const glyph = this.glyphs.get(key);
+                const author = (glyph && glyph.author) || this.authors.get(key);
+                const cellText = glyph ? 'cell "' + glyph.ch + '"' : 'empty';
+                const authorText = author ? 'by ' + author : 'no author';
+                this.statusText = x + ',' + y + ' · ' + cellText + ' · ' + authorText;
+            },
+        };
+    }
+</script>
+{% endif %}
 {% endblock %}
