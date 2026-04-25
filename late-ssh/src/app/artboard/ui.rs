@@ -13,7 +13,7 @@ use ratatui::{
 use crate::app::{common::theme, games::ui::info_label_value};
 
 use super::data::lines_for;
-use super::state::{HelpTab, PAINT_PALETTE, PRIMARY_SWATCH_IDX, State};
+use super::state::{BrushMode, HelpTab, PAINT_PALETTE, PRIMARY_SWATCH_IDX, State};
 
 const INFO_WIDTH: u16 = 21;
 const SWATCH_BOX_WIDTH: u16 = 8;
@@ -80,27 +80,26 @@ fn draw_artboard_sidebar(frame: &mut Frame, info_area: Option<Rect>, info_lines:
 }
 
 fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
-    let mode = if state.is_archive_view_active() {
-        "snapshot".to_string()
-    } else if interacting {
-        "active".to_string()
-    } else {
-        "view".to_string()
+    let mode = match (
+        state.is_archive_view_active(),
+        state.brush_mode(),
+        interacting,
+    ) {
+        (true, _, _) => "snapshot".to_string(),
+        (false, BrushMode::Glyph(ch), _) => format!("brush {ch}"),
+        (false, BrushMode::Swatch, _) => "swatch".to_string(),
+        (false, BrushMode::None, true) => "interact".to_string(),
+        (false, BrushMode::None, false) => "view".to_string(),
     };
     let mode_color = if state.is_archive_view_active() {
         theme::SUCCESS()
-    } else if interacting {
+    } else if interacting || !matches!(state.brush_mode(), BrushMode::None) {
         theme::AMBER()
     } else {
         theme::TEXT_BRIGHT()
     };
     let mut lines = vec![info_label_value("Mode", mode, mode_color)];
     let owner_pos = state.owner_subject_pos();
-    lines.push(info_label_value(
-        "Mouse",
-        format!("{},{}", owner_pos.x, owner_pos.y),
-        theme::AMBER(),
-    ));
     let (cursor_value, cursor_color) = if let Some(selection) = state.selection_view() {
         let width = selection.anchor.x.abs_diff(selection.cursor.x) + 1;
         let height = selection.anchor.y.abs_diff(selection.cursor.y) + 1;
@@ -111,7 +110,12 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
             theme::AMBER(),
         )
     };
-    lines.push(info_label_value("Cursor", cursor_value, cursor_color));
+    let owner_value = state.owner_username().unwrap_or("?").to_string();
+    let owner_color = if state.owner_username().is_some() {
+        theme::TEXT_BRIGHT()
+    } else {
+        theme::TEXT_FAINT()
+    };
     lines.push(info_label_value(
         "Color",
         format!(
@@ -127,6 +131,13 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
         rgb(state.active_paint_color()),
     ));
     lines.extend(color_palette_lines(state));
+    lines.push(info_label_value("Cursor", cursor_value, cursor_color));
+    lines.push(info_label_value(
+        "Mouse",
+        format!("{},{}", owner_pos.x, owner_pos.y),
+        theme::AMBER(),
+    ));
+    lines.push(info_label_value("Owner", owner_value, owner_color));
 
     let mut users = Vec::new();
     if !state.snapshot.your_name.is_empty() {
@@ -153,13 +164,6 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
             .into_iter()
             .map(|peer| (peer.name, rgb(peer.color), false)),
     );
-    let owner_value = state.owner_username().unwrap_or("?").to_string();
-    let owner_color = if state.owner_username().is_some() {
-        theme::TEXT_BRIGHT()
-    } else {
-        theme::TEXT_FAINT()
-    };
-    lines.push(info_label_value("Owner", owner_value, owner_color));
     if !state.is_archive_view_active() && !users.is_empty() {
         lines.push(section_label("Users"));
         for (name, color, is_you) in users {
@@ -225,12 +229,16 @@ fn color_palette_line(
     )];
     for (idx, color) in PAINT_PALETTE[start..end].iter().copied().enumerate() {
         let palette_idx = start + idx;
-        let marker = if palette_idx == active_idx {
-            "●"
+        let style = Style::default().bg(rgb(color));
+        let span = if palette_idx == active_idx {
+            Span::styled(
+                "•",
+                style.fg(theme::BG_CANVAS()).add_modifier(Modifier::BOLD),
+            )
         } else {
-            "■"
+            Span::styled(" ", style)
         };
-        spans.push(Span::styled(marker, Style::default().fg(rgb(color))));
+        spans.push(span);
     }
     Line::from(spans)
 }
@@ -1154,7 +1162,7 @@ mod tests {
         let state = test_state();
         assert_eq!(
             artboard_info_area_for_screen((80, 24), &state),
-            Some(Rect::new(27, 1, 28, 15))
+            Some(Rect::new(34, 1, 21, 12))
         );
     }
 
@@ -1240,12 +1248,15 @@ mod tests {
         let lines = artboard_info_lines(&state, false);
 
         assert_eq!(lines[0].to_string(), "Mode       view");
-        assert_eq!(lines[1].to_string(), "Mouse      0,0");
-        assert_eq!(lines[2].to_string(), "Cursor     0,0");
-        assert_eq!(lines[3].to_string(), "Color      2/16");
-        assert_eq!(lines[4].to_string(), "           #FFEC60");
-        assert_eq!(lines[5].to_string(), "Palette    ■●■■■■■■");
-        assert_eq!(lines[6].to_string(), "           ■■■■■■■■");
+        assert_eq!(lines[1].to_string(), "Color      2/16");
+        assert_eq!(lines[2].to_string(), "           #FFEC60");
+        assert_eq!(lines[3].to_string().chars().count(), 19);
+        assert_eq!(lines[4].to_string().chars().count(), 19);
+        assert!(lines[3].to_string().starts_with("Palette"));
+        assert_eq!(lines[3].to_string().matches('•').count(), 1);
+        assert_eq!(lines[4].to_string().matches('•').count(), 0);
+        assert_eq!(lines[5].to_string(), "Cursor     0,0");
+        assert_eq!(lines[6].to_string(), "Mouse      0,0");
         assert_eq!(lines[7].to_string(), "Owner      ?");
         assert_eq!(lines[8].to_string(), "Users");
         assert_eq!(lines[9].to_string(), "• painter (you)");
@@ -1256,8 +1267,8 @@ mod tests {
         let mut state = test_state();
         state.begin_selection_from_cursor();
         let lines = artboard_info_lines(&state, true);
-        assert_eq!(lines[0].to_string(), "Mode       active");
-        assert_eq!(lines[2].to_string(), "Cursor     1x1");
+        assert_eq!(lines[0].to_string(), "Mode       interact");
+        assert_eq!(lines[5].to_string(), "Cursor     1x1");
 
         state.move_right((80, 24));
         state.move_right((80, 24));
@@ -1265,8 +1276,30 @@ mod tests {
         assert!(state.update_selection_to_cursor());
 
         let lines = artboard_info_lines(&state, true);
-        assert_eq!(lines[0].to_string(), "Mode       active");
-        assert_eq!(lines[2].to_string(), "Cursor     3x2");
+        assert_eq!(lines[0].to_string(), "Mode       interact");
+        assert_eq!(lines[5].to_string(), "Cursor     3x2");
+    }
+
+    #[test]
+    fn info_mode_reports_active_brush_kind() {
+        let mut state = test_state();
+        state.type_char('x', (80, 24));
+        assert!(state.activate_temp_glyph_brush_at(dartboard_core::Pos { x: 0, y: 0 }));
+        assert_eq!(
+            artboard_info_lines(&state, true)[0].to_string(),
+            "Mode       brush x"
+        );
+
+        let mut state = test_state();
+        state.editor.swatches[0] = Some(dartboard_editor::Swatch {
+            clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
+            pinned: false,
+        });
+        state.activate_swatch(0);
+        assert_eq!(
+            artboard_info_lines(&state, true)[0].to_string(),
+            "Mode       swatch"
+        );
     }
 
     #[test]
