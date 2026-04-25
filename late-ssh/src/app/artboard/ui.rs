@@ -118,15 +118,6 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
     };
     lines.push(info_label_value(
         "Color",
-        format!(
-            "{}/{}",
-            state.active_paint_color_index() + 1,
-            PAINT_PALETTE.len()
-        ),
-        rgb(state.active_paint_color()),
-    ));
-    lines.push(info_label_value(
-        "",
         rgb_hex(state.active_paint_color()),
         rgb(state.active_paint_color()),
     ));
@@ -1162,7 +1153,7 @@ mod tests {
         let state = test_state();
         assert_eq!(
             artboard_info_area_for_screen((80, 24), &state),
-            Some(Rect::new(34, 1, 21, 12))
+            Some(Rect::new(34, 1, 21, 11))
         );
     }
 
@@ -1248,18 +1239,17 @@ mod tests {
         let lines = artboard_info_lines(&state, false);
 
         assert_eq!(lines[0].to_string(), "Mode       view");
-        assert_eq!(lines[1].to_string(), "Color      2/16");
-        assert_eq!(lines[2].to_string(), "           #FFEC60");
+        assert_eq!(lines[1].to_string(), "Color      #FFEC60");
+        assert_eq!(lines[2].to_string().chars().count(), 19);
         assert_eq!(lines[3].to_string().chars().count(), 19);
-        assert_eq!(lines[4].to_string().chars().count(), 19);
-        assert!(lines[3].to_string().starts_with("Palette"));
-        assert_eq!(lines[3].to_string().matches('•').count(), 1);
-        assert_eq!(lines[4].to_string().matches('•').count(), 0);
-        assert_eq!(lines[5].to_string(), "Cursor     0,0");
-        assert_eq!(lines[6].to_string(), "Mouse      0,0");
-        assert_eq!(lines[7].to_string(), "Owner      ?");
-        assert_eq!(lines[8].to_string(), "Users");
-        assert_eq!(lines[9].to_string(), "• painter (you)");
+        assert!(lines[2].to_string().starts_with("Palette"));
+        assert_eq!(lines[2].to_string().matches('•').count(), 1);
+        assert_eq!(lines[3].to_string().matches('•').count(), 0);
+        assert_eq!(lines[4].to_string(), "Cursor     0,0");
+        assert_eq!(lines[5].to_string(), "Mouse      0,0");
+        assert_eq!(lines[6].to_string(), "Owner      ?");
+        assert_eq!(lines[7].to_string(), "Users");
+        assert_eq!(lines[8].to_string(), "• painter (you)");
     }
 
     #[test]
@@ -1268,7 +1258,7 @@ mod tests {
         state.begin_selection_from_cursor();
         let lines = artboard_info_lines(&state, true);
         assert_eq!(lines[0].to_string(), "Mode       interact");
-        assert_eq!(lines[5].to_string(), "Cursor     1x1");
+        assert_eq!(lines[4].to_string(), "Cursor     1x1");
 
         state.move_right((80, 24));
         state.move_right((80, 24));
@@ -1277,7 +1267,7 @@ mod tests {
 
         let lines = artboard_info_lines(&state, true);
         assert_eq!(lines[0].to_string(), "Mode       interact");
-        assert_eq!(lines[5].to_string(), "Cursor     3x2");
+        assert_eq!(lines[4].to_string(), "Cursor     3x2");
     }
 
     #[test]
