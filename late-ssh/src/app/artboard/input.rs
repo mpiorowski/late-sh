@@ -671,8 +671,8 @@ mod tests {
             &MouseEvent {
                 kind: MouseEventKind::Down,
                 button: Some(MouseButton::Left),
-                x: 11,
-                y: 17,
+                x: 21,
+                y: 20,
                 modifiers: Default::default(),
             },
         );
@@ -685,8 +685,8 @@ mod tests {
             &MouseEvent {
                 kind: MouseEventKind::Up,
                 button: Some(MouseButton::Left),
-                x: 11,
-                y: 17,
+                x: 21,
+                y: 20,
                 modifiers: Default::default(),
             },
         );
@@ -699,8 +699,8 @@ mod tests {
             &MouseEvent {
                 kind: MouseEventKind::Moved,
                 button: None,
-                x: 11,
-                y: 17,
+                x: 21,
+                y: 20,
                 modifiers: Default::default(),
             },
         );
@@ -766,8 +766,8 @@ mod tests {
             &MouseEvent {
                 kind: MouseEventKind::Down,
                 button: Some(MouseButton::Left),
-                x: 11,
-                y: 17,
+                x: 21,
+                y: 20,
                 modifiers: crate::app::input::MouseModifiers {
                     ctrl: true,
                     ..Default::default()
@@ -795,8 +795,8 @@ mod tests {
             &MouseEvent {
                 kind: MouseEventKind::Down,
                 button: Some(MouseButton::Left),
-                x: 11,
-                y: 17,
+                x: 21,
+                y: 20,
                 modifiers: crate::app::input::MouseModifiers {
                     ctrl: true,
                     ..Default::default()
@@ -1218,7 +1218,7 @@ mod tests {
             &MouseEvent {
                 kind: MouseEventKind::ScrollDown,
                 button: None,
-                x: 30,
+                x: 35,
                 y: 3,
                 modifiers: Default::default(),
             },

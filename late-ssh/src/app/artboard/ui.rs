@@ -88,7 +88,7 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
         (true, _, _) => "snapshot".to_string(),
         (false, BrushMode::Glyph(ch), _) => format!("brush {ch}"),
         (false, BrushMode::Swatch, _) => "swatch".to_string(),
-        (false, BrushMode::None, true) => "interact".to_string(),
+        (false, BrushMode::None, true) => "active".to_string(),
         (false, BrushMode::None, false) => "view".to_string(),
     };
     let mode_color = if state.is_archive_view_active() {
@@ -1257,7 +1257,7 @@ mod tests {
         let mut state = test_state();
         state.begin_selection_from_cursor();
         let lines = artboard_info_lines(&state, true);
-        assert_eq!(lines[0].to_string(), "Mode       interact");
+        assert_eq!(lines[0].to_string(), "Mode       active");
         assert_eq!(lines[4].to_string(), "Cursor     1x1");
 
         state.move_right((80, 24));
@@ -1266,7 +1266,7 @@ mod tests {
         assert!(state.update_selection_to_cursor());
 
         let lines = artboard_info_lines(&state, true);
-        assert_eq!(lines[0].to_string(), "Mode       interact");
+        assert_eq!(lines[0].to_string(), "Mode       active");
         assert_eq!(lines[4].to_string(), "Cursor     3x2");
     }
 

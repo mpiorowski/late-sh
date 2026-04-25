@@ -227,8 +227,8 @@ async fn active_artboard_ctrl_c_copies_without_quitting() {
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("Mode       active"),
-        "expected Ctrl+C to stay inside active artboard; frame={frame:?}"
+        frame.contains("Mode       swatch"),
+        "expected Ctrl+C to copy into the primary swatch and stay inside active artboard; frame={frame:?}"
     );
     assert!(
         !frame.contains(" Quit? "),

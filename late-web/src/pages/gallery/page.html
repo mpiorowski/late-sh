@@ -4,7 +4,8 @@
 
 {% block content %}
 <style>
-    html, body {
+    html,
+    body {
         overflow: hidden !important;
         overscroll-behavior: none;
     }
@@ -31,9 +32,20 @@
         font-size: 0.8rem;
     }
 
-    .gal-topbar a { color: inherit; text-decoration: none; }
-    .gal-topbar .crumb-sep { color: #374151; }
-    .gal-topbar .meta { margin-left: auto; color: #4b5563; font-size: 0.7rem; }
+    .gal-topbar a {
+        color: inherit;
+        text-decoration: none;
+    }
+
+    .gal-topbar .crumb-sep {
+        color: #374151;
+    }
+
+    .gal-topbar .meta {
+        margin-left: auto;
+        color: #4b5563;
+        font-size: 0.7rem;
+    }
 
     .gal-body {
         position: relative;
@@ -51,10 +63,12 @@
         overflow: hidden auto;
         transition: width 0.18s ease;
     }
+
     .gal-side.collapsed {
         width: 0;
         border-right-width: 0;
     }
+
     .gal-side-inner {
         width: 16rem;
         padding: 1rem 0.85rem;
@@ -67,7 +81,10 @@
         text-transform: uppercase;
         color: #4b5563;
     }
-    .gal-side section + section { margin-top: 1.1rem; }
+
+    .gal-side section+section {
+        margin-top: 1.1rem;
+    }
 
     .snap-link {
         display: block;
@@ -79,22 +96,29 @@
         font-size: 0.78rem;
         line-height: 1.2;
     }
+
     .snap-link:hover {
         color: #e5e7eb;
         border-color: #1f2937;
     }
+
     .snap-link.active {
         color: #22c55e;
         border-color: #14532d;
         background: rgba(20, 83, 45, 0.22);
     }
-    .snap-link.active .snap-meta { color: #15803d; }
+
+    .snap-link.active .snap-meta {
+        color: #15803d;
+    }
+
     .snap-meta {
         display: block;
         margin-top: 0.15rem;
         color: #4b5563;
         font-size: 0.65rem;
     }
+
     .snap-empty {
         font-size: 0.72rem;
         color: #4b5563;
@@ -114,8 +138,14 @@
         user-select: none;
         touch-action: none;
     }
-    .gal-stage.is-panning { cursor: grabbing; }
-    .gal-stage.is-empty { cursor: default; }
+
+    .gal-stage.is-panning {
+        cursor: grabbing;
+    }
+
+    .gal-stage.is-empty {
+        cursor: default;
+    }
 
     .gal-frame {
         position: absolute;
@@ -144,6 +174,7 @@
         gap: 0.25rem;
         z-index: 4;
     }
+
     .gal-btn {
         width: 2.1rem;
         height: 2.1rem;
@@ -159,11 +190,16 @@
         backdrop-filter: blur(4px);
         transition: color 0.15s ease, border-color 0.15s ease;
     }
+
     .gal-btn:hover {
         color: #22c55e;
         border-color: #14532d;
     }
-    .gal-btn svg { width: 14px; height: 14px; }
+
+    .gal-btn svg {
+        width: 14px;
+        height: 14px;
+    }
 
     .gal-status {
         position: absolute;
@@ -179,6 +215,7 @@
         pointer-events: none;
         max-width: calc(100% - 5rem);
     }
+
     .gal-zoom {
         position: absolute;
         right: 0.85rem;
@@ -210,24 +247,20 @@
             z-index: 6;
             box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
         }
-        .gal-status { font-size: 0.65rem; }
+
+        .gal-status {
+            font-size: 0.65rem;
+        }
     }
 </style>
 
-<div class="gal-root"
-     x-data="gallery()"
-     x-init="init()"
-     @keydown.window="onKey($event)">
+<div class="gal-root" x-data="gallery()" x-init="init()" @keydown.window="onKey($event)">
 
     <header class="gal-topbar">
-        <button type="button"
-                class="gal-btn"
-                style="width: 1.9rem; height: 1.9rem;"
-                @click="sidebarHidden = !sidebarHidden"
-                aria-label="toggle snapshots panel"
-                title="toggle list (s)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round">
+        <button type="button" class="gal-btn" style="width: 1.9rem; height: 1.9rem;"
+            @click="sidebarHidden = !sidebarHidden" aria-label="toggle snapshots panel" title="toggle list (s)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
                 <line x1="4" y1="6" x2="20" y2="6"></line>
                 <line x1="4" y1="12" x2="20" y2="12"></line>
                 <line x1="4" y1="18" x2="20" y2="18"></line>
@@ -291,14 +324,9 @@
             </div>
         </aside>
 
-        <div class="gal-stage"
-             :class="[panning && 'is-panning', !hasSelected && 'is-empty']"
-             x-ref="stage"
-             @mousedown="onMouseDown($event)"
-             @mousemove="onMouseMove($event)"
-             @mouseleave="onMouseLeave()"
-             @wheel.prevent="onWheel($event)"
-             @dblclick="fitToView()">
+        <div class="gal-stage" :class="[panning && 'is-panning', !hasSelected && 'is-empty']" x-ref="stage"
+            @mousedown="onMouseDown($event)" @mousemove="onMouseMove($event)" @mouseleave="onMouseLeave()"
+            @wheel.prevent="onWheel($event)" @dblclick="fitToView()">
 
             {% if has_selected %}
             <div class="gal-frame" x-ref="frame">
@@ -313,8 +341,8 @@
                 <button type="button" class="gal-btn" @click="zoomBy(0.8)" title="zoom out (-)">-</button>
                 <button type="button" class="gal-btn" @click="actualSize()" title="100% (1)">1:1</button>
                 <button type="button" class="gal-btn" @click="fitToView()" title="fit (f / dbl-click)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                         stroke-linecap="round" stroke-linejoin="round">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
                         <polyline points="4 9 4 4 9 4"></polyline>
                         <polyline points="20 9 20 4 15 4"></polyline>
                         <polyline points="20 15 20 20 15 20"></polyline>
@@ -385,7 +413,7 @@
                 window.addEventListener('resize', this._onResize);
             },
 
-            keyFor(x, y) { return x + ',' + y; },
+            keyFor(x, y) {return x + ',' + y;},
 
             renderSnapshot() {
                 const c = this.canvas;
@@ -481,7 +509,7 @@
                 this.statusText = this.defaultStatus;
             },
 
-            endPan() { this.panning = false; },
+            endPan() {this.panning = false;},
 
             onWheel(e) {
                 const rect = this.stageRect();
