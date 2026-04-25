@@ -268,17 +268,19 @@ fn water_hint_title(can_water: bool, width: u16) -> Option<Line<'static>> {
     if !can_water || width < 12 {
         return None;
     }
-    Some(Line::from(vec![
-        Span::raw(" "),
-        Span::styled(
-            "w",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" care ", Style::default().fg(theme::TEXT_DIM())),
-    ])
-    .right_aligned())
+    Some(
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "w",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" care ", Style::default().fg(theme::TEXT_DIM())),
+        ])
+        .right_aligned(),
+    )
 }
 
 fn leaf_color_for_stage(stage: Stage) -> ratatui::style::Color {
