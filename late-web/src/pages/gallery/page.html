@@ -12,7 +12,7 @@
     .gal-root {
         position: fixed;
         inset: 0;
-        background: #020617;
+        background: #030712;
         color: #e5e7eb;
         display: flex;
         flex-direction: column;
@@ -25,14 +25,14 @@
         align-items: center;
         gap: 0.75rem;
         padding: 0.55rem 0.9rem;
-        border-bottom: 1px solid #0f172a;
-        background: #050b18;
+        border-bottom: 1px solid #1f2937;
+        background: #111827;
         flex-shrink: 0;
         font-size: 0.8rem;
     }
 
     .gal-topbar a { color: inherit; text-decoration: none; }
-    .gal-topbar .crumb-sep { color: #1f2937; }
+    .gal-topbar .crumb-sep { color: #374151; }
     .gal-topbar .meta { margin-left: auto; color: #4b5563; font-size: 0.7rem; }
 
     .gal-body {
@@ -40,14 +40,14 @@
         flex: 1;
         min-height: 0;
         display: flex;
-        background: #020617;
+        background: #030712;
     }
 
     .gal-side {
         width: 16rem;
         flex-shrink: 0;
-        border-right: 1px solid #0f172a;
-        background: #050b18;
+        border-right: 1px solid #1f2937;
+        background: #111827;
         overflow: hidden auto;
         transition: width 0.18s ease;
     }
@@ -84,10 +84,11 @@
         border-color: #1f2937;
     }
     .snap-link.active {
-        color: #f9fafb;
-        border-color: #065f46;
-        background: #052e26;
+        color: #22c55e;
+        border-color: #14532d;
+        background: rgba(20, 83, 45, 0.22);
     }
+    .snap-link.active .snap-meta { color: #15803d; }
     .snap-meta {
         display: block;
         margin-top: 0.15rem;
@@ -104,7 +105,7 @@
         flex: 1;
         position: relative;
         overflow: hidden;
-        background-color: #020617;
+        background-color: #030712;
         background-image:
             linear-gradient(rgba(31, 41, 55, 0.35) 1px, transparent 1px),
             linear-gradient(90deg, rgba(31, 41, 55, 0.35) 1px, transparent 1px);
@@ -127,11 +128,11 @@
     #gallery-canvas {
         display: block;
         image-rendering: pixelated;
-        background: #030712;
+        background: #111827;
         box-shadow:
             0 0 0 1px #1f2937,
             0 30px 80px -20px rgba(0, 0, 0, 0.85),
-            0 0 60px -10px rgba(16, 185, 129, 0.08);
+            0 0 60px -10px rgba(34, 197, 94, 0.06);
     }
 
     .gal-toolbar {
@@ -149,7 +150,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(11, 19, 34, 0.85);
+        background: rgba(17, 24, 39, 0.85);
         border: 1px solid #1f2937;
         color: #9ca3af;
         cursor: pointer;
@@ -159,8 +160,8 @@
         transition: color 0.15s ease, border-color 0.15s ease;
     }
     .gal-btn:hover {
-        color: #d1fae5;
-        border-color: #065f46;
+        color: #22c55e;
+        border-color: #14532d;
     }
     .gal-btn svg { width: 14px; height: 14px; }
 
@@ -170,10 +171,10 @@
         bottom: 0.85rem;
         font-size: 0.72rem;
         color: #6b7280;
-        background: rgba(2, 6, 23, 0.7);
+        background: rgba(17, 24, 39, 0.7);
         backdrop-filter: blur(4px);
         padding: 0.35rem 0.65rem;
-        border: 1px solid #0f172a;
+        border: 1px solid #1f2937;
         z-index: 4;
         pointer-events: none;
         max-width: calc(100% - 5rem);
@@ -184,10 +185,10 @@
         top: 0.85rem;
         font-size: 0.7rem;
         color: #6b7280;
-        background: rgba(2, 6, 23, 0.7);
+        background: rgba(17, 24, 39, 0.7);
         backdrop-filter: blur(4px);
         padding: 0.25rem 0.55rem;
-        border: 1px solid #0f172a;
+        border: 1px solid #1f2937;
         z-index: 4;
         pointer-events: none;
     }
@@ -394,7 +395,7 @@
                 c.style.height = c.height + 'px';
 
                 const ctx = this.ctx;
-                ctx.fillStyle = '#030712';
+                ctx.fillStyle = '#111827';
                 ctx.fillRect(0, 0, c.width, c.height);
                 ctx.font = this.fontSize + 'px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
                 ctx.textBaseline = 'top';
