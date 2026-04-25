@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use std::io::{self, Cursor, Read};
+use std::{
+    io::{self, Cursor, Read},
+    time::Duration,
+};
 use symphonia::core::{
     audio::{AudioBufferRef, SampleBuffer},
     codecs::{Decoder, DecoderOptions},
@@ -19,6 +22,7 @@ pub(super) struct SymphoniaStreamDecoder {
     sample_buf: Vec<f32>,
     sample_pos: usize,
     spec: AudioSpec,
+    scratch: Option<SampleBuffer<f32>>,
 }
 
 struct PrefixThenRead<R> {
@@ -48,7 +52,10 @@ impl<R: Read> Read for PrefixThenRead<R> {
 impl SymphoniaStreamDecoder {
     pub(super) fn new_http(url: &str) -> Result<Self> {
         let stream_url = url.to_string() + "/stream";
-        let mut resp = reqwest::blocking::get(&stream_url)
+        let client = build_stream_client().context("build http client for audio stream")?;
+        let mut resp = client
+            .get(&stream_url)
+            .send()
             .context("http get")?
             .error_for_status()
             .with_context(|| format!("stream request failed for {stream_url}"))?;
@@ -94,29 +101,58 @@ impl SymphoniaStreamDecoder {
             sample_buf: Vec::new(),
             sample_pos: 0,
             spec,
+            scratch: None,
         })
     }
 
     fn refill(&mut self) -> Result<bool> {
+        use symphonia::core::errors::Error;
+
         loop {
             let packet = match self.format.next_packet() {
                 Ok(packet) => packet,
-                Err(symphonia::core::errors::Error::IoError(_)) => return Ok(false),
+                Err(Error::IoError(_)) => return Ok(false),
+                Err(Error::ResetRequired) => {
+                    self.rebuild_decoder()?;
+                    continue;
+                }
                 Err(err) => return Err(err.into()),
             };
             if packet.track_id() != self.track_id {
                 continue;
             }
 
-            let decoded = self.decoder.decode(&packet)?;
+            let decoded = match self.decoder.decode(&packet) {
+                Ok(decoded) => decoded,
+                Err(Error::DecodeError(msg)) => {
+                    tracing::warn!(error = %msg, "skipping bad MP3 packet");
+                    continue;
+                }
+                Err(Error::ResetRequired) => {
+                    self.rebuild_decoder()?;
+                    continue;
+                }
+                Err(err) => return Err(err.into()),
+            };
             self.sample_buf.clear();
             self.sample_pos = 0;
-            push_interleaved_samples(&mut self.sample_buf, decoded)?;
+            push_interleaved_samples(&mut self.scratch, &mut self.sample_buf, decoded);
             return Ok(true);
         }
     }
 
-    fn spec(&self) -> AudioSpec {
+    fn rebuild_decoder(&mut self) -> Result<()> {
+        let track = self
+            .format
+            .default_track()
+            .context("no default track after reset")?;
+        self.decoder = get_codecs()
+            .make(&track.codec_params, &DecoderOptions::default())
+            .context("failed to rebuild decoder after reset")?;
+        Ok(())
+    }
+
+    pub(super) fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
@@ -140,6 +176,14 @@ impl Iterator for SymphoniaStreamDecoder {
         self.sample_pos += 1;
         sample
     }
+}
+
+fn build_stream_client() -> reqwest::Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .tcp_keepalive(Duration::from_secs(15))
+        .tcp_nodelay(true)
+        .build()
 }
 
 fn read_until_mp3_sync<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
@@ -201,18 +245,30 @@ fn find_mp3_sync_offset(bytes: &[u8]) -> Option<usize> {
     None
 }
 
-fn push_interleaved_samples(out: &mut Vec<f32>, decoded: AudioBufferRef<'_>) -> Result<()> {
+fn push_interleaved_samples(
+    scratch: &mut Option<SampleBuffer<f32>>,
+    out: &mut Vec<f32>,
+    decoded: AudioBufferRef<'_>,
+) {
+    let decoded_capacity = decoded.capacity() as u64;
     let spec = *decoded.spec();
-    let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+    let required_samples = decoded_capacity as usize * spec.channels.count();
+    let needs_realloc = scratch
+        .as_ref()
+        .is_none_or(|buf| buf.capacity() < required_samples);
+    if needs_realloc {
+        *scratch = Some(SampleBuffer::<f32>::new(decoded_capacity, spec));
+    }
+    let buf = scratch
+        .as_mut()
+        .expect("sample buffer initialized above");
     buf.copy_interleaved_ref(decoded);
     out.extend_from_slice(buf.samples());
-    Ok(())
 }
 
-pub(super) fn probe_stream_spec(audio_base_url: &str) -> Result<AudioSpec> {
-    let decoder = SymphoniaStreamDecoder::new_http(&trim_stream_suffix(audio_base_url))
-        .context("failed to create audio decoder for stream probe")?;
-    Ok(decoder.spec())
+pub(super) fn probe_stream(audio_base_url: &str) -> Result<SymphoniaStreamDecoder> {
+    SymphoniaStreamDecoder::new_http(&trim_stream_suffix(audio_base_url))
+        .context("failed to create audio decoder for stream probe")
 }
 
 pub(super) fn trim_stream_suffix(audio_base_url: &str) -> String {

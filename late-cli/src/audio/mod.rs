@@ -1,19 +1,21 @@
 use anyhow::{Context, Result};
 use cpal::traits::StreamTrait;
+use ringbuf::{HeapRb, traits::Split};
 use std::{
     collections::VecDeque,
     env,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, AtomicU64},
-        mpsc,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
+    thread,
+    time::Duration,
 };
 use tokio::sync::broadcast;
 
 mod decoder;
 
-use decoder::{SymphoniaStreamDecoder, probe_stream_spec, trim_stream_suffix};
+use decoder::{SymphoniaStreamDecoder, probe_stream, trim_stream_suffix};
 
 #[derive(Debug, Clone)]
 pub(super) struct VizSample {
@@ -38,13 +40,18 @@ struct AudioSpec {
     channels: usize,
 }
 
+#[derive(Debug, Default)]
+pub(super) struct AudioStats {
+    pub(super) underrun_frames: AtomicU64,
+}
+
 mod resampler;
 
 use resampler::StreamingLinearResampler;
 
 mod output;
 
-use output::{PlaybackQueue, PlayedRing, build_output_stream, output_sample_rate_for};
+use output::{PlaybackBuildInputs, PlayedRing, build_output_stream, output_sample_rate_for};
 
 impl AudioRuntime {
     pub(super) async fn start(audio_base_url: String) -> Result<Self> {
@@ -53,48 +60,50 @@ impl AudioRuntime {
         }
 
         let probe_url = audio_base_url.clone();
-        let source_spec = tokio::task::spawn_blocking(move || probe_stream_spec(&probe_url))
+        let initial_decoder = tokio::task::spawn_blocking(move || probe_stream(&probe_url))
             .await
             .context("audio stream probe task failed")??;
+        let source_spec = initial_decoder.spec();
         let output_sample_rate = output_sample_rate_for(source_spec)?;
-        let queue = Arc::new(Mutex::new(VecDeque::with_capacity(
-            output_sample_rate as usize * source_spec.channels,
-        )));
+        let ring_capacity_samples =
+            (output_sample_rate as usize * source_spec.channels * 2).max(1);
+        let (prod, cons) = HeapRb::<f32>::new(ring_capacity_samples).split();
         let played_ring = Arc::new(Mutex::new(VecDeque::with_capacity(4096)));
         let played_samples = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let muted = Arc::new(AtomicBool::new(false));
         let volume_percent = Arc::new(AtomicU8::new(30));
+        let stats = Arc::new(AudioStats::default());
         let (analyzer_tx, _) = broadcast::channel(32);
-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
         let stream = build_output_stream(
             source_spec,
-            Arc::clone(&queue),
-            Arc::clone(&played_ring),
-            Arc::clone(&played_samples),
-            Arc::clone(&muted),
-            Arc::clone(&volume_percent),
+            PlaybackBuildInputs {
+                cons,
+                played_ring: Arc::clone(&played_ring),
+                played_samples: Arc::clone(&played_samples),
+                muted: Arc::clone(&muted),
+                volume_percent: Arc::clone(&volume_percent),
+                stats: Arc::clone(&stats),
+            },
         )?;
         let output_sample_rate = stream.sample_rate;
         let stream = stream.stream;
         spawn_decoder_thread(
             audio_base_url,
-            queue,
+            prod,
             source_spec,
             output_sample_rate,
             Arc::clone(&stop),
-            ready_tx,
+            initial_decoder,
         );
+        spawn_audio_stats_thread(Arc::clone(&stats), Arc::clone(&stop));
         spawn_playback_analyzer_thread(
             Arc::clone(&played_ring),
             analyzer_tx.clone(),
             output_sample_rate,
             Arc::clone(&stop),
         );
-        ready_rx
-            .recv()
-            .context("failed to receive decoder startup status")??;
         stream
             .play()
             .context("failed to start audio output stream")?;
@@ -124,6 +133,26 @@ impl AudioRuntime {
             enabled: false,
         }
     }
+}
+
+fn spawn_audio_stats_thread(stats: Arc<AudioStats>, stop: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        let interval = Duration::from_secs(5);
+        while !stop.load(Ordering::Relaxed) {
+            thread::sleep(interval);
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let underruns = stats.underrun_frames.swap(0, Ordering::Relaxed);
+            if underruns > 0 {
+                tracing::info!(
+                    underrun_frames = underruns,
+                    window_secs = interval.as_secs(),
+                    "audio stats",
+                );
+            }
+        }
+    });
 }
 
 pub(super) fn audio_startup_hint() -> String {

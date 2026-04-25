@@ -1,40 +1,30 @@
-use anyhow::Result;
+use ringbuf::{HeapProd, traits::Producer};
 use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
     thread,
     time::Duration,
 };
 
 use super::{
-    AudioSpec, PlaybackQueue, StreamingLinearResampler, SymphoniaStreamDecoder, trim_stream_suffix,
+    AudioSpec, StreamingLinearResampler, SymphoniaStreamDecoder, trim_stream_suffix,
 };
+
+pub(super) type PlaybackProducer = HeapProd<f32>;
 
 pub(super) fn spawn_decoder_thread(
     audio_base_url: String,
-    queue: PlaybackQueue,
+    mut prod: PlaybackProducer,
     source_spec: AudioSpec,
     output_sample_rate: u32,
     stop: Arc<AtomicBool>,
-    ready_tx: mpsc::SyncSender<Result<()>>,
+    initial_decoder: SymphoniaStreamDecoder,
 ) {
     thread::spawn(move || {
-        let mut decoder_opt =
-            match SymphoniaStreamDecoder::new_http(&trim_stream_suffix(&audio_base_url)) {
-                Ok(decoder) => {
-                    let _ = ready_tx.send(Ok(()));
-                    Some(decoder)
-                }
-                Err(err) => {
-                    let _ = ready_tx.send(Err(err.context("failed to create audio decoder")));
-                    return;
-                }
-            };
+        let mut decoder_opt = Some(initial_decoder);
 
-        let max_buffer_samples = output_sample_rate as usize * source_spec.channels * 2;
         let mut chunk = Vec::with_capacity(1024 * source_spec.channels);
         let mut resampler = StreamingLinearResampler::new(
             source_spec.channels,
@@ -96,18 +86,16 @@ pub(super) fn spawn_decoder_thread(
                 continue;
             }
 
-            loop {
+            let mut pending = chunk.as_slice();
+            while !pending.is_empty() {
                 if stop.load(Ordering::Relaxed) {
                     return;
                 }
-
-                let mut queue_guard = queue.lock().unwrap_or_else(|e| e.into_inner());
-                if queue_guard.len() + chunk.len() <= max_buffer_samples {
-                    queue_guard.extend(chunk.iter().copied());
-                    break;
+                let pushed = prod.push_slice(pending);
+                pending = &pending[pushed..];
+                if !pending.is_empty() {
+                    thread::sleep(Duration::from_millis(5));
                 }
-                drop(queue_guard);
-                thread::sleep(Duration::from_millis(5));
             }
         }
     });
