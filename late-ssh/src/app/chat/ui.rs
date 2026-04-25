@@ -1033,7 +1033,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
     push_row(section_divider("Mobile"), None, false);
     push_row(
         Line::from(vec![
-            Span::styled(" c", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" C", Style::default().fg(theme::AMBER_DIM())),
             Span::styled(" open web chat", Style::default().fg(theme::TEXT_DIM())),
         ]),
         None,

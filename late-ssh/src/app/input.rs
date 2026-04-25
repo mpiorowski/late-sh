@@ -1274,10 +1274,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    if ctx.screen == Screen::Games
-        && app.is_playing_game
-        && !matches!(byte, b'm' | b'M' | b'+' | b'=' | b'-' | b'_')
-    {
+    if ctx.screen == Screen::Games && app.is_playing_game {
         return false;
     }
 
@@ -1361,14 +1358,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_settings = false;
             app.show_quit_confirm = false;
             app.show_bonsai_modal = true;
-            true
-        }
-        b's' | b'S' if !ctx.chat_composing && !ctx.news_composing => {
-            let snippet = app.bonsai_state.share_snippet();
-            app.pending_clipboard = Some(snippet);
-            app.banner = Some(crate::app::common::primitives::Banner::success(
-                "Bonsai copied to clipboard!",
-            ));
             true
         }
         b'1' if !artboard_blocks_page_switch => {

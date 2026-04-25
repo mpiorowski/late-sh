@@ -1,93 +1,90 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
   <defs>
-    <radialGradient id="candle" cx="32%" cy="42%" r="75%">
-      <stop offset="0%" stop-color="#241810" stop-opacity="1" />
-      <stop offset="55%" stop-color="#140d09" stop-opacity="1" />
-      <stop offset="100%" stop-color="#0a0604" stop-opacity="1" />
+    <radialGradient id="hearth" cx="50%" cy="55%" r="85%">
+      <stop offset="0%"  stop-color="#3a2410" stop-opacity="1" />
+      <stop offset="55%" stop-color="#180d07" stop-opacity="1" />
+      <stop offset="100%" stop-color="#080402" stop-opacity="1" />
     </radialGradient>
+    <radialGradient id="ember" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#D29436" stop-opacity="0.45" />
+      <stop offset="100%" stop-color="#D29436" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="cupGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#D29436" stop-opacity="0.55" />
+      <stop offset="100%" stop-color="#D29436" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="cupBody" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#3a2618" />
+      <stop offset="100%" stop-color="#180d07" />
+    </linearGradient>
+    <linearGradient id="brew" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#6a3f18" />
+      <stop offset="100%" stop-color="#2a1808" />
+    </linearGradient>
     <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="40" />
+      <feGaussianBlur stdDeviation="60" />
+    </filter>
+    <filter id="bloom" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="5" />
     </filter>
   </defs>
 
-  <!-- Warm dark background: late-night coffee shop -->
-  <rect width="1200" height="630" fill="url(#candle)" />
+  <!-- Warm dark hearth -->
+  <rect width="1200" height="630" fill="url(#hearth)" />
+  <!-- Two warm bloom pools: under text, under cup -->
+  <ellipse cx="380" cy="320" rx="520" ry="320" fill="url(#ember)" filter="url(#soft)" />
+  <ellipse cx="930" cy="370" rx="320" ry="200" fill="url(#cupGlow)" filter="url(#soft)" />
 
-  <!-- Soft amber candlelight behind the command -->
-  <circle cx="360" cy="280" r="240" fill="#B8782C" opacity="0.10" filter="url(#soft)" />
-
-  <!-- Outer panel, subtle -->
-  <rect x="32" y="32" width="1136" height="566" rx="18" ry="18"
-        fill="none" stroke="#44382E" stroke-width="2" />
-
-  <!-- Top bar: status dot + hostname left, flavor right -->
+  <!-- Top bar: minimal -->
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace">
-    <circle cx="72" cy="82" r="5" fill="#D29436" />
-    <text x="88" y="88" fill="#8A7660" font-size="20">late.sh</text>
-    <text x="1134" y="88" fill="#695848" font-size="18" text-anchor="end">late night, every night</text>
-    <line x1="60" y1="108" x2="1140" y2="108" stroke="#2a2018" stroke-width="1" />
+    <circle cx="80" cy="86" r="5" fill="#D29436" />
+    <text x="96" y="92" fill="#AF9E8A" font-size="20">late.sh</text>
   </g>
 
-  <!-- Main command -->
+  <!-- Hero command — single text, perfectly aligned -->
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" font-weight="700">
-    <text x="76" y="260" fill="#B8782C" font-size="92">→</text>
-    <text x="170" y="260" fill="#C8B69E" font-size="92">ssh late.sh<tspan fill="#D29436">▌</tspan></text>
+    <text x="80" y="320" font-size="92"><tspan fill="#E4C44E">ssh</tspan><tspan fill="#C8B69E" dx="56">late.sh</tspan></text>
+    <rect x="715" y="247" width="22" height="80" fill="#D29436" />
   </g>
 
   <!-- Tagline -->
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace">
-    <text x="80" y="330" fill="#AF9E8A" font-size="30">a cozy terminal clubhouse for developers.</text>
-    <text x="80" y="368" fill="#695848" font-size="22">pour a coffee. pull up a chair. stay a while.</text>
+    <text x="84" y="392" fill="#AF9E8A" font-size="28">a cozy terminal clubhouse for developers.</text>
+    <text x="84" y="430" fill="#695848" font-size="20">pour a coffee. pull up a chair. stay a while.</text>
   </g>
 
-  <!-- Bonsai on the right: vector, muted greens + warm trunk -->
-  <g transform="translate(940, 150)">
-    <!-- Trunk: curved path with amber tones -->
-    <path d="M 70 220 C 68 180, 80 150, 76 120 C 72 95, 90 75, 96 55"
-          stroke="#8a5a24" stroke-width="10" stroke-linecap="round" fill="none" />
-    <path d="M 80 160 C 96 150, 108 140, 120 120"
-          stroke="#8a5a24" stroke-width="6" stroke-linecap="round" fill="none" />
-    <path d="M 72 110 C 60 100, 46 92, 36 76"
-          stroke="#8a5a24" stroke-width="6" stroke-linecap="round" fill="none" />
-    <!-- Canopy: clustered soft circles, layered shades -->
-    <g opacity="0.95">
-      <circle cx="96" cy="50" r="22" fill="#588244" />
-      <circle cx="118" cy="54" r="20" fill="#649448" />
-      <circle cx="78" cy="40" r="18" fill="#649448" />
-      <circle cx="104" cy="32" r="18" fill="#76A252" />
-      <circle cx="130" cy="72" r="16" fill="#588244" />
-      <circle cx="58" cy="58" r="16" fill="#649448" />
-      <circle cx="88" cy="62" r="14" fill="#76A252" />
-      <!-- left branch cluster -->
-      <circle cx="30" cy="72" r="14" fill="#649448" />
-      <circle cx="18" cy="84" r="12" fill="#588244" />
-      <circle cx="40" cy="90" r="12" fill="#76A252" />
-      <!-- right branch cluster -->
-      <circle cx="128" cy="118" r="14" fill="#649448" />
-      <circle cx="140" cy="108" r="12" fill="#76A252" />
-      <!-- bloom highlights -->
-      <circle cx="108" cy="42" r="4" fill="#AAC378" />
-      <circle cx="80" cy="56" r="3" fill="#AAC378" />
-      <circle cx="34" cy="80" r="3" fill="#AAC378" />
-      <circle cx="134" cy="112" r="3" fill="#AAC378" />
+  <!-- Single hero visual: steaming coffee cup, vertically centered on the hero text -->
+  <g transform="translate(870, 168)">
+    <!-- saucer base shadow -->
+    <ellipse cx="120" cy="262" rx="160" ry="14" fill="#0a0604" opacity="0.7" />
+
+    <!-- steam: 3 amber wisps rising tall -->
+    <g stroke="#D29436" stroke-width="3.6" fill="none" stroke-linecap="round" opacity="0.55">
+      <path d="M 78 36 C 64 8, 92 -22, 78 -54 C 68 -76, 90 -98, 80 -126" />
+      <path d="M 122 36 C 138 6, 108 -24, 130 -58 C 144 -80, 118 -100, 132 -130" />
+      <path d="M 168 36 C 152 8, 180 -22, 164 -54 C 154 -76, 178 -98, 168 -126" />
     </g>
-    <!-- Pot: trapezoid with subtle rim -->
-    <path d="M 36 228 L 108 228 L 100 268 L 44 268 Z"
-          fill="#3a2a1c" stroke="#8a7660" stroke-width="2" stroke-linejoin="round" />
-    <line x1="32" y1="228" x2="112" y2="228" stroke="#AF9E8A" stroke-width="3" stroke-linecap="round" />
-    <!-- Soil -->
-    <ellipse cx="72" cy="228" rx="38" ry="3" fill="#241810" />
+
+    <!-- saucer (ellipse + ring highlight) -->
+    <ellipse cx="120" cy="252" rx="148" ry="16" fill="#241810" stroke="#8a7660" stroke-width="2.4" />
+    <ellipse cx="120" cy="250" rx="148" ry="11" fill="#140a06" />
+
+    <!-- cup body -->
+    <path d="M 28 70 L 212 70 L 200 234 C 192 250, 164 258, 120 258 C 76 258, 48 250, 40 234 Z"
+          fill="url(#cupBody)" stroke="#8a5a24" stroke-width="2.8" stroke-linejoin="round" />
+
+    <!-- handle -->
+    <path d="M 212 96 C 268 100, 268 188, 204 196"
+          stroke="#8a5a24" stroke-width="7" fill="none" stroke-linecap="round" />
+
+    <!-- rim, brew, crema highlight -->
+    <ellipse cx="120" cy="70" rx="92" ry="12" fill="#0e0805" stroke="#AF9E8A" stroke-width="1.8" />
+    <ellipse cx="120" cy="70" rx="86" ry="9"  fill="url(#brew)" />
+    <ellipse cx="92"  cy="67" rx="22" ry="3.2" fill="#D29436" opacity="0.75" />
   </g>
 
-  <!-- Status bar: tmux-style, warm amber accents -->
+  <!-- Footer mark -->
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace">
-    <line x1="60" y1="508" x2="1140" y2="508" stroke="#2a2018" stroke-width="1" />
-    <text x="80" y="560" font-size="24">
-      <tspan fill="#D29436">♪</tspan><tspan fill="#AF9E8A">  lofi radio</tspan><tspan fill="#695848">  ·  now playing</tspan>
-      <tspan fill="#44382E">     │     </tspan>
-      <tspan fill="#D29436">●</tspan><tspan fill="#AF9E8A">  42 devs online</tspan>
-      <tspan fill="#44382E">     │     </tspan>
-      <tspan fill="#D29436">✦</tspan><tspan fill="#AF9E8A">  day 7 streak</tspan>
-    </text>
+    <text x="84" y="540" fill="#825826" font-size="18">// late.sh — open the terminal, you're already home</text>
   </g>
 </svg>

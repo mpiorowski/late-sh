@@ -14,6 +14,7 @@ otel = [
 
 [dependencies]
 late-core.workspace = true
+dartboard-core.workspace = true
 
 # Core Utils
 anyhow = { workspace = true }

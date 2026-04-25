@@ -5,8 +5,8 @@ on:
     types: [published]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') }}
-  cancel-in-progress: true
+  group: ${{ (!endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')) && format('terraform-deploy-{0}', github.event.release.prerelease && 'staging' || 'production') || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

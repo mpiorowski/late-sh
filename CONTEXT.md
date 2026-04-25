@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-24 (Artboard global help/gallery context)
+- Last updated: 2026-04-25 (keyboard shortcut cleanup + Artboard web gallery context)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -475,6 +475,7 @@ Only canvas mutations are shared. Editor affordances stay local to the current S
 - Active selection anchor
 - Floating brush / floating selection preview
 - Swatch strip contents + pin state
+- Selected paint color from the 16-color local palette (`Ctrl+U` / `Ctrl+Y`)
 - Temporary sampled glyph brush
 - Help overlay tab + scroll
 - Glyph picker search state
@@ -520,7 +521,7 @@ The artboard is keyboard-first, but it is not "just type into a grid". It layers
 - `view` mode: inspect the board, move the cursor/viewport, and keep global page switching (`1-4`, `Tab`, `Shift+Tab`) available.
 - `active` mode: edit the board. Single-key global shortcuts are suppressed so typing goes to the canvas/editor.
 - `snapshot` view: read-only historical daily/monthly archive view. `g` in Artboard view mode opens the snapshot browser; `j/k` or arrows move, `Enter` selects, the top row returns to the live board, and `g` exits an active historical snapshot back to live.
-- The public web gallery for Artboard snapshots is `https://late.sh/gallery`.
+- The public web gallery for Artboard snapshots is `https://late.sh/gallery`. It is read-only: `late-web` reads `artboard_snapshots` directly from Postgres, lists `main`, `daily:*`, and `monthly:*`, renders one selected saved snapshot, and shows hovered cell coordinates / author from persisted provenance. The `main` gallery entry is the latest saved DB snapshot, not a live in-memory `ServerHandle` stream, so it can lag active drawing by the persistence interval.
 
 ```text
 type chars -> draw directly
@@ -545,11 +546,12 @@ Key behaviors:
 - Activating the currently active swatch again toggles floating-brush transparency.
 - `Enter` or `Ctrl+V` stamps the active floating brush without dismissing it.
 - `Ctrl+Shift+arrows` strokes a floating brush from the keyboard.
+- `Ctrl+U` / `Ctrl+Y` cycle previous/next paint color in a local 16-color palette. This affects subsequent typed glyphs, paste, glyph picker insertion, swatch stamping, and floating previews, but does not change the peer-list assigned color.
 - `Ctrl+]` opens the glyph picker for emoji / Unicode glyph insertion.
 - Double-clicking an existing non-space cell samples it into a temporary one-glyph brush.
 - `Ctrl+P` toggles the help overlay.
 - `Ctrl+\` toggles the ownership overlay. When on, cells render as per-author initials tinted by a deterministic username color derived from the provenance map.
-- Selection-local shape ops now stop at `Ctrl+T` (flip selection corner), `Ctrl+B` (draw border), and `Ctrl+Space` (smart-fill). The older `Ctrl+H/J/K/L` and `Ctrl+Y/U/I/O` push/pull chords are intentionally unbound.
+- Selection-local shape ops now stop at `Ctrl+T` (flip selection corner), `Ctrl+B` (draw border), and `Ctrl+Space` (smart-fill). The older `Ctrl+H/J/K/L` and `Ctrl+I/O` push/pull chords are intentionally unbound; `Ctrl+U/Y` now cycle paint color.
 - The Info sidebar always shows `Owner` and `Cell` for the current cursor/hover subject. The overlay only changes canvas rendering.
 - `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in `active` mode, and only falls back to `view` mode once there is no local editor state left to dismiss.
 
@@ -568,6 +570,7 @@ Mouse-specific extras:
 | Enter active mode | `i`, `Enter` | Switches the screen from inspect to edit |
 | Snapshot browser | `g` | View daily/monthly archives read-only; `j/k` or arrows navigate, `Enter` selects, top row returns live |
 | Draw / erase in active mode | `<type>`, `Space`, `Backspace`, `Delete` | Plain typing edits the shared canvas |
+| Paint color | `Ctrl+U`, `Ctrl+Y` | Previous/next local paint color; printable glyphs remain drawable |
 | Select | `Shift+arrows`, mouse drag | Local selection only |
 | Selection shape ops | `Ctrl+T`, `Ctrl+B`, `Ctrl+Space` | Flip corner, draw border, or smart-fill the current selection |
 | Copy / cut to swatch | `Ctrl+C`, `Ctrl+X` | Fills swatch strip; does not sync to peers |
@@ -586,7 +589,7 @@ Mouse-specific extras:
 - Artboard now lives under `late-ssh/src/app/artboard/`, not `app/games/artboard/`.
 - The Artboard screen has its own renderer and does **not** use the generic game frame/sidebar layout used by the arcade games.
 - The screen chrome exposes `view` vs `active` mode explicitly in both the frame title and the Artboard info sidebar.
-- The artboard info sidebar shows cursor position, `Owner`, `Cell`, pan availability, brush status, current selection size, and connected peers.
+- The artboard info sidebar shows cursor position, `Owner`, `Cell`, pan availability, selected paint color + palette row, brush status, current selection size, and connected peers.
 - The Artboard help overlay mirrors the global help modal style: single-row tabs, TitleCase labels, Amber active chip, `Tab` / `Shift+Tab` switches tabs, `j` / `k` / arrows scroll. Copy lives in `artboard/data.rs` (not pulled from upstream keymap).
 - The global help modal also has an `Artboard` tab. Its copy lives in `late-ssh/src/app/help_modal/data.rs` and is included in `bot_app_context()`, so `@bot` can answer common Artboard questions including daily/monthly snapshots and the web gallery URL.
 - Tab-switching keybindings were unified across modals: both the global help modal and the settings modal use `Tab` / `Shift+Tab` as the canonical tab switcher; arrow/hl routing was dropped from the help modals.
@@ -603,6 +606,7 @@ Mouse-specific extras:
 - `late-ssh/src/app/artboard/data.rs` — hand-authored help text for the 4 help tabs
 - `late-ssh/src/app/artboard/provenance.rs` — per-cell authorship map + ownership overlay source of truth
 - `late-ssh/tests/games/artboard.rs` — service + persistence integration tests
+- `late-web/src/pages/gallery/` — read-only public gallery for saved Artboard snapshots
 - `late-ssh/src/app/input.rs`, `late-ssh/src/app/tick.rs`, `late-ssh/src/app/render.rs` — SSH app integration points
 
 ---
@@ -1302,7 +1306,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `m` | Global | Toggle mute on paired client |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
-| `w` | Global (not composing, games override) | Open the Bonsai care modal |
+| `w` | Global (not composing, active games override) | Open the Bonsai care modal |
 | `w` | Bonsai modal | Water bonsai / replant dead tree, with a short watering animation |
 | `p` | Bonsai modal | Hard-prune: -100 growth, reroll shape, reset today's wrong-branch cuts |
 | `h` / `j` / `k` / `l` / arrows | Bonsai modal prune mode | Move spatial branch cursor |
@@ -1310,7 +1314,6 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
-| `s` | Global (not composing) | Copy bonsai ASCII snippet to clipboard |
 | `j` / `k` / arrows | Dashboard | Scroll chat |
 | `p` | Dashboard chat selection | Open selected user's read-only profile modal |
 | `r` | Dashboard chat selection | Reply to selected general chat message |
@@ -1364,7 +1367,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
 | `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
 | `Esc` / `q` | Chat overlay (`/help`, ignore list) | Close overlay |
-| `Ctrl+O` | Global | Open the settings modal from anywhere |
+| `Ctrl+O` | Global | Open the settings modal from anywhere, including active games |
 | `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
 | `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/bio, cycle a setting, or open the country/timezone picker |
@@ -1373,7 +1376,8 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |
 | `Esc` / `q` | Read-only profile modal | Close |
 | `Esc` | Any modal | Close/cancel |
-| `c` | Chat (not composing) | Open web chat QR (copies URL + shows it as fallback) |
+| `c` | Dashboard / Chat message selection | Copy selected message |
+| `C` | Chat (not composing) | Open web chat QR (copies URL + shows it as fallback) |
 | `Ctrl+]` | Dashboard / Chat | Open icon picker (emoji + nerd font). Auto-starts the composer if not already composing. Inserts into the chat composer only. |
 | `↑` / `↓` / `j` / `k` | Icon picker | Move selection |
 | `Ctrl+U` / `Ctrl+D` | Icon picker | Half-page up / down |
@@ -1391,7 +1395,7 @@ When modifying any keybinding, update **all** of the following:
 2. **Help modal** — `app/help_modal/data.rs` (slide copy, e.g. Overview "This modal" section) and `app/help_modal/ui.rs` `draw_footer()` keybind line
 3. **Settings modal** — `app/settings_modal/ui.rs` `draw_footer()` keybind line and the bordered help callout in `draw_help_callout()`
 4. **Sidebar hints** — `app/common/sidebar.rs`, e.g. the volume/mute hint line in Now Playing
-5. **Game guard** — `app/input.rs` `handle_global_key()`, the `!matches!(byte, ...)` allowlist for keys that pass through during active games
+5. **Game guard** — `app/input.rs` `handle_global_key()`, where active games suppress global byte shortcuts before screen-specific game routing
 6. **This table** — the keyboard shortcuts table above in CONTEXT.md
 7. **Game info panels** — per-game UI panels that show controls (check each game's `ui.rs`)
 

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
+use late_core::db::Db;
 use late_web::{AppState, app, config::Config};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,11 +17,13 @@ async fn main() -> anyhow::Result<()> {
         .no_proxy()
         .build()
         .context("failed to build HTTP client")?;
+    let db = Db::from_env().context("failed to initialize database pool")?;
 
     let port = config.port;
 
     let state = AppState {
         config,
+        db,
         http_client,
     };
 

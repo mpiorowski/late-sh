@@ -32,7 +32,7 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         " Bonsai [RIP] ".to_string()
     };
 
-    let block = Block::default()
+    let mut block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if state.is_alive {
@@ -40,9 +40,11 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         } else {
             theme::TEXT_FAINT()
         }));
+    if let Some(hint) = water_hint_title(state.can_water(), area.width) {
+        block = block.title_top(hint);
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    draw_water_hint(frame, area, state.can_water());
 
     if inner.height < 2 || inner.width < 10 {
         return;
@@ -262,28 +264,23 @@ fn status_line_specs(is_alive: bool, _stage: Stage, can_water: bool) -> Vec<Stat
     lines
 }
 
-fn draw_water_hint(frame: &mut Frame, area: Rect, can_water: bool) {
-    if !can_water || area.width < 12 {
-        return;
+fn water_hint_title(can_water: bool, width: u16) -> Option<Line<'static>> {
+    if !can_water || width < 12 {
+        return None;
     }
-    let width = 9;
-    let hint_area = Rect {
-        x: area.x + area.width.saturating_sub(width + 2),
-        y: area.y,
-        width,
-        height: 1,
-    };
-    let line = Line::from(vec![
-        Span::raw(" "),
-        Span::styled(
-            "w",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" care ", Style::default().fg(theme::TEXT_DIM())),
-    ]);
-    frame.render_widget(Paragraph::new(line), hint_area);
+    Some(
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "w",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" care ", Style::default().fg(theme::TEXT_DIM())),
+        ])
+        .right_aligned(),
+    )
 }
 
 fn leaf_color_for_stage(stage: Stage) -> ratatui::style::Color {

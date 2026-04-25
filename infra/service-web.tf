@@ -45,11 +45,11 @@ resource "kubernetes_deployment_v1" "service_web" {
           resources {
             limits = {
               cpu    = "250m"
-              memory = "256Mi"
+              memory = "1Gi"
             }
             requests = {
               cpu    = "100m"
-              memory = "128Mi"
+              memory = "256Mi"
             }
           }
 
@@ -93,6 +93,47 @@ resource "kubernetes_deployment_v1" "service_web" {
           env {
             name  = "LATE_AUDIO_URL"
             value = "https://audio.${var.DOMAIN}"
+          }
+
+          # --- Database (CloudNativePG) ---
+          env {
+            name  = "LATE_DB_HOST"
+            value = "postgres-rw"
+          }
+          env {
+            name  = "LATE_DB_PORT"
+            value = "5432"
+          }
+          env {
+            name = "LATE_DB_NAME"
+            value_from {
+              secret_key_ref {
+                name = "postgres-app"
+                key  = "dbname"
+              }
+            }
+          }
+          env {
+            name = "LATE_DB_USER"
+            value_from {
+              secret_key_ref {
+                name = "postgres-app"
+                key  = "user"
+              }
+            }
+          }
+          env {
+            name = "LATE_DB_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = "postgres-app"
+                key  = "password"
+              }
+            }
+          }
+          env {
+            name  = "LATE_DB_POOL_SIZE"
+            value = var.DB_POOL_SIZE
           }
         }
 
