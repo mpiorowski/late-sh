@@ -1,4 +1,5 @@
 use axum::{Json, routing::get};
+use late_core::db::{Db, DbConfig};
 use late_web::{AppState, app, config::Config};
 use serde_json::json;
 use std::sync::Once;
@@ -25,6 +26,7 @@ fn test_state(ssh_internal_url: String) -> AppState {
     };
     AppState {
         config,
+        db: Db::new(&DbConfig::default()).expect("lazy db"),
         http_client: reqwest::Client::new(),
     }
 }

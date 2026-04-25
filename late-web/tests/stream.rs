@@ -1,4 +1,5 @@
 use axum::{body::Body, http::StatusCode, response::IntoResponse, routing::get};
+use late_core::db::{Db, DbConfig};
 use late_web::{AppState, app, config::Config};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -12,6 +13,7 @@ fn test_state(audio_base_url: String) -> AppState {
     };
     AppState {
         config,
+        db: Db::new(&DbConfig::default()).expect("lazy db"),
         http_client: reqwest::Client::new(),
     }
 }

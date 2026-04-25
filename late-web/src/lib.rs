@@ -12,9 +12,10 @@ use axum::{
 use late_core::telemetry::http_telemetry_middleware;
 use tower_http::services::ServeDir;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppState {
     pub config: config::Config,
+    pub db: late_core::db::Db,
     pub http_client: reqwest::Client,
 }
 

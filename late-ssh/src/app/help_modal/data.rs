@@ -140,7 +140,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  h / l  or  ← / →   previous / next room",
         "  Space              room jump hints",
         "  Enter / i          start composing",
-        "  c                  copy a web-chat link to this session",
+        "  C                  copy a web-chat link to this session",
         "",
         "Compose",
         "  Enter              send and exit",

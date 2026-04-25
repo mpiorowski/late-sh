@@ -1,0 +1,201 @@
+{% extends "pages/app.html" %}
+
+{% block title %}Artboard Gallery - late.sh{% endblock %}
+
+{% block content %}
+<style>
+    .gallery-shell {
+        max-width: 92rem;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
+        gap: 1rem;
+    }
+
+    .gallery-panel {
+        background: #111827;
+        border: 1px solid #1f2937;
+    }
+
+    .snapshot-link {
+        display: block;
+        padding: 0.55rem 0.7rem;
+        border: 1px solid transparent;
+        color: #9ca3af;
+        text-decoration: none;
+    }
+
+    .snapshot-link:hover,
+    .snapshot-link.active {
+        color: #f9fafb;
+        border-color: #065f46;
+        background: #052e26;
+    }
+
+    .snapshot-meta {
+        display: block;
+        margin-top: 0.15rem;
+        color: #6b7280;
+        font-size: 0.7rem;
+    }
+
+    .gallery-canvas-wrap {
+        overflow: auto;
+        background: #030712;
+        border: 1px solid #1f2937;
+        max-height: 72vh;
+    }
+
+    #gallery-canvas {
+        display: block;
+        image-rendering: pixelated;
+    }
+
+    @media (max-width: 900px) {
+        .gallery-shell {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+<div class="gallery-shell">
+    <aside class="gallery-panel p-4">
+        <div class="mb-5">
+            <h1 class="text-xl text-white font-semibold">Artboard Gallery</h1>
+            <p class="mt-1 text-xs text-gray-500">saved snapshots only</p>
+        </div>
+
+        <section class="mb-5">
+            <h2 class="mb-2 text-xs uppercase tracking-wide text-gray-500">Live</h2>
+            {% if show_live_empty %}
+            <div class="text-sm text-gray-600">not saved yet</div>
+            {% endif %}
+            {% for item in live_items %}
+            <a class="snapshot-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
+                {{ item.label }}
+                <span class="snapshot-meta">{{ item.meta }}</span>
+            </a>
+            {% endfor %}
+        </section>
+
+        <section class="mb-5">
+            <h2 class="mb-2 text-xs uppercase tracking-wide text-gray-500">Daily</h2>
+            {% if show_daily_empty %}
+            <div class="text-sm text-gray-600">none yet</div>
+            {% endif %}
+            {% for item in daily_items %}
+            <a class="snapshot-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
+                {{ item.label }}
+                <span class="snapshot-meta">{{ item.meta }}</span>
+            </a>
+            {% endfor %}
+        </section>
+
+        <section>
+            <h2 class="mb-2 text-xs uppercase tracking-wide text-gray-500">Monthly</h2>
+            {% if show_monthly_empty %}
+            <div class="text-sm text-gray-600">none yet</div>
+            {% endif %}
+            {% for item in monthly_items %}
+            <a class="snapshot-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
+                {{ item.label }}
+                <span class="snapshot-meta">{{ item.meta }}</span>
+            </a>
+            {% endfor %}
+        </section>
+    </aside>
+
+    <section class="min-w-0">
+        {% if has_selected %}
+        <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
+            <div>
+                <h2 class="text-2xl text-white font-semibold">{{ selected_title }}</h2>
+                <div class="mt-1 text-xs text-gray-500">
+                    saved {{ selected_updated }} · {{ selected_cell_count }} cells · {{ selected_author_count }} authors
+                </div>
+            </div>
+            <div id="gallery-cell-status" class="text-sm text-gray-400">move over the board</div>
+        </div>
+
+        <div class="gallery-canvas-wrap">
+            <canvas id="gallery-canvas" aria-label="{{ selected_title }}"></canvas>
+        </div>
+
+        <script id="snapshot-data" type="application/json">{{ snapshot_json|safe }}</script>
+        <script>
+            (() => {
+                const dataEl = document.getElementById('snapshot-data');
+                const canvas = document.getElementById('gallery-canvas');
+                const status = document.getElementById('gallery-cell-status');
+                if (!dataEl || !canvas || !status) return;
+
+                const snapshot = JSON.parse(dataEl.textContent);
+                const ctx = canvas.getContext('2d');
+                const cellW = 8;
+                const cellH = 16;
+                const fontSize = 14;
+                const keyFor = (x, y) => `${x},${y}`;
+                const glyphs = new Map();
+                const authors = new Map();
+
+                for (const author of snapshot.authors) {
+                    authors.set(keyFor(author.x, author.y), author.username);
+                }
+                for (const cell of snapshot.cells) {
+                    glyphs.set(keyFor(cell.x, cell.y), cell);
+                    if (cell.width === 2 && cell.x + 1 < snapshot.width) {
+                        glyphs.set(keyFor(cell.x + 1, cell.y), cell);
+                        if (cell.author) authors.set(keyFor(cell.x + 1, cell.y), cell.author);
+                    }
+                    if (cell.author) authors.set(keyFor(cell.x, cell.y), cell.author);
+                }
+
+                function renderSnapshot() {
+                    canvas.width = snapshot.width * cellW;
+                    canvas.height = snapshot.height * cellH;
+                    canvas.style.width = `${canvas.width}px`;
+                    canvas.style.height = `${canvas.height}px`;
+
+                    ctx.fillStyle = '#030712';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+                    ctx.textBaseline = 'top';
+
+                    for (const cell of snapshot.cells) {
+                        ctx.fillStyle = cell.fg || '#d1d5db';
+                        ctx.fillText(cell.ch, cell.x * cellW, cell.y * cellH);
+                    }
+                }
+
+                function updateStatus(event) {
+                    const rect = canvas.getBoundingClientRect();
+                    const x = Math.floor((event.clientX - rect.left) * snapshot.width / rect.width);
+                    const y = Math.floor((event.clientY - rect.top) * snapshot.height / rect.height);
+                    if (x < 0 || y < 0 || x >= snapshot.width || y >= snapshot.height) {
+                        status.textContent = 'move over the board';
+                        return;
+                    }
+
+                    const key = keyFor(x, y);
+                    const glyph = glyphs.get(key);
+                    const author = (glyph && glyph.author) || authors.get(key);
+                    const cellText = glyph ? `cell "${glyph.ch}"` : 'empty cell';
+                    const authorText = author ? `by ${author}` : 'unknown author';
+                    status.textContent = `${x},${y} · ${cellText} · ${authorText}`;
+                }
+
+                renderSnapshot();
+                canvas.addEventListener('mousemove', updateStatus);
+                canvas.addEventListener('mouseleave', () => {
+                    status.textContent = 'move over the board';
+                });
+            })();
+        </script>
+        {% else %}
+        <div class="gallery-panel p-8 text-gray-500">
+            No saved artboard snapshots are available yet.
+        </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

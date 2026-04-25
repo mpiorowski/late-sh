@@ -397,7 +397,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             app.chat.start_composing();
             true
         }
-        b'c' | b'C' => {
+        b'C' => {
             if let Some(ref registry) = app.web_chat_registry {
                 let username = app.profile_state.profile().username.clone();
                 let base_url = app
