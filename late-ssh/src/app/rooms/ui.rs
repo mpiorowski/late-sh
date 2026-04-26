@@ -8,7 +8,10 @@ use ratatui::{
 
 use crate::app::{
     common::theme,
-    rooms::svc::{RoomListItem, RoomsSnapshot, game_kind_label},
+    rooms::{
+        blackjack::state::State as BlackjackState,
+        svc::{RoomListItem, RoomsSnapshot, game_kind_label},
+    },
 };
 
 pub fn draw_rooms_page(
@@ -19,6 +22,8 @@ pub fn draw_rooms_page(
     snapshot: &RoomsSnapshot,
     selected_index: usize,
     active_room: Option<&RoomListItem>,
+    blackjack_state: &BlackjackState,
+    is_admin: bool,
 ) {
     let block = Block::default()
         .title(" Rooms ")
@@ -33,7 +38,7 @@ pub fn draw_rooms_page(
     }
 
     if let Some(room) = active_room {
-        draw_active_room(frame, inner, room);
+        draw_active_room(frame, inner, room, blackjack_state);
         return;
     }
 
@@ -46,17 +51,24 @@ pub fn draw_rooms_page(
     ])
     .split(inner);
 
-    draw_add_button(frame, layout[1], add_form_open || selected_index == 0);
+    draw_add_button(
+        frame,
+        layout[1],
+        add_form_open || selected_index == 0,
+        is_admin,
+    );
 
     if add_form_open {
         draw_display_name_input(frame, layout[3], display_name);
     }
 
-    draw_room_list(frame, layout[4], snapshot, selected_index);
+    draw_room_list(frame, layout[4], snapshot, selected_index, is_admin);
 }
 
-fn draw_add_button(frame: &mut Frame, area: Rect, active: bool) {
-    let style = if active {
+fn draw_add_button(frame: &mut Frame, area: Rect, active: bool, enabled: bool) {
+    let style = if !enabled {
+        Style::default().fg(theme::TEXT_DIM())
+    } else if active {
         Style::default()
             .fg(theme::BG_SELECTION())
             .bg(theme::AMBER())
@@ -66,7 +78,7 @@ fn draw_add_button(frame: &mut Frame, area: Rect, active: bool) {
             .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD)
     };
-    let border = if active {
+    let border = if active && enabled {
         theme::BORDER_ACTIVE()
     } else {
         theme::BORDER()
@@ -75,9 +87,16 @@ fn draw_add_button(frame: &mut Frame, area: Rect, active: bool) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border));
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled("Add Blackjack Table", style)))
-            .block(block)
-            .alignment(Alignment::Center),
+        Paragraph::new(Line::from(Span::styled(
+            if enabled {
+                "Add Blackjack Table"
+            } else {
+                "Add Blackjack Table (admin only)"
+            },
+            style,
+        )))
+        .block(block)
+        .alignment(Alignment::Center),
         area,
     );
 }
@@ -98,7 +117,13 @@ fn draw_display_name_input(frame: &mut Frame, area: Rect, display_name: &str) {
     frame.render_widget(Paragraph::new(input_line), inner);
 }
 
-fn draw_room_list(frame: &mut Frame, area: Rect, snapshot: &RoomsSnapshot, selected_index: usize) {
+fn draw_room_list(
+    frame: &mut Frame,
+    area: Rect,
+    snapshot: &RoomsSnapshot,
+    selected_index: usize,
+    can_enter: bool,
+) {
     if area.height == 0 {
         return;
     }
@@ -128,13 +153,22 @@ fn draw_room_list(frame: &mut Frame, area: Rect, snapshot: &RoomsSnapshot, selec
         .enumerate()
         .map(|(index, room)| {
             let selected = selected_index == index + 1;
-            let name_style = if selected {
+            let name_style = if selected && can_enter {
                 Style::default()
                     .fg(theme::BG_SELECTION())
                     .bg(theme::AMBER())
                     .add_modifier(Modifier::BOLD)
+            } else if selected {
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme::TEXT())
+            };
+            let status = if can_enter {
+                &room.status
+            } else {
+                "admin only"
             };
             Line::from(vec![
                 Span::styled(if selected { "> " } else { "  " }, name_style),
@@ -145,14 +179,19 @@ fn draw_room_list(frame: &mut Frame, area: Rect, snapshot: &RoomsSnapshot, selec
                     Style::default().fg(theme::AMBER()),
                 ),
                 Span::raw("  "),
-                Span::styled(&room.status, Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(status, Style::default().fg(theme::TEXT_DIM())),
             ])
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_active_room(frame: &mut Frame, area: Rect, room: &RoomListItem) {
+fn draw_active_room(
+    frame: &mut Frame,
+    area: Rect,
+    room: &RoomListItem,
+    blackjack_state: &BlackjackState,
+) {
     let layout = Layout::vertical([
         Constraint::Percentage(50),
         Constraint::Length(1),
@@ -160,36 +199,21 @@ fn draw_active_room(frame: &mut Frame, area: Rect, room: &RoomListItem) {
     ])
     .split(area);
 
-    draw_game_placeholder(frame, layout[0], room);
+    draw_game_area(frame, layout[0], room, blackjack_state);
     draw_chat_placeholder(frame, layout[2], room);
 }
 
-fn draw_game_placeholder(frame: &mut Frame, area: Rect, room: &RoomListItem) {
-    let block = Block::default()
-        .title(" Game ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(
-                game_kind_label(room.game_kind),
-                Style::default().fg(theme::AMBER()),
-            ),
-            Span::raw(" / "),
-            Span::styled(
-                &room.display_name,
-                Style::default().fg(theme::TEXT_BRIGHT()),
-            ),
-        ]),
-        Line::from(Span::styled(
-            &room.slug,
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(lines), inner);
+fn draw_game_area(
+    frame: &mut Frame,
+    area: Rect,
+    room: &RoomListItem,
+    blackjack_state: &BlackjackState,
+) {
+    match room.game_kind {
+        crate::app::rooms::svc::GameKind::Blackjack => {
+            crate::app::rooms::blackjack::ui::draw_game(frame, area, blackjack_state, false);
+        }
+    }
 }
 
 fn draw_chat_placeholder(frame: &mut Frame, area: Rect, room: &RoomListItem) {

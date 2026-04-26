@@ -122,6 +122,7 @@ pub struct SessionConfig {
     pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
+    pub blackjack_table_manager: crate::app::rooms::blackjack::manager::BlackjackTableManager,
     pub blackjack_service: crate::app::rooms::blackjack::svc::BlackjackService,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
@@ -249,6 +250,8 @@ pub struct App {
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
+    pub(crate) blackjack_table_manager:
+        crate::app::rooms::blackjack::manager::BlackjackTableManager,
     pub(crate) rooms_selected_index: usize,
     pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
     pub(crate) rooms_add_form_open: bool,
@@ -698,6 +701,7 @@ impl App {
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             rooms_service: config.rooms_service,
+            blackjack_table_manager: config.blackjack_table_manager,
             rooms_selected_index: 0,
             rooms_active_room: None,
             rooms_add_form_open: false,

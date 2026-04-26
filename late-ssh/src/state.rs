@@ -14,7 +14,7 @@ use crate::app::games::sudoku::svc::SudokuService;
 use crate::app::games::tetris::svc::TetrisService;
 use crate::app::games::twenty_forty_eight::svc::TwentyFortyEightService;
 use crate::app::profile::svc::ProfileService;
-use crate::app::rooms::blackjack::svc::BlackjackService;
+use crate::app::rooms::blackjack::{manager::BlackjackTableManager, svc::BlackjackService};
 use crate::app::rooms::svc::RoomsService;
 use crate::app::vote::svc::VoteService;
 use crate::config::Config;
@@ -66,6 +66,7 @@ pub struct State {
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
     pub rooms_service: RoomsService,
+    pub blackjack_table_manager: BlackjackTableManager,
     pub blackjack_service: BlackjackService,
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,

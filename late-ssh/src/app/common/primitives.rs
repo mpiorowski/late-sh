@@ -60,19 +60,19 @@ impl Screen {
         match self {
             Screen::Dashboard => Screen::Chat,
             Screen::Chat => Screen::Games,
-            Screen::Games => Screen::Artboard,
-            Screen::Artboard => Screen::Rooms,
-            Screen::Rooms => Screen::Dashboard,
+            Screen::Games => Screen::Rooms,
+            Screen::Rooms => Screen::Artboard,
+            Screen::Artboard => Screen::Dashboard,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Rooms,
+            Screen::Dashboard => Screen::Artboard,
             Screen::Chat => Screen::Dashboard,
             Screen::Games => Screen::Chat,
-            Screen::Artboard => Screen::Games,
-            Screen::Rooms => Screen::Artboard,
+            Screen::Rooms => Screen::Games,
+            Screen::Artboard => Screen::Rooms,
         }
     }
 }
@@ -156,18 +156,18 @@ mod tests {
     fn screen_next_cycles_all_screens() {
         assert_eq!(Screen::Dashboard.next(), Screen::Chat);
         assert_eq!(Screen::Chat.next(), Screen::Games);
-        assert_eq!(Screen::Games.next(), Screen::Artboard);
-        assert_eq!(Screen::Artboard.next(), Screen::Rooms);
-        assert_eq!(Screen::Rooms.next(), Screen::Dashboard);
+        assert_eq!(Screen::Games.next(), Screen::Rooms);
+        assert_eq!(Screen::Rooms.next(), Screen::Artboard);
+        assert_eq!(Screen::Artboard.next(), Screen::Dashboard);
     }
 
     #[test]
     fn screen_prev_cycles_all_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::Rooms);
+        assert_eq!(Screen::Dashboard.prev(), Screen::Artboard);
         assert_eq!(Screen::Chat.prev(), Screen::Dashboard);
         assert_eq!(Screen::Games.prev(), Screen::Chat);
-        assert_eq!(Screen::Artboard.prev(), Screen::Games);
-        assert_eq!(Screen::Rooms.prev(), Screen::Artboard);
+        assert_eq!(Screen::Rooms.prev(), Screen::Games);
+        assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
     }
 
     #[test]

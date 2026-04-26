@@ -12,6 +12,7 @@ use crate::app::{
     rooms::blackjack::svc::{BlackjackEvent, BlackjackService},
 };
 
+#[derive(Clone)]
 pub struct BlackjackTableManager {
     chip_svc: ChipService,
     tables: Arc<Mutex<HashMap<Uuid, BlackjackService>>>,

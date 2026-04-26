@@ -126,6 +126,8 @@ async fn main() -> anyhow::Result<()> {
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
     rooms_service.refresh_task();
+    let blackjack_table_manager =
+        late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(chip_service.clone());
     let (blackjack_event_tx, _) =
         broadcast::channel::<late_ssh::app::rooms::blackjack::svc::BlackjackEvent>(64);
     let blackjack_service = late_ssh::app::rooms::blackjack::svc::BlackjackService::new(
@@ -220,6 +222,7 @@ async fn main() -> anyhow::Result<()> {
         nonogram_library,
         chip_service,
         rooms_service,
+        blackjack_table_manager,
         blackjack_service,
         dartboard_server,
         dartboard_provenance,

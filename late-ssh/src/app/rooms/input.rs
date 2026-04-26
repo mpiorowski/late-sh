@@ -8,6 +8,16 @@ const DISPLAY_NAME_MAX_LEN: usize = 48;
 const DEFAULT_BLACKJACK_TABLE_NAME: &str = "Blackjack Table";
 
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
+    if app.rooms_active_room.is_some() && !app.rooms_add_form_open {
+        match event {
+            ParsedInput::Byte(byte) => return handle_active_room_key(app, *byte),
+            ParsedInput::Char(ch) if ch.is_ascii() => {
+                return handle_active_room_key(app, *ch as u8);
+            }
+            _ => {}
+        }
+    }
+
     match event {
         ParsedInput::Byte(b'\r' | b'\n') => {
             handle_enter(app);
@@ -47,6 +57,11 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 }
 
 pub fn handle_key(app: &mut App, byte: u8) {
+    if app.rooms_active_room.is_some() && !app.rooms_add_form_open {
+        handle_active_room_key(app, byte);
+        return;
+    }
+
     match byte {
         b'\r' | b'\n' => handle_enter(app),
         0x1B => handle_escape(app),
@@ -74,6 +89,10 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 
 fn handle_enter(app: &mut App) {
     if !app.rooms_add_form_open {
+        if !app.is_admin {
+            app.banner = Some(Banner::error("Admin only: rooms are locked for now."));
+            return;
+        }
         if app.rooms_selected_index > 0 {
             enter_selected_room(app);
             return;
@@ -82,6 +101,12 @@ fn handle_enter(app: &mut App) {
         if app.rooms_display_name_input.trim().is_empty() {
             app.rooms_display_name_input = DEFAULT_BLACKJACK_TABLE_NAME.to_string();
         }
+        return;
+    }
+
+    if !app.is_admin {
+        app.banner = Some(Banner::error("Admin only: rooms are locked for now."));
+        app.rooms_add_form_open = false;
         return;
     }
 
@@ -134,9 +159,43 @@ fn move_selection(app: &mut App, delta: isize) {
 }
 
 fn enter_selected_room(app: &mut App) {
+    if !app.is_admin {
+        app.banner = Some(Banner::error("Admin only: rooms are locked for now."));
+        return;
+    }
+
     let room_index = app.rooms_selected_index.saturating_sub(1);
     if let Some(room) = app.rooms_snapshot.rooms.get(room_index).cloned() {
+        if matches!(room.game_kind, crate::app::rooms::svc::GameKind::Blackjack) {
+            let svc = app.blackjack_table_manager.get_or_create(room.id);
+            app.blackjack_state =
+                crate::app::rooms::blackjack::state::State::new(svc, app.user_id, app.chip_balance);
+        }
         app.rooms_active_room = Some(room);
         app.rooms_add_form_open = false;
+    }
+}
+
+fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
+    let Some(room) = &app.rooms_active_room else {
+        return false;
+    };
+
+    match room.game_kind {
+        crate::app::rooms::svc::GameKind::Blackjack => {
+            let byte = if matches!(byte, b'q' | b'Q') {
+                0x1B
+            } else {
+                byte
+            };
+            match crate::app::rooms::blackjack::input::handle_key(&mut app.blackjack_state, byte) {
+                crate::app::rooms::blackjack::input::InputAction::Ignored => false,
+                crate::app::rooms::blackjack::input::InputAction::Handled => true,
+                crate::app::rooms::blackjack::input::InputAction::Leave => {
+                    app.rooms_active_room = None;
+                    true
+                }
+            }
+        }
     }
 }

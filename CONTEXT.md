@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-26 (Rooms domain cleanup + Blackjack module relocation)
+- Last updated: 2026-04-26 (Rooms persistence + per-room Blackjack runtime)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, The Arcade, Artboard, Rooms), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..8` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), a dedicated shared multi-user ASCII artboard screen, plus a dedicated hardcoded rooms directory screen with two Blackjack rooms (`bj-001`, `bj-002`) as the first step toward multi-room table games, and configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` now opens a quit-confirm modal; pressing `q` again exits and `Esc` dismisses it. `@bot` mention replies now receive compact context about online non-bot members in the active room (username plus optional bio/country/timezone, capped and truncated for prompt size).
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, The Arcade, Rooms, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..8` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, legacy admin-gated Arcade Blackjack), a dedicated Rooms screen for persistent game-backed rooms, plus a dedicated shared multi-user ASCII artboard screen. Rooms currently supports listing Blackjack tables from `game_rooms`; admins can create/enter them and lazily bind each room to its own in-memory `BlackjackService` via `BlackjackTableManager`; the bottom chat pane is still a placeholder. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` now opens a quit-confirm modal; pressing `q` again exits and `Esc` dismisses it. `@bot` mention replies now receive compact context about online non-bot members in the active room (username plus optional bio/country/timezone, capped and truncated for prompt size).
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -213,7 +213,10 @@ flowchart LR
     CS -->|"holds"| NS
     PS["ProfileService"] -->|"watch"| PSS["ProfileSnapshot"]
     PS -->|"broadcast"| PSE["ProfileEvent"]
-    BJS["BlackjackService"] -->|"watch"| BJSS["BlackjackSnapshot"]
+    RS["RoomsService"] -->|"watch"| RSS["RoomsSnapshot"]
+    RS -->|"broadcast"| RSE["RoomsEvent"]
+    BJM["BlackjackTableManager"] -->|"room id"| BJS["BlackjackService<br/>per table"]
+    BJS -->|"watch"| BJSS["BlackjackSnapshot"]
     BJS -->|"broadcast"| BJSE["BlackjackEvent"]
     AF["Activity Feed"] -->|"broadcast"| AFE["ActivityEvent"]
     LB["LeaderboardService"] -->|"watch"| LBS["Arc&lt;LeaderboardData&gt;"]
@@ -228,6 +231,8 @@ flowchart LR
     NSE --> APP
     PSS --> APP
     PSE --> APP
+    RSS --> APP
+    RSE --> APP
     BJSS --> APP
     BJSE --> APP
     AFE --> APP
@@ -238,7 +243,9 @@ flowchart LR
 - `ProfileService` (in `app/profile/svc.rs`) exposes per-user `watch` snapshots backed by service-owned maps (`subscribe_snapshot(user_id)`).
 - `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, streak leaders, per-user streak map (used for chat badges and profile achievements), all-time high scores (Tetris + 2048), and chip leaders (top balances).
 - `ChipService` (in `app/games/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` grants the daily 500-chip stipend on login, `grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips on daily puzzle completion. All 4 daily game services hold a `ChipService` clone and call it in `record_win_task()`.
-- `BlackjackService` (in `app/rooms/blackjack/svc.rs`) owns the current shared blackjack table in-memory, publishes `BlackjackSnapshot` via `watch`, and emits per-user `BlackjackEvent` messages via `broadcast`. The SSH app's blackjack state is now a thin client wrapper, not the game authority.
+- `RoomsService` (in `app/rooms/svc.rs`) owns persistent game-room creation/listing over `game_rooms` + associated `chat_rooms`, publishes `RoomsSnapshot` via `watch`, and emits `RoomsEvent` for create success/failure so session state can show banners.
+- `BlackjackTableManager` (in `app/rooms/blackjack/manager.rs`) owns the process-local runtime registry `HashMap<GameRoom.id, BlackjackService>`. Entering a Blackjack room lazily calls `get_or_create(room.id)`; room creation itself only persists the room row.
+- `BlackjackService` (in `app/rooms/blackjack/svc.rs`) owns one Blackjack table in-memory, publishes `BlackjackSnapshot` via `watch`, and emits per-user `BlackjackEvent` messages via `broadcast`. The SSH app's blackjack state is a thin client wrapper, not the game authority.
 - Events remain `broadcast` for all subscribers; targeted variants carry `user_id` and are filtered in UI state.
 
 ### 2.5 TUI Rendering and State Architecture (Sync vs Async Boundary)
@@ -445,7 +452,7 @@ Current invariants:
 
 ```mermaid
 flowchart LR
-    Nav["Screen 4 / Tab"] --> Page["App::set_screen(Screen::Artboard)"]
+    Nav["Screen 5 / Tab"] --> Page["App::set_screen(Screen::Artboard)"]
     Page --> Enter["App::enter_dartboard()"]
     Enter --> Svc["DartboardService::new()"]
     Svc --> Client["dartboard_local::LocalClient<br/>per session"]
@@ -518,7 +525,7 @@ Persistence behavior:
 
 The artboard is keyboard-first, but it is not "just type into a grid". It layers a local editor model on top of the shared canvas and now has two interaction modes:
 
-- `view` mode: inspect the board, move the cursor/viewport, and keep global page switching (`1-4`, `Tab`, `Shift+Tab`) available.
+- `view` mode: inspect the board, move the cursor/viewport, and keep global page switching (`1-5`, `Tab`, `Shift+Tab`) available.
 - `active` mode: edit the board. Single-key global shortcuts are suppressed so typing goes to the canvas/editor.
 - `snapshot` view: read-only historical daily/monthly archive view. `g` in Artboard view mode opens the snapshot browser; `j/k` or arrows move, `Enter` selects, the top row returns to the live board, and `g` exits an active historical snapshot back to live.
 - The public web gallery for Artboard snapshots is `https://late.sh/gallery`. It is read-only: `late-web` reads `artboard_snapshots` directly from Postgres, lists `main`, `daily:*`, and `monthly:*`, renders one selected saved snapshot, and shows hovered cell coordinates / author from persisted provenance. The `main` gallery entry is the latest saved DB snapshot, not a live in-memory `ServerHandle` stream, so it can lag active drawing by the persistence interval.
@@ -565,7 +572,7 @@ Mouse-specific extras:
 
 | Action | Keys / Mouse | Notes |
 | --- | --- | --- |
-| Open Artboard | `4`, `Tab`, `Shift+Tab` | Dedicated top-level screen; entering it also connects a local client |
+| Open Artboard | `5`, `Tab`, `Shift+Tab` | Dedicated top-level screen; entering it also connects a local client |
 | Move around in view mode | `←↑↓→`, `Home`, `End`, `PgUp`, `PgDn`, mouse wheel | Lets users inspect/pan without entering draw mode |
 | Enter active mode | `i`, `Enter` | Switches the screen from inspect to edit |
 | Snapshot browser | `g` | View daily/monthly archives read-only; `j/k` or arrows navigate, `Enter` selects, top row returns live |
@@ -582,7 +589,7 @@ Mouse-specific extras:
 | Help | `Ctrl+P` | Four-tab overlay (Overview / Drawing / Brushes / Session), authored in-project under `artboard/data.rs`. `Tab` / `Shift+Tab` switches tabs, `j` / `k` / arrows scroll. |
 | Ownership overlay | `Ctrl+\` | Recolors cells by author initials; `Owner` / `Cell` rows stay visible in the Info sidebar either way. Backed by `provenance.rs`. |
 | Return to view mode | `Esc` | Also closes help / glyph-picker before exiting edit mode |
-| Leave Artboard page | `1-4`, `Tab`, `Shift+Tab` | Available from `view` mode |
+| Leave Artboard page | `1-5`, `Tab`, `Shift+Tab` | Available from `view` mode |
 
 #### UI and integration notes
 
@@ -644,6 +651,7 @@ late-sh/
 │   │       ├── games/          # Arcade hub, leaderboards, and game subdomains
 │   │       ├── icon_picker/    # Ctrl+] emoji + nerd font overlay (chat composer only)
 │   │       ├── profile/        # Username/profile settings and stats
+│   │       ├── rooms/          # Persistent game-room directory + room-backed Blackjack runtime
 │   │       └── vote/           # Genre vote state, service, and Liquidsoap control
 │   ├── assets/nonograms/       # Prebuilt puzzle packs
 │   └── tests/                  # Integration/smoke tests grouped by feature
@@ -731,12 +739,14 @@ late-sh/
 | BonsaiGrave | `bonsai_graveyard` | `user_id` FK (not unique — multiple deaths), survived_days, died_at |
 | BonsaiDailyCare | `bonsai_daily_care` | `UNIQUE(user_id, care_date)`, UTC daily care row with watered flag, generated branch goal, cut branch ids, and one-shot water/prune penalty flags |
 | UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (floor=100), `last_stipend_date` DATE |
+| GameRoom | `game_rooms` | Generic game-room registry. `id` UUIDv7, `chat_room_id` UNIQUE FK to `chat_rooms`, `game_kind` TEXT, `slug` UNIQUE, `display_name` non-empty, `status` IN (`open`, `in_round`, `paused`, `closed`), `settings` JSONB, optional `created_by`. `GameKind` is a Rust enum over text, not a Postgres enum. |
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Chat`, `Games`, `Artboard`, `Rooms` (cycle: `Dashboard -> Chat -> Games -> Artboard -> Rooms -> Dashboard`; News and Mentions are synthetic room-like entries within Chat, not separate screens, each with their own persisted unread state)
+- `Screen`: `Dashboard`, `Chat`, `Games`, `Rooms`, `Artboard` (cycle: `Dashboard -> Chat -> Games -> Rooms -> Artboard -> Dashboard`; News and Mentions are synthetic room-like entries within Chat, not separate screens, each with their own persisted unread state)
 - `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
+- `GameKind`: Rust enum in `late-core::models::game_room`; currently `Blackjack`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
 
 ### 4.4 Error model
 
@@ -769,9 +779,12 @@ late-sh/
 ## 6. Current Work [VOLATILE]
 
 In progress:
-- Blackjack now uses service-owned shared state with `watch` snapshots and `broadcast` events, but it is still a single shared table with one active player at a time.
-- Blackjack remains admin-gated in the arcade until multi-seat/table semantics land.
-- See PLAN.md for the concrete multiplayer follow-up roadmap.
+- Rooms is now the primary multiplayer table-game entry point (`Screen::Rooms`, key `4`).
+- `RoomsService` can create persistent Blackjack tables in `game_rooms` while also creating/associating a `chat_rooms(kind='game')` row in one SQL CTE. Room creation publishes a snapshot refresh plus `RoomsEvent` success/error.
+- Rooms page supports selecting rows, admin-only room creation/entry, and returning to the list with `Esc`. Active room mode is a dedicated input-capture surface: after modals and global `Ctrl-O`, events are consumed by the game/room and do not leak to app-wide hotkeys (`w`, `P`, `?`, `1-5`, `Tab`, etc.).
+- `BlackjackTableManager` lazily maps each entered Blackjack `GameRoom.id` to its own runtime `BlackjackService`. Server restart drops runtime table state; entering an existing room creates a fresh service for Blackjack. Future games that need durability (Chess/Battleship/etc.) should restore from game-specific persisted state inside their manager.
+- Active Blackjack room top half renders the real Blackjack UI. The bottom chat half is still a placeholder showing the associated `chat_room_id`.
+- Blackjack gameplay is still single-player table logic internally. Next active task: seats and multi-seat table state.
 
 Future:
 - **Nonograms (v2)**: Replace random generation with pixel-art-to-nonogram pipeline or bulk-curate from webpbn.com.
@@ -803,7 +816,7 @@ Roadmap ideas:
 - ~~2048~~ ✓ ~~Sudoku~~ ✓ ~~Nonograms~~ ✓ ~~Solitaire~~ ✓
 
 **Table Games (active buildout):**
-- **Blackjack:** Shared-table implementation is live behind admin gate. Service owns truth; clients subscribe to snapshots/events. Still missing seats, turn rotation, table identity, and room wiring.
+- **Blackjack:** Persistent rooms and per-room runtime services are live in the Rooms screen. Service owns one table's truth; clients subscribe to snapshots/events. Still missing seats, multi-player betting, turn rotation, AFK/disconnect handling, and real room-scoped chat rendering.
 - **Texas Hold'em Poker (PvP):** The ultimate late-night clubhouse game. Table-scoped chat, robust turn state.
 
 **Async 1v1:**
@@ -1254,9 +1267,9 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
 | **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/settings`, `/help`) with grouped room sections and synthetic `news`, `mentions`, and `discover` entries in the room list. Admin-only room management commands include `/create-room #room`, `/delete-room #room`, and `/fill-room #room`; `/fill-room` works only for public rooms, bulk-adds all users, and flips the room to `auto_join = true` for future joins. `discover` shows public rooms you have not joined yet with member/message counts; Enter joins the selected room. `/public #room` opens or creates an opt-in public room and joins only the caller. |
-| **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
-| **Rooms** | 5 | Active | Dedicated room directory screen for shared multiplayer table games. Current implementation is intentionally hardcoded and UI-light: two Blackjack room entries (`bj-001`, `bj-002`). Admins can enter a room shell via Enter; `Esc` returns to the directory. Non-admins see room status as `In Progress`. No room-bound service routing yet. Blackjack now lives under `app/rooms/blackjack` while the Arcade still routes to it for the current playable table. |
+| **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and legacy admin-gated Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
+| **Rooms** | 4 | Active | Dedicated room directory screen for shared multiplayer table games. Current implementation persists `game_rooms`, lets admins create Blackjack tables, select/enter a table, and lazily binds each entered Blackjack room to its own `BlackjackService` through `BlackjackTableManager`. Non-admins can view the list but cannot create or enter rooms. Active Rooms mode captures input like a dedicated game screen; only global `Ctrl-O` reaches settings. Top half renders Blackjack; bottom half is a room-chat placeholder using the associated `chat_room_id`. |
+| **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 
 ### Layout
 
@@ -1301,8 +1314,8 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `1` | Global | Jump to Dashboard |
 | `2` | Global | Jump to Chat |
 | `3` | Global | Jump to Games |
-| `4` | Global | Jump to Artboard |
-| `5` | Global | Jump to Rooms |
+| `4` | Global | Jump to Rooms |
+| `5` | Global | Jump to Artboard |
 | `m` | Global | Toggle mute on paired client |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |

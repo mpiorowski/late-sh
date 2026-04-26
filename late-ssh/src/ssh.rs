@@ -715,6 +715,7 @@ impl russh::server::Handler for ClientHandler {
             minesweeper_service: self.state.minesweeper_service.clone(),
             initial_minesweeper_games,
             rooms_service: self.state.rooms_service.clone(),
+            blackjack_table_manager: self.state.blackjack_table_manager.clone(),
             blackjack_service: self.state.blackjack_service.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
             dartboard_provenance: self.state.dartboard_provenance.clone(),

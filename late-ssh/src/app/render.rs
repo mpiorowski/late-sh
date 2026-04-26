@@ -556,6 +556,8 @@ impl App {
                 ctx.rooms_snapshot,
                 ctx.rooms_selected_index,
                 ctx.rooms_active_room,
+                ctx.blackjack_state,
+                ctx.is_admin,
             ),
         }
 
@@ -669,8 +671,8 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Dashboard, "1"),
         (Screen::Chat, "2"),
         (Screen::Games, "3"),
-        (Screen::Artboard, "4"),
-        (Screen::Rooms, "5"),
+        (Screen::Rooms, "4"),
+        (Screen::Artboard, "5"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
