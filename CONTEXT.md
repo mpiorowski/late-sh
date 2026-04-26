@@ -731,10 +731,11 @@ late-sh/
 | BonsaiGrave | `bonsai_graveyard` | `user_id` FK (not unique — multiple deaths), survived_days, died_at |
 | BonsaiDailyCare | `bonsai_daily_care` | `UNIQUE(user_id, care_date)`, UTC daily care row with watered flag, generated branch goal, cut branch ids, and one-shot water/prune penalty flags |
 | UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (floor=100), `last_stipend_date` DATE |
+| Showcase | `showcases` | `user_id` FK; `title` 1-120, `url` 1-2000, `description` 1-800, `tags` TEXT[] (lowercased, ≤8). Listed newest-first, edit/delete restricted to author or admin |
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Chat`, `Games` (cycle: `Dashboard -> Chat -> Games -> Dashboard`; News and Mentions are synthetic room-like entries within Chat, not separate screens, each with their own persisted unread state)
+- `Screen`: `Dashboard`, `Chat`, `Games` (cycle: `Dashboard -> Chat -> Games -> Dashboard`; News, Mentions, Discover, and Showcase are synthetic room-like entries within Chat, not separate screens. News and Mentions each carry persisted unread state; Showcase is a user-authored project showcase backed by the `showcases` table with no unread tracking.)
 - `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 
@@ -1003,7 +1004,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Chat message navigation is selection-first:** `selected_message_id` is the source of truth on both the dashboard general card and the chat screen (they share one storage). Mouse wheel, arrows, paging, and `j/k` all move selection; when no message is selected, the viewport falls back to newest-at-bottom.
 - **Chat display names are intentionally plain:** transcript author labels, DM labels, and member labels render the stored username without a leading `@` and without an appended country badge. `@` still exists in composer mentions, mention autocomplete, and command syntax (`/dm @user`, `/ignore @user`, etc.), so display formatting and mention syntax are deliberately different.
 - **Chat wrapping is word-aware:** Shared wrapping prefers breaking on whitespace for regular messages, reply quote lines, small-subset Markdown chat blocks (paragraphs, headings, quotes, `- ` list items), news-card text, and the composer. Hard splits are only valid for single words longer than the available width.
-- **Chat room list order is UI-defined:** The chat sidebar order is hardcoded as `core` (`general`, `announcements`, `suggestions`, any other permanent rooms, then synthetic `news`, `mentions`, `discover`) → `public` → `private` → `dm`, with divider rows rendered in the UI. Public/private sections now map directly to DB `visibility = 'public' | 'private'` for non-permanent, non-DM rooms. The synthetic `news` row carries its own unread badge sourced from `article_feed_reads`, and the synthetic `discover` row lists public topic rooms the current user has not joined yet (member/message counts + Enter-to-join).
+- **Chat room list order is UI-defined:** The chat sidebar order is hardcoded as `core` (`general`, `announcements`, `suggestions`, any other permanent rooms, then synthetic `news`, `mentions`, `discover`, `showcase`) → `public` → `private` → `dm`, with divider rows rendered in the UI. Public/private sections now map directly to DB `visibility = 'public' | 'private'` for non-permanent, non-DM rooms. The synthetic `news` row carries its own unread badge sourced from `article_feed_reads`, the synthetic `discover` row lists public topic rooms the current user has not joined yet (member/message counts + Enter-to-join), and the synthetic `showcase` row lists user-authored project shares (title + url + description + tags) where authors can edit/delete their own entries.
 - **Transcript render cost is cache-sensitive:** every member room keeps a warm tail (broadcast-driven, hard-capped at 1000 messages per room). The chat UI caches wrapped transcript rows for the dashboard general card and the active room; invalidation must track width, message content/order, usernames, badges, and bonsai glyphs. Only the selected room and general are fetched from DB on snapshot refresh — other rooms warm up from broadcasts and pull a one-shot backfill via `request_list` on first open per session.
 - **Composer render cost is cache-sensitive:** The chat composer caches wrapped `ComposerRow`s in `ChatState`; any change to composer text or width must invalidate that cache before render/cursor-up/down.
 - **Icon picker is chat-composer-only:** `Ctrl+]` (byte `0x1D`) opens `app::icon_picker` as a modal overlay, lazy-loads the catalog on first open (two sections each for Emoji and Nerd Font — no Unicode tab, no `unicode_names2` dep), and auto-starts `ChatState::start_composing` if the user isn't already composing. Selected icons are only ever pushed into `app.chat.composer`; Profile and news composers are intentionally not targets. The picker intercepts all input via an early return in `handle_parsed_input`, so while it is open nothing else on screen receives keys.
@@ -1253,7 +1254,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/settings`, `/help`) with grouped room sections and synthetic `news`, `mentions`, and `discover` entries in the room list. Admin-only room management commands include `/create-room #room`, `/delete-room #room`, and `/fill-room #room`; `/fill-room` works only for public rooms, bulk-adds all users, and flips the room to `auto_join = true` for future joins. `discover` shows public rooms you have not joined yet with member/message counts; Enter joins the selected room. `/public #room` opens or creates an opt-in public room and joins only the caller. |
+| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/settings`, `/help`) with grouped room sections and synthetic `news`, `mentions`, `discover`, and `showcase` entries in the room list. Admin-only room management commands include `/create-room #room`, `/delete-room #room`, and `/fill-room #room`; `/fill-room` works only for public rooms, bulk-adds all users, and flips the room to `auto_join = true` for future joins. `discover` shows public rooms you have not joined yet with member/message counts; Enter joins the selected room. `/public #room` opens or creates an opt-in public room and joins only the caller. `showcase` lets users post project links (title + url + tags + description); j/k navigates, Enter copies the URL, `i` opens a 4-field composer, `e` edits your own entry, `d` deletes your own (admins can delete any). |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
 | **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 
@@ -1343,12 +1344,20 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `n` | Nonograms | Generate a fresh personal puzzle for the current size |
 | `[` / `]` | Nonograms | Switch puzzle size pack |
 | `Esc` | Nonograms | Exit back to Arcade lobby |
-| `h` / `l` | Chat | Switch room selection, including the synthetic `news`, `mentions`, and `discover` entries. Aliases: `Ctrl+N` next room, `Ctrl+P` previous room; room switching wraps around. |
+| `h` / `l` | Chat | Switch room selection, including the synthetic `news`, `mentions`, `discover`, and `showcase` entries. Aliases: `Ctrl+N` next room, `Ctrl+P` previous room; room switching wraps around. |
 | `j` / `k` / arrows | Chat (`news` selected) | Navigate news list |
 | `i` | Chat (`news` selected) | Start composing/pasting URL |
 | `Enter` | Chat (`news` selected) | Copy selected link / submit URL |
 | `d` | Chat (`news` selected) | Delete own article |
 | `Esc` | Chat (`news` composing) | Cancel URL compose |
+| `j` / `k` / arrows | Chat (`showcase` selected) | Navigate showcase list |
+| `i` | Chat (`showcase` selected) | Open new showcase composer (title / url / tags / description) |
+| `e` | Chat (`showcase` selected) | Edit selected showcase (own only) |
+| `d` | Chat (`showcase` selected) | Delete selected showcase (own only; admins can delete any) |
+| `Enter` | Chat (`showcase` selected) | Copy selected URL |
+| `Tab` / `Shift+Tab` | Chat (`showcase` composing) | Cycle composer fields |
+| `Enter` | Chat (`showcase` composing) | Submit (in description, also submits — there is no Alt+Enter newline yet, use raw `\n`) |
+| `Esc` | Chat (`showcase` composing) | Cancel compose |
 | `i` / `Enter` | Dashboard | Start composing chat |
 | `j` / `k` | Chat | Move message selection newer/older |
 | `f` then `1`..`8` | Dashboard / Chat message selection | React to selected message |

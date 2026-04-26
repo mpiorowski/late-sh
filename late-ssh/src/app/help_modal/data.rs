@@ -183,6 +183,18 @@ pub fn chat_help_lines() -> Vec<String> {
         "Overlay windows",
         "  Esc / q            close overlay",
         "  j / k              scroll overlay",
+        "",
+        "Showcase room",
+        "  A synthetic room where users post project links.",
+        "  j / k              navigate showcase list",
+        "  Enter              copy selected URL to clipboard",
+        "  i                  open the new-showcase composer",
+        "  e                  edit your own showcase",
+        "  d                  delete your own showcase (admin: any)",
+        "  Composer fields    title (≤120) · url · tags (comma-sep, ≤8) · description (≤800)",
+        "  Tab / Shift+Tab    cycle composer fields",
+        "  Enter              submit",
+        "  Esc                cancel compose",
     ]
     .into_iter()
     .map(str::to_string)

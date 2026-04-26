@@ -2,6 +2,7 @@ pub mod discover;
 pub mod input;
 pub mod news;
 pub mod notifications;
+pub mod showcase;
 pub mod state;
 pub mod svc;
 pub mod ui;

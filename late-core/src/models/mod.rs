@@ -12,6 +12,7 @@ pub mod minesweeper;
 pub mod nonogram;
 pub mod notification;
 pub mod profile;
+pub mod showcase;
 pub mod solitaire;
 pub mod sudoku;
 pub mod tetris;

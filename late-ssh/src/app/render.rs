@@ -256,6 +256,14 @@ impl App {
             items: self.chat.notifications.all_items(),
             selected_index: self.chat.notifications.selected_index(),
         };
+        let showcase_view = chat::showcase::ui::ShowcaseListView {
+            items: self.chat.showcase.all_items(),
+            selected_index: self.chat.showcase.selected_index(),
+            current_user_id: self.user_id,
+            is_admin: self.chat.showcase.is_admin(),
+        };
+        let showcase_count = self.chat.showcase.all_items().len();
+        let showcase_composing = self.chat.showcase.composing();
         let chat_view = chat::ui::ChatRenderInput {
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),
@@ -291,6 +299,11 @@ impl App {
             notifications_selected: self.chat.notifications_selected,
             notifications_unread_count: self.chat.notifications.unread_count(),
             notifications_view,
+            showcase_selected: self.chat.showcase_selected,
+            showcase_count,
+            showcase_view,
+            showcase_state: &self.chat.showcase,
+            showcase_composing,
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);

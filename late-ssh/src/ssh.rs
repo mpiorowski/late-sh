@@ -699,6 +699,7 @@ impl russh::server::Handler for ClientHandler {
             chat_service,
             notification_service: self.state.notification_service.clone(),
             article_service,
+            showcase_service: self.state.showcase_service.clone(),
             profile_service,
             twenty_forty_eight_service,
             initial_2048_game,

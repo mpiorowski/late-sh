@@ -316,6 +316,9 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     if app.chat.news_selected {
         return super::news::input::handle_arrow(app, key);
     }
+    if app.chat.showcase_selected {
+        return super::showcase::input::handle_arrow(app, key);
+    }
     handle_message_arrow(app, key)
 }
 
@@ -378,6 +381,18 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::news::input::handle_byte(app, byte);
+    }
+
+    if app.chat.showcase_selected {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        return super::showcase::input::handle_byte(app, byte);
     }
 
     if handle_message_action(app, byte) {

@@ -93,6 +93,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let chat_service = ChatService::new(db.clone(), notification_service.clone());
     let ai_service = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let showcase_service = late_ssh::app::chat::showcase::svc::ShowcaseService::new(db.clone());
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,
         config.ssh_rate_limit_window_secs,
@@ -130,6 +131,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         notification_service,
         ai_service,
         article_service,
+        showcase_service,
         profile_service,
         twenty_forty_eight_service,
         tetris_service,
@@ -182,6 +184,7 @@ pub fn make_app_with_chat_service(
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
             chat_service.clone(),
         ),
+        showcase_service: late_ssh::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
@@ -280,6 +283,7 @@ pub fn make_app_with_paired_client(
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
             ChatService::new(db.clone(), NotificationService::new(db.clone())),
         ),
+        showcase_service: late_ssh::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
