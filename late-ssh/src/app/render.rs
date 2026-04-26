@@ -307,7 +307,7 @@ impl App {
             showcase_selected: self.chat.showcase_selected,
             showcase_count,
             showcase_view,
-            showcase_state: &self.chat.showcase,
+            showcase_state: Some(&self.chat.showcase),
             showcase_composing,
         };
         self.settings_modal_state

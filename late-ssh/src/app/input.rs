@@ -50,6 +50,7 @@ enum PasteTarget {
     None,
     ChatComposer,
     NewsComposer,
+    ShowcaseComposer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -774,6 +775,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 app.chat.news.composer_cursor_word_left();
             }
         }
+        ParsedInput::CtrlArrow(key) | ParsedInput::AltArrow(key)
+            if ctx.screen == Screen::Chat && ctx.showcase_composing =>
+        {
+            let _ = chat::showcase::input::handle_arrow(app, key);
+        }
         ParsedInput::Delete
         | ParsedInput::CtrlArrow(_)
         | ParsedInput::AltArrow(_)
@@ -807,6 +813,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                     b'D' => app.chat.news.composer_cursor_left(),
                     _ => {}
                 }
+                return;
+            }
+            if ctx.screen == Screen::Chat && ctx.showcase_composing {
+                let _ = chat::showcase::input::handle_arrow(app, key);
                 return;
             }
 
@@ -879,6 +889,10 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
 fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && ctx.chat_composing {
         chat::input::handle_compose_char(app, ch);
+        return true;
+    }
+    if ctx.screen == Screen::Chat && ctx.showcase_composing {
+        app.chat.showcase.field_insert_char(ch);
         return true;
     }
     false
@@ -991,6 +1005,9 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
         PasteTarget::NewsComposer => {
             insert_pasted_text(pasted, |ch| app.chat.news.composer_push(ch));
         }
+        PasteTarget::ShowcaseComposer => {
+            insert_pasted_text(pasted, |ch| app.chat.showcase.field_insert_char(ch));
+        }
         PasteTarget::None => {}
     }
 }
@@ -1000,6 +1017,8 @@ fn paste_target(ctx: InputContext) -> PasteTarget {
         PasteTarget::ChatComposer
     } else if ctx.screen == Screen::Chat && ctx.news_composing {
         PasteTarget::NewsComposer
+    } else if ctx.screen == Screen::Chat && ctx.showcase_composing {
+        PasteTarget::ShowcaseComposer
     } else {
         PasteTarget::None
     }
@@ -1149,7 +1168,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                         current_user_id: app.user_id,
                         is_admin: app.chat.showcase.is_admin(),
                     },
-                    showcase_state: &app.chat.showcase,
+                    showcase_state: Some(&app.chat.showcase),
                     showcase_composing: app.chat.showcase.composing(),
                 };
                 crate::app::chat::ui::room_list_hit_test(content_area, &view, x, y)
@@ -1843,6 +1862,18 @@ mod tests {
             showcase_composing: false,
         };
         assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
+    }
+
+    #[test]
+    fn paste_target_routes_to_showcase_composer() {
+        let ctx = InputContext {
+            screen: Screen::Chat,
+            chat_composing: false,
+            chat_ac_active: false,
+            news_composing: false,
+            showcase_composing: true,
+        };
+        assert_eq!(paste_target(ctx), PasteTarget::ShowcaseComposer);
     }
 
     #[test]

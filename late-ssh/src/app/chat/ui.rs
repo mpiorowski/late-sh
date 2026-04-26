@@ -733,7 +733,7 @@ pub struct ChatRenderInput<'a> {
     pub showcase_selected: bool,
     pub showcase_count: usize,
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
-    pub showcase_state: &'a super::showcase::state::State,
+    pub showcase_state: Option<&'a super::showcase::state::State>,
     pub showcase_composing: bool,
 }
 
@@ -1256,13 +1256,15 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         .block(hint_block);
         frame.render_widget(hint_text, composer_area);
     } else if view.showcase_selected {
-        super::showcase::ui::draw_showcase_composer(
-            frame,
-            composer_area,
-            &super::showcase::ui::ShowcaseComposerView {
-                state: view.showcase_state,
-            },
-        );
+        if let Some(showcase_state) = view.showcase_state {
+            super::showcase::ui::draw_showcase_composer(
+                frame,
+                composer_area,
+                &super::showcase::ui::ShowcaseComposerView {
+                    state: showcase_state,
+                },
+            );
+        }
     } else if view.discover_selected {
         let hint_block = Block::default()
             .title(" Discover ")
@@ -1385,7 +1387,6 @@ mod tests {
         bonsai_glyphs: &'a HashMap<Uuid, String>,
         composer: &'a TextArea<'static>,
         news_composer: &'a TextArea<'static>,
-        showcase_state: &'a crate::app::chat::showcase::state::State,
     ) -> ChatRenderInput<'a> {
         ChatRenderInput {
             news_selected: false,
@@ -1439,7 +1440,7 @@ mod tests {
                 current_user_id: Uuid::nil(),
                 is_admin: false,
             },
-            showcase_state,
+            showcase_state: None,
             showcase_composing: false,
         }
     }
@@ -1700,14 +1701,6 @@ mod tests {
         let bonsai_glyphs = HashMap::new();
         let composer = TextArea::default();
         let news_composer = TextArea::default();
-        let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(
-            late_core::db::Db::new(&late_core::db::DbConfig::default()).unwrap(),
-        );
-        let showcase_state = crate::app::chat::showcase::state::State::new_without_initial_load(
-            showcase_service,
-            Uuid::nil(),
-            false,
-        );
         let view = chat_view(
             &mut rows_cache,
             &rooms,
@@ -1720,7 +1713,6 @@ mod tests {
             &bonsai_glyphs,
             &composer,
             &news_composer,
-            &showcase_state,
         );
 
         assert_eq!(
