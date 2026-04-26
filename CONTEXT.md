@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-25 (keyboard shortcut cleanup + Artboard web gallery context)
+- Last updated: 2026-04-26 (Rooms domain cleanup + Blackjack module relocation)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, The Arcade, Artboard, Multiplayer Rooms), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..8` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), a dedicated shared multi-user ASCII artboard screen, plus a dedicated hardcoded multiplayer room directory screen with two Blackjack rooms (`bj-001`, `bj-002`) as the first step toward multi-room table games, and configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` now opens a quit-confirm modal; pressing `q` again exits and `Esc` dismisses it. `@bot` mention replies now receive compact context about online non-bot members in the active room (username plus optional bio/country/timezone, capped and truncated for prompt size).
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, The Arcade, Artboard, Rooms), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..8` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, admin-gated Blackjack), a dedicated shared multi-user ASCII artboard screen, plus a dedicated hardcoded rooms directory screen with two Blackjack rooms (`bj-001`, `bj-002`) as the first step toward multi-room table games, and configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` now opens a quit-confirm modal; pressing `q` again exits and `Esc` dismisses it. `@bot` mention replies now receive compact context about online non-bot members in the active room (username plus optional bio/country/timezone, capped and truncated for prompt size).
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -238,7 +238,7 @@ flowchart LR
 - `ProfileService` (in `app/profile/svc.rs`) exposes per-user `watch` snapshots backed by service-owned maps (`subscribe_snapshot(user_id)`).
 - `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, streak leaders, per-user streak map (used for chat badges and profile achievements), all-time high scores (Tetris + 2048), and chip leaders (top balances).
 - `ChipService` (in `app/games/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` grants the daily 500-chip stipend on login, `grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips on daily puzzle completion. All 4 daily game services hold a `ChipService` clone and call it in `record_win_task()`.
-- `BlackjackService` (in `app/games/blackjack/svc.rs`) owns the current shared blackjack table in-memory, publishes `BlackjackSnapshot` via `watch`, and emits per-user `BlackjackEvent` messages via `broadcast`. The SSH app's blackjack state is now a thin client wrapper, not the game authority.
+- `BlackjackService` (in `app/rooms/blackjack/svc.rs`) owns the current shared blackjack table in-memory, publishes `BlackjackSnapshot` via `watch`, and emits per-user `BlackjackEvent` messages via `broadcast`. The SSH app's blackjack state is now a thin client wrapper, not the game authority.
 - Events remain `broadcast` for all subscribers; targeted variants carry `user_id` and are filtered in UI state.
 
 ### 2.5 TUI Rendering and State Architecture (Sync vs Async Boundary)
@@ -734,7 +734,7 @@ late-sh/
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Chat`, `Games`, `Artboard`, `MultiplayerRooms` (cycle: `Dashboard -> Chat -> Games -> Artboard -> MultiplayerRooms -> Dashboard`; News and Mentions are synthetic room-like entries within Chat, not separate screens, each with their own persisted unread state)
+- `Screen`: `Dashboard`, `Chat`, `Games`, `Artboard`, `Rooms` (cycle: `Dashboard -> Chat -> Games -> Artboard -> Rooms -> Dashboard`; News and Mentions are synthetic room-like entries within Chat, not separate screens, each with their own persisted unread state)
 - `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 
@@ -1256,7 +1256,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/settings`, `/help`) with grouped room sections and synthetic `news`, `mentions`, and `discover` entries in the room list. Admin-only room management commands include `/create-room #room`, `/delete-room #room`, and `/fill-room #room`; `/fill-room` works only for public rooms, bulk-adds all users, and flips the room to `auto_join = true` for future joins. `discover` shows public rooms you have not joined yet with member/message counts; Enter joins the selected room. `/public #room` opens or creates an opt-in public room and joins only the caller. |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and admin-gated shared-table Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
 | **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
-| **Multiplayer Rooms** | 5 | Active | Dedicated room directory screen for shared multiplayer table games. Current implementation is intentionally hardcoded and UI-light: two Blackjack room entries (`bj-001`, `bj-002`). Admins can enter a room shell via Enter; `Esc` returns to the directory. Non-admins see room status as `In Progress`. No room-bound service routing yet. |
+| **Rooms** | 5 | Active | Dedicated room directory screen for shared multiplayer table games. Current implementation is intentionally hardcoded and UI-light: two Blackjack room entries (`bj-001`, `bj-002`). Admins can enter a room shell via Enter; `Esc` returns to the directory. Non-admins see room status as `In Progress`. No room-bound service routing yet. Blackjack now lives under `app/rooms/blackjack` while the Arcade still routes to it for the current playable table. |
 
 ### Layout
 
@@ -1302,7 +1302,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `2` | Global | Jump to Chat |
 | `3` | Global | Jump to Games |
 | `4` | Global | Jump to Artboard |
-| `5` | Global | Jump to Multiplayer Rooms |
+| `5` | Global | Jump to Rooms |
 | `m` | Global | Toggle mute on paired client |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |

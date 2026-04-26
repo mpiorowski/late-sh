@@ -6,9 +6,9 @@ use tokio::sync::{
 };
 use uuid::Uuid;
 
-use crate::app::games::{
-    blackjack::svc::{BlackjackEvent, BlackjackService},
-    cards::{CardRank, CardSuit, PlayingCard},
+use crate::app::{
+    games::cards::{CardRank, CardSuit, PlayingCard},
+    rooms::blackjack::svc::{BlackjackEvent, BlackjackService},
 };
 
 pub const MIN_BET: i64 = 10;

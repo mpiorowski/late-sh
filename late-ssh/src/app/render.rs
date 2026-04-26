@@ -94,15 +94,15 @@ struct DrawContext<'a> {
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
-    multiplayer_room_selection: usize,
-    active_multiplayer_room: Option<usize>,
+    room_selection: usize,
+    active_room: Option<usize>,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::games::tetris::state::State,
     sudoku_state: &'a crate::app::games::sudoku::state::State,
     nonogram_state: &'a crate::app::games::nonogram::state::State,
     solitaire_state: &'a crate::app::games::solitaire::state::State,
     minesweeper_state: &'a crate::app::games::minesweeper::state::State,
-    blackjack_state: &'a crate::app::games::blackjack::state::State,
+    blackjack_state: &'a crate::app::rooms::blackjack::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
@@ -315,8 +315,8 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
-                        multiplayer_room_selection: self.multiplayer_room_selection,
-                        active_multiplayer_room: self.active_multiplayer_room,
+                        room_selection: self.room_selection,
+                        active_room: self.active_room,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         sudoku_state: &self.sudoku_state,
@@ -542,11 +542,11 @@ impl App {
                     show_sidebar: ctx.show_games_sidebar,
                 },
             ),
-            Screen::MultiplayerRooms => crate::app::multiplayer_rooms::ui::draw_rooms_page(
+            Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
                 frame,
                 content_area,
-                ctx.multiplayer_room_selection,
-                ctx.active_multiplayer_room,
+                ctx.room_selection,
+                ctx.active_room,
                 ctx.is_admin,
             ),
         }
@@ -637,7 +637,7 @@ impl App {
             } else {
                 ("Pair", "Scan to pair audio")
             };
-            super::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
+            super::common::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
         }
 
         if ctx.icon_picker_open
@@ -662,7 +662,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Chat, "2"),
         (Screen::Games, "3"),
         (Screen::Artboard, "4"),
-        (Screen::MultiplayerRooms, "5"),
+        (Screen::Rooms, "5"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -684,7 +684,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Chat => "Chat",
         Screen::Games => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::MultiplayerRooms => "Rooms",
+        Screen::Rooms => "Rooms",
     };
     spans.push(Span::styled(
         " | ",

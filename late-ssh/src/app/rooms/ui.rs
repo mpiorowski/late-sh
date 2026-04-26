@@ -18,19 +18,24 @@ pub fn draw_rooms_page(
     is_admin: bool,
 ) {
     let block = Block::default()
-        .title(" Multiplayer Rooms ")
+        .title(" Rooms ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if inner.height < 10 || inner.width < 50 {
-        frame.render_widget(Paragraph::new("Terminal too small for Multiplayer Rooms"), inner);
+        frame.render_widget(Paragraph::new("Terminal too small for Rooms"), inner);
         return;
     }
 
     if let Some(room_idx) = active_room {
-        draw_room_shell(frame, inner, &ROOMS[room_idx.min(ROOMS.len() - 1)], is_admin);
+        draw_room_shell(
+            frame,
+            inner,
+            &ROOMS[room_idx.min(ROOMS.len() - 1)],
+            is_admin,
+        );
         return;
     }
 
@@ -55,7 +60,11 @@ pub fn draw_rooms_page(
             Span::styled(" move  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Enter", Style::default().fg(theme::AMBER())),
             Span::styled(
-                if is_admin { " enter room" } else { " unavailable for non-admins" },
+                if is_admin {
+                    " enter room"
+                } else {
+                    " unavailable for non-admins"
+                },
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]),
@@ -94,7 +103,11 @@ fn draw_room_card(
         Style::default().fg(theme::TEXT())
     };
     let block = Block::default()
-        .title(if selected { " Selected Room " } else { " Room " })
+        .title(if selected {
+            " Selected Room "
+        } else {
+            " Room "
+        })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border));
     let inner = block.inner(area);
@@ -104,7 +117,10 @@ fn draw_room_card(
         Line::from(vec![
             Span::styled("> ", title_style),
             Span::styled(room.title, title_style),
-            Span::styled(format!("  [{}]", room.slug), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                format!("  [{}]", room.slug),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Game: ", Style::default().fg(theme::TEXT_DIM())),
@@ -138,8 +154,16 @@ fn draw_room_shell(frame: &mut Frame, area: Rect, room: &RoomCard<'_>, is_admin:
 
     let header = vec![
         Line::from(vec![
-            Span::styled(room.title, Style::default().fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  [{}]", room.slug), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                room.title,
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  [{}]", room.slug),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ]),
         Line::from(Span::styled(
             "Room shell only. Shared table routing is not connected yet.",
@@ -153,7 +177,10 @@ fn draw_room_shell(frame: &mut Frame, area: Rect, room: &RoomCard<'_>, is_admin:
             Span::styled("Esc", Style::default().fg(theme::AMBER())),
             Span::styled(" back  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Enter", Style::default().fg(theme::AMBER())),
-            Span::styled(" placeholder action", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                " placeholder action",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ]),
     ];
     frame.render_widget(Paragraph::new(header), layout[0]);

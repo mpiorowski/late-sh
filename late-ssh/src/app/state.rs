@@ -121,7 +121,7 @@ pub struct SessionConfig {
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
     pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
-    pub blackjack_service: crate::app::games::blackjack::svc::BlackjackService,
+    pub blackjack_service: crate::app::rooms::blackjack::svc::BlackjackService,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
     /// enters the dartboard game from the arcade.
@@ -247,15 +247,15 @@ pub struct App {
     /// Games Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
-    pub(crate) multiplayer_room_selection: usize,
-    pub(crate) active_multiplayer_room: Option<usize>,
+    pub(crate) room_selection: usize,
+    pub(crate) active_room: Option<usize>,
     pub(crate) twenty_forty_eight_state: crate::app::games::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::games::tetris::state::State,
     pub(crate) sudoku_state: crate::app::games::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
-    pub(crate) blackjack_state: crate::app::games::blackjack::state::State,
+    pub(crate) blackjack_state: crate::app::rooms::blackjack::state::State,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -554,7 +554,7 @@ impl App {
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
         );
-        let blackjack_state = crate::app::games::blackjack::state::State::new(
+        let blackjack_state = crate::app::rooms::blackjack::state::State::new(
             config.blackjack_service.clone(),
             config.user_id,
             config.initial_chip_balance,
@@ -686,8 +686,8 @@ impl App {
             bonsai_care_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
-            multiplayer_room_selection: 0,
-            active_multiplayer_room: None,
+            room_selection: 0,
+            active_room: None,
             twenty_forty_eight_state,
             tetris_state,
             sudoku_state,

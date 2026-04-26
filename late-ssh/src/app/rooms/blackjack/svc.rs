@@ -4,13 +4,12 @@ use late_core::db::Db;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
-use crate::app::games::{
-    blackjack::state::{
+use crate::app::{
+    games::{cards::PlayingCard, chips::svc::ChipService},
+    rooms::blackjack::state::{
         Bet, BetError, BlackjackSnapshot, MAX_BET, MIN_BET, Outcome, Phase, Shoe, dealer_must_hit,
         is_bust, is_natural_blackjack, payout_credit, score, settle,
     },
-    cards::PlayingCard,
-    chips::svc::ChipService,
 };
 
 #[derive(Clone)]
