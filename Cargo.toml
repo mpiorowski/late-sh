@@ -52,6 +52,7 @@ dartboard-tui = "0.1.4"
 deadpool-postgres = "0.14"
 emojis = "0.7"
 futures-util = "0.3"
+getrandom = { version = "0.4", features = ["sys_rng"] }
 image = "0.25.9"
 ipnet = "2.11"
 late-core = { path = "late-core", default-features = false }

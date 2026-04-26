@@ -551,13 +551,15 @@ impl App {
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
                 frame,
                 content_area,
-                ctx.rooms_add_form_open,
-                ctx.rooms_display_name_input,
-                ctx.rooms_snapshot,
-                ctx.rooms_selected_index,
-                ctx.rooms_active_room,
-                ctx.blackjack_state,
-                ctx.is_admin,
+                &crate::app::rooms::ui::RoomsPageView {
+                    add_form_open: ctx.rooms_add_form_open,
+                    display_name: ctx.rooms_display_name_input,
+                    snapshot: ctx.rooms_snapshot,
+                    selected_index: ctx.rooms_selected_index,
+                    active_room: ctx.rooms_active_room,
+                    blackjack_state: ctx.blackjack_state,
+                    is_admin: ctx.is_admin,
+                },
             ),
         }
 

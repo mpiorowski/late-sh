@@ -36,6 +36,7 @@ ratatui-textarea = { version = "0.9.1", default-features = false }
 unicode-width.workspace = true
 unicode_names2.workspace = true
 emojis.workspace = true
+getrandom.workspace = true
 rand_core = { workspace = true, features = ["std"] }
 base64.workspace = true
 vte.workspace = true

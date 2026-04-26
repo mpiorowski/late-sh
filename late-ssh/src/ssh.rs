@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
+use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::user::{User, UserParams, extract_theme_id};
-use russh::keys::PrivateKey;
+use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::*;
 use serde_json::{Value, json};
@@ -104,7 +105,7 @@ pub fn load_or_generate_key(state: &State) -> anyhow::Result<PrivateKey> {
         tracing::info!(path = %path.display(), "loaded existing server key");
         Ok(key)
     } else {
-        let key = PrivateKey::random(&mut rand_core::OsRng, russh::keys::Algorithm::Ed25519)?;
+        let key = PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519)?;
         let key_data = key.to_openssh(LineEnding::LF)?;
         std::fs::write(path, key_data.as_bytes())?;
         #[cfg(unix)]

@@ -14,17 +14,17 @@ use crate::app::{
     },
 };
 
-pub fn draw_rooms_page(
-    frame: &mut Frame,
-    area: Rect,
-    add_form_open: bool,
-    display_name: &str,
-    snapshot: &RoomsSnapshot,
-    selected_index: usize,
-    active_room: Option<&RoomListItem>,
-    blackjack_state: &BlackjackState,
-    is_admin: bool,
-) {
+pub struct RoomsPageView<'a> {
+    pub add_form_open: bool,
+    pub display_name: &'a str,
+    pub snapshot: &'a RoomsSnapshot,
+    pub selected_index: usize,
+    pub active_room: Option<&'a RoomListItem>,
+    pub blackjack_state: &'a BlackjackState,
+    pub is_admin: bool,
+}
+
+pub fn draw_rooms_page(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
     let block = Block::default()
         .title(" Rooms ")
         .borders(Borders::ALL)
@@ -37,8 +37,8 @@ pub fn draw_rooms_page(
         return;
     }
 
-    if let Some(room) = active_room {
-        draw_active_room(frame, inner, room, blackjack_state);
+    if let Some(room) = view.active_room {
+        draw_active_room(frame, inner, room, view.blackjack_state);
         return;
     }
 
@@ -46,7 +46,7 @@ pub fn draw_rooms_page(
         Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(1),
-        Constraint::Length(if add_form_open { 5 } else { 0 }),
+        Constraint::Length(if view.add_form_open { 5 } else { 0 }),
         Constraint::Min(3),
     ])
     .split(inner);
@@ -54,15 +54,21 @@ pub fn draw_rooms_page(
     draw_add_button(
         frame,
         layout[1],
-        add_form_open || selected_index == 0,
-        is_admin,
+        view.add_form_open || view.selected_index == 0,
+        view.is_admin,
     );
 
-    if add_form_open {
-        draw_display_name_input(frame, layout[3], display_name);
+    if view.add_form_open {
+        draw_display_name_input(frame, layout[3], view.display_name);
     }
 
-    draw_room_list(frame, layout[4], snapshot, selected_index, is_admin);
+    draw_room_list(
+        frame,
+        layout[4],
+        view.snapshot,
+        view.selected_index,
+        view.is_admin,
+    );
 }
 
 fn draw_add_button(frame: &mut Frame, area: Rect, active: bool, enabled: bool) {
