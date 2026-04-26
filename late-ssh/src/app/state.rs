@@ -249,6 +249,8 @@ pub struct App {
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
+    pub(crate) rooms_selected_index: usize,
+    pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
     pub(crate) rooms_add_form_open: bool,
     pub(crate) rooms_display_name_input: String,
     pub(super) rooms_snapshot_rx:
@@ -696,6 +698,8 @@ impl App {
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             rooms_service: config.rooms_service,
+            rooms_selected_index: 0,
+            rooms_active_room: None,
             rooms_add_form_open: false,
             rooms_display_name_input: String::new(),
             rooms_snapshot_rx,

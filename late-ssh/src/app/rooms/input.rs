@@ -54,12 +54,30 @@ pub fn handle_key(app: &mut App, byte: u8) {
     }
 }
 
-pub fn handle_arrow(_app: &mut App, _key: u8) -> bool {
-    false
+pub fn handle_arrow(app: &mut App, key: u8) -> bool {
+    if app.rooms_add_form_open || app.rooms_active_room.is_some() {
+        return false;
+    }
+
+    match key {
+        b'A' => {
+            move_selection(app, -1);
+            true
+        }
+        b'B' => {
+            move_selection(app, 1);
+            true
+        }
+        _ => false,
+    }
 }
 
 fn handle_enter(app: &mut App) {
     if !app.rooms_add_form_open {
+        if app.rooms_selected_index > 0 {
+            enter_selected_room(app);
+            return;
+        }
         app.rooms_add_form_open = true;
         if app.rooms_display_name_input.trim().is_empty() {
             app.rooms_display_name_input = DEFAULT_BLACKJACK_TABLE_NAME.to_string();
@@ -87,7 +105,9 @@ fn handle_enter(app: &mut App) {
 fn handle_escape(app: &mut App) {
     if app.rooms_add_form_open {
         app.rooms_add_form_open = false;
+        return;
     }
+    app.rooms_active_room = None;
 }
 
 fn push_display_name_char(app: &mut App, ch: char) {
@@ -102,4 +122,21 @@ fn push_display_name_char(app: &mut App, ch: char) {
 
 fn is_display_name_char(ch: char) -> bool {
     !ch.is_control() && ch != '\n' && ch != '\r'
+}
+
+fn move_selection(app: &mut App, delta: isize) {
+    let max_index = app.rooms_snapshot.rooms.len();
+    let next = app
+        .rooms_selected_index
+        .saturating_add_signed(delta)
+        .min(max_index);
+    app.rooms_selected_index = next;
+}
+
+fn enter_selected_room(app: &mut App) {
+    let room_index = app.rooms_selected_index.saturating_sub(1);
+    if let Some(room) = app.rooms_snapshot.rooms.get(room_index).cloned() {
+        app.rooms_active_room = Some(room);
+        app.rooms_add_form_open = false;
+    }
 }

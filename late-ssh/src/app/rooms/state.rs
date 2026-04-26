@@ -7,8 +7,28 @@ impl App {
     pub(crate) fn tick_rooms(&mut self) -> Option<Banner> {
         if self.rooms_snapshot_rx.has_changed().unwrap_or(false) {
             self.rooms_snapshot = self.rooms_snapshot_rx.borrow_and_update().clone();
+            self.clamp_rooms_selection();
+            self.refresh_active_room();
         }
         self.drain_rooms_events()
+    }
+
+    fn clamp_rooms_selection(&mut self) {
+        self.rooms_selected_index = self
+            .rooms_selected_index
+            .min(self.rooms_snapshot.rooms.len());
+    }
+
+    fn refresh_active_room(&mut self) {
+        let Some(active_id) = self.rooms_active_room.as_ref().map(|room| room.id) else {
+            return;
+        };
+        self.rooms_active_room = self
+            .rooms_snapshot
+            .rooms
+            .iter()
+            .find(|room| room.id == active_id)
+            .cloned();
     }
 
     fn drain_rooms_events(&mut self) -> Option<Banner> {
