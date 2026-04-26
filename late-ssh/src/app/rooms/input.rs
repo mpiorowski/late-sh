@@ -1,64 +1,92 @@
-use crate::app::{common::primitives::Banner, state::App};
+use crate::app::{
+    common::primitives::Banner,
+    input::{ParsedInput, sanitize_paste_markers},
+    state::App,
+};
 
-use super::data::ROOMS;
+const DISPLAY_NAME_MAX_LEN: usize = 48;
 
-pub fn handle_key(app: &mut App, byte: u8) {
-    if byte == 0x1B {
-        if app.active_room.is_some() {
-            app.active_room = None;
-        }
-        return;
-    }
-
-    match byte {
-        b'j' | b'J' => {
-            if app.active_room.is_some() {
-                return;
-            }
-            app.room_selection = (app.room_selection + 1) % ROOMS.len();
-        }
-        b'k' | b'K' => {
-            if app.active_room.is_some() {
-                return;
-            }
-            app.room_selection = app.room_selection.saturating_add(ROOMS.len() - 1) % ROOMS.len();
-        }
-        b'\r' | b'\n' => {
-            if let Some(room_idx) = app.active_room {
-                let room = &ROOMS[room_idx.min(ROOMS.len() - 1)];
-                app.banner = Some(Banner::success(&format!(
-                    "Entered {}. Blackjack room wiring is next.",
-                    room.slug
-                )));
-                return;
-            }
-            if !app.is_admin {
-                app.banner = Some(Banner::error("Rooms are in progress for non-admin users"));
-                return;
-            }
-            let room_idx = app.room_selection.min(ROOMS.len() - 1);
-            let room_slug = ROOMS[room_idx].slug;
-            app.active_room = Some(room_idx);
-            app.banner = Some(Banner::success(&format!("Entered room {room_slug}")));
-        }
-        _ => {}
-    }
-}
-
-pub fn handle_arrow(app: &mut App, key: u8) -> bool {
-    if app.active_room.is_some() {
-        return false;
-    }
-
-    match key {
-        b'A' => {
-            app.room_selection = app.room_selection.saturating_add(ROOMS.len() - 1) % ROOMS.len();
+pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::Byte(b'\r' | b'\n') => {
+            handle_enter(app);
             true
         }
-        b'B' => {
-            app.room_selection = (app.room_selection + 1) % ROOMS.len();
+        ParsedInput::Byte(0x1B) => {
+            handle_escape(app);
+            true
+        }
+        ParsedInput::Byte(0x08 | 0x7F) if app.rooms_add_form_open => {
+            app.rooms_display_name_input.pop();
+            true
+        }
+        ParsedInput::Byte(0x17) if app.rooms_add_form_open => {
+            app.rooms_display_name_input.clear();
+            true
+        }
+        ParsedInput::Char(ch) if app.rooms_add_form_open => {
+            push_display_name_char(app, *ch);
+            true
+        }
+        ParsedInput::Byte(byte) if app.rooms_add_form_open => {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                push_display_name_char(app, *byte as char);
+            }
+            true
+        }
+        ParsedInput::Paste(bytes) if app.rooms_add_form_open => {
+            let pasted = String::from_utf8_lossy(bytes);
+            for ch in sanitize_paste_markers(&pasted).chars() {
+                push_display_name_char(app, ch);
+            }
             true
         }
         _ => false,
     }
+}
+
+pub fn handle_key(app: &mut App, byte: u8) {
+    match byte {
+        b'\r' | b'\n' => handle_enter(app),
+        0x1B => handle_escape(app),
+        _ => {}
+    }
+}
+
+pub fn handle_arrow(_app: &mut App, _key: u8) -> bool {
+    false
+}
+
+fn handle_enter(app: &mut App) {
+    if !app.rooms_add_form_open {
+        app.rooms_add_form_open = true;
+        return;
+    }
+
+    app.blackjack_state
+        .create_room(app.rooms_display_name_input.to_string());
+
+    app.banner = Some(Banner::success(
+        "Blackjack table creation UI is ready; persistence is not wired yet.",
+    ));
+}
+
+fn handle_escape(app: &mut App) {
+    if app.rooms_add_form_open {
+        app.rooms_add_form_open = false;
+    }
+}
+
+fn push_display_name_char(app: &mut App, ch: char) {
+    if !is_display_name_char(ch) {
+        return;
+    }
+    if app.rooms_display_name_input.chars().count() >= DISPLAY_NAME_MAX_LEN {
+        return;
+    }
+    app.rooms_display_name_input.push(ch);
+}
+
+fn is_display_name_char(ch: char) -> bool {
+    !ch.is_control() && ch != '\n' && ch != '\r'
 }

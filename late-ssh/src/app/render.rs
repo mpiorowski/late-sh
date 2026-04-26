@@ -94,8 +94,8 @@ struct DrawContext<'a> {
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
-    room_selection: usize,
-    active_room: Option<usize>,
+    rooms_add_form_open: bool,
+    rooms_display_name_input: &'a str,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::games::tetris::state::State,
     sudoku_state: &'a crate::app::games::sudoku::state::State,
@@ -315,8 +315,8 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
-                        room_selection: self.room_selection,
-                        active_room: self.active_room,
+                        rooms_add_form_open: self.rooms_add_form_open,
+                        rooms_display_name_input: self.rooms_display_name_input.as_str(),
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         sudoku_state: &self.sudoku_state,
@@ -545,9 +545,8 @@ impl App {
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
                 frame,
                 content_area,
-                ctx.room_selection,
-                ctx.active_room,
-                ctx.is_admin,
+                ctx.rooms_add_form_open,
+                ctx.rooms_display_name_input,
             ),
         }
 

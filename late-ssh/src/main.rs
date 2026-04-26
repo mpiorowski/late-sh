@@ -127,9 +127,9 @@ async fn main() -> anyhow::Result<()> {
     let (blackjack_event_tx, _) =
         broadcast::channel::<late_ssh::app::rooms::blackjack::svc::BlackjackEvent>(64);
     let blackjack_service = late_ssh::app::rooms::blackjack::svc::BlackjackService::new(
+        db.clone(),
         chip_service.clone(),
         blackjack_event_tx,
-        db.clone(),
     );
     let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
         db.clone(),

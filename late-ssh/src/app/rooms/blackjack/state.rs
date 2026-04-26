@@ -273,6 +273,10 @@ impl State {
         }
     }
 
+    pub fn create_room(&mut self, display_name: String) {
+        self.svc.create_room_task(display_name);
+    }
+
     pub fn append_bet_digit(&mut self, digit: char) {
         if self.snapshot.phase != Phase::Betting || !digit.is_ascii_digit() {
             return;

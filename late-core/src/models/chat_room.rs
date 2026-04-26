@@ -103,6 +103,26 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    pub async fn get_or_create_game_room(
+        client: &Client,
+        game_kind: &str,
+        slug: &str,
+    ) -> Result<Self> {
+        let game_kind = normalize_game_kind(game_kind)?;
+        let slug = normalize_game_slug(slug)?;
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                 VALUES ('game', 'public', false, $1, $2)
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&slug, &game_kind],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     pub async fn create_private_room(client: &Client, slug: &str) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 
@@ -338,6 +358,22 @@ fn normalize_room_slug(slug: &str) -> Result<String> {
     let slug = normalized.trim_matches('-').to_string();
     if slug.is_empty() {
         bail!("room name cannot be empty");
+    }
+    Ok(slug)
+}
+
+fn normalize_game_kind(game_kind: &str) -> Result<String> {
+    let normalized = normalize_room_slug(game_kind)?;
+    if normalized == "general" {
+        bail!("game kind cannot use reserved name 'general'");
+    }
+    Ok(normalized)
+}
+
+fn normalize_game_slug(slug: &str) -> Result<String> {
+    let slug = normalize_room_slug(slug)?;
+    if slug == "general" {
+        bail!("cannot create game room with reserved name 'general'");
     }
     Ok(slug)
 }

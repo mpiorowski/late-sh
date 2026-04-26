@@ -1,6 +1,14 @@
 use std::sync::Arc;
 
-use late_core::db::Db;
+use anyhow::Context;
+use late_core::{
+    db::Db,
+    models::{
+        chat_room::ChatRoom,
+        game_room::{GameRoom, GameRoomParams},
+    },
+};
+use serde_json::json;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
@@ -14,6 +22,7 @@ use crate::app::{
 
 #[derive(Clone)]
 pub struct BlackjackService {
+    db: Db,
     chip_svc: ChipService,
     snapshot_tx: watch::Sender<BlackjackSnapshot>,
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
@@ -80,14 +89,12 @@ impl ActionFailure {
 }
 
 impl BlackjackService {
-    pub fn new(
-        chip_svc: ChipService,
-        event_tx: broadcast::Sender<BlackjackEvent>,
-        _db: Db,
-    ) -> Self {
+    pub const GAME_KIND: &'static str = "blackjack";
+    pub fn new(db: Db, chip_svc: ChipService, event_tx: broadcast::Sender<BlackjackEvent>) -> Self {
         let initial_snapshot = SharedTableState::new().snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
         Self {
+            db,
             chip_svc,
             snapshot_tx,
             snapshot_rx,
@@ -102,6 +109,43 @@ impl BlackjackService {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<BlackjackEvent> {
         self.event_tx.subscribe()
+    }
+
+    pub fn create_room_task(&self, display_name: String) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.create_room(display_name).await {
+                tracing::error!(error = ?e, "failed to create blackjack room");
+            }
+        });
+    }
+
+    async fn create_room(&self, display_name: String) -> anyhow::Result<()> {
+        let client = self.db.get().await?;
+        let slug = Self::generate_room_slug();
+
+        let chat_room = ChatRoom::get_or_create_game_room(&client, Self::GAME_KIND, &slug)
+            .await
+            .context("failed to get or create chat room")?;
+
+        let params = GameRoomParams {
+            chat_room_id: chat_room.id,
+            game_kind: Self::GAME_KIND.to_string(),
+            slug,
+            display_name,
+            status: GameRoom::STATUS_OPEN.to_string(),
+            settings: json!({}),
+            created_by: None,
+        };
+        GameRoom::create(&client, params)
+            .await
+            .context("failed to create game room")?;
+        Ok(())
+    }
+
+    fn generate_room_slug() -> String {
+        let id = Uuid::now_v7().simple().to_string();
+        format!("bj-{}", &id[..12])
     }
 
     pub fn place_bet_task(&self, user_id: Uuid, request_id: Uuid, amount: i64) {

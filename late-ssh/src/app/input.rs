@@ -610,6 +610,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     if ctx.screen == Screen::Artboard && crate::app::artboard::page::handle_event(app, &event) {
         return;
     }
+    if ctx.screen == Screen::Rooms && crate::app::rooms::input::handle_event(app, &event) {
+        return;
+    }
 
     match event {
         ParsedInput::FocusGained | ParsedInput::FocusLost => {}

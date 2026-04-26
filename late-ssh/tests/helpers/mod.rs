@@ -108,7 +108,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let chip_service = ChipService::new(db.clone());
     let (blackjack_event_tx, _) = broadcast::channel(64);
     let blackjack_service =
-        BlackjackService::new(chip_service.clone(), blackjack_event_tx, db.clone());
+        BlackjackService::new(db.clone(), chip_service.clone(), blackjack_event_tx);
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let nonogram_service =
         NonogramService::new(db.clone(), activity_tx.clone(), chip_service.clone());
@@ -214,9 +214,9 @@ pub fn make_app_with_chat_service(
         ),
         initial_minesweeper_games: Vec::new(),
         blackjack_service: BlackjackService::new(
+            db.clone(),
             ChipService::new(db.clone()),
             broadcast::channel(64).0,
-            db.clone(),
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
@@ -312,9 +312,9 @@ pub fn make_app_with_paired_client(
         ),
         initial_minesweeper_games: Vec::new(),
         blackjack_service: BlackjackService::new(
+            db.clone(),
             ChipService::new(db.clone()),
             broadcast::channel(64).0,
-            db.clone(),
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),

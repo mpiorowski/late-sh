@@ -8,14 +8,14 @@ This file tracks the local music catalog used by `late.sh` radio.
 
 ## Library Status
 
-- `lofi`: done, 121-track manifest, mixed `CC0` and `CC-BY 4.0`
+- `lofi`: done, 202-track manifest, mixed `CC0` and `CC-BY 4.0`
 - `ambient`: done, 93 tracks, mixed `CC0` and `CC-BY 4.0`
 - `classic`: done, 100-track calm-first manifest, public domain via Musopen / Internet Archive
 - `jazz`: pending
 
 ## Lofi
 
-This section documents the current 121-track lofi manifest used by the regenerated playlist files. The dev Liquidsoap stack now mounts `tmp/music/lofi` onto `/music/lofi`, so the local runtime playlist resolves against the refreshed temp library.
+This section documents the current 202-track lofi manifest used by the regenerated playlist files. The dev Liquidsoap stack now mounts `tmp/music/lofi` onto `/music/lofi`, so the local runtime playlist resolves against the refreshed temp library.
 
 ### HoliznaCC0 - Lofi And Chill
 
@@ -100,6 +100,34 @@ This section documents the current 121-track lofi manifest used by the regenerat
 - License: CC-BY 4.0
 - Source: https://freemusicarchive.org/music/legacyalli/instrumental-by-legacyalli-2024/rf-lofi-funky-and-chunky/
 - Tracks: RF - LoFi Funky and Chunky
+
+### HoliznaCC0 - Waves Of Nostalgia Part 2
+
+- Count: 9
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/waves-of-nostalgia-part-2
+- Tracks: Machines With Feelings; All The Fight Left; New Gods; Cyber Anxiety; Night Life; Fires Uptown; Street Lights Passing By; Internal Panic; We Used To Dance
+
+### HoliznaCC0 - Eternal Skies (Retro Gamer)
+
+- Count: 22
+- License: CC0
+- Source: https://holiznacc0.bandcamp.com/album/eternal-skies-retro-gamer
+- Tracks: Comfort Game #1; Comfort Game #2; Comfort Game #3; Comfort Game #4; Trees In The Fog; Flying; Half Machine; Home; Jump; Mini Boss; Magic Orb; Mystery; A Fight In The Dark; Quickly!; A Hero Is Born; Random Encounter; Bag Of Carrying; Righteous Sword; City Limits; Secret Map; Credits; Skyline
+
+### HoliznaCC0 - Background Music
+
+- Count: 20
+- License: CC0
+- Source: https://freemusicarchive.org/music/holiznacc0/background-music/
+- Tracks: OST Music Box 1; OST Music Box 2; OST Music Box 3; OST Music Box 4; OST Music Box 5; OST Music Box 6; OST Music Box 7; Drifting Piano; A Small Town On Pluto (Music Box); A Small Town On Pluto (Composed); Game Travel 1 (Piano); VST Guitar; Cabin Fever; Spring On The Horizon; Creepy Piano 1; Creepy Piano 2; Creepy Piano 3; Creepy Piano 4; Dangerous Voyage; Dangerous Voyage (Music Box)
+
+### Ketsa - CC BY: Free To Use For Anything (selected calm picks)
+
+- Count: 30
+- License: CC-BY 4.0
+- Source: https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything
+- Tracks: Saviour Above; Always Faithful; All Ways; Feeling; Importance; Trench Work; Night Flow Day Grow; Will Make You Happy; Bright State; Cello; Dry and High; The Road; Kinship; Her Memory Fading; What It Feels Like; A Little Faith; Tide Turns; Longer Wait; Life is Great; That Feeling; London West; Dawn Faded; Good Feel; Here For You; Brazilian Sunsets; Too Late; The Road 2; Off Days; Inside Dead; Vision
 
 ## Ambient
 
