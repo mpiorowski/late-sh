@@ -8,6 +8,10 @@ Sources:
   Classical: Musopen (Public Domain) via Internet Archive
   Jazz:      Kevin MacLeod (CC-BY) via Internet Archive + HoliznaCC0 (CC0) via Bandcamp
 
+All downloads land in tmp/<genre>/ (the upload-staging area). Dev fixtures
+under music/<genre>/ and R2-backed production tracks are never touched. After
+the user confirms upload to R2, staged files in tmp/ should be removed.
+
 Dependencies: yt-dlp, ffmpeg, python3
 Usage: python3 scripts/fetch_cc_music.py [--genre lofi|ambient|classic|jazz|all] [--music-dir PATH] [--skip-m3u]
 """
@@ -15,7 +19,7 @@ Usage: python3 scripts/fetch_cc_music.py [--genre lofi|ambient|classic|jazz|all]
 import subprocess, json, os, sys, re, urllib.request, glob, argparse
 from pathlib import Path
 
-DEFAULT_MUSIC_DIR = Path(__file__).resolve().parent.parent / "music"
+DEFAULT_MUSIC_DIR = Path(__file__).resolve().parent.parent / "tmp"
 DEFAULT_LIQUIDSOAP_DIR = Path(__file__).resolve().parent.parent / "infra" / "liquidsoap"
 MUSIC_DIR = DEFAULT_MUSIC_DIR
 LIQUIDSOAP_DIR = DEFAULT_LIQUIDSOAP_DIR
@@ -37,26 +41,31 @@ BANDCAMP_ALBUMS = {
 
 FMA_TRACKS = {
     "ambient": [
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/swirling-snowflakes-finale/", "Amarent", "Swirling Snowflakes - Finale"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/sweet-dreams-middle-eastern-remix/", "Amarent", "Sweet Dreams (Middle-Eastern Remix)"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/salt-lake-swerve-chillout-remix/", "Amarent", "Salt Lake Swerve (Chillout Remix)"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/cathay-lounge/", "Amarent", "Cathay Lounge"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/a-better-world/", "Amarent", "A Better World"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/sweet-dreams-2/", "Amarent", "Sweet Dreams"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/sweet-love-chill-remix/", "Amarent", "Sweet Love (Chill Remix)"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/outer-space/", "Amarent", "Outer Space"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/tuesday-night/", "Amarent", "Tuesday Night"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/tuesday-night-radio-edit/", "Amarent", "Tuesday Night (Radio Edit)"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/ethereal-2/", "Amarent", "Ethereal"),
-        ("https://freemusicarchive.org/music/Ketsa/modern-meditations/meditation-5/", "Ketsa", "Meditation"),
-        ("https://freemusicarchive.org/music/Ketsa/modern-meditations/morning-stillness/", "Ketsa", "Morning Stillness"),
-        ("https://freemusicarchive.org/music/Ketsa/modern-meditations/patterns-1/", "Ketsa", "Patterns"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/1-white-noise-part1mp3/", "The Imperfectionist", "1-White noise part.1.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/2-white-noise-part2mp3/", "The Imperfectionist", "2-White noise part.2.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/3-white-noise-part3mp3/", "The Imperfectionist", "3-White noise part.3.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/4-white-noise-part4mp3/", "The Imperfectionist", "4-White noise part.4.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/5-white-noise-part5mp3/", "The Imperfectionist", "5-White noise part.5.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/6-white-noise-part6mp3/", "The Imperfectionist", "6-White noise part.6.mp3"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_01_Closer_To_You/", "Sergey Cheremisinov", "Closer To You"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_02_Train/", "Sergey Cheremisinov", "Train"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_03_Waves/", "Sergey Cheremisinov", "Waves"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_04_When_You_Leave/", "Sergey Cheremisinov", "When You Leave"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_05_Fog/", "Sergey Cheremisinov", "Fog"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_01_Fouler_lhorizon/", "Komiku", "Fouler l'horizon"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_02_Le_Grand_Village/", "Komiku", "Le Grand Village"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_03_Champ_de_tournesol/", "Komiku", "Champ de tournesol"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_04_Barque_sur_le_lac/", "Komiku", "Barque sur le lac"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_09_De_lherbe_sous_les_pieds/", "Komiku", "De l'herbe sous les pieds"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_13_Bleu/", "Komiku", "Bleu"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_14_Un_coin_loin_du_monde/", "Komiku", "Un coin loin du monde"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_01_Balance/", "Komiku", "Balance"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_02_Chill_Out_Theme/", "Komiku", "Chill Out Theme"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_04_Time/", "Komiku", "Time"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_05_Down_the_river/", "Komiku", "Down the river"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_07_Frozen_Jungle/", "Komiku", "Frozen Jungle"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_08_Dreaming_of_you/", "Komiku", "Dreaming of you"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_3/Komiku_-_Its_time_for_adventure_vol_3_-_01_Childhood_scene/", "Komiku", "Childhood scene"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_3/Komiku_-_Its_time_for_adventure_vol_3_-_07_The_place_that_never_get_old/", "Komiku", "The place that never gets old"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_5/Komiku_-_Its_time_for_adventure_vol_5_-_05_Xenobiological_Forest/", "Komiku", "Xenobiological Forest"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_5/Komiku_-_Its_time_for_adventure_vol_5_-_06_Friendss_theme/", "Komiku", "Friends's theme"),
+        ("https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-1/", "HoliznaCC0", "Lullabies For The End Of The World 1"),
+        ("https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-2/", "HoliznaCC0", "Lullabies For The End Of The World 2"),
+        ("https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-3/", "HoliznaCC0", "Lullabies For The End Of The World 3"),
     ],
 }
 
@@ -525,7 +534,7 @@ def main():
                         choices=["lofi", "ambient", "classic", "jazz", "all"],
                         help="Which genre to download (default: all)")
     parser.add_argument("--music-dir", type=Path, default=DEFAULT_MUSIC_DIR,
-                        help="Where to store downloaded music (default: repo music/)")
+                        help="Where to store downloaded music (default: repo tmp/, the upload-staging area)")
     parser.add_argument("--liquidsoap-dir", type=Path, default=DEFAULT_LIQUIDSOAP_DIR,
                         help="Where to write generated .m3u files (default: repo infra/liquidsoap/)")
     parser.add_argument("--m3u-only", action="store_true",

@@ -9,7 +9,7 @@ This file tracks the local music catalog used by `late.sh` radio.
 ## Library Status
 
 - `lofi`: done, 202-track manifest, mixed `CC0` and `CC-BY 4.0`
-- `ambient`: done, 93 tracks, mixed `CC0` and `CC-BY 4.0`
+- `ambient`: done, 204 tracks, mixed `CC0` and `CC-BY 4.0`
 - `classic`: done, 100-track calm-first manifest, public domain via Musopen / Internet Archive
 - `jazz`: pending
 
@@ -131,6 +131,8 @@ This section documents the current 202-track lofi manifest used by the regenerat
 
 ## Ambient
 
+This section documents the current 204-track ambient manifest used by the regenerated playlist files.
+
 | # | Artist | Title | License | Source URL |
 |---|--------|-------|---------|------------|
 | 1 | 1000 Handz | Alchemist | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-melodiessamples-no-drums/alchemist/ |
@@ -226,6 +228,117 @@ This section documents the current 202-track lofi manifest used by the regenerat
 | 91 | Sergey Cheremisinov | Mindful Choice | CC-BY 4.0 | https://freemusicarchive.org/music/Sergey_Cheremisinov/metamorphoses/mindful-choice/ |
 | 92 | Splashkabona | Dreamy Ambient Positive Moments in Time | CC-BY 4.0 | https://freemusicarchive.org/music/splashkabona/single/dreamy-ambient-positive-moments-in-time/ |
 | 93 | Vlad Annenkov | Emotional Cinematic Ambient "Gentle Memory" | CC-BY 4.0 | https://freemusicarchive.org/music/vlad-annenkov/single/emotional-cinematic-ambient-gentle-memorymp3/ |
+| 94 | Almusic34 | Energetic Transition | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/energetic-transitionmp3/ |
+| 95 | Almusic34 | Other World 1 | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/other-world-1mp3/ |
+| 96 | Almusic34 | Call of the Wind Spirits | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/call-of-the-wind-spiritsmp3/ |
+| 97 | Almusic34 | Sea and Birds | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/sea-and-birdsmp3-1/ |
+| 98 | Almusic34 | Quiet Space | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/quiet-spacemp3/ |
+| 99 | Almusic34 | Wind Chimes and Birds | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/wind-chimes-and-birdsmp3-1/ |
+| 100 | Almusic34 | Crystal Chamber 1 | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/crystal-chamber-1mp3-1/ |
+| 101 | Almusic34 | The Majestic Ocean | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/the-majestic-oceanmp3/ |
+| 102 | Almusic34 | Harmony in the Night | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/harmony-in-the-nightmp3-1/ |
+| 103 | Almusic34 | Peace Landscape 3 | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/peace-landscape-3mp3-1/ |
+| 104 | Almusic34 | Voices and Bells | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/voices-and-bellsmp3-1/ |
+| 105 | Almusic34 | Tranquility | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/tranquilitymp3-2/ |
+| 106 | Almusic34 | Flute in the Wind | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/flute-in-the-windmp3/ |
+| 107 | Almusic34 | Sound Reflections | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/sound-reflectionsmp3/ |
+| 108 | Almusic34 | Voices in the Wind | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/voices-in-the-windmp3/ |
+| 109 | Almusic34 | Night of Peace | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/night-of-peacemp3-1/ |
+| 110 | Almusic34 | Wind and Crystals | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/wind-and-crystalsmp3/ |
+| 111 | Almusic34 | Flutes in Peace | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/flutes-in-peacemp3-1/ |
+| 112 | Almusic34 | Deep Space Travel | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/deep-space-travelmp3-1/ |
+| 113 | Almusic34 | Wind Chimes Harmony | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/wind-chimes-harmonymp3-1/ |
+| 114 | Almusic34 | Meditative Flute | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/meditative-flutemp3/ |
+| 115 | Almusic34 | Peace in the Light | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/peace-in-the-lightmp3/ |
+| 116 | Almusic34 | Landscape of Peace | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/landscape-of-peacemp3/ |
+| 117 | Almusic34 | Resonances | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/resonancesmp3/ |
+| 118 | Almusic34 | Mysterious Flute | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/mysterious-flutemp3/ |
+| 119 | Almusic34 | Flute and Windchimes | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/flute-and-windchimesmp3-1/ |
+| 120 | Almusic34 | Nature Spirits | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/nature-spiritsmp3-1/ |
+| 121 | Almusic34 | Sequential Soundscape | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/sequential-soundscapemp3/ |
+| 122 | Almusic34 | Presence in the Night | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/presence-in-the-nightmp3-1/ |
+| 123 | Almusic34 | Journey in the Wind | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/journey-in-the-windmp3-1/ |
+| 124 | Almusic34 | Mysterious Landscape | CC-BY 4.0 | https://freemusicarchive.org/music/almusic34/single/mysterious-landscapemp3/ |
+| 125 | Splashkabona | Inspiring Positive Cinematic Calming Ambient Piano | CC-BY 4.0 | https://freemusicarchive.org/music/splashkabona/single/inspiring-positive-cinematic-calming-ambient-piano/ |
+| 126 | Splashkabona | Meditative Zen Yoga Spa Chill Out Ambient | CC-BY 4.0 | https://freemusicarchive.org/music/splashkabona/single/meditative-zen-yoga-spa-chill-out-ambient/ |
+| 127 | Splashkabona | Smooth Inspiring Background | CC-BY 4.0 | https://freemusicarchive.org/music/splashkabona/single/smooth-inspiring-background/ |
+| 128 | Splashkabona | Chill Ambient Elegant Pop Background | CC-BY 4.0 | https://freemusicarchive.org/music/splashkabona/single/chill-ambient-elegant-pop-background/ |
+| 129 | Splashkabona | Dark Cinematic Ambient | CC-BY 4.0 | https://freemusicarchive.org/music/splashkabona/single/dark-cinematic-ambient/ |
+| 130 | Splashkabona | Deep Chill Electronic | CC-BY 4.0 | https://freemusicarchive.org/music/splashkabona/single/deep-chill-electronic/ |
+| 131 | Splashkabona | Prosperous Downtempo Chillwave Ambient | CC-BY 4.0 | https://freemusicarchive.org/music/splashkabona/single/prosperous-downtempo-chillwave-ambient/ |
+| 132 | Splashkabona | Ethereal Veil | CC-BY 4.0 | https://freemusicarchive.org/music/splashkabona/single/ethereal-veil/ |
+| 133 | 1000 Handz | Opportunity | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/opportunity/ |
+| 134 | 1000 Handz | Embers | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/embers-2/ |
+| 135 | 1000 Handz | Flowers | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/flowers-3/ |
+| 136 | 1000 Handz | Lovely | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/lovely-1/ |
+| 137 | 1000 Handz | Leverage | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/leverage/ |
+| 138 | 1000 Handz | Seasons | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/seasons/ |
+| 139 | 1000 Handz | Early | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/early/ |
+| 140 | 1000 Handz | Branches | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/branches-1/ |
+| 141 | 1000 Handz | Tales | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/tales/ |
+| 142 | 1000 Handz | Spring | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/spring-5/ |
+| 143 | 1000 Handz | Void | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/void-3/ |
+| 144 | 1000 Handz | Growth | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-solo-piano-melodies/growth-2/ |
+| 145 | 1000 Handz | Velvet ft. Ketsa | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-chillstudylounge-instrumentals/velvet-ft-ketsa/ |
+| 146 | 1000 Handz | Pay It Forward | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-chillstudylounge-instrumentals/pay-it-forward/ |
+| 147 | 1000 Handz | Neon | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-chillstudylounge-instrumentals/neon-1/ |
+| 148 | 1000 Handz | Chill Out | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-chillstudylounge-instrumentals/chill-out-1/ |
+| 149 | 1000 Handz | Water Cooler | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-corporatead-instrumentals/water-cooler/ |
+| 150 | 1000 Handz | Casual Fridays | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-corporatead-instrumentals/casual-fridays/ |
+| 151 | 1000 Handz | Clock Out | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-corporatead-instrumentals/clock-out/ |
+| 152 | 1000 Handz | Lunch Break | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-corporatead-instrumentals/lunch-break/ |
+| 153 | 1000 Handz | Office Plants | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-corporatead-instrumentals/office-plants/ |
+| 154 | 1000 Handz | Sunset Love ft. Ketsa | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-tropical-vibes/sunset-love-ft-ketsa/ |
+| 155 | 1000 Handz | Cocoon | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-tropical-vibes/cocoon-1/ |
+| 156 | 1000 Handz | Turquoise Water | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-tropical-vibes/turqouise-water/ |
+| 157 | 1000 Handz | Bloom | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-tropical-vibes/bloom-3/ |
+| 158 | 1000 Handz | Agua | CC-BY 4.0 | https://freemusicarchive.org/music/1000-handz/cc-by-free-to-use-tropical-vibes/agua-1/ |
+| 159 | Lobo Loco | Christmas Market | CC-BY 4.0 | https://freemusicarchive.org/music/Lobo_Loco/christmas-market-cc-by/christmas-market-id-2402/ |
+| 160 | Lobo Loco | Land of Silence | CC-BY 4.0 | https://freemusicarchive.org/music/Lobo_Loco/christmas-market-cc-by/land-of-silence-id-2399/ |
+| 161 | Lobo Loco | Lama Shadow | CC-BY 4.0 | https://freemusicarchive.org/music/Lobo_Loco/christmas-market-cc-by/lama-shadow-id-2400-1/ |
+| 162 | Lobo Loco | Sheperd Angels | CC-BY 4.0 | https://freemusicarchive.org/music/Lobo_Loco/christmas-market-cc-by/sheperd-angels-id-2405/ |
+| 163 | Lobo Loco | Beach and Surf | CC-BY 4.0 | https://freemusicarchive.org/music/Lobo_Loco/free-for-you-cc-by/beach-and-surf-id-2361/ |
+| 164 | Lobo Loco | Celltrance | CC-BY 4.0 | https://freemusicarchive.org/music/Lobo_Loco/free-for-you-cc-by/celltrance-id-2346/ |
+| 165 | Sergey Cheremisinov | Limitless | CC-BY 4.0 | https://freemusicarchive.org/music/Sergey_Cheremisinov/slow-light/limitless-1/ |
+| 166 | Sergey Cheremisinov | Slow Light | CC-BY 4.0 | https://freemusicarchive.org/music/Sergey_Cheremisinov/slow-light/slow-light/ |
+| 167 | Sergey Cheremisinov | Sense | CC-BY 4.0 | https://freemusicarchive.org/music/Sergey_Cheremisinov/slow-light/sense-1/ |
+| 168 | Andy G. Cohen | Piscoid | CC-BY 4.0 | https://freemusicarchive.org/music/Andy_G_Cohen/MUL__DIV_1198/Andy_G_Cohen_-_MULDIV_-_01_-_Piscoid_1803/ |
+| 169 | Andy G. Cohen | Land Legs | CC-BY 4.0 | https://freemusicarchive.org/music/Andy_G_Cohen/MUL__DIV_1198/Andy_G_Cohen_-_MULDIV_-_02_-_Land_Legs/ |
+| 170 | Andy G. Cohen | Oxygen Mask | CC-BY 4.0 | https://freemusicarchive.org/music/Andy_G_Cohen/MUL__DIV_1198/Andy_G_Cohen_-_MULDIV_-_03_-_Oxygen_Mask/ |
+| 171 | Andy G. Cohen | A Perceptible Shift | CC-BY 4.0 | https://freemusicarchive.org/music/Andy_G_Cohen/MUL__DIV_1198/Andy_G_Cohen_-_MULDIV_-_04_-_A_Perceptible_Shift/ |
+| 172 | Andy G. Cohen | Bathed in Fine Dust | CC-BY 4.0 | https://freemusicarchive.org/music/Andy_G_Cohen/MUL__DIV_1198/Andy_G_Cohen_-_MULDIV_-_07_-_Bathed_in_Fine_Dust/ |
+| 173 | Andy G. Cohen | Warmer | CC-BY 4.0 | https://freemusicarchive.org/music/Andy_G_Cohen/MUL__DIV_1198/Andy_G_Cohen_-_MULDIV_-_10_-_Warmer/ |
+| 174 | Komiku | The road we use to travel when we were kids | CC0 | https://freemusicarchive.org/music/Komiku/Tale_on_the_Late/Komiku_-_Tale_on_the_Late_-_03_The_road_we_use_to_travel_when_we_were_kids/ |
+| 175 | Komiku | Village, 2068 | CC0 | https://freemusicarchive.org/music/Komiku/Tale_on_the_Late/Komiku_-_Tale_on_the_Late_-_09_Village_2068/ |
+| 176 | Komiku | You can't beat the machine | CC0 | https://freemusicarchive.org/music/Komiku/Tale_on_the_Late/Komiku_-_Tale_on_the_Late_-_15_You_cant_beat_the_machine/ |
+| 177 | Komiku | End of the trip | CC0 | https://freemusicarchive.org/music/Komiku/Tale_on_the_Late/Komiku_-_Tale_on_the_Late_-_16_End_of_the_trip/ |
+| 178 | The Imperfectionist | Free space ambient music 1 - Take off | CC-BY 4.0 | https://freemusicarchive.org/music/the-imperfectionist/single/free-space-ambient-music-1-take-off/ |
+| 179 | The Imperfectionist | Free ambient music 1 - Windy mountains | CC-BY 4.0 | https://freemusicarchive.org/music/the-imperfectionist/single/free-ambient-music-1-windy-mountainsmp3/ |
+| 180 | Sergey Cheremisinov | Closer To You | CC-BY 4.0 | https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_01_Closer_To_You/ |
+| 181 | Sergey Cheremisinov | Train | CC-BY 4.0 | https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_02_Train/ |
+| 182 | Sergey Cheremisinov | Waves | CC-BY 4.0 | https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_03_Waves/ |
+| 183 | Sergey Cheremisinov | When You Leave | CC-BY 4.0 | https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_04_When_You_Leave/ |
+| 184 | Sergey Cheremisinov | Fog | CC-BY 4.0 | https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_05_Fog/ |
+| 185 | Komiku | Fouler l'horizon | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_01_Fouler_lhorizon/ |
+| 186 | Komiku | Le Grand Village | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_02_Le_Grand_Village/ |
+| 187 | Komiku | Champ de tournesol | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_03_Champ_de_tournesol/ |
+| 188 | Komiku | Barque sur le lac | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_04_Barque_sur_le_lac/ |
+| 189 | Komiku | De l'herbe sous les pieds | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_09_De_lherbe_sous_les_pieds/ |
+| 190 | Komiku | Bleu | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_13_Bleu/ |
+| 191 | Komiku | Un coin loin du monde | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_14_Un_coin_loin_du_monde/ |
+| 192 | Komiku | Balance | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_01_Balance/ |
+| 193 | Komiku | Chill Out Theme | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_02_Chill_Out_Theme/ |
+| 194 | Komiku | Time | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_04_Time/ |
+| 195 | Komiku | Down the river | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_05_Down_the_river/ |
+| 196 | Komiku | Frozen Jungle | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_07_Frozen_Jungle/ |
+| 197 | Komiku | Dreaming of you | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_08_Dreaming_of_you/ |
+| 198 | Komiku | Childhood scene | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_3/Komiku_-_Its_time_for_adventure_vol_3_-_01_Childhood_scene/ |
+| 199 | Komiku | The place that never gets old | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_3/Komiku_-_Its_time_for_adventure_vol_3_-_07_The_place_that_never_get_old/ |
+| 200 | Komiku | Xenobiological Forest | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_5/Komiku_-_Its_time_for_adventure_vol_5_-_05_Xenobiological_Forest/ |
+| 201 | Komiku | Friends's theme | CC0 | https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_5/Komiku_-_Its_time_for_adventure_vol_5_-_06_Friendss_theme/ |
+| 202 | HoliznaCC0 | Lullabies For The End Of The World 1 | CC0 | https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-1/ |
+| 203 | HoliznaCC0 | Lullabies For The End Of The World 2 | CC0 | https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-2/ |
+| 204 | HoliznaCC0 | Lullabies For The End Of The World 3 | CC0 | https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-3/ |
 
 ## Classic
 

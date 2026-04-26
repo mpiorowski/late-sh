@@ -96,6 +96,7 @@ struct DrawContext<'a> {
     is_playing_game: bool,
     rooms_add_form_open: bool,
     rooms_display_name_input: &'a str,
+    rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::games::tetris::state::State,
     sudoku_state: &'a crate::app::games::sudoku::state::State,
@@ -317,6 +318,7 @@ impl App {
                         is_playing_game: self.is_playing_game,
                         rooms_add_form_open: self.rooms_add_form_open,
                         rooms_display_name_input: self.rooms_display_name_input.as_str(),
+                        rooms_snapshot: &self.rooms_snapshot,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         sudoku_state: &self.sudoku_state,
@@ -547,6 +549,7 @@ impl App {
                 content_area,
                 ctx.rooms_add_form_open,
                 ctx.rooms_display_name_input,
+                ctx.rooms_snapshot,
             ),
         }
 

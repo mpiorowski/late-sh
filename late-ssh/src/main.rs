@@ -124,10 +124,11 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
     let tetris_service = late_ssh::app::games::tetris::svc::TetrisService::new(db.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
+    let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
+    rooms_service.refresh_task();
     let (blackjack_event_tx, _) =
         broadcast::channel::<late_ssh::app::rooms::blackjack::svc::BlackjackEvent>(64);
     let blackjack_service = late_ssh::app::rooms::blackjack::svc::BlackjackService::new(
-        db.clone(),
         chip_service.clone(),
         blackjack_event_tx,
     );
@@ -218,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
         bonsai_service,
         nonogram_library,
         chip_service,
+        rooms_service,
         blackjack_service,
         dartboard_server,
         dartboard_provenance,

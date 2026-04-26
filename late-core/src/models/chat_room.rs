@@ -2,6 +2,8 @@ use anyhow::{Result, bail};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::game_room::GameKind;
+
 crate::model! {
     table = "chat_rooms";
     params = ChatRoomParams;
@@ -105,10 +107,10 @@ impl ChatRoom {
 
     pub async fn get_or_create_game_room(
         client: &Client,
-        game_kind: &str,
+        game_kind: GameKind,
         slug: &str,
     ) -> Result<Self> {
-        let game_kind = normalize_game_kind(game_kind)?;
+        let game_kind = game_kind.as_str();
         let slug = normalize_game_slug(slug)?;
         let row = client
             .query_one(
@@ -360,14 +362,6 @@ fn normalize_room_slug(slug: &str) -> Result<String> {
         bail!("room name cannot be empty");
     }
     Ok(slug)
-}
-
-fn normalize_game_kind(game_kind: &str) -> Result<String> {
-    let normalized = normalize_room_slug(game_kind)?;
-    if normalized == "general" {
-        bail!("game kind cannot use reserved name 'general'");
-    }
-    Ok(normalized)
 }
 
 fn normalize_game_slug(slug: &str) -> Result<String> {

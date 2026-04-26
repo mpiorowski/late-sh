@@ -5,6 +5,7 @@ use crate::app::{
 };
 
 const DISPLAY_NAME_MAX_LEN: usize = 48;
+const DEFAULT_BLACKJACK_TABLE_NAME: &str = "Blackjack Table";
 
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     match event {
@@ -60,15 +61,27 @@ pub fn handle_arrow(_app: &mut App, _key: u8) -> bool {
 fn handle_enter(app: &mut App) {
     if !app.rooms_add_form_open {
         app.rooms_add_form_open = true;
+        if app.rooms_display_name_input.trim().is_empty() {
+            app.rooms_display_name_input = DEFAULT_BLACKJACK_TABLE_NAME.to_string();
+        }
         return;
     }
 
-    app.blackjack_state
-        .create_room(app.rooms_display_name_input.to_string());
+    let display_name = app.rooms_display_name_input.trim().to_string();
+    if display_name.is_empty() {
+        app.banner = Some(Banner::error("Table name is required."));
+        return;
+    }
 
-    app.banner = Some(Banner::success(
-        "Blackjack table creation UI is ready; persistence is not wired yet.",
-    ));
+    app.rooms_service.create_game_room_task(
+        app.user_id,
+        crate::app::rooms::svc::GameKind::Blackjack,
+        display_name,
+    );
+    app.rooms_display_name_input.clear();
+    app.rooms_add_form_open = false;
+
+    app.banner = Some(Banner::success("Creating Blackjack table."));
 }
 
 fn handle_escape(app: &mut App) {

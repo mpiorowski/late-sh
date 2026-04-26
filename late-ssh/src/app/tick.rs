@@ -74,6 +74,9 @@ impl App {
             self.tetris_state.tick();
         }
         self.blackjack_state.tick();
+        if let Some(b) = self.tick_rooms() {
+            self.banner = Some(b);
+        }
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
         }
