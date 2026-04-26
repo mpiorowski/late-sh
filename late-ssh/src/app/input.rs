@@ -522,6 +522,17 @@ fn handle_vt_segment(app: &mut App, data: &[u8]) {
 }
 
 fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
+    if app
+        .chat
+        .overlay()
+        .is_some_and(|overlay| overlay.close_on_any_key)
+    {
+        if !matches!(event, ParsedInput::FocusGained | ParsedInput::FocusLost) {
+            app.chat.close_overlay();
+        }
+        return;
+    }
+
     match overlay_input_action(event) {
         Some(OverlayInputAction::Close) => app.chat.close_overlay(),
         Some(OverlayInputAction::Scroll(delta)) => app.chat.scroll_overlay(delta),

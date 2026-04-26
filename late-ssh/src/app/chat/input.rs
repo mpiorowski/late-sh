@@ -177,6 +177,10 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             }
             return true;
         }
+        if matches!(byte, b'f' | b'F') {
+            app.chat.open_selected_message_reactions_in_room(room_id);
+            return true;
+        }
         app.chat.cancel_reaction_leader();
         return true;
     }

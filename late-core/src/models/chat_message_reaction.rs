@@ -29,6 +29,7 @@ impl From<Row> for ChatMessageReaction {
 pub struct ChatMessageReactionSummary {
     pub kind: i16,
     pub count: i64,
+    pub user_ids: Vec<Uuid>,
 }
 
 impl ChatMessageReaction {
@@ -100,7 +101,8 @@ impl ChatMessageReaction {
             .query(
                 "SELECT message_id,
                         kind,
-                        COUNT(*)::bigint AS count
+                        COUNT(*)::bigint AS count,
+                        ARRAY_AGG(user_id ORDER BY created, user_id) AS user_ids
                  FROM chat_message_reactions
                  WHERE message_id = ANY($1)
                  GROUP BY message_id, kind
@@ -117,6 +119,7 @@ impl ChatMessageReaction {
                 .push(ChatMessageReactionSummary {
                     kind: row.get("kind"),
                     count: row.get("count"),
+                    user_ids: row.get("user_ids"),
                 });
         }
 

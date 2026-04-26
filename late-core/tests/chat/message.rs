@@ -123,6 +123,8 @@ async fn chat_message_reactions_toggle_and_summarize() {
     assert_eq!(reactions.len(), 2);
     assert_eq!(reactions[0].kind, 1);
     assert_eq!(reactions[0].count, 1);
+    assert_eq!(reactions[0].user_ids, vec![author.id]);
     assert_eq!(reactions[1].kind, 8);
     assert_eq!(reactions[1].count, 1);
+    assert_eq!(reactions[1].user_ids, vec![viewer.id]);
 }

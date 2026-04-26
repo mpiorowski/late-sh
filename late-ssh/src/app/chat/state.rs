@@ -21,9 +21,12 @@ use super::{
     discover, news, notifications,
     notifications::svc::NotificationService,
     svc::{ChatEvent, ChatService, ChatSnapshot},
+    ui_text::reaction_label,
 };
 
 pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
+const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
+const REACTION_OWNER_COLUMNS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionMatch {
@@ -343,6 +346,17 @@ impl ChatState {
 
     pub fn is_reaction_leader_active(&self) -> bool {
         self.reaction_leader_active
+    }
+
+    pub fn open_selected_message_reactions_in_room(&mut self, room_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some(message) = self.selected_message_in_room(room_id) else {
+            return false;
+        };
+
+        let lines = self.reaction_owner_lines(message.id);
+        self.overlay = Some(Overlay::dismissible("Reactions", lines));
+        true
     }
 
     pub fn begin_reply_to_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
@@ -756,6 +770,62 @@ impl ChatState {
             return;
         }
         self.overlay = Some(Overlay::new(title, lines));
+    }
+
+    fn reaction_owner_lines(&self, message_id: Uuid) -> Vec<String> {
+        let Some(reactions) = self.message_reactions.get(&message_id) else {
+            return vec!["No reactions yet".to_string()];
+        };
+        if reactions.is_empty() {
+            return vec!["No reactions yet".to_string()];
+        }
+
+        let mut lines = Vec::new();
+        for reaction in reactions {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            let noun = if reaction.count == 1 {
+                "reaction"
+            } else {
+                "reactions"
+            };
+            lines.push(format!(
+                "{} {} {}",
+                reaction_label(reaction.kind),
+                reaction.count,
+                noun
+            ));
+
+            if reaction.user_ids.is_empty() {
+                lines.push("  unknown".to_string());
+                continue;
+            }
+            let mut labels: Vec<String> = reaction
+                .user_ids
+                .iter()
+                .take(REACTION_OWNER_DISPLAY_LIMIT)
+                .map(|user_id| {
+                    self.usernames
+                        .get(user_id)
+                        .map(|name| name.trim())
+                        .filter(|name| !name.is_empty())
+                        .map(|name| format!("@{name}"))
+                        .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(*user_id)))
+                })
+                .collect();
+            let hidden_count = reaction
+                .user_ids
+                .len()
+                .saturating_sub(REACTION_OWNER_DISPLAY_LIMIT);
+            if hidden_count > 0 {
+                labels.push(format!("[+{hidden_count} more]"));
+            }
+            for row in labels.chunks(REACTION_OWNER_COLUMNS) {
+                lines.push(format!("  {}", row.join(" ")));
+            }
+        }
+        lines
     }
 
     fn ignore_list_lines(&self) -> Vec<String> {

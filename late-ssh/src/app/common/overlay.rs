@@ -13,6 +13,7 @@ pub struct Overlay {
     pub title: String,
     pub lines: Vec<String>,
     pub scroll_offset: u16,
+    pub close_on_any_key: bool,
 }
 
 impl Overlay {
@@ -21,6 +22,14 @@ impl Overlay {
             title: title.into(),
             lines,
             scroll_offset: 0,
+            close_on_any_key: false,
+        }
+    }
+
+    pub fn dismissible(title: impl Into<String>, lines: Vec<String>) -> Self {
+        Self {
+            close_on_any_key: true,
+            ..Self::new(title, lines)
         }
     }
 
@@ -57,11 +66,13 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
         height,
     );
 
+    let hint = if overlay.close_on_any_key {
+        "any key close"
+    } else {
+        "↑/↓ j/k scroll · Esc/q close"
+    };
     let block = Block::default()
-        .title(format!(
-            " {} (↑/↓ j/k scroll · Esc/q close) ",
-            overlay.title
-        ))
+        .title(format!(" {} ({hint}) ", overlay.title))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
