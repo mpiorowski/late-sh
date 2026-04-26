@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
+use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::user::{User, UserParams, extract_theme_id};
-use russh::keys::PrivateKey;
+use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::*;
 use serde_json::{Value, json};
@@ -104,7 +105,7 @@ pub fn load_or_generate_key(state: &State) -> anyhow::Result<PrivateKey> {
         tracing::info!(path = %path.display(), "loaded existing server key");
         Ok(key)
     } else {
-        let key = PrivateKey::random(&mut rand_core::OsRng, russh::keys::Algorithm::Ed25519)?;
+        let key = PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519)?;
         let key_data = key.to_openssh(LineEnding::LF)?;
         std::fs::write(path, key_data.as_bytes())?;
         #[cfg(unix)]
@@ -715,6 +716,8 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             minesweeper_service: self.state.minesweeper_service.clone(),
             initial_minesweeper_games,
+            rooms_service: self.state.rooms_service.clone(),
+            blackjack_table_manager: self.state.blackjack_table_manager.clone(),
             blackjack_service: self.state.blackjack_service.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
             dartboard_provenance: self.state.dartboard_provenance.clone(),

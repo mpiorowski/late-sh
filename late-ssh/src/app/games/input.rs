@@ -50,14 +50,14 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             return super::solitaire::input::handle_key(&mut app.solitaire_state, byte);
         } else if app.game_selection == GAME_SELECTION_BLACKJACK {
             let action = if byte == b'q' || byte == b'Q' {
-                super::blackjack::input::handle_key(&mut app.blackjack_state, 0x1B)
+                crate::app::rooms::blackjack::input::handle_key(&mut app.blackjack_state, 0x1B)
             } else {
-                super::blackjack::input::handle_key(&mut app.blackjack_state, byte)
+                crate::app::rooms::blackjack::input::handle_key(&mut app.blackjack_state, byte)
             };
             match action {
-                super::blackjack::input::InputAction::Ignored => return false,
-                super::blackjack::input::InputAction::Handled => return true,
-                super::blackjack::input::InputAction::Leave => {
+                crate::app::rooms::blackjack::input::InputAction::Ignored => return false,
+                crate::app::rooms::blackjack::input::InputAction::Handled => return true,
+                crate::app::rooms::blackjack::input::InputAction::Leave => {
                     app.is_playing_game = false;
                     return true;
                 }

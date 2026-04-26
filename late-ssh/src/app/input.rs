@@ -597,6 +597,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     let ctx = InputContext::from_app(app);
 
+    if handle_dedicated_screen_input(app, ctx, &event) {
+        return;
+    }
+
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
         handle_overlay_input(app, &event);
         return;
@@ -611,6 +615,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
     if ctx.screen == Screen::Artboard && crate::app::artboard::page::handle_event(app, &event) {
+        return;
+    }
+    if ctx.screen == Screen::Rooms && crate::app::rooms::input::handle_event(app, &event) {
         return;
     }
 
@@ -844,6 +851,31 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     }
 }
 
+fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if ctx.screen == Screen::Games && app.is_playing_game {
+        match event {
+            ParsedInput::Byte(byte) => {
+                crate::app::games::input::handle_key(app, *byte);
+            }
+            ParsedInput::Char(ch) if ch.is_ascii() => {
+                crate::app::games::input::handle_key(app, *ch as u8);
+            }
+            ParsedInput::Arrow(key) => {
+                crate::app::games::input::handle_arrow(app, *key);
+            }
+            _ => {}
+        }
+        return true;
+    }
+
+    if ctx.screen == Screen::Rooms && app.rooms_active_room.is_some() {
+        let _ = crate::app::rooms::input::handle_event(app, event);
+        return true;
+    }
+
+    false
+}
+
 fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && ctx.chat_composing {
         chat::input::handle_compose_char(app, ch);
@@ -935,6 +967,10 @@ fn dispatch_escape(app: &mut App) {
         }
     }
     if ctx.screen == Screen::Games && app.is_playing_game {
+        dispatch_screen_key(app, ctx.screen, 0x1B);
+        return;
+    }
+    if ctx.screen == Screen::Rooms {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
@@ -1193,6 +1229,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         }
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
         Screen::Games => crate::app::games::input::handle_arrow(app, key),
+        Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
     }
 }
@@ -1395,6 +1432,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
+            app.set_screen(Screen::Rooms);
+            true
+        }
+        b'5' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
             app.set_screen(Screen::Artboard);
             true
         }
@@ -1433,6 +1475,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Games => {
             crate::app::games::input::handle_key(app, byte);
+        }
+        Screen::Rooms => {
+            crate::app::rooms::input::handle_key(app, byte);
         }
         Screen::Artboard => {
             let _ = crate::app::artboard::page::handle_key(app, byte);

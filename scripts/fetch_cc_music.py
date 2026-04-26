@@ -8,6 +8,10 @@ Sources:
   Classical: Musopen (Public Domain) via Internet Archive
   Jazz:      Kevin MacLeod (CC-BY) via Internet Archive + HoliznaCC0 (CC0) via Bandcamp
 
+All downloads land in tmp/<genre>/ (the upload-staging area). Dev fixtures
+under music/<genre>/ and R2-backed production tracks are never touched. After
+the user confirms upload to R2, staged files in tmp/ should be removed.
+
 Dependencies: yt-dlp, ffmpeg, python3
 Usage: python3 scripts/fetch_cc_music.py [--genre lofi|ambient|classic|jazz|all] [--music-dir PATH] [--skip-m3u]
 """
@@ -15,7 +19,7 @@ Usage: python3 scripts/fetch_cc_music.py [--genre lofi|ambient|classic|jazz|all]
 import subprocess, json, os, sys, re, urllib.request, glob, argparse
 from pathlib import Path
 
-DEFAULT_MUSIC_DIR = Path(__file__).resolve().parent.parent / "music"
+DEFAULT_MUSIC_DIR = Path(__file__).resolve().parent.parent / "tmp"
 DEFAULT_LIQUIDSOAP_DIR = Path(__file__).resolve().parent.parent / "infra" / "liquidsoap"
 MUSIC_DIR = DEFAULT_MUSIC_DIR
 LIQUIDSOAP_DIR = DEFAULT_LIQUIDSOAP_DIR
@@ -26,10 +30,8 @@ LIQUIDSOAP_DIR = DEFAULT_LIQUIDSOAP_DIR
 
 BANDCAMP_ALBUMS = {
     "lofi": [
-        "https://holiznacc0.bandcamp.com/album/lofi-and-chill",
-        "https://holiznacc0.bandcamp.com/album/public-domain-lo-fi",
-        "https://holiznacc0.bandcamp.com/album/winter-lo-fi-2",
-        "https://holiznacc0.bandcamp.com/album/city-slacker",
+        "https://holiznacc0.bandcamp.com/album/waves-of-nostalgia-part-2",
+        "https://holiznacc0.bandcamp.com/album/eternal-skies-retro-gamer",
     ],
     "jazz": [
         "https://holiznacc0.bandcamp.com/album/lofi-jazz-guitar",
@@ -39,69 +41,86 @@ BANDCAMP_ALBUMS = {
 
 FMA_TRACKS = {
     "ambient": [
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/swirling-snowflakes-finale/", "Amarent", "Swirling Snowflakes - Finale"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/sweet-dreams-middle-eastern-remix/", "Amarent", "Sweet Dreams (Middle-Eastern Remix)"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/salt-lake-swerve-chillout-remix/", "Amarent", "Salt Lake Swerve (Chillout Remix)"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/cathay-lounge/", "Amarent", "Cathay Lounge"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/a-better-world/", "Amarent", "A Better World"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/sweet-dreams-2/", "Amarent", "Sweet Dreams"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/sweet-love-chill-remix/", "Amarent", "Sweet Love (Chill Remix)"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/outer-space/", "Amarent", "Outer Space"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/tuesday-night/", "Amarent", "Tuesday Night"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/tuesday-night-radio-edit/", "Amarent", "Tuesday Night (Radio Edit)"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/ethereal-2/", "Amarent", "Ethereal"),
-        ("https://freemusicarchive.org/music/Ketsa/modern-meditations/meditation-5/", "Ketsa", "Meditation"),
-        ("https://freemusicarchive.org/music/Ketsa/modern-meditations/morning-stillness/", "Ketsa", "Morning Stillness"),
-        ("https://freemusicarchive.org/music/Ketsa/modern-meditations/patterns-1/", "Ketsa", "Patterns"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/1-white-noise-part1mp3/", "The Imperfectionist", "1-White noise part.1.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/2-white-noise-part2mp3/", "The Imperfectionist", "2-White noise part.2.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/3-white-noise-part3mp3/", "The Imperfectionist", "3-White noise part.3.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/4-white-noise-part4mp3/", "The Imperfectionist", "4-White noise part.4.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/5-white-noise-part5mp3/", "The Imperfectionist", "5-White noise part.5.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/6-white-noise-part6mp3/", "The Imperfectionist", "6-White noise part.6.mp3"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_01_Closer_To_You/", "Sergey Cheremisinov", "Closer To You"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_02_Train/", "Sergey Cheremisinov", "Train"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_03_Waves/", "Sergey Cheremisinov", "Waves"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_04_When_You_Leave/", "Sergey Cheremisinov", "When You Leave"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_05_Fog/", "Sergey Cheremisinov", "Fog"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_01_Fouler_lhorizon/", "Komiku", "Fouler l'horizon"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_02_Le_Grand_Village/", "Komiku", "Le Grand Village"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_03_Champ_de_tournesol/", "Komiku", "Champ de tournesol"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_04_Barque_sur_le_lac/", "Komiku", "Barque sur le lac"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_09_De_lherbe_sous_les_pieds/", "Komiku", "De l'herbe sous les pieds"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_13_Bleu/", "Komiku", "Bleu"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_14_Un_coin_loin_du_monde/", "Komiku", "Un coin loin du monde"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_01_Balance/", "Komiku", "Balance"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_02_Chill_Out_Theme/", "Komiku", "Chill Out Theme"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_04_Time/", "Komiku", "Time"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_05_Down_the_river/", "Komiku", "Down the river"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_07_Frozen_Jungle/", "Komiku", "Frozen Jungle"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_08_Dreaming_of_you/", "Komiku", "Dreaming of you"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_3/Komiku_-_Its_time_for_adventure_vol_3_-_01_Childhood_scene/", "Komiku", "Childhood scene"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_3/Komiku_-_Its_time_for_adventure_vol_3_-_07_The_place_that_never_get_old/", "Komiku", "The place that never gets old"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_5/Komiku_-_Its_time_for_adventure_vol_5_-_05_Xenobiological_Forest/", "Komiku", "Xenobiological Forest"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_5/Komiku_-_Its_time_for_adventure_vol_5_-_06_Friendss_theme/", "Komiku", "Friends's theme"),
+        ("https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-1/", "HoliznaCC0", "Lullabies For The End Of The World 1"),
+        ("https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-2/", "HoliznaCC0", "Lullabies For The End Of The World 2"),
+        ("https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-3/", "HoliznaCC0", "Lullabies For The End Of The World 3"),
     ],
 }
 
 FMA_EXTRA_TRACKS = {
     "lofi": [
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/tetra/", "Ketsa", "Tetra"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/i-dream-of-you/", "Ketsa", "I Dream Of You"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/black-screen/", "Ketsa", "Black Screen"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/slow-dance/", "Ketsa", "Slow Dance"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/seconds-left/", "Ketsa", "Seconds Left"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/lowest-sun/", "Ketsa", "Lowest Sun"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/down-pitch/", "Ketsa", "Down Pitch"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/reclaimed/", "Ketsa", "Reclaimed"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/the-time-it-takes/", "Ketsa", "The Time It Takes"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/deep-waves/", "Ketsa", "Deep Waves"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/shining-still/", "Ketsa", "Shining Still"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/the-winter-months/", "Ketsa", "The Winter Months"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/folded/", "Ketsa", "Folded"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/home-sigh/", "Ketsa", "Home Sigh"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/take-me-up/", "Ketsa", "Take Me Up"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/appointments/", "Ketsa", "Appointments"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/jazz-daze/", "Ketsa", "Jazz Daze"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/bring-dat/", "Ketsa", "Bring Dat"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/make-me-sad/", "Ketsa", "Make Me Sad"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/in-trouble/", "Ketsa", "In Trouble"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/worlds-a-stage/", "Ketsa", "World's A Stage"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/smoothness/", "Ketsa", "Smoothness"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/journal/", "Ketsa", "Journal"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/my-biz/", "Ketsa", "My Biz"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/aligning-frequencies/", "Ketsa", "Aligning Frequencies"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/therapy-1/", "Ketsa", "Therapy"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/sun-slides/", "Ketsa", "Sun Slides"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/to-do/", "Ketsa", "To do"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/grand-rising/", "Ketsa", "Grand Rising"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/the-cure/", "Ketsa", "The Cure"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/keep-hold/", "Ketsa", "Keep Hold"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/one-more/", "JMHBM", "One More"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/night-city/", "JMHBM", "Night City"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/new-new/", "JMHBM", "New New"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/do-me-right/", "JMHBM", "Do Me Right"),
-        ("https://freemusicarchive.org/index.php/music/beat-mekanik/single/heavyweights/", "JMHBM", "Heavyweights"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/footsteps/", "JMHBM", "Footsteps"),
-        ("https://freemusicarchive.org/music/legacyalli/instrumental-by-legacyalli-2024/rf-lofi-funky-and-chunky/", "legacyAlli", "RF - LoFi Funky and Chunky"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-1/", "HoliznaCC0", "OST Music Box 1"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-2/", "HoliznaCC0", "OST Music Box 2"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-3/", "HoliznaCC0", "OST Music Box 3"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-4/", "HoliznaCC0", "OST Music Box 4"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-5/", "HoliznaCC0", "OST Music Box 5"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-6/", "HoliznaCC0", "OST Music Box 6"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-7/", "HoliznaCC0", "OST Music Box 7"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/drifting-piano/", "HoliznaCC0", "Drifting Piano"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/a-small-town-on-pluto-music-box/", "HoliznaCC0", "A Small Town On Pluto (Music Box)"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/a-small-town-on-pluto-composed/", "HoliznaCC0", "A Small Town On Pluto (Composed)"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/game-travel-1-piano/", "HoliznaCC0", "Game Travel 1 (Piano)"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/vst-guitar/", "HoliznaCC0", "VST Guitar"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/cabin-fever/", "HoliznaCC0", "Cabin Fever"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/spring-on-the-horizon/", "HoliznaCC0", "Spring On The Horizon"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/creepy-piano-1/", "HoliznaCC0", "Creepy Piano 1"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/creepy-piano-2/", "HoliznaCC0", "Creepy Piano 2"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/creepy-piano-3/", "HoliznaCC0", "Creepy Piano 3"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/creepy-piano-4/", "HoliznaCC0", "Creepy Piano 4"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/dangerous-voyage/", "HoliznaCC0", "Dangerous Voyage"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/dangerous-voyage-music-box/", "HoliznaCC0", "Dangerous Voyage (Music Box)"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/saviour-above/", "Ketsa", "Saviour Above"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/always-faithful/", "Ketsa", "Always Faithful"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/all-ways/", "Ketsa", "All Ways"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/feeling-1/", "Ketsa", "Feeling"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/importance-1/", "Ketsa", "Importance"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/trench-work/", "Ketsa", "Trench Work"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/night-flow-day-grow/", "Ketsa", "Night Flow Day Grow"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/will-make-you-happy/", "Ketsa", "Will Make You Happy"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/bright-state/", "Ketsa", "Bright State"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/cello/", "Ketsa", "Cello"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/dry-and-high/", "Ketsa", "Dry and High"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/the-road-1/", "Ketsa", "The Road"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/kinship/", "Ketsa", "Kinship"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/her-memory-fading/", "Ketsa", "Her Memory Fading"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/what-it-feels-like-1/", "Ketsa", "What It Feels Like"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/a-little-faith/", "Ketsa", "A Little Faith"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/tide-turns/", "Ketsa", "Tide Turns"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/longer-wait/", "Ketsa", "Longer Wait"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/life-is-great/", "Ketsa", "Life is Great"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/that-feeling/", "Ketsa", "That Feeling"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/london-west/", "Ketsa", "London West"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/dawn-faded/", "Ketsa", "Dawn Faded"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/good-feel/", "Ketsa", "Good Feel"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/here-for-you/", "Ketsa", "Here For You"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/brazilian-sunsets/", "Ketsa", "Brazilian Sunsets"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/too-late/", "Ketsa", "Too Late"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/the-road-2/", "Ketsa", "The Road 2"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/off-days/", "Ketsa", "Off Days"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/inside-dead/", "Ketsa", "Inside Dead"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/vision-2/", "Ketsa", "Vision"),
     ],
 }
 
@@ -515,7 +534,7 @@ def main():
                         choices=["lofi", "ambient", "classic", "jazz", "all"],
                         help="Which genre to download (default: all)")
     parser.add_argument("--music-dir", type=Path, default=DEFAULT_MUSIC_DIR,
-                        help="Where to store downloaded music (default: repo music/)")
+                        help="Where to store downloaded music (default: repo tmp/, the upload-staging area)")
     parser.add_argument("--liquidsoap-dir", type=Path, default=DEFAULT_LIQUIDSOAP_DIR,
                         help="Where to write generated .m3u files (default: repo infra/liquidsoap/)")
     parser.add_argument("--m3u-only", action="store_true",

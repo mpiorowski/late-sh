@@ -2,6 +2,8 @@ use anyhow::{Result, bail};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::game_room::GameKind;
+
 crate::model! {
     table = "chat_rooms";
     params = ChatRoomParams;
@@ -98,6 +100,26 @@ impl ChatRoom {
                  DO UPDATE SET updated = current_timestamp
                  RETURNING *",
                 &[&slug],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    pub async fn get_or_create_game_room(
+        client: &Client,
+        game_kind: GameKind,
+        slug: &str,
+    ) -> Result<Self> {
+        let game_kind = game_kind.as_str();
+        let slug = normalize_game_slug(slug)?;
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                 VALUES ('game', 'public', false, $1, $2)
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&slug, &game_kind],
             )
             .await?;
         Ok(Self::from(row))
@@ -338,6 +360,14 @@ fn normalize_room_slug(slug: &str) -> Result<String> {
     let slug = normalized.trim_matches('-').to_string();
     if slug.is_empty() {
         bail!("room name cannot be empty");
+    }
+    Ok(slug)
+}
+
+fn normalize_game_slug(slug: &str) -> Result<String> {
+    let slug = normalize_room_slug(slug)?;
+    if slug == "general" {
+        bail!("cannot create game room with reserved name 'general'");
     }
     Ok(slug)
 }

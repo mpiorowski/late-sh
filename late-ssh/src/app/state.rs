@@ -122,7 +122,9 @@ pub struct SessionConfig {
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
     pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
-    pub blackjack_service: crate::app::games::blackjack::svc::BlackjackService,
+    pub rooms_service: crate::app::rooms::svc::RoomsService,
+    pub blackjack_table_manager: crate::app::rooms::blackjack::manager::BlackjackTableManager,
+    pub blackjack_service: crate::app::rooms::blackjack::svc::BlackjackService,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
     /// enters the dartboard game from the arcade.
@@ -248,13 +250,24 @@ pub struct App {
     /// Games Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
+    pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
+    pub(crate) blackjack_table_manager:
+        crate::app::rooms::blackjack::manager::BlackjackTableManager,
+    pub(crate) rooms_selected_index: usize,
+    pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
+    pub(crate) rooms_add_form_open: bool,
+    pub(crate) rooms_display_name_input: String,
+    pub(super) rooms_snapshot_rx:
+        tokio::sync::watch::Receiver<crate::app::rooms::svc::RoomsSnapshot>,
+    pub(super) rooms_event_rx: tokio::sync::broadcast::Receiver<crate::app::rooms::svc::RoomsEvent>,
+    pub(crate) rooms_snapshot: crate::app::rooms::svc::RoomsSnapshot,
     pub(crate) twenty_forty_eight_state: crate::app::games::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::games::tetris::state::State,
     pub(crate) sudoku_state: crate::app::games::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
-    pub(crate) blackjack_state: crate::app::games::blackjack::state::State,
+    pub(crate) blackjack_state: crate::app::rooms::blackjack::state::State,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -553,11 +566,14 @@ impl App {
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
         );
-        let blackjack_state = crate::app::games::blackjack::state::State::new(
+        let blackjack_state = crate::app::rooms::blackjack::state::State::new(
             config.blackjack_service.clone(),
             config.user_id,
             config.initial_chip_balance,
         );
+        let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
+        let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
+        let rooms_event_rx = config.rooms_service.subscribe_events();
         let dartboard_server = config.dartboard_server.clone();
         let dartboard_provenance = config.dartboard_provenance.clone();
         let artboard_snapshot_service = config.artboard_snapshot_service.clone();
@@ -686,6 +702,15 @@ impl App {
             bonsai_care_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
+            rooms_service: config.rooms_service,
+            blackjack_table_manager: config.blackjack_table_manager,
+            rooms_selected_index: 0,
+            rooms_active_room: None,
+            rooms_add_form_open: false,
+            rooms_display_name_input: String::new(),
+            rooms_snapshot_rx,
+            rooms_event_rx,
+            rooms_snapshot,
             twenty_forty_eight_state,
             tetris_state,
             sudoku_state,

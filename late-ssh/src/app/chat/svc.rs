@@ -221,11 +221,11 @@ impl ChatService {
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, selected_room_id = ?selected_room_id))]
     async fn list_chat_rooms(&self, user_id: Uuid, selected_room_id: Option<Uuid>) -> Result<()> {
-        let client = &self.db.get().await?;
-        let rooms = ChatRoom::list_for_user(client, user_id).await?;
-        let discover_rooms = self.list_discover_rooms(client, user_id).await?;
-        let unread_counts = ChatRoomMember::unread_counts_for_user(client, user_id).await?;
-        let favorite_room_ids = User::favorite_room_ids(client, user_id).await?;
+        let client = self.db.get().await?;
+        let rooms = ChatRoom::list_for_user(&client, user_id).await?;
+        let discover_rooms = self.list_discover_rooms(&client, user_id).await?;
+        let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
+        let favorite_room_ids = User::favorite_room_ids(&client, user_id).await?;
         let general_room_id = rooms
             .iter()
             .find(|room| room.kind == "general" && room.slug.as_deref() == Some("general"))
@@ -256,22 +256,22 @@ impl ChatService {
         }
 
         let recent_messages =
-            ChatMessage::list_recent_for_rooms(client, &preload_room_ids, HISTORY_LIMIT).await?;
+            ChatMessage::list_recent_for_rooms(&client, &preload_room_ids, HISTORY_LIMIT).await?;
         let message_ids: Vec<Uuid> = recent_messages
             .values()
             .flat_map(|messages| messages.iter().map(|message| message.id))
             .collect();
         let message_reactions =
-            ChatMessageReaction::list_summaries_for_messages(client, &message_ids).await?;
+            ChatMessageReaction::list_summaries_for_messages(&client, &message_ids).await?;
         // General stays warm for the dashboard even when another room is
         // selected. Favorites ride in the same preload set so the dashboard
         // quick-switch never depends on a prior manual visit or lucky delta.
-        let usernames = User::list_all_username_map(client).await?;
-        let countries = User::list_all_country_map(client).await?;
+        let usernames = User::list_all_username_map(&client).await?;
+        let countries = User::list_all_country_map(&client).await?;
         let mut all_usernames: Vec<String> = usernames.values().cloned().collect();
         all_usernames.sort();
-        let ignored_user_ids = User::ignored_user_ids(client, user_id).await?;
-        let bonsai_glyphs: HashMap<Uuid, String> = Tree::list_all(client)
+        let ignored_user_ids = User::ignored_user_ids(&client, user_id).await?;
+        let bonsai_glyphs: HashMap<Uuid, String> = Tree::list_all(&client)
             .await?
             .into_iter()
             .filter_map(|t| {
@@ -406,12 +406,12 @@ impl ChatService {
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, room_id = %room_id))]
     async fn mark_room_read(&self, user_id: Uuid, room_id: Uuid) -> Result<()> {
-        let client = &self.db.get().await?;
-        let is_member = ChatRoomMember::is_member(client, room_id, user_id).await?;
+        let client = self.db.get().await?;
+        let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
-        ChatRoomMember::mark_read_now(client, room_id, user_id).await?;
+        ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         Ok(())
     }
 
@@ -443,14 +443,14 @@ impl ChatService {
         after_created: DateTime<Utc>,
         after_id: Uuid,
     ) -> Result<()> {
-        let client = &self.db.get().await?;
-        let is_member = ChatRoomMember::is_member(client, room_id, user_id).await?;
+        let client = self.db.get().await?;
+        let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
 
         let messages =
-            ChatMessage::list_after(client, room_id, after_created, after_id, DELTA_LIMIT).await?;
+            ChatMessage::list_after(&client, room_id, after_created, after_id, DELTA_LIMIT).await?;
         if !messages.is_empty() {
             let _ = self.evt_tx.send(ChatEvent::DeltaSynced {
                 user_id,
@@ -562,12 +562,12 @@ impl ChatService {
             anyhow::bail!("announcements is admin-only");
         }
 
-        let client = &self.db.get().await?;
-        let is_member = ChatRoomMember::is_member(client, room_id, user_id).await?;
+        let client = self.db.get().await?;
+        let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
-        let room = ChatRoom::get(client, room_id)
+        let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("room not found"))?;
         if room.kind == "dm" {
@@ -577,8 +577,8 @@ impl ChatService {
             let user_b = room
                 .dm_user_b
                 .ok_or_else(|| anyhow::anyhow!("dm room is missing second participant"))?;
-            ChatRoomMember::join(client, room_id, user_a).await?;
-            ChatRoomMember::join(client, room_id, user_b).await?;
+            ChatRoomMember::join(&client, room_id, user_a).await?;
+            ChatRoomMember::join(&client, room_id, user_b).await?;
         }
 
         let message = ChatMessageParams {
@@ -586,10 +586,10 @@ impl ChatService {
             user_id,
             body: body.to_string(),
         };
-        let chat = ChatMessage::create(client, message).await?;
-        ChatRoom::touch_updated(client, room_id).await?;
-        ChatRoomMember::mark_read_now(client, room_id, user_id).await?;
-        let target_user_ids = ChatRoom::get_target_user_ids(client, room_id).await?;
+        let chat = ChatMessage::create(&client, message).await?;
+        ChatRoom::touch_updated(&client, room_id).await?;
+        ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
+        let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageCreated {
             message: chat.clone(),
             target_user_ids,
@@ -660,8 +660,8 @@ impl ChatService {
             anyhow::bail!("edited body is empty");
         }
 
-        let client = &self.db.get().await?;
-        let existing = ChatMessage::get(client, message_id)
+        let client = self.db.get().await?;
+        let existing = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("message not found"))?;
         if existing.user_id != user_id && !is_admin {
@@ -673,8 +673,8 @@ impl ChatService {
             user_id: existing.user_id,
             body: new_body.to_string(),
         };
-        let updated = ChatMessage::update(client, message_id, params).await?;
-        let target_user_ids = ChatRoom::get_target_user_ids(client, existing.room_id).await?;
+        let updated = ChatMessage::update(&client, message_id, params).await?;
+        let target_user_ids = ChatRoom::get_target_user_ids(&client, existing.room_id).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageEdited {
             message: updated,
             target_user_ids,
@@ -714,21 +714,21 @@ impl ChatService {
         message_id: Uuid,
         kind: i16,
     ) -> Result<()> {
-        let client = &self.db.get().await?;
-        let message = ChatMessage::get(client, message_id)
+        let client = self.db.get().await?;
+        let message = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("message not found"))?;
-        let is_member = ChatRoomMember::is_member(client, message.room_id, user_id).await?;
+        let is_member = ChatRoomMember::is_member(&client, message.room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
 
-        ChatMessageReaction::toggle(client, message_id, user_id, kind).await?;
-        let reactions = ChatMessageReaction::list_summaries_for_messages(client, &[message_id])
+        ChatMessageReaction::toggle(&client, message_id, user_id, kind).await?;
+        let reactions = ChatMessageReaction::list_summaries_for_messages(&client, &[message_id])
             .await?
             .remove(&message_id)
             .unwrap_or_default();
-        let target_user_ids = ChatRoom::get_target_user_ids(client, message.room_id).await?;
+        let target_user_ids = ChatRoom::get_target_user_ids(&client, message.room_id).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageReactionsUpdated {
             room_id: message.room_id,
             message_id,
@@ -762,16 +762,16 @@ impl ChatService {
     }
 
     async fn open_dm(&self, user_id: Uuid, target_username: &str) -> Result<Uuid> {
-        let client = &self.db.get().await?;
-        let target = User::find_by_username(client, target_username)
+        let client = self.db.get().await?;
+        let target = User::find_by_username(&client, target_username)
             .await?
             .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
         if target.id == user_id {
             anyhow::bail!("Cannot DM yourself");
         }
-        let room = ChatRoom::get_or_create_dm(client, user_id, target.id).await?;
-        ChatRoomMember::join(client, room.id, user_id).await?;
-        ChatRoomMember::join(client, room.id, target.id).await?;
+        let room = ChatRoom::get_or_create_dm(&client, user_id, target.id).await?;
+        ChatRoomMember::join(&client, room.id, user_id).await?;
+        ChatRoomMember::join(&client, room.id, target.id).await?;
         Ok(room.id)
     }
 
@@ -806,17 +806,17 @@ impl ChatService {
         user_id: Uuid,
         room_id: Uuid,
     ) -> Result<(String, Vec<String>)> {
-        let client = &self.db.get().await?;
-        let room = ChatRoom::get(client, room_id)
+        let client = self.db.get().await?;
+        let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
-        let is_member = ChatRoomMember::is_member(client, room_id, user_id).await?;
+        let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("You are not a member of this room");
         }
 
-        let user_ids = ChatRoomMember::list_user_ids(client, room_id).await?;
-        let usernames = User::list_usernames_by_ids(client, &user_ids).await?;
+        let user_ids = ChatRoomMember::list_user_ids(&client, room_id).await?;
+        let usernames = User::list_usernames_by_ids(&client, &user_ids).await?;
         let members = user_ids
             .into_iter()
             .map(|id| {
@@ -861,7 +861,7 @@ impl ChatService {
     }
 
     async fn list_public_rooms(&self) -> Result<(String, Vec<String>)> {
-        let client = &self.db.get().await?;
+        let client = self.db.get().await?;
         let rows = client
             .query(
                 "SELECT r.kind,
@@ -939,14 +939,14 @@ impl ChatService {
         user_id: Uuid,
         target_username: &str,
     ) -> Result<(Vec<Uuid>, String)> {
-        let client = &self.db.get().await?;
-        let target = User::find_by_username(client, target_username)
+        let client = self.db.get().await?;
+        let target = User::find_by_username(&client, target_username)
             .await?
             .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
         if target.id == user_id {
             anyhow::bail!("Cannot ignore yourself");
         }
-        let (changed, ids) = User::add_ignored_user_id(client, user_id, target.id).await?;
+        let (changed, ids) = User::add_ignored_user_id(&client, user_id, target.id).await?;
         if !changed {
             anyhow::bail!("@{} is already ignored", target.username);
         }
@@ -981,14 +981,14 @@ impl ChatService {
         user_id: Uuid,
         target_username: &str,
     ) -> Result<(Vec<Uuid>, String)> {
-        let client = &self.db.get().await?;
-        let target = User::find_by_username(client, target_username)
+        let client = self.db.get().await?;
+        let target = User::find_by_username(&client, target_username)
             .await?
             .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
         if target.id == user_id {
             anyhow::bail!("Cannot unignore yourself");
         }
-        let (changed, ids) = User::remove_ignored_user_id(client, user_id, target.id).await?;
+        let (changed, ids) = User::remove_ignored_user_id(&client, user_id, target.id).await?;
         if !changed {
             anyhow::bail!("@{} is not ignored", target.username);
         }
@@ -1046,21 +1046,21 @@ impl ChatService {
     }
 
     async fn join_public_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
-        let client = &self.db.get().await?;
-        let room = ChatRoom::get(client, room_id)
+        let client = self.db.get().await?;
+        let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
         if room.kind != "topic" || room.visibility != "public" {
             anyhow::bail!("Only public rooms can be joined from discover");
         }
-        ChatRoomMember::join(client, room.id, user_id).await?;
+        ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
     }
 
     async fn open_public_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
-        let client = &self.db.get().await?;
-        let room = ChatRoom::get_or_create_public_room(client, slug).await?;
-        ChatRoomMember::join(client, room.id, user_id).await?;
+        let client = self.db.get().await?;
+        let room = ChatRoom::get_or_create_public_room(&client, slug).await?;
+        ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
     }
 
@@ -1090,9 +1090,9 @@ impl ChatService {
     }
 
     async fn create_private_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
-        let client = &self.db.get().await?;
-        let room = ChatRoom::create_private_room(client, slug).await?;
-        ChatRoomMember::join(client, room.id, user_id).await?;
+        let client = self.db.get().await?;
+        let room = ChatRoom::create_private_room(&client, slug).await?;
+        ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
     }
 
@@ -1118,15 +1118,15 @@ impl ChatService {
     }
 
     async fn leave_room(&self, user_id: Uuid, room_id: Uuid) -> Result<()> {
-        let client = &self.db.get().await?;
-        let room = ChatRoom::get(client, room_id)
+        let client = self.db.get().await?;
+        let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
         if room.permanent {
             let name = room.slug.as_deref().unwrap_or("this room");
             anyhow::bail!("Cannot leave #{name} (permanent room)");
         }
-        ChatRoomMember::leave(client, room_id, user_id).await?;
+        ChatRoomMember::leave(&client, room_id, user_id).await?;
         Ok(())
     }
 
@@ -1156,9 +1156,9 @@ impl ChatService {
     }
 
     async fn create_room(&self, slug: &str) -> Result<Uuid> {
-        let client = &self.db.get().await?;
-        let room = ChatRoom::ensure_auto_join(client, slug).await?;
-        let added = ChatRoom::add_all_users(client, room.id).await?;
+        let client = self.db.get().await?;
+        let room = ChatRoom::ensure_auto_join(&client, slug).await?;
+        let added = ChatRoom::add_all_users(&client, room.id).await?;
         tracing::info!(slug = %slug, room_id = %room.id, users_added = added, "room created");
         Ok(room.id)
     }
@@ -1187,9 +1187,9 @@ impl ChatService {
     }
 
     async fn create_permanent_room(&self, slug: &str) -> Result<()> {
-        let client = &self.db.get().await?;
-        let room = ChatRoom::ensure_permanent(client, slug).await?;
-        let added = ChatRoom::add_all_users(client, room.id).await?;
+        let client = self.db.get().await?;
+        let room = ChatRoom::ensure_permanent(&client, slug).await?;
+        let added = ChatRoom::add_all_users(&client, room.id).await?;
         tracing::info!(slug = %slug, room_id = %room.id, users_added = added, "permanent room created");
         Ok(())
     }
@@ -1220,14 +1220,14 @@ impl ChatService {
     }
 
     async fn fill_room(&self, slug: &str) -> Result<u64> {
-        let client = &self.db.get().await?;
-        if let Some(room) = ChatRoom::find_topic_room(client, "public", slug).await? {
-            ChatRoom::set_auto_join(client, room.id, true).await?;
-            let users_added = ChatRoom::add_all_users(client, room.id).await?;
+        let client = self.db.get().await?;
+        if let Some(room) = ChatRoom::find_topic_room(&client, "public", slug).await? {
+            ChatRoom::set_auto_join(&client, room.id, true).await?;
+            let users_added = ChatRoom::add_all_users(&client, room.id).await?;
             tracing::info!(slug = %slug, room_id = %room.id, users_added, "room filled and auto-join enabled");
             return Ok(users_added);
         }
-        if ChatRoom::find_topic_room(client, "private", slug)
+        if ChatRoom::find_topic_room(&client, "private", slug)
             .await?
             .is_some()
         {
@@ -1273,26 +1273,26 @@ impl ChatService {
         room_id: Uuid,
         target_username: &str,
     ) -> Result<(String, String)> {
-        let client = &self.db.get().await?;
-        let room = ChatRoom::get(client, room_id)
+        let client = self.db.get().await?;
+        let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
         if room.kind == "dm" {
             anyhow::bail!("Cannot invite users to a DM");
         }
-        let is_member = ChatRoomMember::is_member(client, room_id, user_id).await?;
+        let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("You are not a member of this room");
         }
 
-        let target = User::find_by_username(client, target_username)
+        let target = User::find_by_username(&client, target_username)
             .await?
             .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
         if target.id == user_id {
             anyhow::bail!("Cannot invite yourself");
         }
 
-        ChatRoomMember::join(client, room_id, target.id).await?;
+        ChatRoomMember::join(&client, room_id, target.id).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
         Ok((room_slug, target.username))
     }
@@ -1321,8 +1321,8 @@ impl ChatService {
     }
 
     async fn delete_permanent_room(&self, slug: &str) -> Result<()> {
-        let client = &self.db.get().await?;
-        let count = ChatRoom::delete_permanent(client, slug).await?;
+        let client = self.db.get().await?;
+        let count = ChatRoom::delete_permanent(&client, slug).await?;
         if count == 0 {
             anyhow::bail!("Permanent room #{slug} not found");
         }
@@ -1361,15 +1361,15 @@ impl ChatService {
         message_id: Uuid,
         is_admin: bool,
     ) -> Result<Uuid> {
-        let client = &self.db.get().await?;
+        let client = self.db.get().await?;
         // Look up the message to get room_id
-        let msg = ChatMessage::get(client, message_id)
+        let msg = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Message not found"))?;
         let count = if is_admin {
-            ChatMessage::delete_by_admin(client, message_id).await?
+            ChatMessage::delete_by_admin(&client, message_id).await?
         } else {
-            ChatMessage::delete_by_author(client, message_id, user_id).await?
+            ChatMessage::delete_by_author(&client, message_id, user_id).await?
         };
         if count == 0 {
             anyhow::bail!("Cannot delete this message");
