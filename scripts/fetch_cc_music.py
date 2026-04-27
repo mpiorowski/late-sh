@@ -234,6 +234,136 @@ IA_ITEMS = [
     ("Jazz_Sampler-9619", "jazz", 20),
 ]
 
+# Second-pass classical expansion: ~100 chill picks for coding sessions, drawn
+# from explicitly CC0 / Public-Domain-marked archive.org items. These are
+# downloaded into tmp/classic/ and APPENDED to infra/liquidsoap/classic.m3u
+# (the existing 100-track manifest in R2 is left untouched). Triggered by
+# --classic-expand on the CLI.
+#
+# Sources:
+#   - musopen-chopin (CC0): Musopen's Complete Chopin Collection
+#   - bach-well-tempered-clavier-book-1 (PD mark): Kimiko Ishizaka's "Open
+#     Well-Tempered Clavier" Book I, the canonical PD recording
+#   - MusopenCollectionAsFlac (PD): chill movements not yet in the manifest
+IA_CLASSIC_EXPANSION = [
+    # ---- MusopenCollectionAsFlac: chill movements left over from pass 1 ----
+    ("MusopenCollectionAsFlac", "Mendelssohn_StringQuartetNo.6inFMinorOp.80/FelixMendelssohn-StringQuartetNo.6InFMinorOp.80-03-Adagio.mp3", "Felix Mendelssohn", "String Quartet No. 6 in F Minor, Op. 80 - III. Adagio"),
+    ("MusopenCollectionAsFlac", "Schubert_SonataInDMajorD.850/FranzSchubert-SonataInDMajorD.850-02-ConMoto.mp3", "Franz Schubert", "Sonata in D Major, D. 850 - II. Con moto"),
+    ("MusopenCollectionAsFlac", "Tchaikovsky_SymphonyPathetique/PyotrIlyichTchaikovsky-SymphonyNo.6InBMinorOp.74pathtique-04-FinaleAdagioLamentoso.mp3", "Pyotr Ilyich Tchaikovsky", "Symphony No. 6 in B Minor, Op. 74 'Pathetique' - IV. Finale Adagio lamentoso"),
+    ("MusopenCollectionAsFlac", "Brahms_SymphonyNo.1inCMinor/JohannesBrahms-SymphonyNo.1InCMinorOp.68-04-Adagio-PiAndante-AllegroNonTroppoMaConBrio.mp3", "Johannes Brahms", "Symphony No. 1 in C Minor, Op. 68 - IV. Adagio - Piu andante - Allegro non troppo"),
+    ("MusopenCollectionAsFlac", "Schubert_SonataInCMinorD.958/FranzSchubert-SonataInCMinorD.958-03-MenuettoAllegro.mp3", "Franz Schubert", "Sonata in C Minor, D. 958 - III. Menuetto Allegro"),
+
+    # ---- Kimiko Ishizaka, Open Well-Tempered Clavier Book I (CC0/PD mark) ----
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 01 Prelude No. 1 in C major, BWV 846.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 1 in C major, BWV 846"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 02 Fugue No. 1 in C major, BWV 846.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 1 in C major, BWV 846"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 03 Prelude No. 2 in C minor, BWV 847.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 2 in C minor, BWV 847"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 04 Fugue No. 2 in C minor, BWV 847.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 2 in C minor, BWV 847"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 05 Prelude No. 3 in C-sharp major, BWV 848.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 3 in C-sharp major, BWV 848"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 06 Fugue No. 3 in C-sharp major, BWV 848.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 3 in C-sharp major, BWV 848"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 07 Prelude No. 4 in C-sharp minor, BWV 849.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 4 in C-sharp minor, BWV 849"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 08 Fugue No. 4 in C-sharp minor, BWV 849.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 4 in C-sharp minor, BWV 849"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 09 Prelude No. 5 in D major, BWV 850.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 5 in D major, BWV 850"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 10 Fugue No. 5 in D major, BWV 850.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 5 in D major, BWV 850"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 11 Prelude No. 6 in D minor, BWV 851.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 6 in D minor, BWV 851"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 12 Fugue No. 6 in D minor, BWV 851.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 6 in D minor, BWV 851"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 13 Prelude No. 7 in E-flat major, BWV 852.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 7 in E-flat major, BWV 852"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 14 Fugue No. 7 in E-flat major, BWV 852.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 7 in E-flat major, BWV 852"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 15 Prelude No. 8 in E-flat minor, BWV 853.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 8 in E-flat minor, BWV 853"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 16 Fugue No. 8 in D-sharp minor, BWV 853.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 8 in D-sharp minor, BWV 853"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 17 Prelude No. 9 in E major, BWV 854.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 9 in E major, BWV 854"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 18 Fugue No. 9 in E major, BWV 854.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 9 in E major, BWV 854"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 19 Prelude No. 10 in E minor, BWV 855.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 10 in E minor, BWV 855"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 20 Fugue No. 10 in E minor, BWV 855.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 10 in E minor, BWV 855"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 21 Prelude No. 11 in F major, BWV 856.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 11 in F major, BWV 856"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 22 Fugue No. 11 in F major, BWV 856.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 11 in F major, BWV 856"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 23 Prelude No. 12 in F minor, BWV 857.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 12 in F minor, BWV 857"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 24 Fugue No. 12 in F minor, BWV 857.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 12 in F minor, BWV 857"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 25 Prelude No. 13 in F-sharp major, BWV 858.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 13 in F-sharp major, BWV 858"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 26 Fugue No. 13 in F-sharp major, BWV 858.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 13 in F-sharp major, BWV 858"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 27 Prelude No. 14 in F-sharp minor, BWV 859.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 14 in F-sharp minor, BWV 859"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 28 Fugue No. 14 in F-sharp minor, BWV 859.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 14 in F-sharp minor, BWV 859"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 29 Prelude No. 15 in G major, BWV 860.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 15 in G major, BWV 860"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 30 Fugue No. 15 in G major, BWV 860.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 15 in G major, BWV 860"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 31 Prelude No. 16 in G minor, BWV 861.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 16 in G minor, BWV 861"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 32 Fugue No. 16 in G minor, BWV 861.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 16 in G minor, BWV 861"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 33 Prelude No. 17 in A-flat major, BWV 862.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 17 in A-flat major, BWV 862"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 34 Fugue No. 17 in A-flat major, BWV 862.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 17 in A-flat major, BWV 862"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 35 Prelude No. 18 in G-sharp minor, BWV 863.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 18 in G-sharp minor, BWV 863"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 36 Fugue No. 18 in G-sharp minor, BWV 863.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 18 in G-sharp minor, BWV 863"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 37 Prelude No. 19 in A major, BWV 864.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 19 in A major, BWV 864"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 38 Fugue No. 19 in A major, BWV 864.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 19 in A major, BWV 864"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 39 Prelude No. 20 in A minor, BWV 865.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 20 in A minor, BWV 865"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 40 Fugue No. 20 in A minor, BWV 865.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 20 in A minor, BWV 865"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 41 Prelude No. 21 in B-flat major, BWV 866.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 21 in B-flat major, BWV 866"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 42 Fugue No. 21 in B-flat major, BWV 866.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 21 in B-flat major, BWV 866"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 43 Prelude No. 22 in B-flat minor, BWV 867.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 22 in B-flat minor, BWV 867"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 44 Fugue No. 22 in B-flat minor, BWV 867.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 22 in B-flat minor, BWV 867"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 45 Prelude No. 23 in B major, BWV 868.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 23 in B major, BWV 868"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 46 Fugue No. 23 in B major, BWV 868.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 23 in B major, BWV 868"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 47 Prelude No. 24 in B minor, BWV 869.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 24 in B minor, BWV 869"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 48 Fugue No. 24 in B minor, BWV 869.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 24 in B minor, BWV 869"),
+
+    # ---- Musopen Complete Chopin Collection (CC0) - Nocturnes ----
+    ("musopen-chopin", "NocturneOp.9No.1InBFlatMinor.mp3", "Frederic Chopin", "Nocturne Op. 9 No. 1 in B-flat minor"),
+    ("musopen-chopin", "Nocturne Op. 9 no. 2 in E flat major.mp3", "Frederic Chopin", "Nocturne Op. 9 No. 2 in E-flat major"),
+    ("musopen-chopin", "NocturneOp.9No.3.mp3", "Frederic Chopin", "Nocturne Op. 9 No. 3 in B major"),
+    ("musopen-chopin", "Nocturne Op. 15 no. 1 In F major.mp3", "Frederic Chopin", "Nocturne Op. 15 No. 1 in F major"),
+    ("musopen-chopin", "Nocturne Op. 27 no. 1 in C sharp minor.mp3", "Frederic Chopin", "Nocturne Op. 27 No. 1 in C-sharp minor"),
+    ("musopen-chopin", "Nocturne Op. 32 no. 1 in B major.mp3", "Frederic Chopin", "Nocturne Op. 32 No. 1 in B major"),
+    ("musopen-chopin", "Nocturne Op. 32 no. 2 in A flat major.mp3", "Frederic Chopin", "Nocturne Op. 32 No. 2 in A-flat major"),
+    ("musopen-chopin", "Nocturne Op. 48 no. 1 in C minor.mp3", "Frederic Chopin", "Nocturne Op. 48 No. 1 in C minor"),
+    ("musopen-chopin", "Nocturne Op. 48 no. 2 in F sharp minor.mp3", "Frederic Chopin", "Nocturne Op. 48 No. 2 in F-sharp minor"),
+    ("musopen-chopin", "Nocturne Op. 55 no. 1 in F minor.mp3", "Frederic Chopin", "Nocturne Op. 55 No. 1 in F minor"),
+    ("musopen-chopin", "Nocturne Op. 55 no. 2 in E flat major.mp3", "Frederic Chopin", "Nocturne Op. 55 No. 2 in E-flat major"),
+    ("musopen-chopin", "Nocturne Op. 62 no. 2 in E major.mp3", "Frederic Chopin", "Nocturne Op. 62 No. 2 in E major"),
+    ("musopen-chopin", "NocturneOp.72No.1InEMinor.mp3", "Frederic Chopin", "Nocturne Op. 72 No. 1 in E minor"),
+    ("musopen-chopin", "Nocturne B. 108 in C minor.mp3", "Frederic Chopin", "Nocturne B. 108 in C minor"),
+    ("musopen-chopin", "Nocturne B. 49 in C sharp minor 'Lento con gran espressione' (1).mp3", "Frederic Chopin", "Nocturne B. 49 in C-sharp minor 'Lento con gran espressione'"),
+    ("musopen-chopin", "NocturneOp27No2.mp3", "Frederic Chopin", "Nocturne Op. 27 No. 2 in D-flat major"),
+
+    # ---- Chopin: Mazurkas ----
+    ("musopen-chopin", "Mazurka Op. 17 no. 3 in A flat major.mp3", "Frederic Chopin", "Mazurka Op. 17 No. 3 in A-flat major"),
+    ("musopen-chopin", "Mazurka Op. 17 no. 4 in A minor.mp3", "Frederic Chopin", "Mazurka Op. 17 No. 4 in A minor"),
+    ("musopen-chopin", "Mazurka Op. 24 no. 4 in B flat minor.mp3", "Frederic Chopin", "Mazurka Op. 24 No. 4 in B-flat minor"),
+    ("musopen-chopin", "Mazurka Op. 50 no. 3 in C sharp minor.mp3", "Frederic Chopin", "Mazurka Op. 50 No. 3 in C-sharp minor"),
+    ("musopen-chopin", "Mazurka Op. 56 no. 1 in B major.mp3", "Frederic Chopin", "Mazurka Op. 56 No. 1 in B major"),
+    ("musopen-chopin", "Mazurka Op. 56 no. 3 in C minor.mp3", "Frederic Chopin", "Mazurka Op. 56 No. 3 in C minor"),
+    ("musopen-chopin", "Mazurka Op. 59 no. 1 in A minor.mp3", "Frederic Chopin", "Mazurka Op. 59 No. 1 in A minor"),
+    ("musopen-chopin", "Mazurka Op. 59 no. 3 in F sharp minor.mp3", "Frederic Chopin", "Mazurka Op. 59 No. 3 in F-sharp minor"),
+    ("musopen-chopin", "Mazurka Op. 50 no. 1 in G major.mp3", "Frederic Chopin", "Mazurka Op. 50 No. 1 in G major"),
+    ("musopen-chopin", "Mazurka Op. 50 no. 2 in A flat major.mp3", "Frederic Chopin", "Mazurka Op. 50 No. 2 in A-flat major"),
+    ("musopen-chopin", "Mazurka Op. 7 no. 3 in F minor.mp3", "Frederic Chopin", "Mazurka Op. 7 No. 3 in F minor"),
+    ("musopen-chopin", "Mazurka Op. 24 no. 3 in A flat major.mp3", "Frederic Chopin", "Mazurka Op. 24 No. 3 in A-flat major"),
+
+    # ---- Chopin: Waltzes (calmer, melodic ones) ----
+    ("musopen-chopin", "Waltz Op. 64 no. 2 in C sharp minor.mp3", "Frederic Chopin", "Waltz Op. 64 No. 2 in C-sharp minor"),
+    ("musopen-chopin", "Waltz Op. 69 no. 1 in A flat major.mp3", "Frederic Chopin", "Waltz Op. 69 No. 1 in A-flat major"),
+    ("musopen-chopin", "Waltz Op. 69 no. 2 in B minor.mp3", "Frederic Chopin", "Waltz Op. 69 No. 2 in B minor"),
+    ("musopen-chopin", "Waltz Op. 70 no. 2 in F minor.mp3", "Frederic Chopin", "Waltz Op. 70 No. 2 in F minor"),
+    ("musopen-chopin", "Waltz Op. 70 no. 3 in D flat major.mp3", "Frederic Chopin", "Waltz Op. 70 No. 3 in D-flat major"),
+    ("musopen-chopin", "WaltzOp.34No.2InAMinor.mp3", "Frederic Chopin", "Waltz Op. 34 No. 2 in A minor"),
+    ("musopen-chopin", "WaltzB.46InEFlatMajor.mp3", "Frederic Chopin", "Waltz B. 46 in E-flat major"),
+    ("musopen-chopin", "WaltzB.56InEMinor.mp3", "Frederic Chopin", "Waltz B. 56 in E minor"),
+    ("musopen-chopin", "WaltzOp.34No.3InFMajor.mp3", "Frederic Chopin", "Waltz Op. 34 No. 3 in F major"),
+    ("musopen-chopin", "WaltzB.21InAFlatMajor.mp3", "Frederic Chopin", "Waltz B. 21 in A-flat major"),
+
+    # ---- Chopin: Impromptus ----
+    ("musopen-chopin", "Fantasie Impromptu Op. 66.mp3", "Frederic Chopin", "Fantaisie-Impromptu Op. 66 in C-sharp minor"),
+    ("musopen-chopin", "Impromptu no. 1 - Op. 29.mp3", "Frederic Chopin", "Impromptu No. 1 Op. 29 in A-flat major"),
+    ("musopen-chopin", "Impromptu no. 2 - Op. 36.mp3", "Frederic Chopin", "Impromptu No. 2 Op. 36 in F-sharp major"),
+    ("musopen-chopin", "Impromptu no. 3 - Op. 51.mp3", "Frederic Chopin", "Impromptu No. 3 Op. 51 in G-flat major"),
+
+    # ---- Chopin: Preludes Op. 28 (calmer ones) ----
+    ("musopen-chopin", "Prelude Op. 28 no. 6.mp3", "Frederic Chopin", "Prelude Op. 28 No. 6 in B minor"),
+    ("musopen-chopin", "Prelude Op. 28 no. 7.mp3", "Frederic Chopin", "Prelude Op. 28 No. 7 in A major"),
+    ("musopen-chopin", "Prelude Op. 28 no. 13.mp3", "Frederic Chopin", "Prelude Op. 28 No. 13 in F-sharp major"),
+    ("musopen-chopin", "Prelude Op. 28 no. 15.mp3", "Frederic Chopin", "Prelude Op. 28 No. 15 in D-flat major 'Raindrop'"),
+    ("musopen-chopin", "Prelude Op. 28 no. 17.mp3", "Frederic Chopin", "Prelude Op. 28 No. 17 in A-flat major"),
+
+    # ---- Chopin: Cello Sonata Largo ----
+    ("musopen-chopin", "Sonata for Piano and Cello in G Minor, Op. 65 - III. Largo.mp3", "Frederic Chopin", "Sonata for Piano and Cello, Op. 65 - III. Largo"),
+]
+
 
 def slugify(text: str) -> str:
     """Convert text to a safe filename slug."""
@@ -444,6 +574,115 @@ def download_ia(identifier: str, genre: str, max_tracks: int):
     print(f"  Downloaded {count} tracks for {genre}")
 
 
+def download_classic_expansion():
+    """Download the IA_CLASSIC_EXPANSION batch into tmp/classic/ (skipping any
+    files already present locally or already represented in classic.m3u)."""
+    out_dir = MUSIC_DIR / "classic"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_in_m3u = m3u_existing_container_paths("classic")
+
+    print(f"\n{'='*60}")
+    print(f"  Downloading classical expansion ({len(IA_CLASSIC_EXPANSION)} tracks)")
+    print(f"{'='*60}")
+
+    downloaded = 0
+    for i, (identifier, relative_path, artist, title) in enumerate(IA_CLASSIC_EXPANSION, start=1):
+        out_path = manifest_output_path("classic", artist, title)
+        container_path = f"/music/classic/{out_path.name}"
+        if container_path in existing_in_m3u:
+            print(f"  [skip-m3u] {artist} - {title}")
+            continue
+        if out_path.exists():
+            print(f"  [skip-file] {artist} - {title}")
+            continue
+
+        print(f"  [{i}/{len(IA_CLASSIC_EXPANSION)}] {artist} - {title}")
+        try:
+            dl_url = f"https://archive.org/download/{identifier}/{urllib.request.quote(relative_path)}"
+            urllib.request.urlretrieve(dl_url, str(out_path))
+            downloaded += 1
+        except Exception as e:
+            print(f"  [error] {e}")
+            if out_path.exists():
+                out_path.unlink()
+
+    print(f"  Downloaded {downloaded} new tracks to {out_dir}")
+
+
+def m3u_existing_container_paths(genre: str) -> set:
+    """Parse an existing .m3u and return the set of container paths already
+    represented (the part after the final ':' on annotate lines)."""
+    m3u_path = LIQUIDSOAP_DIR / f"{genre}.m3u"
+    if not m3u_path.exists():
+        return set()
+    paths = set()
+    for line in m3u_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # annotate:...:/music/<genre>/<file>
+        marker = f":/music/{genre}/"
+        idx = line.find(marker)
+        if idx >= 0:
+            paths.add(line[idx + 1:])
+        elif line.startswith(f"/music/{genre}/"):
+            paths.add(line)
+    return paths
+
+
+def append_classic_expansion_to_m3u():
+    """Append annotate lines for any IA_CLASSIC_EXPANSION tracks present in
+    tmp/classic/ but not yet in classic.m3u. Existing entries are untouched."""
+    m3u_path = LIQUIDSOAP_DIR / "classic.m3u"
+    existing_paths = m3u_existing_container_paths("classic")
+
+    new_lines = []
+    skipped_missing = 0
+    for identifier, relative_path, artist, title in IA_CLASSIC_EXPANSION:
+        mp3 = manifest_output_path("classic", artist, title)
+        container_path = f"/music/classic/{mp3.name}"
+        if container_path in existing_paths:
+            continue
+        if not mp3.exists():
+            skipped_missing += 1
+            continue
+
+        duration = ""
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json",
+                 "-show_format", str(mp3)],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                fmt = json.loads(result.stdout).get("format", {})
+                dur_secs = float(fmt.get("duration", 0))
+                if dur_secs > 0:
+                    duration = str(int(dur_secs))
+        except Exception:
+            pass
+
+        # liquidsoap annotate format expects double-quoted values; embed any
+        # apostrophes literally and replace any double quotes in source with
+        # single quotes (matches the existing manifest convention)
+        a = artist.replace('"', "'")
+        t = title.replace('"', "'")
+        dur_part = f',duration="{duration}"' if duration else ""
+        new_lines.append(f'annotate:artist="{a}",title="{t}"{dur_part}:{container_path}')
+
+    if not new_lines:
+        print(f"  No new tracks to append to {m3u_path.name} ({skipped_missing} missing locally)")
+        return
+
+    # Append, ensuring the existing file ends with a newline
+    existing_content = m3u_path.read_text() if m3u_path.exists() else ""
+    if existing_content and not existing_content.endswith("\n"):
+        existing_content += "\n"
+    m3u_path.write_text(existing_content + "\n".join(new_lines) + "\n")
+    print(f"  Appended {len(new_lines)} tracks to {m3u_path.name} (skipped {skipped_missing} missing locally)")
+
+
 def generate_m3u(genre: str):
     """Generate .m3u playlist from downloaded MP3 files."""
     music_path = MUSIC_DIR / genre
@@ -541,10 +780,26 @@ def main():
                         help="Only regenerate .m3u files from existing downloads")
     parser.add_argument("--skip-m3u", action="store_true",
                         help="Skip generating .m3u files")
+    parser.add_argument("--classic-expand", action="store_true",
+                        help="Download the IA_CLASSIC_EXPANSION batch into tmp/classic/ "
+                             "and append the new tracks to classic.m3u (existing entries "
+                             "are preserved). Skips all other genres and download paths.")
     args = parser.parse_args()
 
     MUSIC_DIR = args.music_dir.resolve()
     LIQUIDSOAP_DIR = args.liquidsoap_dir.resolve()
+
+    if args.classic_expand:
+        download_classic_expansion()
+        if not args.skip_m3u:
+            print(f"\n{'='*60}")
+            print("  Appending new classical tracks to classic.m3u")
+            print(f"{'='*60}")
+            append_classic_expansion_to_m3u()
+        print("\nDone! Next steps:")
+        print(f"  1. Review {LIQUIDSOAP_DIR}/classic.m3u (new entries appended at the end)")
+        print(f"  2. Upload tmp/classic/*.mp3 to R2, then clear tmp/classic/")
+        return
 
     genres = ["lofi", "ambient", "classic", "jazz"] if args.genre == "all" else [args.genre]
 

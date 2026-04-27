@@ -10,7 +10,7 @@ This file tracks the local music catalog used by `late.sh` radio.
 
 - `lofi`: done, 202-track manifest, mixed `CC0` and `CC-BY 4.0`
 - `ambient`: done, 204 tracks, mixed `CC0` and `CC-BY 4.0`
-- `classic`: done, 100-track calm-first manifest, public domain via Musopen / Internet Archive
+- `classic`: done, 201-track calm-first manifest, public domain via Musopen / Internet Archive (Musopen Chopin CC0 + Kimiko Ishizaka's "Open Well-Tempered Clavier" CC0/PD-mark + MusopenCollectionAsFlac PD)
 - `jazz`: pending
 
 ## Lofi
@@ -435,7 +435,7 @@ This section documents the current 204-track ambient manifest used by the regene
 
 ## Classic
 
-This section documents the current 100-track calm-first classical manifest used by the regenerated playlist files. The dev Liquidsoap stack mounts `tmp/music/classic` onto `/music/classic`, so the local runtime playlist resolves against the refreshed temp library.
+This section documents the current 201-track calm-first classical manifest used by the regenerated playlist files. The dev Liquidsoap stack mounts `tmp/music/classic` onto `/music/classic`, so the local runtime playlist resolves against the refreshed temp library. Tracks 1-100 are the original Musopen Public Domain pass; tracks 101-201 are the second-pass coding-session expansion (5 chill leftovers from MusopenCollectionAsFlac, 48 Bach Well-Tempered Clavier Book I prelude/fugue pairs by Kimiko Ishizaka under CC0/PD mark, and 48 Chopin pieces from Musopen's CC0 Complete Chopin Collection).
 
 | # | Artist | Title | License | Source URL |
 |---|--------|-------|---------|------------|
@@ -539,6 +539,107 @@ This section documents the current 100-track calm-first classical manifest used 
 | 98 | Bedrich Smetana | Ma Vlast - Vltava | Public Domain | https://archive.org/download/MusopenCollectionAsFlac/Smetana_Vltava/BedichSmetana-MVlast-Vltava.mp3 |
 | 99 | Wolfgang Amadeus Mozart | Symphony No. 40 in G Minor, K. 550 - II. Andante | Public Domain | https://archive.org/download/MusopenCollectionAsFlac/Mozart_SymphonyNo.40inGMinor/WolfgangAmadeusMozart-SymphonyNo.40InGMinorK.550-02-Andante.mp3 |
 | 100 | Wolfgang Amadeus Mozart | Symphony No. 40 in G Minor, K. 550 - III. Menuetto Allegretto | Public Domain | https://archive.org/download/MusopenCollectionAsFlac/Mozart_SymphonyNo.40inGMinor/WolfgangAmadeusMozart-SymphonyNo.40InGMinorK.550-03-MenuettoAllegretto.mp3 |
+| 101 | Felix Mendelssohn | String Quartet No. 6 in F Minor, Op. 80 - III. Adagio | Public Domain | https://archive.org/download/MusopenCollectionAsFlac/Mendelssohn_StringQuartetNo.6inFMinorOp.80/FelixMendelssohn-StringQuartetNo.6InFMinorOp.80-03-Adagio.mp3 |
+| 102 | Franz Schubert | Sonata in D Major, D. 850 - II. Con moto | Public Domain | https://archive.org/download/MusopenCollectionAsFlac/Schubert_SonataInDMajorD.850/FranzSchubert-SonataInDMajorD.850-02-ConMoto.mp3 |
+| 103 | Pyotr Ilyich Tchaikovsky | Symphony No. 6 in B Minor, Op. 74 'Pathetique' - IV. Finale Adagio lamentoso | Public Domain | https://archive.org/download/MusopenCollectionAsFlac/Tchaikovsky_SymphonyPathetique/PyotrIlyichTchaikovsky-SymphonyNo.6InBMinorOp.74pathtique-04-FinaleAdagioLamentoso.mp3 |
+| 104 | Johannes Brahms | Symphony No. 1 in C Minor, Op. 68 - IV. Adagio - Piu andante - Allegro non troppo | Public Domain | https://archive.org/download/MusopenCollectionAsFlac/Brahms_SymphonyNo.1inCMinor/JohannesBrahms-SymphonyNo.1InCMinorOp.68-04-Adagio-PiAndante-AllegroNonTroppoMaConBrio.mp3 |
+| 105 | Franz Schubert | Sonata in C Minor, D. 958 - III. Menuetto Allegro | Public Domain | https://archive.org/download/MusopenCollectionAsFlac/Schubert_SonataInCMinorD.958/FranzSchubert-SonataInCMinorD.958-03-MenuettoAllegro.mp3 |
+| 106 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 1 in C major, BWV 846 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 01 Prelude No. 1 in C major, BWV 846.mp3 |
+| 107 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 1 in C major, BWV 846 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 02 Fugue No. 1 in C major, BWV 846.mp3 |
+| 108 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 2 in C minor, BWV 847 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 03 Prelude No. 2 in C minor, BWV 847.mp3 |
+| 109 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 2 in C minor, BWV 847 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 04 Fugue No. 2 in C minor, BWV 847.mp3 |
+| 110 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 3 in C-sharp major, BWV 848 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 05 Prelude No. 3 in C-sharp major, BWV 848.mp3 |
+| 111 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 3 in C-sharp major, BWV 848 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 06 Fugue No. 3 in C-sharp major, BWV 848.mp3 |
+| 112 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 4 in C-sharp minor, BWV 849 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 07 Prelude No. 4 in C-sharp minor, BWV 849.mp3 |
+| 113 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 4 in C-sharp minor, BWV 849 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 08 Fugue No. 4 in C-sharp minor, BWV 849.mp3 |
+| 114 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 5 in D major, BWV 850 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 09 Prelude No. 5 in D major, BWV 850.mp3 |
+| 115 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 5 in D major, BWV 850 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 10 Fugue No. 5 in D major, BWV 850.mp3 |
+| 116 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 6 in D minor, BWV 851 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 11 Prelude No. 6 in D minor, BWV 851.mp3 |
+| 117 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 6 in D minor, BWV 851 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 12 Fugue No. 6 in D minor, BWV 851.mp3 |
+| 118 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 7 in E-flat major, BWV 852 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 13 Prelude No. 7 in E-flat major, BWV 852.mp3 |
+| 119 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 7 in E-flat major, BWV 852 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 14 Fugue No. 7 in E-flat major, BWV 852.mp3 |
+| 120 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 8 in E-flat minor, BWV 853 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 15 Prelude No. 8 in E-flat minor, BWV 853.mp3 |
+| 121 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 8 in D-sharp minor, BWV 853 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 16 Fugue No. 8 in D-sharp minor, BWV 853.mp3 |
+| 122 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 9 in E major, BWV 854 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 17 Prelude No. 9 in E major, BWV 854.mp3 |
+| 123 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 9 in E major, BWV 854 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 18 Fugue No. 9 in E major, BWV 854.mp3 |
+| 124 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 10 in E minor, BWV 855 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 19 Prelude No. 10 in E minor, BWV 855.mp3 |
+| 125 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 10 in E minor, BWV 855 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 20 Fugue No. 10 in E minor, BWV 855.mp3 |
+| 126 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 11 in F major, BWV 856 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 21 Prelude No. 11 in F major, BWV 856.mp3 |
+| 127 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 11 in F major, BWV 856 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 22 Fugue No. 11 in F major, BWV 856.mp3 |
+| 128 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 12 in F minor, BWV 857 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 23 Prelude No. 12 in F minor, BWV 857.mp3 |
+| 129 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 12 in F minor, BWV 857 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 24 Fugue No. 12 in F minor, BWV 857.mp3 |
+| 130 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 13 in F-sharp major, BWV 858 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 25 Prelude No. 13 in F-sharp major, BWV 858.mp3 |
+| 131 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 13 in F-sharp major, BWV 858 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 26 Fugue No. 13 in F-sharp major, BWV 858.mp3 |
+| 132 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 14 in F-sharp minor, BWV 859 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 27 Prelude No. 14 in F-sharp minor, BWV 859.mp3 |
+| 133 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 14 in F-sharp minor, BWV 859 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 28 Fugue No. 14 in F-sharp minor, BWV 859.mp3 |
+| 134 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 15 in G major, BWV 860 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 29 Prelude No. 15 in G major, BWV 860.mp3 |
+| 135 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 15 in G major, BWV 860 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 30 Fugue No. 15 in G major, BWV 860.mp3 |
+| 136 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 16 in G minor, BWV 861 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 31 Prelude No. 16 in G minor, BWV 861.mp3 |
+| 137 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 16 in G minor, BWV 861 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 32 Fugue No. 16 in G minor, BWV 861.mp3 |
+| 138 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 17 in A-flat major, BWV 862 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 33 Prelude No. 17 in A-flat major, BWV 862.mp3 |
+| 139 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 17 in A-flat major, BWV 862 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 34 Fugue No. 17 in A-flat major, BWV 862.mp3 |
+| 140 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 18 in G-sharp minor, BWV 863 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 35 Prelude No. 18 in G-sharp minor, BWV 863.mp3 |
+| 141 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 18 in G-sharp minor, BWV 863 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 36 Fugue No. 18 in G-sharp minor, BWV 863.mp3 |
+| 142 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 19 in A major, BWV 864 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 37 Prelude No. 19 in A major, BWV 864.mp3 |
+| 143 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 19 in A major, BWV 864 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 38 Fugue No. 19 in A major, BWV 864.mp3 |
+| 144 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 20 in A minor, BWV 865 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 39 Prelude No. 20 in A minor, BWV 865.mp3 |
+| 145 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 20 in A minor, BWV 865 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 40 Fugue No. 20 in A minor, BWV 865.mp3 |
+| 146 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 21 in B-flat major, BWV 866 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 41 Prelude No. 21 in B-flat major, BWV 866.mp3 |
+| 147 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 21 in B-flat major, BWV 866 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 42 Fugue No. 21 in B-flat major, BWV 866.mp3 |
+| 148 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 22 in B-flat minor, BWV 867 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 43 Prelude No. 22 in B-flat minor, BWV 867.mp3 |
+| 149 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 22 in B-flat minor, BWV 867 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 44 Fugue No. 22 in B-flat minor, BWV 867.mp3 |
+| 150 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 23 in B major, BWV 868 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 45 Prelude No. 23 in B major, BWV 868.mp3 |
+| 151 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 23 in B major, BWV 868 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 46 Fugue No. 23 in B major, BWV 868.mp3 |
+| 152 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Prelude No. 24 in B minor, BWV 869 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 47 Prelude No. 24 in B minor, BWV 869.mp3 |
+| 153 | J.S. Bach (Kimiko Ishizaka) | Well-Tempered Clavier Book I - Fugue No. 24 in B minor, BWV 869 | CC0 / PD Mark | https://archive.org/download/bach-well-tempered-clavier-book-1/Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 48 Fugue No. 24 in B minor, BWV 869.mp3 |
+| 154 | Frederic Chopin | Nocturne Op. 9 No. 1 in B-flat minor | CC0 | https://archive.org/download/musopen-chopin/NocturneOp.9No.1InBFlatMinor.mp3 |
+| 155 | Frederic Chopin | Nocturne Op. 9 No. 2 in E-flat major | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 9 no. 2 in E flat major.mp3 |
+| 156 | Frederic Chopin | Nocturne Op. 9 No. 3 in B major | CC0 | https://archive.org/download/musopen-chopin/NocturneOp.9No.3.mp3 |
+| 157 | Frederic Chopin | Nocturne Op. 15 No. 1 in F major | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 15 no. 1 In F major.mp3 |
+| 158 | Frederic Chopin | Nocturne Op. 27 No. 1 in C-sharp minor | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 27 no. 1 in C sharp minor.mp3 |
+| 159 | Frederic Chopin | Nocturne Op. 32 No. 1 in B major | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 32 no. 1 in B major.mp3 |
+| 160 | Frederic Chopin | Nocturne Op. 32 No. 2 in A-flat major | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 32 no. 2 in A flat major.mp3 |
+| 161 | Frederic Chopin | Nocturne Op. 48 No. 1 in C minor | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 48 no. 1 in C minor.mp3 |
+| 162 | Frederic Chopin | Nocturne Op. 48 No. 2 in F-sharp minor | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 48 no. 2 in F sharp minor.mp3 |
+| 163 | Frederic Chopin | Nocturne Op. 55 No. 1 in F minor | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 55 no. 1 in F minor.mp3 |
+| 164 | Frederic Chopin | Nocturne Op. 55 No. 2 in E-flat major | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 55 no. 2 in E flat major.mp3 |
+| 165 | Frederic Chopin | Nocturne Op. 62 No. 2 in E major | CC0 | https://archive.org/download/musopen-chopin/Nocturne Op. 62 no. 2 in E major.mp3 |
+| 166 | Frederic Chopin | Nocturne Op. 72 No. 1 in E minor | CC0 | https://archive.org/download/musopen-chopin/NocturneOp.72No.1InEMinor.mp3 |
+| 167 | Frederic Chopin | Nocturne B. 108 in C minor | CC0 | https://archive.org/download/musopen-chopin/Nocturne B. 108 in C minor.mp3 |
+| 168 | Frederic Chopin | Nocturne B. 49 in C-sharp minor 'Lento con gran espressione' | CC0 | https://archive.org/download/musopen-chopin/Nocturne B. 49 in C sharp minor 'Lento con gran espressione' (1).mp3 |
+| 169 | Frederic Chopin | Nocturne Op. 27 No. 2 in D-flat major | CC0 | https://archive.org/download/musopen-chopin/NocturneOp27No2.mp3 |
+| 170 | Frederic Chopin | Mazurka Op. 17 No. 3 in A-flat major | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 17 no. 3 in A flat major.mp3 |
+| 171 | Frederic Chopin | Mazurka Op. 17 No. 4 in A minor | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 17 no. 4 in A minor.mp3 |
+| 172 | Frederic Chopin | Mazurka Op. 24 No. 4 in B-flat minor | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 24 no. 4 in B flat minor.mp3 |
+| 173 | Frederic Chopin | Mazurka Op. 50 No. 3 in C-sharp minor | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 50 no. 3 in C sharp minor.mp3 |
+| 174 | Frederic Chopin | Mazurka Op. 56 No. 1 in B major | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 56 no. 1 in B major.mp3 |
+| 175 | Frederic Chopin | Mazurka Op. 56 No. 3 in C minor | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 56 no. 3 in C minor.mp3 |
+| 176 | Frederic Chopin | Mazurka Op. 59 No. 1 in A minor | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 59 no. 1 in A minor.mp3 |
+| 177 | Frederic Chopin | Mazurka Op. 59 No. 3 in F-sharp minor | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 59 no. 3 in F sharp minor.mp3 |
+| 178 | Frederic Chopin | Mazurka Op. 50 No. 1 in G major | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 50 no. 1 in G major.mp3 |
+| 179 | Frederic Chopin | Mazurka Op. 50 No. 2 in A-flat major | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 50 no. 2 in A flat major.mp3 |
+| 180 | Frederic Chopin | Mazurka Op. 7 No. 3 in F minor | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 7 no. 3 in F minor.mp3 |
+| 181 | Frederic Chopin | Mazurka Op. 24 No. 3 in A-flat major | CC0 | https://archive.org/download/musopen-chopin/Mazurka Op. 24 no. 3 in A flat major.mp3 |
+| 182 | Frederic Chopin | Waltz Op. 64 No. 2 in C-sharp minor | CC0 | https://archive.org/download/musopen-chopin/Waltz Op. 64 no. 2 in C sharp minor.mp3 |
+| 183 | Frederic Chopin | Waltz Op. 69 No. 1 in A-flat major | CC0 | https://archive.org/download/musopen-chopin/Waltz Op. 69 no. 1 in A flat major.mp3 |
+| 184 | Frederic Chopin | Waltz Op. 69 No. 2 in B minor | CC0 | https://archive.org/download/musopen-chopin/Waltz Op. 69 no. 2 in B minor.mp3 |
+| 185 | Frederic Chopin | Waltz Op. 70 No. 2 in F minor | CC0 | https://archive.org/download/musopen-chopin/Waltz Op. 70 no. 2 in F minor.mp3 |
+| 186 | Frederic Chopin | Waltz Op. 70 No. 3 in D-flat major | CC0 | https://archive.org/download/musopen-chopin/Waltz Op. 70 no. 3 in D flat major.mp3 |
+| 187 | Frederic Chopin | Waltz Op. 34 No. 2 in A minor | CC0 | https://archive.org/download/musopen-chopin/WaltzOp.34No.2InAMinor.mp3 |
+| 188 | Frederic Chopin | Waltz B. 46 in E-flat major | CC0 | https://archive.org/download/musopen-chopin/WaltzB.46InEFlatMajor.mp3 |
+| 189 | Frederic Chopin | Waltz B. 56 in E minor | CC0 | https://archive.org/download/musopen-chopin/WaltzB.56InEMinor.mp3 |
+| 190 | Frederic Chopin | Waltz Op. 34 No. 3 in F major | CC0 | https://archive.org/download/musopen-chopin/WaltzOp.34No.3InFMajor.mp3 |
+| 191 | Frederic Chopin | Waltz B. 21 in A-flat major | CC0 | https://archive.org/download/musopen-chopin/WaltzB.21InAFlatMajor.mp3 |
+| 192 | Frederic Chopin | Fantaisie-Impromptu Op. 66 in C-sharp minor | CC0 | https://archive.org/download/musopen-chopin/Fantasie Impromptu Op. 66.mp3 |
+| 193 | Frederic Chopin | Impromptu No. 1 Op. 29 in A-flat major | CC0 | https://archive.org/download/musopen-chopin/Impromptu no. 1 - Op. 29.mp3 |
+| 194 | Frederic Chopin | Impromptu No. 2 Op. 36 in F-sharp major | CC0 | https://archive.org/download/musopen-chopin/Impromptu no. 2 - Op. 36.mp3 |
+| 195 | Frederic Chopin | Impromptu No. 3 Op. 51 in G-flat major | CC0 | https://archive.org/download/musopen-chopin/Impromptu no. 3 - Op. 51.mp3 |
+| 196 | Frederic Chopin | Prelude Op. 28 No. 6 in B minor | CC0 | https://archive.org/download/musopen-chopin/Prelude Op. 28 no. 6.mp3 |
+| 197 | Frederic Chopin | Prelude Op. 28 No. 7 in A major | CC0 | https://archive.org/download/musopen-chopin/Prelude Op. 28 no. 7.mp3 |
+| 198 | Frederic Chopin | Prelude Op. 28 No. 13 in F-sharp major | CC0 | https://archive.org/download/musopen-chopin/Prelude Op. 28 no. 13.mp3 |
+| 199 | Frederic Chopin | Prelude Op. 28 No. 15 in D-flat major 'Raindrop' | CC0 | https://archive.org/download/musopen-chopin/Prelude Op. 28 no. 15.mp3 |
+| 200 | Frederic Chopin | Prelude Op. 28 No. 17 in A-flat major | CC0 | https://archive.org/download/musopen-chopin/Prelude Op. 28 no. 17.mp3 |
+| 201 | Frederic Chopin | Sonata for Piano and Cello, Op. 65 - III. Largo | CC0 | https://archive.org/download/musopen-chopin/Sonata for Piano and Cello in G Minor, Op. 65 - III. Largo.mp3 |
 
 ## Planned Sources
 

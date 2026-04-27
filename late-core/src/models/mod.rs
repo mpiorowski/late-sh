@@ -9,6 +9,7 @@ pub mod chat_room_member;
 pub mod chips;
 pub mod game_room;
 pub mod leaderboard;
+pub mod mention_feed_read;
 pub mod minesweeper;
 pub mod nonogram;
 pub mod notification;

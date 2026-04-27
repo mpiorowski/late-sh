@@ -1,4 +1,5 @@
 use crate::app::common::{primitives::format_relative_time, theme};
+use chrono::{DateTime, Utc};
 use late_core::models::notification::NotificationView;
 use ratatui::{
     Frame,
@@ -11,6 +12,7 @@ use ratatui::{
 pub struct NotificationListView<'a> {
     pub items: &'a [NotificationView],
     pub selected_index: usize,
+    pub marker_read_at: Option<DateTime<Utc>>,
 }
 
 const ITEM_HEIGHT: u16 = 4;
@@ -76,10 +78,14 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
             .map(|s| format!("#{s}"))
             .unwrap_or_else(|| "DM".to_string());
 
-        let read_indicator = if item.read_at.is_some() {
-            Span::styled(" ", Style::default())
-        } else {
+        let is_unread = view
+            .marker_read_at
+            .map(|last_read_at| item.created > last_read_at)
+            .unwrap_or(true);
+        let read_indicator = if is_unread {
             Span::styled("● ", Style::default().fg(theme::MENTION()))
+        } else {
+            Span::styled(" ", Style::default())
         };
 
         let mut lines = vec![Line::from(vec![

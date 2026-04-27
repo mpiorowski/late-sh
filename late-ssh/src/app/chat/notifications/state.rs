@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -14,6 +15,8 @@ pub struct State {
     snapshot_rx: watch::Receiver<NotificationSnapshot>,
     event_rx: broadcast::Receiver<NotificationEvent>,
     unread_count: i64,
+    last_read_at: Option<DateTime<Utc>>,
+    marker_read_at: Option<DateTime<Utc>>,
 }
 
 impl State {
@@ -29,6 +32,8 @@ impl State {
             snapshot_rx,
             event_rx,
             unread_count: 0,
+            last_read_at: None,
+            marker_read_at: None,
         }
     }
 
@@ -57,7 +62,12 @@ impl State {
         self.unread_count
     }
 
+    pub fn marker_read_at(&self) -> Option<DateTime<Utc>> {
+        self.marker_read_at
+    }
+
     pub fn mark_read(&mut self) {
+        self.marker_read_at = self.last_read_at;
         self.unread_count = 0;
         self.service.mark_all_read_task(self.user_id);
     }
@@ -85,8 +95,10 @@ impl State {
                     NotificationEvent::UnreadCountUpdated {
                         user_id,
                         unread_count,
+                        last_read_at,
                     } if user_id == self.user_id => {
                         self.unread_count = unread_count;
+                        self.last_read_at = last_read_at;
                     }
                     NotificationEvent::NewMention {
                         user_id,

@@ -1126,6 +1126,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                     crate::app::chat::notifications::ui::NotificationListView {
                         items: app.chat.notifications.all_items(),
                         selected_index: app.chat.notifications.selected_index(),
+                        marker_read_at: app.chat.notifications.marker_read_at(),
                     };
                 let mut rows_cache = crate::app::chat::ui::ChatRowsCache::default();
                 let view = crate::app::chat::ui::ChatRenderInput {

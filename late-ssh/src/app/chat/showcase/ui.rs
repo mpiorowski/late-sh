@@ -113,11 +113,6 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
                 "  (yours)",
                 Style::default().fg(theme::AMBER_DIM()),
             ));
-        } else if view.is_admin {
-            title_spans.push(Span::styled(
-                "  (admin)",
-                Style::default().fg(theme::AMBER_DIM()),
-            ));
         }
         lines.push(Line::from(title_spans));
 

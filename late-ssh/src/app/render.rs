@@ -261,6 +261,7 @@ impl App {
         let notifications_view = chat::notifications::ui::NotificationListView {
             items: self.chat.notifications.all_items(),
             selected_index: self.chat.notifications.selected_index(),
+            marker_read_at: self.chat.notifications.marker_read_at(),
         };
         let showcase_view = chat::showcase::ui::ShowcaseListView {
             items: self.chat.showcase.all_items(),

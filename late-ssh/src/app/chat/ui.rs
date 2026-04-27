@@ -1432,6 +1432,7 @@ mod tests {
             notifications_view: crate::app::chat::notifications::ui::NotificationListView {
                 items: &[],
                 selected_index: 0,
+                marker_read_at: None,
             },
             showcase_selected: false,
             showcase_unread_count: 0,

@@ -3,6 +3,8 @@ use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::mention_feed_read::MentionFeedRead;
+
 crate::user_scoped_model! {
     table = "notifications";
     user_field = user_id;
@@ -12,8 +14,7 @@ crate::user_scoped_model! {
         pub user_id: Uuid,
         pub actor_id: Uuid,
         pub message_id: Uuid,
-        pub room_id: Uuid,
-        pub read_at: Option<DateTime<Utc>>
+        pub room_id: Uuid
     }
 }
 
@@ -26,7 +27,6 @@ pub struct NotificationView {
     pub actor_id: Uuid,
     pub message_id: Uuid,
     pub room_id: Uuid,
-    pub read_at: Option<DateTime<Utc>>,
     pub actor_username: String,
     pub room_slug: Option<String>,
     pub message_preview: String,
@@ -76,7 +76,7 @@ impl Notification {
     ) -> Result<Vec<NotificationView>> {
         let rows = client
             .query(
-                "SELECT n.id, n.created, n.user_id, n.actor_id, n.message_id, n.room_id, n.read_at,
+                "SELECT n.id, n.created, n.user_id, n.actor_id, n.message_id, n.room_id,
                         COALESCE(u.username, '') AS actor_username,
                         r.slug AS room_slug,
                         LEFT(m.body, 120) AS message_preview
@@ -100,7 +100,6 @@ impl Notification {
                 actor_id: row.get("actor_id"),
                 message_id: row.get("message_id"),
                 room_id: row.get("room_id"),
-                read_at: row.get("read_at"),
                 actor_username: row.get("actor_username"),
                 room_slug: row.get("room_slug"),
                 message_preview: row.get("message_preview"),
@@ -110,24 +109,16 @@ impl Notification {
 
     /// Count unread notifications for a user.
     pub async fn unread_count(client: &Client, user_id: Uuid) -> Result<i64> {
-        let row = client
-            .query_one(
-                "SELECT COUNT(*)::bigint AS cnt FROM notifications WHERE user_id = $1 AND read_at IS NULL",
-                &[&user_id],
-            )
-            .await?;
-        Ok(row.get("cnt"))
+        MentionFeedRead::unread_count_for_user(client, user_id).await
     }
 
     /// Mark all unread notifications as read for a user.
-    pub async fn mark_all_read(client: &Client, user_id: Uuid) -> Result<u64> {
-        let count = client
-            .execute(
-                "UPDATE notifications SET read_at = current_timestamp WHERE user_id = $1 AND read_at IS NULL",
-                &[&user_id],
-            )
-            .await?;
-        Ok(count)
+    pub async fn mark_all_read(client: &Client, user_id: Uuid) -> Result<()> {
+        MentionFeedRead::mark_read_now(client, user_id).await
+    }
+
+    pub async fn last_read_at(client: &Client, user_id: Uuid) -> Result<Option<DateTime<Utc>>> {
+        MentionFeedRead::last_read_at(client, user_id).await
     }
 
     /// Resolve @usernames to user IDs, excluding the actor.

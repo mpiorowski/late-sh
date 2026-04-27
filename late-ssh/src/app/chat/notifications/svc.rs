@@ -16,8 +16,15 @@ pub struct NotificationSnapshot {
 
 #[derive(Clone, Debug)]
 pub enum NotificationEvent {
-    UnreadCountUpdated { user_id: Uuid, unread_count: i64 },
-    NewMention { user_id: Uuid, unread_count: i64 },
+    UnreadCountUpdated {
+        user_id: Uuid,
+        unread_count: i64,
+        last_read_at: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    NewMention {
+        user_id: Uuid,
+        unread_count: i64,
+    },
 }
 
 #[derive(Clone)]
@@ -93,9 +100,11 @@ impl NotificationService {
     async fn publish_unread_count(&self, user_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
         let unread_count = Notification::unread_count(&client, user_id).await?;
+        let last_read_at = Notification::last_read_at(&client, user_id).await?;
         let _ = self.evt_tx.send(NotificationEvent::UnreadCountUpdated {
             user_id,
             unread_count,
+            last_read_at,
         });
         Ok(())
     }
@@ -123,9 +132,11 @@ impl NotificationService {
     async fn do_mark_all_read(&self, user_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
         Notification::mark_all_read(&client, user_id).await?;
+        let last_read_at = Notification::last_read_at(&client, user_id).await?;
         let _ = self.evt_tx.send(NotificationEvent::UnreadCountUpdated {
             user_id,
             unread_count: 0,
+            last_read_at,
         });
         Ok(())
     }
