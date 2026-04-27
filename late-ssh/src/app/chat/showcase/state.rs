@@ -285,9 +285,7 @@ impl State {
     }
 
     pub fn delete_selected(&mut self) -> Option<Banner> {
-        let Some(item) = self.selected_item() else {
-            return None;
-        };
+        let item = self.selected_item()?;
         if !(self.is_admin || item.showcase.user_id == self.user_id) {
             return Some(Banner::error("not your showcase"));
         }
@@ -371,19 +369,19 @@ impl State {
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => match event {
-                    ShowcaseEvent::Created { user_id } if self.user_id == user_id => {
-                        if self.submitted {
-                            self.submitted = false;
-                            self.stop_composing();
-                            banner = Some(Banner::success("Showcase shared!"));
-                        }
+                    ShowcaseEvent::Created { user_id }
+                        if self.user_id == user_id && self.submitted =>
+                    {
+                        self.submitted = false;
+                        self.stop_composing();
+                        banner = Some(Banner::success("Showcase shared!"));
                     }
-                    ShowcaseEvent::Updated { user_id } if self.user_id == user_id => {
-                        if self.submitted {
-                            self.submitted = false;
-                            self.stop_composing();
-                            banner = Some(Banner::success("Showcase updated."));
-                        }
+                    ShowcaseEvent::Updated { user_id }
+                        if self.user_id == user_id && self.submitted =>
+                    {
+                        self.submitted = false;
+                        self.stop_composing();
+                        banner = Some(Banner::success("Showcase updated."));
                     }
                     ShowcaseEvent::Deleted { user_id } if self.user_id == user_id => {
                         banner = Some(Banner::success("Showcase deleted."));
@@ -438,6 +436,10 @@ impl State {
     }
 
     pub(crate) fn field_insert_char(&mut self, ch: char) {
+        if ch == '\n' {
+            self.field_newline();
+            return;
+        }
         let ta = match self.field {
             ComposerField::Title => &mut self.title,
             ComposerField::Url => &mut self.url,

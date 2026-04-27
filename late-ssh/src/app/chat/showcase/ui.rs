@@ -1,5 +1,5 @@
-use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
+use crate::app::common::{composer, primitives::format_relative_time};
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
@@ -97,7 +97,7 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
         let mut title_spans = Vec::new();
         if is_unread {
             title_spans.push(Span::styled(
-                "* ",
+                "● ",
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
@@ -121,14 +121,6 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
             ));
         }
         lines.push(Line::from(title_spans));
-
-        // URL line
-        lines.push(Line::from(Span::styled(
-            s.url.as_str(),
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        )));
 
         // Author + time + tags
         let mut meta_spans = vec![
@@ -157,28 +149,76 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
         }
         lines.push(Line::from(meta_spans));
 
-        // Description (up to 3 lines, wrapped)
-        let desc_lines: Vec<&str> = s
-            .description
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .collect();
-        for line in desc_lines.iter().take(SUMMARY_LINES).copied() {
+        // Description (up to 3 visual lines, with inline ellipsis on truncation).
+        let (mut desc_lines, truncated) =
+            description_summary_lines(&s.description, content_area.width as usize, SUMMARY_LINES);
+        if truncated && let Some(last) = desc_lines.last_mut() {
+            apply_inline_ellipsis(last, content_area.width as usize);
+        }
+        for line in desc_lines {
             lines.push(Line::from(Span::styled(
-                line.to_string(),
+                line,
                 Style::default().fg(theme::TEXT()),
             )));
         }
-        if desc_lines.len() > SUMMARY_LINES {
-            lines.push(Line::from(Span::styled(
-                "...",
-                Style::default().fg(theme::TEXT_DIM()),
-            )));
-        }
+
+        // URL as the last line: treat it as the call-to-action.
+        lines.push(Line::from(vec![
+            Span::styled("↗ ", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(
+                s.url.as_str(),
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
 
         let p = Paragraph::new(lines).wrap(Wrap { trim: true });
         frame.render_widget(p, content_area);
     }
+}
+
+fn apply_inline_ellipsis(line: &mut String, width: usize) {
+    let width = width.max(1);
+    let char_count = line.chars().count();
+    if char_count < width {
+        line.push('…');
+        return;
+    }
+    line.pop();
+    line.push('…');
+}
+
+fn description_summary_lines(
+    description: &str,
+    width: usize,
+    max_lines: usize,
+) -> (Vec<String>, bool) {
+    let mut out = Vec::new();
+    let mut truncated = false;
+
+    for paragraph in description.lines().filter(|line| !line.trim().is_empty()) {
+        let wrapped = composer::build_composer_rows(paragraph.trim(), width.max(1));
+        let rows: Vec<String> = if wrapped.is_empty() {
+            vec![String::new()]
+        } else {
+            wrapped.into_iter().map(|row| row.text).collect()
+        };
+
+        for row in rows {
+            if out.len() == max_lines {
+                truncated = true;
+                break;
+            }
+            out.push(row);
+        }
+
+        if truncated {
+            break;
+        }
+    }
+
+    (out, truncated)
 }
 
 pub struct ShowcaseComposerView<'a> {
@@ -303,4 +343,25 @@ fn draw_empty_placeholder(frame: &mut Frame, area: Rect, placeholder: &str, acti
         Span::styled(rest, Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(line).wrap(Wrap { trim: false }), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::description_summary_lines;
+
+    #[test]
+    fn description_summary_wraps_to_visual_line_budget() {
+        let (lines, truncated) = description_summary_lines("hello wide world\nsecond line", 8, 3);
+
+        assert_eq!(lines, vec!["hello", "wide", "world"]);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn description_summary_preserves_short_multiline_description() {
+        let (lines, truncated) = description_summary_lines("one\ntwo\nthree", 20, 3);
+
+        assert_eq!(lines, vec!["one", "two", "three"]);
+        assert!(!truncated);
+    }
 }

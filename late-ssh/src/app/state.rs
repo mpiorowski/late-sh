@@ -694,6 +694,7 @@ impl App {
             ),
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),
+                config.showcase_service.clone(),
             ),
             settings_modal_state,
             leaderboard_rx: config.leaderboard_rx,

@@ -79,7 +79,7 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
         let read_indicator = if item.read_at.is_some() {
             Span::styled(" ", Style::default())
         } else {
-            Span::styled("* ", Style::default().fg(theme::MENTION()))
+            Span::styled("● ", Style::default().fg(theme::MENTION()))
         };
 
         let mut lines = vec![Line::from(vec![

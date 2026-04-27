@@ -1717,13 +1717,20 @@ mod tests {
             &news_composer,
         );
 
+        let area = Rect::new(1, 1, 74, 30);
+        let (_, rooms_area, _, _) = chat_layout(area, &view);
+        let inner = Block::default().borders(Borders::ALL).inner(rooms_area);
+        let room_rows = build_room_list_rows(&view, rooms_area);
+        let rust_row = room_rows
+            .hit_slots
+            .iter()
+            .position(|slot| *slot == Some(RoomSlot::Room(rust.id)))
+            .expect("rust room row");
+
         assert_eq!(
-            room_list_hit_test(Rect::new(1, 1, 74, 30), &view, 4, 9),
+            room_list_hit_test(area, &view, inner.x, inner.y + rust_row as u16),
             Some(RoomSlot::Room(rust.id))
         );
-        assert_eq!(
-            room_list_hit_test(Rect::new(1, 1, 74, 30), &view, 4, 2),
-            None
-        );
+        assert_eq!(room_list_hit_test(area, &view, inner.x, inner.y), None);
     }
 }

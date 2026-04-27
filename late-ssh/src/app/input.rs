@@ -630,6 +630,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             {
                 app.chat.composer_push('\n');
                 app.chat.update_autocomplete();
+            } else if ctx.screen == Screen::Chat && ctx.showcase_composing {
+                app.chat.showcase.field_newline();
             }
         }
         ParsedInput::AltS => {

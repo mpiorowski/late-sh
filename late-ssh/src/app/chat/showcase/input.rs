@@ -5,9 +5,7 @@ pub fn handle_composer_input(app: &mut App, byte: u8) {
     match byte {
         0x1B => app.chat.showcase.stop_composing(),
         b'\t' => app.chat.showcase.cycle_field(true),
-        // Ctrl-J inserts newline in description; submit is Enter only on
-        // single-line fields. In description, Enter also submits — Alt+Enter
-        // inserts a newline.
+        // Ctrl-J inserts a newline only in description. Plain Enter submits.
         b'\n' => app.chat.showcase.field_newline(),
         b'\r' => {
             if let Some(banner) = app.chat.showcase.submit() {
@@ -30,20 +28,32 @@ pub fn handle_composer_input(app: &mut App, byte: u8) {
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     if app.chat.showcase.composing() {
-        match key {
-            b'A' => {
-                app.chat.showcase.cycle_field(false);
-                return true;
-            }
-            b'B' => {
-                app.chat.showcase.cycle_field(true);
-                return true;
-            }
-            _ => {}
+        let field = app.chat.showcase.active_field();
+        if matches!(field, super::state::ComposerField::Description) {
+            let input = match key {
+                b'A' => ratatui_textarea::Input {
+                    key: ratatui_textarea::Key::Up,
+                    ..Default::default()
+                },
+                b'B' => ratatui_textarea::Input {
+                    key: ratatui_textarea::Key::Down,
+                    ..Default::default()
+                },
+                b'C' => ratatui_textarea::Input {
+                    key: ratatui_textarea::Key::Right,
+                    ..Default::default()
+                },
+                b'D' => ratatui_textarea::Input {
+                    key: ratatui_textarea::Key::Left,
+                    ..Default::default()
+                },
+                _ => return false,
+            };
+            app.chat.showcase.field_input(field, input);
+            return true;
         }
 
-        // Horizontal arrows move inside the active field.
-        let field = app.chat.showcase.active_field();
+        // Horizontal arrows move inside single-line fields.
         let input = match key {
             b'C' => ratatui_textarea::Input {
                 key: ratatui_textarea::Key::Right,

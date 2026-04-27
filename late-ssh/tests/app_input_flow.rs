@@ -532,7 +532,12 @@ async fn chat_room_list_is_mouse_clickable() {
     wait_for_render_contains(&mut app, " Rooms ").await;
     wait_for_render_contains(&mut app, "rust").await;
 
-    let click = "\x1b[<0;5;10M";
+    let plain = render_plain(&mut app);
+    let rust_offset = plain
+        .find("rust")
+        .unwrap_or_else(|| panic!("rust room row should render: {plain:?}"));
+    let rust_y = rust_offset / 100 + 1;
+    let click = format!("\x1b[<0;5;{rust_y}M");
     app.handle_input(click.as_bytes());
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
@@ -703,8 +708,8 @@ async fn members_command_shows_room_members_without_persisting_message() {
     wait_for_render_contains(&mut app, " side").await;
 
     app.handle_input(b" ");
-    wait_for_render_contains(&mut app, "[g] side").await;
-    app.handle_input(b"g");
+    wait_for_render_contains(&mut app, "[h] side").await;
+    app.handle_input(b"h");
     wait_for_render_contains(&mut app, "> side").await;
 
     app.handle_input(b"i/members\r");

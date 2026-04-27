@@ -107,7 +107,7 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
             let mut title_spans = Vec::new();
             if is_unread {
                 title_spans.push(Span::styled(
-                    "* ",
+                    "● ",
                     Style::default()
                         .fg(theme::AMBER())
                         .add_modifier(Modifier::BOLD),
