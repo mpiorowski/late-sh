@@ -10,7 +10,7 @@ use crate::app::common::{markdown::render_body_to_lines, theme};
 
 use super::{
     data::country_label,
-    state::{BIO_MAX_LEN, PickerKind, Row, SettingsModalState, Tab},
+    state::{BIO_MAX_LEN, PickerKind, Row, SettingsModalState, Tab, ThemeTreeRow},
 };
 
 pub const MODAL_WIDTH: u16 = 96;
@@ -45,6 +45,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 
     match state.selected_tab() {
         Tab::Settings => draw_settings_tab(frame, layout[3], state),
+        Tab::Themes => draw_themes_tab(frame, layout[3], state),
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
         Tab::Favorites => draw_favorites_tab(frame, layout[3], state),
     }
@@ -114,6 +115,18 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
+        (Tab::Themes, _) => {
+            spans.extend([
+                Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" preview  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" close/open  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+            ]);
+        }
         (Tab::Favorites, _) => {
             spans.extend([
                 Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
@@ -132,6 +145,186 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
         }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let sections = Layout::vertical([
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // summary
+        Constraint::Length(1), // breathing
+        Constraint::Min(4),    // tree
+    ])
+    .split(area);
+
+    frame.render_widget(
+        Paragraph::new(section_heading("Theme browser")),
+        sections[0],
+    );
+
+    let active_id = state.draft().theme_id.as_deref().unwrap_or("late");
+    let active_preview = theme::preview_for_id(active_id);
+    let summary = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            theme::label_for_id(active_id).to_string(),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("   ", Style::default().fg(theme::TEXT_DIM())),
+        swatch(active_preview.bg_canvas),
+        swatch(active_preview.bg_selection),
+        swatch(active_preview.border_active),
+        swatch(active_preview.amber),
+        swatch(active_preview.chat_author),
+        swatch(active_preview.mention),
+        swatch(active_preview.success),
+        swatch(active_preview.error),
+        Span::styled(
+            format!("   {}", theme::color_to_hex(active_preview.border_active)),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(summary), sections[1]);
+
+    let tree_area = sections[3];
+    let width = tree_area.width as usize;
+    let visible_height = tree_area.height as usize;
+    state.set_theme_visible_height(visible_height.max(1));
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (row_idx, row) in state
+        .theme_tree_rows()
+        .into_iter()
+        .enumerate()
+        .skip(state.theme_scroll_offset())
+    {
+        if lines.len() >= visible_height {
+            break;
+        }
+
+        let selected = row_idx == state.theme_selected_row();
+        match row {
+            ThemeTreeRow::Group { group, collapsed } => {
+                lines.push(theme_group_line(group, collapsed, selected, width));
+            }
+            ThemeTreeRow::Theme {
+                option_index,
+                last_in_group,
+            } => {
+                lines.push(theme_option_line(
+                    theme::OPTIONS[option_index],
+                    selected,
+                    last_in_group,
+                    width,
+                ));
+            }
+        }
+    }
+
+    frame.render_widget(Paragraph::new(lines), tree_area);
+}
+
+fn theme_group_line(
+    group: theme::ThemeGroup,
+    collapsed: bool,
+    selected: bool,
+    width: usize,
+) -> Line<'static> {
+    let marker = if selected { "›" } else { " " };
+    let symbol = if collapsed { "▸" } else { "▾" };
+    let text = format!(" {marker} {symbol} {}", group.label());
+    let padding = width.saturating_sub(text.chars().count());
+    let style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+    Line::from(vec![
+        Span::styled(text, style),
+        Span::styled(" ".repeat(padding), trailing_style),
+    ])
+}
+
+fn theme_option_line(
+    option: theme::ThemeOption,
+    selected: bool,
+    last_in_group: bool,
+    width: usize,
+) -> Line<'static> {
+    let preview = theme::preview_for_option(option);
+    let marker = if selected { "›" } else { " " };
+    let branch = if last_in_group { "└─" } else { "├─" };
+    let prefix = format!(" {marker} {branch} ");
+    let prefix_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let label_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_BRIGHT())
+    };
+    let id_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_DIM())
+            .bg(theme::BG_SELECTION())
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+    let swatches = [
+        preview.bg_canvas,
+        preview.bg_selection,
+        preview.border_active,
+        preview.text,
+        preview.text_bright,
+        preview.amber,
+        preview.chat_author,
+        preview.mention,
+    ];
+    let id_text = format!("  {}", option.id);
+    let used = prefix.chars().count()
+        + option.label.chars().count()
+        + id_text.chars().count()
+        + 2
+        + (swatches.len() * 2);
+    let padding = width.saturating_sub(used);
+    let mut spans = vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(option.label.to_string(), label_style),
+        Span::styled(id_text, id_style),
+        Span::styled(" ".repeat(padding + 2), trailing_style),
+    ];
+    for color in swatches {
+        spans.push(swatch(color));
+    }
+    Line::from(spans)
+}
+
+fn swatch(color: ratatui::style::Color) -> Span<'static> {
+    Span::styled("  ", Style::default().bg(color))
 }
 
 fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
