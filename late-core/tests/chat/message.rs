@@ -123,8 +123,15 @@ async fn chat_message_reactions_toggle_and_summarize() {
     assert_eq!(reactions.len(), 2);
     assert_eq!(reactions[0].kind, 1);
     assert_eq!(reactions[0].count, 1);
-    assert_eq!(reactions[0].user_ids, vec![author.id]);
     assert_eq!(reactions[1].kind, 8);
     assert_eq!(reactions[1].count, 1);
-    assert_eq!(reactions[1].user_ids, vec![viewer.id]);
+
+    let owners = ChatMessageReaction::list_owners_for_message(&client, message.id)
+        .await
+        .unwrap();
+    assert_eq!(owners.len(), 2);
+    assert_eq!(owners[0].kind, 1);
+    assert_eq!(owners[0].user_ids, vec![author.id]);
+    assert_eq!(owners[1].kind, 8);
+    assert_eq!(owners[1].user_ids, vec![viewer.id]);
 }

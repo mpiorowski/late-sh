@@ -425,16 +425,8 @@ mod tests {
             false,
             false,
             &[
-                ChatMessageReactionSummary {
-                    kind: 2,
-                    count: 3,
-                    user_ids: Vec::new(),
-                },
-                ChatMessageReactionSummary {
-                    kind: 5,
-                    count: 1,
-                    user_ids: Vec::new(),
-                },
+                ChatMessageReactionSummary { kind: 2, count: 3 },
+                ChatMessageReactionSummary { kind: 5, count: 1 },
             ],
         );
         let rendered = lines_to_strings(&lines).join("\n");

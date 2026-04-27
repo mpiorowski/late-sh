@@ -3,8 +3,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use late_core::{
     MutexRecover,
     models::{
-        article::NEWS_MARKER, chat_message::ChatMessage,
-        chat_message_reaction::ChatMessageReactionSummary, chat_room::ChatRoom,
+        article::NEWS_MARKER,
+        chat_message::ChatMessage,
+        chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
+        chat_room::ChatRoom,
     },
 };
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
@@ -72,6 +74,7 @@ pub struct ChatState {
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
     overlay: Option<Overlay>,
+    pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
     visible_room_id: Option<Uuid>,
@@ -154,6 +157,7 @@ impl ChatState {
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             overlay: None,
+            pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             visible_room_id: None,
@@ -282,6 +286,7 @@ impl ChatState {
 
     pub fn close_overlay(&mut self) {
         self.overlay = None;
+        self.pending_reaction_owners_message_id = None;
     }
 
     pub fn scroll_overlay(&mut self, delta: i16) {
@@ -358,12 +363,17 @@ impl ChatState {
 
     pub fn open_selected_message_reactions_in_room(&mut self, room_id: Uuid) -> bool {
         self.reaction_leader_active = false;
-        let Some(message) = self.selected_message_in_room(room_id) else {
+        let Some(message_id) = self.selected_message_in_room(room_id).map(|m| m.id) else {
             return false;
         };
 
-        let lines = self.reaction_owner_lines(message.id);
-        self.overlay = Some(Overlay::dismissible("Reactions", lines));
+        self.overlay = Some(Overlay::dismissible(
+            "Reactions",
+            vec!["Loading reactions…".to_string()],
+        ));
+        self.pending_reaction_owners_message_id = Some(message_id);
+        self.service
+            .list_reaction_owners_task(self.user_id, message_id);
         true
     }
 
@@ -794,28 +804,22 @@ impl ChatState {
         self.overlay = Some(Overlay::new(title, lines));
     }
 
-    fn reaction_owner_lines(&self, message_id: Uuid) -> Vec<String> {
-        let Some(reactions) = self.message_reactions.get(&message_id) else {
-            return vec!["No reactions yet".to_string()];
-        };
-        if reactions.is_empty() {
+    fn reaction_owner_lines(&self, owners: &[ChatMessageReactionOwners]) -> Vec<String> {
+        if owners.is_empty() {
             return vec!["No reactions yet".to_string()];
         }
 
         let mut lines = Vec::new();
-        for reaction in reactions {
+        for reaction in owners {
             if !lines.is_empty() {
                 lines.push(String::new());
             }
-            let noun = if reaction.count == 1 {
-                "reaction"
-            } else {
-                "reactions"
-            };
+            let count = reaction.user_ids.len();
+            let noun = if count == 1 { "reaction" } else { "reactions" };
             lines.push(format!(
                 "{} {} {}",
                 reaction_label(reaction.kind),
-                reaction.count,
+                count,
                 noun
             ));
 
@@ -1609,6 +1613,25 @@ impl ChatState {
                 ChatEvent::RoomMembersListFailed { user_id, message }
                     if self.user_id == user_id =>
                 {
+                    banner = Some(Banner::error(&message));
+                }
+                ChatEvent::ReactionOwnersListed {
+                    user_id,
+                    message_id,
+                    owners,
+                } if self.user_id == user_id
+                    && self.pending_reaction_owners_message_id == Some(message_id) =>
+                {
+                    self.pending_reaction_owners_message_id = None;
+                    let lines = self.reaction_owner_lines(&owners);
+                    self.overlay = Some(Overlay::dismissible("Reactions", lines));
+                }
+                ChatEvent::ReactionOwnersListFailed { user_id, message }
+                    if self.user_id == user_id
+                        && self.pending_reaction_owners_message_id.is_some() =>
+                {
+                    self.pending_reaction_owners_message_id = None;
+                    self.overlay = None;
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::PublicRoomsListFailed { user_id, message }
