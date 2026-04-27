@@ -660,6 +660,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             if ctx.screen == Screen::Chat && app.chat.room_jump_active {
                 return;
             }
+            if ctx.screen == Screen::Chat && ctx.showcase_composing {
+                app.chat.showcase.cycle_field(false);
+                return;
+            }
             if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
             {
                 return;
@@ -1128,6 +1132,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                     news_view: crate::app::chat::news::ui::ArticleListView {
                         articles: app.chat.news.all_articles(),
                         selected_index: app.chat.news.selected_index(),
+                        marker_read_at: app.chat.news.marker_read_at(),
                     },
                     discover_selected: app.chat.discover_selected,
                     discover_view,
@@ -1161,12 +1166,13 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                     notifications_unread_count: app.chat.notifications.unread_count(),
                     notifications_view,
                     showcase_selected: app.chat.showcase_selected,
-                    showcase_count: app.chat.showcase.all_items().len(),
+                    showcase_unread_count: app.chat.showcase.unread_count(),
                     showcase_view: crate::app::chat::showcase::ui::ShowcaseListView {
                         items: app.chat.showcase.all_items(),
                         selected_index: app.chat.showcase.selected_index(),
                         current_user_id: app.user_id,
                         is_admin: app.chat.showcase.is_admin(),
+                        marker_read_at: app.chat.showcase.marker_read_at(),
                     },
                     showcase_state: Some(&app.chat.showcase),
                     showcase_composing: app.chat.showcase.composing(),

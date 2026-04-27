@@ -138,9 +138,11 @@ impl ArticleService {
     async fn publish_unread_count(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
         let unread_count = ArticleFeedRead::unread_count_for_user(&db_client, user_id).await?;
+        let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
         self.publish_event(ArticleEvent::UnreadCountUpdated {
             user_id,
             unread_count,
+            last_read_at,
         });
         Ok(())
     }
@@ -148,9 +150,11 @@ impl ArticleService {
     async fn mark_read_and_publish(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
         ArticleFeedRead::mark_read_now(&db_client, user_id).await?;
+        let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
         self.publish_event(ArticleEvent::UnreadCountUpdated {
             user_id,
             unread_count: 0,
+            last_read_at,
         });
         Ok(())
     }
@@ -165,9 +169,11 @@ impl ArticleService {
         for row in rows {
             let user_id: Uuid = row.get("id");
             let unread_count = ArticleFeedRead::unread_count_for_user(&db_client, user_id).await?;
+            let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
             self.publish_event(ArticleEvent::UnreadCountUpdated {
                 user_id,
                 unread_count,
+                last_read_at,
             });
             if announce_new && Some(user_id) != actor_user_id && unread_count > 0 {
                 self.publish_event(ArticleEvent::NewArticlesAvailable {

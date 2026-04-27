@@ -1,5 +1,8 @@
 use late_core::{
-    models::showcase::{Showcase, ShowcaseEvent, ShowcaseParams},
+    models::{
+        showcase::{Showcase, ShowcaseEvent, ShowcaseParams},
+        showcase_feed_read::ShowcaseFeedRead,
+    },
     test_utils::create_test_user,
 };
 use late_ssh::app::chat::showcase::svc::ShowcaseService;
@@ -157,4 +160,61 @@ async fn admin_delete_removes_other_users_showcase_and_refreshes_snapshot() {
         .await
         .expect("reload deleted showcase");
     assert!(deleted.is_none());
+}
+
+#[tokio::test]
+async fn unread_count_uses_showcase_read_cursor() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let author = create_test_user(&test_db.db, "showcase-unread-author").await;
+    let reader = create_test_user(&test_db.db, "showcase-unread-reader").await;
+
+    Showcase::create_by_user_id(
+        &client,
+        author.id,
+        params(
+            author.id,
+            "Unread Project",
+            "https://example.com/unread",
+            "Visible before the reader opens showcase.",
+        ),
+    )
+    .await
+    .expect("seed unread showcase");
+
+    let unread_before = ShowcaseFeedRead::unread_count_for_user(&client, reader.id)
+        .await
+        .expect("count unread before");
+    assert_eq!(unread_before, 1);
+
+    ShowcaseFeedRead::mark_read_now(&client, reader.id)
+        .await
+        .expect("mark read");
+    let read_cursor = ShowcaseFeedRead::last_read_at(&client, reader.id)
+        .await
+        .expect("read cursor");
+    assert!(read_cursor.is_some());
+
+    let unread_after = ShowcaseFeedRead::unread_count_for_user(&client, reader.id)
+        .await
+        .expect("count unread after mark read");
+    assert_eq!(unread_after, 0);
+
+    Showcase::create_by_user_id(
+        &client,
+        author.id,
+        params(
+            author.id,
+            "Later Project",
+            "https://example.com/later",
+            "Created after the reader opened showcase.",
+        ),
+    )
+    .await
+    .expect("seed later showcase");
+
+    let unread_after_new = ShowcaseFeedRead::unread_count_for_user(&client, reader.id)
+        .await
+        .expect("count unread after new showcase");
+    assert_eq!(unread_after_new, 1);
 }

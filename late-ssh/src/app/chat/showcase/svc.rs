@@ -3,6 +3,7 @@ use late_core::{
     db::Db,
     models::{
         showcase::{Showcase, ShowcaseEvent, ShowcaseFeedItem, ShowcaseParams, ShowcaseSnapshot},
+        showcase_feed_read::ShowcaseFeedRead,
         user::User,
     },
 };
@@ -63,6 +64,34 @@ impl ShowcaseService {
         );
     }
 
+    pub fn refresh_unread_count_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service.publish_unread_count(user_id).await {
+                late_core::error_span!(
+                    "showcase_unread_refresh_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    "failed to refresh showcase unread count"
+                );
+            }
+        });
+    }
+
+    pub fn mark_read_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service.mark_read_and_publish(user_id).await {
+                late_core::error_span!(
+                    "showcase_mark_read_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    "failed to mark showcase feed read"
+                );
+            }
+        });
+    }
+
     pub fn create_task(&self, user_id: Uuid, params: ShowcaseParams) {
         let service = self.clone();
         tokio::spawn(
@@ -76,7 +105,19 @@ impl ShowcaseService {
                 .await;
 
                 match result {
-                    Ok(()) => service.publish_event(ShowcaseEvent::Created { user_id }),
+                    Ok(()) => {
+                        service.publish_event(ShowcaseEvent::Created { user_id });
+                        if let Err(e) = service
+                            .publish_unread_updates_for_all(true, Some(user_id))
+                            .await
+                        {
+                            late_core::error_span!(
+                                "showcase_unread_broadcast_failed",
+                                error = ?e,
+                                "failed to publish showcase unread updates after create"
+                            );
+                        }
+                    }
                     Err(e) => {
                         late_core::error_span!(
                             "showcase_create_failed",
@@ -125,7 +166,16 @@ impl ShowcaseService {
                 .await;
 
                 match result {
-                    Ok(()) => service.publish_event(ShowcaseEvent::Updated { user_id }),
+                    Ok(()) => {
+                        service.publish_event(ShowcaseEvent::Updated { user_id });
+                        if let Err(e) = service.publish_unread_updates_for_all(false, None).await {
+                            late_core::error_span!(
+                                "showcase_unread_broadcast_failed",
+                                error = ?e,
+                                "failed to publish showcase unread updates after update"
+                            );
+                        }
+                    }
                     Err(e) => {
                         late_core::error_span!(
                             "showcase_update_failed",
@@ -169,7 +219,16 @@ impl ShowcaseService {
                 .await;
 
                 match result {
-                    Ok(()) => service.publish_event(ShowcaseEvent::Deleted { user_id }),
+                    Ok(()) => {
+                        service.publish_event(ShowcaseEvent::Deleted { user_id });
+                        if let Err(e) = service.publish_unread_updates_for_all(false, None).await {
+                            late_core::error_span!(
+                                "showcase_unread_broadcast_failed",
+                                error = ?e,
+                                "failed to publish showcase unread updates after delete"
+                            );
+                        }
+                    }
                     Err(e) => {
                         late_core::error_span!(
                             "showcase_delete_failed",
@@ -212,6 +271,56 @@ impl ShowcaseService {
 
         if let Err(e) = self.snapshot_tx.send(ShowcaseSnapshot { items }) {
             tracing::debug!(%e, "no showcase snapshot subscribers");
+        }
+        Ok(())
+    }
+
+    async fn publish_unread_count(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let unread_count = ShowcaseFeedRead::unread_count_for_user(&client, user_id).await?;
+        let last_read_at = ShowcaseFeedRead::last_read_at(&client, user_id).await?;
+        self.publish_event(ShowcaseEvent::UnreadCountUpdated {
+            user_id,
+            unread_count,
+            last_read_at,
+        });
+        Ok(())
+    }
+
+    async fn mark_read_and_publish(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        ShowcaseFeedRead::mark_read_now(&client, user_id).await?;
+        let last_read_at = ShowcaseFeedRead::last_read_at(&client, user_id).await?;
+        self.publish_event(ShowcaseEvent::UnreadCountUpdated {
+            user_id,
+            unread_count: 0,
+            last_read_at,
+        });
+        Ok(())
+    }
+
+    async fn publish_unread_updates_for_all(
+        &self,
+        announce_new: bool,
+        actor_user_id: Option<Uuid>,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let rows = client.query("SELECT id FROM users", &[]).await?;
+        for row in rows {
+            let user_id: Uuid = row.get("id");
+            let unread_count = ShowcaseFeedRead::unread_count_for_user(&client, user_id).await?;
+            let last_read_at = ShowcaseFeedRead::last_read_at(&client, user_id).await?;
+            self.publish_event(ShowcaseEvent::UnreadCountUpdated {
+                user_id,
+                unread_count,
+                last_read_at,
+            });
+            if announce_new && Some(user_id) != actor_user_id && unread_count > 0 {
+                self.publish_event(ShowcaseEvent::NewShowcasesAvailable {
+                    user_id,
+                    unread_count,
+                });
+            }
         }
         Ok(())
     }

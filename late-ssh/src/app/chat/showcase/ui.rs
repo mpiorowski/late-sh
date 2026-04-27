@@ -1,5 +1,6 @@
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
+use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -17,6 +18,7 @@ pub struct ShowcaseListView<'a> {
     pub selected_index: usize,
     pub current_user_id: uuid::Uuid,
     pub is_admin: bool,
+    pub marker_read_at: Option<DateTime<Utc>>,
 }
 
 const ITEM_HEIGHT: u16 = 8;
@@ -71,6 +73,10 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
         let item = &view.items[item_idx];
         let s = &item.showcase;
         let is_selected = item_idx == selected_index;
+        let is_unread = view
+            .marker_read_at
+            .map(|last_read_at| s.created > last_read_at)
+            .unwrap_or(true);
         let bg = if is_selected {
             theme::BG_SELECTION()
         } else {
@@ -88,12 +94,21 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
 
         // Title row: title + ownership marker
         let owner = item.showcase.user_id == view.current_user_id;
-        let mut title_spans = vec![Span::styled(
+        let mut title_spans = Vec::new();
+        if is_unread {
+            title_spans.push(Span::styled(
+                "* ",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        title_spans.push(Span::styled(
             s.title.as_str(),
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
-        )];
+        ));
         if owner {
             title_spans.push(Span::styled(
                 "  (yours)",
@@ -176,11 +191,11 @@ pub fn draw_showcase_composer(frame: &mut Frame, area: Rect, view: &ShowcaseComp
     let active = view.state.active_field();
 
     let title = if !composing {
-        " Showcase · i compose · e edit · d delete · Enter copy "
+        " Showcase "
     } else if editing {
-        " Editing · Tab next field · Enter submit · Esc cancel "
+        " Editing · Tab/S+Tab switch · Enter submit · Esc cancel "
     } else {
-        " New showcase · Tab next field · Enter submit · Esc cancel "
+        " New showcase · Tab/S+Tab switch · Enter submit · Esc cancel "
     };
     let border_style = if composing {
         Style::default().fg(theme::BORDER_ACTIVE())
@@ -246,7 +261,11 @@ fn draw_field(
     let label_w: u16 = 18;
     let split = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(label_w), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(label_w),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
         .split(area);
     let prefix = if is_active { "▸ " } else { "  " };
     let label = Paragraph::new(Line::from(Span::styled(
@@ -254,5 +273,34 @@ fn draw_field(
         label_style,
     )));
     frame.render_widget(label, split[0]);
-    frame.render_widget(state.field_textarea(field), split[1]);
+    frame.render_widget(Paragraph::new(" "), split[1]);
+    if state.field_is_empty(field) {
+        draw_empty_placeholder(frame, split[2], field.placeholder(), is_active);
+    } else {
+        frame.render_widget(state.field_textarea(field), split[2]);
+    }
+}
+
+fn draw_empty_placeholder(frame: &mut Frame, area: Rect, placeholder: &str, active: bool) {
+    let mut chars = placeholder.chars();
+    let Some(first) = chars.next() else {
+        return;
+    };
+    let rest = chars.collect::<String>();
+    let first = if active {
+        Span::styled(
+            first.to_string(),
+            Style::default()
+                .fg(theme::BG_CANVAS())
+                .bg(theme::TEXT_DIM())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(first.to_string(), Style::default().fg(theme::TEXT_DIM()))
+    };
+    let line = Line::from(vec![
+        first,
+        Span::styled(rest, Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(line).wrap(Wrap { trim: false }), area);
 }

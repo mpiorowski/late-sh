@@ -563,11 +563,11 @@ impl ChatState {
         // Mentions / notifications
         order.push(RoomSlot::Notifications);
 
-        // Discover
-        order.push(RoomSlot::Discover);
-
         // Showcase
         order.push(RoomSlot::Showcase);
+
+        // Discover
+        order.push(RoomSlot::Discover);
 
         // Public rooms (non-DM, non-permanent, alpha by slug)
         let mut public: Vec<_> = self
@@ -1138,6 +1138,7 @@ impl ChatState {
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.showcase.list();
+        self.showcase.mark_read();
     }
 
     pub fn join_selected_discover_room(&mut self) -> Option<Banner> {
@@ -2299,6 +2300,7 @@ mod tests {
             RoomSlot::Room(room_a),
             RoomSlot::News,
             RoomSlot::Notifications,
+            RoomSlot::Showcase,
             RoomSlot::Discover,
             RoomSlot::Room(room_b),
             RoomSlot::Room(room_c),
@@ -2320,7 +2322,12 @@ mod tests {
 
     #[test]
     fn adjacent_composer_room_returns_none_without_real_rooms() {
-        let order = vec![RoomSlot::News, RoomSlot::Notifications, RoomSlot::Discover];
+        let order = vec![
+            RoomSlot::News,
+            RoomSlot::Notifications,
+            RoomSlot::Showcase,
+            RoomSlot::Discover,
+        ];
         assert_eq!(adjacent_composer_room(&order, None, 1), None);
     }
 
@@ -2380,7 +2387,8 @@ mod tests {
             (b'a', RoomSlot::Room(room_id)),
             (b's', RoomSlot::News),
             (b'd', RoomSlot::Notifications),
-            (b'f', RoomSlot::Discover),
+            (b'f', RoomSlot::Showcase),
+            (b'g', RoomSlot::Discover),
         ];
 
         assert_eq!(
@@ -2397,6 +2405,10 @@ mod tests {
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b'f'),
+            Some(RoomSlot::Showcase)
+        );
+        assert_eq!(
+            resolve_room_jump_target(&targets, b'G'),
             Some(RoomSlot::Discover)
         );
         assert_eq!(resolve_room_jump_target(&targets, b'x'), None);

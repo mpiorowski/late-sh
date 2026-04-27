@@ -731,7 +731,7 @@ pub struct ChatRenderInput<'a> {
     pub notifications_unread_count: i64,
     pub notifications_view: super::notifications::ui::NotificationListView<'a>,
     pub showcase_selected: bool,
-    pub showcase_count: usize,
+    pub showcase_unread_count: i64,
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
     pub showcase_state: Option<&'a super::showcase::state::State>,
     pub showcase_composing: bool,
@@ -931,6 +931,32 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         view.notifications_selected,
     );
 
+    let showcase_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.showcase_selected,
+        );
+        let style = if view.showcase_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.showcase_unread_count > 0 {
+            format!("{prefix}showcase ({})", view.showcase_unread_count)
+        } else {
+            format!("{prefix}showcase")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(
+        showcase_line,
+        Some(RoomSlot::Showcase),
+        view.showcase_selected,
+    );
+
     let discover_line = {
         let prefix = room_jump_prefix(
             view.room_jump_active.then(|| jump_keys.next()).flatten(),
@@ -955,32 +981,6 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         discover_line,
         Some(RoomSlot::Discover),
         view.discover_selected,
-    );
-
-    let showcase_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.showcase_selected,
-        );
-        let style = if view.showcase_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = if view.showcase_count > 0 {
-            format!("{prefix}showcase ({})", view.showcase_count)
-        } else {
-            format!("{prefix}showcase")
-        };
-        Line::from(Span::styled(label, style))
-    };
-    push_row(
-        showcase_line,
-        Some(RoomSlot::Showcase),
-        view.showcase_selected,
     );
 
     let mut public_rooms: Vec<_> = chat_rooms
@@ -1394,6 +1394,7 @@ mod tests {
             news_view: crate::app::chat::news::ui::ArticleListView {
                 articles: &[],
                 selected_index: 0,
+                marker_read_at: None,
             },
             discover_selected: false,
             discover_view: crate::app::chat::discover::ui::DiscoverListView {
@@ -1433,12 +1434,13 @@ mod tests {
                 selected_index: 0,
             },
             showcase_selected: false,
-            showcase_count: 0,
+            showcase_unread_count: 0,
             showcase_view: crate::app::chat::showcase::ui::ShowcaseListView {
                 items: &[],
                 selected_index: 0,
                 current_user_id: Uuid::nil(),
                 is_admin: false,
+                marker_read_at: None,
             },
             showcase_state: None,
             showcase_composing: false,

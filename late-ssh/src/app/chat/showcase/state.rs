@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -44,6 +45,15 @@ impl ComposerField {
             Self::Description => "Description",
         }
     }
+
+    pub(crate) fn placeholder(self) -> &'static str {
+        match self {
+            Self::Title => "Project name",
+            Self::Url => "https://...",
+            Self::Tags => "rust, cli, game",
+            Self::Description => "What is it? Why should we look?",
+        }
+    }
 }
 
 pub struct State {
@@ -62,12 +72,16 @@ pub struct State {
     tags: TextArea<'static>,
     description: TextArea<'static>,
     submitted: bool,
+    unread_count: i64,
+    last_read_at: Option<DateTime<Utc>>,
+    marker_read_at: Option<DateTime<Utc>>,
 }
 
 impl State {
     pub fn new(service: ShowcaseService, user_id: Uuid, is_admin: bool) -> Self {
         let state = Self::new_without_initial_load(service, user_id, is_admin);
         state.list();
+        state.refresh_unread_count();
         state
     }
 
@@ -97,6 +111,9 @@ impl State {
             tags: new_single_line("rust, cli, game"),
             description: new_multi_line("What is it? Why should we look?"),
             submitted: false,
+            unread_count: 0,
+            last_read_at: None,
+            marker_read_at: None,
         }
     }
 
@@ -110,10 +127,29 @@ impl State {
 
     pub fn list(&self) {
         self.service.list_task();
+        self.refresh_unread_count();
+    }
+
+    pub fn refresh_unread_count(&self) {
+        self.service.refresh_unread_count_task(self.user_id);
+    }
+
+    pub fn mark_read(&mut self) {
+        self.marker_read_at = self.last_read_at;
+        self.unread_count = 0;
+        self.service.mark_read_task(self.user_id);
     }
 
     pub fn all_items(&self) -> &[ShowcaseFeedItem] {
         &self.items
+    }
+
+    pub fn unread_count(&self) -> i64 {
+        self.unread_count
+    }
+
+    pub fn marker_read_at(&self) -> Option<DateTime<Utc>> {
+        self.marker_read_at
     }
 
     pub fn selected_index(&self) -> usize {
@@ -157,6 +193,11 @@ impl State {
             ComposerField::Tags => &self.tags,
             ComposerField::Description => &self.description,
         }
+    }
+
+    pub(crate) fn field_is_empty(&self, field: ComposerField) -> bool {
+        let lines = self.field_textarea(field).lines();
+        lines.len() == 1 && lines[0].is_empty()
     }
 
     pub fn refresh_composer_theme(&mut self) {
@@ -350,6 +391,29 @@ impl State {
                     ShowcaseEvent::Failed { user_id, error } if self.user_id == user_id => {
                         self.submitted = false;
                         banner = Some(Banner::error(&format!("Failed: {error}")));
+                    }
+                    ShowcaseEvent::UnreadCountUpdated {
+                        user_id,
+                        unread_count,
+                        last_read_at,
+                    } if self.user_id == user_id => {
+                        self.unread_count = unread_count;
+                        self.last_read_at = last_read_at;
+                    }
+                    ShowcaseEvent::NewShowcasesAvailable {
+                        user_id,
+                        unread_count,
+                    } if self.user_id == user_id => {
+                        let increased = unread_count > self.unread_count;
+                        self.unread_count = unread_count;
+                        if increased {
+                            let noun = if unread_count == 1 {
+                                "showcase"
+                            } else {
+                                "showcases"
+                            };
+                            banner = Some(Banner::success(&format!("{unread_count} new {noun}")));
+                        }
                     }
                     _ => {}
                 },

@@ -4,16 +4,16 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
-pub struct ArticleFeedRead {
+pub struct ShowcaseFeedRead {
     pub user_id: Uuid,
     pub last_read_at: Option<DateTime<Utc>>,
 }
 
-impl ArticleFeedRead {
+impl ShowcaseFeedRead {
     pub async fn mark_read_now(client: &Client, user_id: Uuid) -> Result<()> {
         client
             .execute(
-                "INSERT INTO article_feed_reads (user_id, last_read_at, updated)
+                "INSERT INTO showcase_feed_reads (user_id, last_read_at, updated)
                  VALUES ($1, current_timestamp, current_timestamp)
                  ON CONFLICT (user_id)
                  DO UPDATE SET
@@ -29,7 +29,7 @@ impl ArticleFeedRead {
     pub async fn last_read_at(client: &Client, user_id: Uuid) -> Result<Option<DateTime<Utc>>> {
         let row = client
             .query_opt(
-                "SELECT last_read_at FROM article_feed_reads WHERE user_id = $1",
+                "SELECT last_read_at FROM showcase_feed_reads WHERE user_id = $1",
                 &[&user_id],
             )
             .await?;
@@ -39,12 +39,12 @@ impl ArticleFeedRead {
     pub async fn unread_count_for_user(client: &Client, user_id: Uuid) -> Result<i64> {
         let row = client
             .query_one(
-                "SELECT COUNT(a.id)::bigint AS unread_count
-                 FROM articles a
-                 LEFT JOIN article_feed_reads afr ON afr.user_id = $1
+                "SELECT COUNT(s.id)::bigint AS unread_count
+                 FROM showcases s
+                 LEFT JOIN showcase_feed_reads sfr ON sfr.user_id = $1
                  WHERE
-                   afr.user_id IS NULL
-                   OR a.created > COALESCE(afr.last_read_at, '-infinity'::timestamptz)",
+                   sfr.user_id IS NULL
+                   OR s.created > COALESCE(sfr.last_read_at, '-infinity'::timestamptz)",
                 &[&user_id],
             )
             .await?;

@@ -30,17 +30,21 @@ pub fn handle_composer_input(app: &mut App, byte: u8) {
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     if app.chat.showcase.composing() {
-        // Arrows inside the active field
+        match key {
+            b'A' => {
+                app.chat.showcase.cycle_field(false);
+                return true;
+            }
+            b'B' => {
+                app.chat.showcase.cycle_field(true);
+                return true;
+            }
+            _ => {}
+        }
+
+        // Horizontal arrows move inside the active field.
         let field = app.chat.showcase.active_field();
         let input = match key {
-            b'A' => ratatui_textarea::Input {
-                key: ratatui_textarea::Key::Up,
-                ..Default::default()
-            },
-            b'B' => ratatui_textarea::Input {
-                key: ratatui_textarea::Key::Down,
-                ..Default::default()
-            },
             b'C' => ratatui_textarea::Input {
                 key: ratatui_textarea::Key::Right,
                 ..Default::default()

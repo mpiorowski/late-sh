@@ -41,8 +41,26 @@ pub struct ShowcaseFeedItem {
 
 #[derive(Clone, Debug)]
 pub enum ShowcaseEvent {
-    Created { user_id: Uuid },
-    Updated { user_id: Uuid },
-    Deleted { user_id: Uuid },
-    Failed { user_id: Uuid, error: String },
+    Created {
+        user_id: Uuid,
+    },
+    Updated {
+        user_id: Uuid,
+    },
+    Deleted {
+        user_id: Uuid,
+    },
+    Failed {
+        user_id: Uuid,
+        error: String,
+    },
+    UnreadCountUpdated {
+        user_id: Uuid,
+        unread_count: i64,
+        last_read_at: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    NewShowcasesAvailable {
+        user_id: Uuid,
+        unread_count: i64,
+    },
 }
