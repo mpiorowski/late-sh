@@ -20,6 +20,22 @@ resource "kubernetes_namespace_v1" "monitoring" {
   }
 }
 
+data "http" "grafana_dashboard_kubernetes_cluster" {
+  url = "https://grafana.com/api/dashboards/14205/revisions/1/download"
+
+  request_headers = {
+    Accept = "application/json"
+  }
+}
+
+locals {
+  grafana_kubernetes_cluster_dashboard = replace(
+    data.http.grafana_dashboard_kubernetes_cluster.response_body,
+    "$${DS_PROMETHEUS}",
+    "VictoriaMetrics"
+  )
+}
+
 resource "kubernetes_config_map_v1" "otel_collector_config" {
   metadata {
     name      = "otel-collector-config"
@@ -60,8 +76,44 @@ resource "kubernetes_config_map_v1" "grafana_dashboards" {
   }
 
   data = {
-    "observability.json" = file("${path.module}/../monitoring/dashboards/observability.json")
+    "observability.json"      = file("${path.module}/../monitoring/dashboards/observability.json")
+    "kubernetes-cluster.json" = local.grafana_kubernetes_cluster_dashboard
   }
+}
+
+resource "helm_release" "vmagent" {
+  name       = "vmagent"
+  repository = "https://victoriametrics.github.io/helm-charts/"
+  chart      = "victoria-metrics-agent"
+  version    = "0.36.0"
+  namespace  = kubernetes_namespace_v1.monitoring.metadata[0].name
+
+  values = [
+    yamlencode({
+      fullnameOverride = "vmagent"
+
+      remoteWrite = [
+        {
+          url = "http://victoriametrics.monitoring.svc.cluster.local:8428/api/v1/write"
+        }
+      ]
+
+      resources = {
+        limits = {
+          cpu    = "250m"
+          memory = "256Mi"
+        }
+        requests = {
+          cpu    = "50m"
+          memory = "128Mi"
+        }
+      }
+    })
+  ]
+
+  depends_on = [
+    kubernetes_deployment_v1.victoriametrics
+  ]
 }
 
 resource "kubernetes_persistent_volume_claim_v1" "victoriametrics_data" {
