@@ -945,9 +945,9 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
             Style::default().fg(theme::TEXT())
         };
         let label = if view.showcase_unread_count > 0 {
-            format!("{prefix}showcase ({})", view.showcase_unread_count)
+            format!("{prefix}showcases ({})", view.showcase_unread_count)
         } else {
-            format!("{prefix}showcase")
+            format!("{prefix}showcases")
         };
         Line::from(Span::styled(label, style))
     };

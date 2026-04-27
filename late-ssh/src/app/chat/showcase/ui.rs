@@ -21,7 +21,7 @@ pub struct ShowcaseListView<'a> {
     pub marker_read_at: Option<DateTime<Utc>>,
 }
 
-const ITEM_HEIGHT: u16 = 8;
+const ITEM_HEIGHT: u16 = 7;
 const SUMMARY_LINES: usize = 3;
 
 pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView<'_>) {
@@ -30,7 +30,7 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
     } else {
         view.selected_index.min(view.items.len() - 1) + 1
     };
-    let title = format!(" Showcase ({selected}/{}) ", view.items.len());
+    let title = format!(" Showcases ({selected}/{}) ", view.items.len());
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
@@ -122,7 +122,31 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
         }
         lines.push(Line::from(title_spans));
 
-        // Author + time + tags
+        // URL directly under the title.
+        lines.push(Line::from(vec![
+            Span::styled("↗ ", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(
+                s.url.as_str(),
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+
+        // Description (up to 3 visual lines, with inline ellipsis on truncation).
+        let (mut desc_lines, truncated) =
+            description_summary_lines(&s.description, content_area.width as usize, SUMMARY_LINES);
+        if truncated && let Some(last) = desc_lines.last_mut() {
+            apply_inline_ellipsis(last, content_area.width as usize);
+        }
+        for line in desc_lines {
+            lines.push(Line::from(Span::styled(
+                line,
+                Style::default().fg(theme::TEXT()),
+            )));
+        }
+
+        // Author + time + tags as the footer line.
         let mut meta_spans = vec![
             Span::styled(
                 format!("@{}", item.author_username),
@@ -148,30 +172,6 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
             ));
         }
         lines.push(Line::from(meta_spans));
-
-        // Description (up to 3 visual lines, with inline ellipsis on truncation).
-        let (mut desc_lines, truncated) =
-            description_summary_lines(&s.description, content_area.width as usize, SUMMARY_LINES);
-        if truncated && let Some(last) = desc_lines.last_mut() {
-            apply_inline_ellipsis(last, content_area.width as usize);
-        }
-        for line in desc_lines {
-            lines.push(Line::from(Span::styled(
-                line,
-                Style::default().fg(theme::TEXT()),
-            )));
-        }
-
-        // URL as the last line: treat it as the call-to-action.
-        lines.push(Line::from(vec![
-            Span::styled("↗ ", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(
-                s.url.as_str(),
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]));
 
         let p = Paragraph::new(lines).wrap(Wrap { trim: true });
         frame.render_widget(p, content_area);
@@ -233,9 +233,9 @@ pub fn draw_showcase_composer(frame: &mut Frame, area: Rect, view: &ShowcaseComp
     let title = if !composing {
         " Showcase "
     } else if editing {
-        " Editing · Tab/S+Tab switch · Enter submit · Esc cancel "
+        " Editing · Tab/S+Tab switch · Enter submit · Alt+Enter newline · Esc cancel "
     } else {
-        " New showcase · Tab/S+Tab switch · Enter submit · Esc cancel "
+        " New showcase · Tab/S+Tab switch · Enter submit · Alt+Enter newline · Esc cancel "
     };
     let border_style = if composing {
         Style::default().fg(theme::BORDER_ACTIVE())
