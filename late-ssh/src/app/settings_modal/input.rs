@@ -44,6 +44,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.settings_modal_state.selected_tab() == Tab::Themes {
+        handle_themes_tab_input(app, event);
+        return;
+    }
+
     if app.settings_modal_state.selected_tab() == Tab::Favorites {
         handle_favorites_tab_input(app, event);
         return;
@@ -61,6 +66,29 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Arrow(b'D') => app.settings_modal_state.cycle_setting(false),
         ParsedInput::Byte(b' ') | ParsedInput::Byte(b'\r') => activate_selected_row(app),
         ParsedInput::Char('e') | ParsedInput::Char('E') => activate_selected_row(app),
+        _ => {}
+    }
+}
+
+fn handle_themes_tab_input(app: &mut App, event: ParsedInput) {
+    let state: &mut SettingsModalState = &mut app.settings_modal_state;
+    match event {
+        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B')
+        | ParsedInput::Arrow(b'C') => state.move_theme_cursor(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A')
+        | ParsedInput::Arrow(b'D') => state.move_theme_cursor(-1),
+        ParsedInput::PageDown => state.page_theme_cursor(1),
+        ParsedInput::PageUp => state.page_theme_cursor(-1),
+        ParsedInput::Home => state.first_theme(),
+        ParsedInput::End => state.last_theme(),
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => {
+            state.select_theme_index(state.theme_index())
+        }
         _ => {}
     }
 }

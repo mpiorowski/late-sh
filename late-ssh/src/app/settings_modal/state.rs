@@ -69,23 +69,26 @@ impl Row {
     ];
 }
 
-/// Top-level tab in the settings modal. `Settings` holds every compact
-/// row (identity/appearance/location/notifications); `Bio` is a separate
-/// full-width pane with the markdown editor + preview; `Favorites` manages
-/// the dashboard quick-switch room list.
+/// Top-level tab in the settings modal. `Settings` holds every compact row
+/// (identity/appearance/location/notifications); `Themes` is a fast browser
+/// for the expanded theme catalog; `Bio` is a separate full-width pane with
+/// the markdown editor + preview; `Favorites` manages the dashboard
+/// quick-switch room list.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
+    Themes,
     Bio,
     Favorites,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 3] = [Tab::Settings, Tab::Bio, Tab::Favorites];
+    pub const ALL: [Tab; 4] = [Tab::Settings, Tab::Themes, Tab::Bio, Tab::Favorites];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
+            Tab::Themes => "Themes",
             Tab::Bio => "Bio",
             Tab::Favorites => "Favorites",
         }
@@ -107,6 +110,9 @@ pub struct SettingsModalState {
     draft: Profile,
     selected_tab: Tab,
     row_index: usize,
+    theme_index: usize,
+    theme_scroll_offset: usize,
+    theme_visible_height: Cell<usize>,
     editing_username: bool,
     username_input: TextArea<'static>,
     editing_bio: bool,
@@ -128,6 +134,9 @@ impl SettingsModalState {
             draft: Profile::default(),
             selected_tab: Tab::Settings,
             row_index: 0,
+            theme_index: 0,
+            theme_scroll_offset: 0,
+            theme_visible_height: Cell::new(1),
             editing_username: false,
             username_input: new_username_textarea(false),
             editing_bio: false,
@@ -155,6 +164,7 @@ impl SettingsModalState {
         self.available_rooms = available_rooms;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
+        self.sync_theme_index_to_draft();
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
         self.editing_bio = false;
@@ -189,6 +199,9 @@ impl SettingsModalState {
             self.submit_username();
             self.save();
         }
+        if next == Tab::Themes {
+            self.sync_theme_index_to_draft();
+        }
         self.selected_tab = next;
     }
 
@@ -207,6 +220,79 @@ impl SettingsModalState {
     pub fn move_row(&mut self, delta: isize) {
         let last = Row::ALL.len().saturating_sub(1) as isize;
         self.row_index = (self.row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn theme_index(&self) -> usize {
+        self.theme_index
+    }
+
+    pub fn theme_scroll_offset(&self) -> usize {
+        self.theme_scroll_offset
+    }
+
+    pub fn set_theme_visible_height(&self, height: usize) {
+        self.theme_visible_height.set(height.max(1));
+    }
+
+    pub fn move_theme_cursor(&mut self, delta: isize) {
+        let last = theme::OPTIONS.len().saturating_sub(1) as isize;
+        let next = (self.theme_index as isize + delta).clamp(0, last) as usize;
+        self.select_theme_index(next);
+    }
+
+    pub fn page_theme_cursor(&mut self, delta_pages: isize) {
+        let page = self.theme_visible_height.get().max(1) as isize;
+        self.move_theme_cursor(delta_pages * page);
+    }
+
+    pub fn first_theme(&mut self) {
+        self.select_theme_index(0);
+    }
+
+    pub fn last_theme(&mut self) {
+        self.select_theme_index(theme::OPTIONS.len().saturating_sub(1));
+    }
+
+    pub fn select_theme_index(&mut self, index: usize) {
+        let clamped = index.min(theme::OPTIONS.len().saturating_sub(1));
+        self.theme_index = clamped;
+        if let Some(option) = theme::OPTIONS.get(clamped) {
+            let current = self
+                .draft
+                .theme_id
+                .as_deref()
+                .map(theme::normalize_id)
+                .unwrap_or("late");
+            let changed = current != option.id;
+            self.draft.theme_id = Some(option.id.to_string());
+            self.keep_theme_cursor_visible();
+            if changed {
+                self.save();
+            }
+        }
+    }
+
+    fn sync_theme_index_to_draft(&mut self) {
+        let current = self
+            .draft
+            .theme_id
+            .as_deref()
+            .unwrap_or_else(|| theme::normalize_id(""));
+        let normalized = theme::normalize_id(current);
+        self.theme_index = theme::OPTIONS
+            .iter()
+            .position(|option| option.id == normalized)
+            .unwrap_or(0);
+        self.keep_theme_cursor_visible();
+    }
+
+    fn keep_theme_cursor_visible(&mut self) {
+        let visible = self.theme_visible_height.get().max(1);
+        if self.theme_index < self.theme_scroll_offset {
+            self.theme_scroll_offset = self.theme_index;
+        } else if self.theme_index >= self.theme_scroll_offset + visible {
+            self.theme_scroll_offset = self.theme_index.saturating_sub(visible - 1);
+        }
     }
 
     pub fn editing_username(&self) -> bool {
@@ -602,6 +688,7 @@ impl SettingsModalState {
                     .as_deref()
                     .unwrap_or_else(|| theme::normalize_id(""));
                 self.draft.theme_id = Some(theme::cycle_id(current, forward).to_string());
+                self.sync_theme_index_to_draft();
                 true
             }
             Row::BackgroundColor => {

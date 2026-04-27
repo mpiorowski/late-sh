@@ -43,6 +43,20 @@ pub struct ThemeOption {
 }
 
 #[derive(Clone, Copy)]
+pub struct ThemePreview {
+    pub bg_canvas: Color,
+    pub bg_selection: Color,
+    pub border_active: Color,
+    pub text: Color,
+    pub text_bright: Color,
+    pub amber: Color,
+    pub chat_author: Color,
+    pub mention: Color,
+    pub success: Color,
+    pub error: Color,
+}
+
+#[derive(Clone, Copy)]
 struct Palette {
     bg_canvas: Color,
     bg_selection: Color,
@@ -1173,7 +1187,11 @@ fn option_by_id(id: &str) -> ThemeOption {
 }
 
 fn current_palette() -> &'static Palette {
-    CURRENT_THEME.with(|current| match current.get() {
+    CURRENT_THEME.with(|current| palette_for_kind(current.get()))
+}
+
+fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
+    match kind {
         ThemeKind::Contrast => &PALETTE_CONTRAST,
         ThemeKind::Purple => &PALETTE_PURPLE,
         ThemeKind::Mocha => &PALETTE_MOCHA,
@@ -1204,7 +1222,27 @@ fn current_palette() -> &'static Palette {
         ThemeKind::ENADreamBbq => &PALETTE_ENA_DREAM_BBQ,
         ThemeKind::Kirii => &PALETTE_KIRII,
         ThemeKind::Late => &PALETTE_LATE,
-    })
+    }
+}
+
+pub fn preview_for_id(id: &str) -> ThemePreview {
+    preview_for_option(option_by_id(id))
+}
+
+pub fn preview_for_option(option: ThemeOption) -> ThemePreview {
+    let palette = palette_for_kind(option.kind);
+    ThemePreview {
+        bg_canvas: palette.bg_canvas,
+        bg_selection: palette.bg_selection,
+        border_active: palette.border_active,
+        text: palette.text,
+        text_bright: palette.text_bright,
+        amber: palette.amber,
+        chat_author: palette.chat_author,
+        mention: palette.mention,
+        success: palette.success,
+        error: palette.error,
+    }
 }
 
 #[allow(non_snake_case)]
