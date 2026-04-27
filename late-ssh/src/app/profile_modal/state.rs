@@ -1,9 +1,8 @@
 use late_core::models::profile::Profile;
-use late_core::models::showcase::{ShowcaseFeedItem, ShowcaseSnapshot};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::app::chat::showcase::svc::ShowcaseService;
+use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
 use crate::app::profile::svc::{ProfileService, ProfileSnapshot};
 
 pub struct ProfileModalState {

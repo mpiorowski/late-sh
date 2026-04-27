@@ -1,5 +1,4 @@
 use chrono::Utc;
-use late_core::models::showcase::ShowcaseFeedItem;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Margin, Rect},
@@ -9,6 +8,7 @@ use ratatui::{
 };
 
 use crate::app::{
+    chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     settings_modal::data::country_label,
 };

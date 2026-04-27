@@ -9,9 +9,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use late_core::models::showcase::ShowcaseFeedItem;
-
 use super::state::{ComposerField, State};
+use super::svc::ShowcaseFeedItem;
 
 pub struct ShowcaseListView<'a> {
     pub items: &'a [ShowcaseFeedItem],

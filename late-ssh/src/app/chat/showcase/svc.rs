@@ -1,8 +1,9 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use late_core::{
     db::Db,
     models::{
-        showcase::{Showcase, ShowcaseEvent, ShowcaseFeedItem, ShowcaseParams, ShowcaseSnapshot},
+        showcase::{Showcase, ShowcaseParams},
         showcase_feed_read::ShowcaseFeedRead,
         user::User,
     },
@@ -13,6 +14,43 @@ use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 const LIST_LIMIT: i64 = 100;
+
+#[derive(Clone, Default)]
+pub struct ShowcaseSnapshot {
+    pub items: Vec<ShowcaseFeedItem>,
+}
+
+#[derive(Clone)]
+pub struct ShowcaseFeedItem {
+    pub showcase: Showcase,
+    pub author_username: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum ShowcaseEvent {
+    Created {
+        user_id: Uuid,
+    },
+    Updated {
+        user_id: Uuid,
+    },
+    Deleted {
+        user_id: Uuid,
+    },
+    Failed {
+        user_id: Uuid,
+        error: String,
+    },
+    UnreadCountUpdated {
+        user_id: Uuid,
+        unread_count: i64,
+        last_read_at: Option<DateTime<Utc>>,
+    },
+    NewShowcasesAvailable {
+        user_id: Uuid,
+        unread_count: i64,
+    },
+}
 
 #[derive(Clone)]
 pub struct ShowcaseService {

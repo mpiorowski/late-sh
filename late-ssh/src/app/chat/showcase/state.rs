@@ -4,11 +4,9 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::common::{composer, primitives::Banner};
-use late_core::models::showcase::{
-    ShowcaseEvent, ShowcaseFeedItem, ShowcaseParams, ShowcaseSnapshot,
-};
+use late_core::models::showcase::ShowcaseParams;
 
-use super::svc::{self, ShowcaseService};
+use super::svc::{self, ShowcaseEvent, ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ComposerField {

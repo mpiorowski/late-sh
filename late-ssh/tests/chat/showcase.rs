@@ -1,11 +1,11 @@
 use late_core::{
     models::{
-        showcase::{Showcase, ShowcaseEvent, ShowcaseParams},
+        showcase::{Showcase, ShowcaseParams},
         showcase_feed_read::ShowcaseFeedRead,
     },
     test_utils::create_test_user,
 };
-use late_ssh::app::chat::showcase::svc::ShowcaseService;
+use late_ssh::app::chat::showcase::svc::{ShowcaseEvent, ShowcaseService};
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
