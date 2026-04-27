@@ -15,7 +15,7 @@ pub use barcode::{Barcode, Braille, FullBlock, HalfBlock};
 pub use polarity::{DarkOnLight, LightOnDark, Polarity};
 pub use widget::{AspectRatio, QrWidget, QuietZone, Scaling};
 
-use super::common::theme;
+use super::theme;
 
 pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, subtitle: &str) {
     use qrcodegen::QrCodeEcc;

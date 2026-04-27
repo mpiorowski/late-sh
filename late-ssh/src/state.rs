@@ -3,8 +3,8 @@ use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
+use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
-use crate::app::games::blackjack::svc::BlackjackService;
 use crate::app::games::chips::svc::ChipService;
 use crate::app::games::leaderboard::svc::LeaderboardService;
 use crate::app::games::minesweeper::svc::MinesweeperService;
@@ -15,6 +15,8 @@ use crate::app::games::sudoku::svc::SudokuService;
 use crate::app::games::tetris::svc::TetrisService;
 use crate::app::games::twenty_forty_eight::svc::TwentyFortyEightService;
 use crate::app::profile::svc::ProfileService;
+use crate::app::rooms::blackjack::{manager::BlackjackTableManager, svc::BlackjackService};
+use crate::app::rooms::svc::RoomsService;
 use crate::app::vote::svc::VoteService;
 use crate::config::Config;
 use crate::session::{PairedClientRegistry, SessionRegistry};
@@ -54,6 +56,7 @@ pub struct State {
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
+    pub showcase_service: ShowcaseService,
     pub profile_service: ProfileService,
     pub twenty_forty_eight_service: TwentyFortyEightService,
     pub tetris_service: TetrisService,
@@ -64,6 +67,8 @@ pub struct State {
     pub bonsai_service: BonsaiService,
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
+    pub rooms_service: RoomsService,
+    pub blackjack_table_manager: BlackjackTableManager,
     pub blackjack_service: BlackjackService,
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,

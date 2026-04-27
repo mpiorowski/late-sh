@@ -2,10 +2,14 @@ use late_core::models::profile::Profile;
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, ShowcaseSnapshot};
 use crate::app::profile::svc::{ProfileService, ProfileSnapshot};
 
 pub struct ProfileModalState {
     profile_service: ProfileService,
+    showcase_service: ShowcaseService,
+    showcase_snapshot_rx: watch::Receiver<ShowcaseSnapshot>,
+    showcases: Vec<ShowcaseFeedItem>,
     viewed_user_id: Option<Uuid>,
     fallback_name: String,
     profile: Option<Profile>,
@@ -20,9 +24,14 @@ impl Drop for ProfileModalState {
 }
 
 impl ProfileModalState {
-    pub fn new(profile_service: ProfileService) -> Self {
+    pub fn new(profile_service: ProfileService, showcase_service: ShowcaseService) -> Self {
+        let showcase_snapshot_rx = showcase_service.subscribe_snapshot();
+        let showcases = showcase_snapshot_rx.borrow().items.clone();
         Self {
             profile_service,
+            showcase_service,
+            showcase_snapshot_rx,
+            showcases,
             viewed_user_id: None,
             fallback_name: String::new(),
             profile: None,
@@ -41,6 +50,7 @@ impl ProfileModalState {
         snapshot_rx.mark_changed();
         self.snapshot_rx = Some(snapshot_rx);
         self.profile_service.find_profile(user_id);
+        self.showcase_service.list_task();
     }
 
     pub fn close(&mut self) {
@@ -53,6 +63,10 @@ impl ProfileModalState {
     }
 
     pub fn tick(&mut self) {
+        if let Ok(true) = self.showcase_snapshot_rx.has_changed() {
+            self.showcases = self.showcase_snapshot_rx.borrow_and_update().items.clone();
+        }
+
         let Some(rx) = &mut self.snapshot_rx else {
             return;
         };
@@ -67,6 +81,16 @@ impl ProfileModalState {
                 tracing::error!(%e, "failed to receive profile modal snapshot");
             }
         }
+    }
+
+    pub fn showcases_for_viewed(&self) -> Vec<&ShowcaseFeedItem> {
+        let Some(user_id) = self.viewed_user_id else {
+            return Vec::new();
+        };
+        self.showcases
+            .iter()
+            .filter(|item| item.showcase.user_id == user_id)
+            .collect()
     }
 
     pub fn title(&self) -> String {

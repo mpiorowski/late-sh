@@ -52,8 +52,13 @@ jobs:
 
       - name: resolve_image_tag
         id: vars
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          REPOSITORY: ${{ github.repository }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          echo "image_tag=${{ inputs.registry }}/${{ github.repository }}/${{ inputs.image_name }}:${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$REGISTRY/$REPOSITORY/$IMAGE_NAME:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: setup_qemu
         uses: docker/setup-qemu-action@v4

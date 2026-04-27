@@ -14,6 +14,7 @@ use late_ssh::{
     app::ai::{ghost::GhostService, svc::AiService},
     app::chat::news::svc::ArticleService,
     app::chat::notifications::svc::NotificationService,
+    app::chat::showcase::svc::ShowcaseService,
     app::chat::svc::ChatService,
     app::profile::svc::ProfileService,
     app::vote::svc::VoteService,
@@ -120,16 +121,20 @@ async fn main() -> anyhow::Result<()> {
     );
     let profile_service = ProfileService::new(db.clone(), active_users.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let showcase_service = ShowcaseService::new(db.clone());
     let twenty_forty_eight_service =
         late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
     let tetris_service = late_ssh::app::games::tetris::svc::TetrisService::new(db.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
+    let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
+    rooms_service.refresh_task();
+    let blackjack_table_manager =
+        late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(chip_service.clone());
     let (blackjack_event_tx, _) =
-        broadcast::channel::<late_ssh::app::games::blackjack::svc::BlackjackEvent>(64);
-    let blackjack_service = late_ssh::app::games::blackjack::svc::BlackjackService::new(
+        broadcast::channel::<late_ssh::app::rooms::blackjack::svc::BlackjackEvent>(64);
+    let blackjack_service = late_ssh::app::rooms::blackjack::svc::BlackjackService::new(
         chip_service.clone(),
         blackjack_event_tx,
-        db.clone(),
     );
     let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
         db.clone(),
@@ -208,6 +213,7 @@ async fn main() -> anyhow::Result<()> {
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
         article_service,
+        showcase_service,
         profile_service,
         twenty_forty_eight_service,
         tetris_service,
@@ -218,6 +224,8 @@ async fn main() -> anyhow::Result<()> {
         bonsai_service,
         nonogram_library,
         chip_service,
+        rooms_service,
+        blackjack_table_manager,
         blackjack_service,
         dartboard_server,
         dartboard_provenance,

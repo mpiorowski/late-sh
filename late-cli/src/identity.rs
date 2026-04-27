@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use rand_core::OsRng;
-use russh::keys::{self, PrivateKey};
+use getrandom::SysRng;
+use russh::keys::{self, PrivateKey, signature::rand_core::UnwrapErr};
 use std::{
     env, fs,
     io::IsTerminal,
@@ -107,7 +107,7 @@ fn generate_identity(path: &Path) -> Result<()> {
         let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
     }
 
-    let key = PrivateKey::random(&mut OsRng, keys::Algorithm::Ed25519)
+    let key = PrivateKey::random(&mut UnwrapErr(SysRng), keys::Algorithm::Ed25519)
         .context("failed to generate Ed25519 key")?;
     let encoded = key
         .to_openssh(keys::ssh_key::LineEnding::LF)

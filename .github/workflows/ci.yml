@@ -56,10 +56,25 @@ jobs:
       - name: install_clippy
         run: rustup component add clippy
       - name: cargo_clippy
-        run: cargo clippy ${{ inputs.package && format('-p {0}', inputs.package) || '--workspace' }} --all-targets --features otel -- -D warnings
+        env:
+          CARGO_PACKAGE: ${{ inputs.package }}
+        run: |
+          package_args=(--workspace)
+          if [ -n "$CARGO_PACKAGE" ]; then
+            package_args=(-p "$CARGO_PACKAGE")
+          fi
+
+          cargo clippy "${package_args[@]}" --all-targets --features otel -- -D warnings
       - name: install_nextest
         uses: taiki-e/install-action@nextest
       - name: cargo_test
         env:
           TEST_DATABASE_URL: "host=127.0.0.1 port=5432 user=test password=test dbname=postgres"
-        run: cargo nextest run ${{ inputs.package && format('-p {0}', inputs.package) || '--workspace' }} --all-targets
+          CARGO_PACKAGE: ${{ inputs.package }}
+        run: |
+          package_args=(--workspace)
+          if [ -n "$CARGO_PACKAGE" ]; then
+            package_args=(-p "$CARGO_PACKAGE")
+          fi
+
+          cargo nextest run "${package_args[@]}" --all-targets

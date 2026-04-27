@@ -1,8 +1,9 @@
 mod helpers;
 
+use getrandom::SysRng;
 use helpers::{new_test_db, test_app_state, test_config};
 use late_ssh::ssh::run_with_listener;
-use rand_core::OsRng;
+use russh::keys::signature::rand_core::UnwrapErr;
 use russh::{
     client,
     keys::{PrivateKey, PrivateKeyWithHashAlg},
@@ -74,8 +75,11 @@ async fn rejects_second_auth_when_ssh_attempt_rate_limit_is_one() {
 
     let user = "rate-limit-user";
     let key = Arc::new(
-        PrivateKey::random(&mut OsRng, russh::keys::ssh_key::Algorithm::Ed25519)
-            .expect("generate client key"),
+        PrivateKey::random(
+            &mut UnwrapErr(SysRng),
+            russh::keys::ssh_key::Algorithm::Ed25519,
+        )
+        .expect("generate client key"),
     );
 
     let mut c1 = client::connect(Arc::new(client::Config::default()), addr, TestClient)

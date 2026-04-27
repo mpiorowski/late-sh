@@ -97,7 +97,7 @@ async fn ctrl_c_does_not_quit_the_app() {
 }
 
 #[tokio::test]
-async fn screen_number_keys_switch_between_dashboard_games_chat_and_artboard() {
+async fn screen_number_keys_switch_between_dashboard_chat_games_rooms_and_artboard() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -110,12 +110,15 @@ async fn screen_number_keys_switch_between_dashboard_games_chat_and_artboard() {
     let mut app = make_app(test_db.db.clone(), user.id, "screen-flow-it");
 
     app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, " Chat ").await;
 
     app.handle_input(b"3");
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"4");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"1");
@@ -139,10 +142,13 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+
+    app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " The Arcade ").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, " Chat ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Dashboard ").await;
@@ -154,7 +160,7 @@ async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
     let user = create_test_user(&test_db.db, "artboard-view-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-view-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
     wait_for_render_contains(&mut app, "Cursor     0,0").await;
 
@@ -171,7 +177,7 @@ async fn artboard_view_mode_click_enters_active_mode_at_clicked_canvas_cell() {
     let user = create_test_user(&test_db.db, "artboard-click-enter-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-click-enter-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
     wait_for_render_contains(&mut app, "Cursor     0,0").await;
 
@@ -186,7 +192,7 @@ async fn active_artboard_blocks_screen_number_hotkeys_until_escape() {
     let user = create_test_user(&test_db.db, "artboard-active-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-active-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"i");
@@ -217,7 +223,7 @@ async fn active_artboard_ctrl_c_copies_without_quitting() {
     let user = create_test_user(&test_db.db, "artboard-ctrl-c-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-ctrl-c-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"i");
@@ -242,7 +248,7 @@ async fn artboard_help_modal_tab_switches_help_tabs_instead_of_pages() {
     let user = create_test_user(&test_db.db, "artboard-help-tab-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-help-tab-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x10");
@@ -264,7 +270,7 @@ async fn artboard_view_mode_question_mark_opens_local_help() {
     let user = create_test_user(&test_db.db, "artboard-view-help-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-view-help-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"?");
@@ -283,7 +289,7 @@ async fn active_artboard_question_mark_types_into_canvas_instead_of_opening_help
     let user = create_test_user(&test_db.db, "artboard-questionmark-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-questionmark-flow-it");
 
-    app.handle_input(b"4");
+    app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
     wait_for_render_contains(&mut app, "Cursor     0,0").await;
 
@@ -526,7 +532,12 @@ async fn chat_room_list_is_mouse_clickable() {
     wait_for_render_contains(&mut app, " Rooms ").await;
     wait_for_render_contains(&mut app, "rust").await;
 
-    let click = "\x1b[<0;5;10M";
+    let plain = render_plain(&mut app);
+    let rust_offset = plain
+        .find("rust")
+        .unwrap_or_else(|| panic!("rust room row should render: {plain:?}"));
+    let rust_y = rust_offset / 100 + 1;
+    let click = format!("\x1b[<0;5;{rust_y}M");
     app.handle_input(click.as_bytes());
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
@@ -784,8 +795,8 @@ async fn members_command_shows_room_members_without_persisting_message() {
     wait_for_render_contains(&mut app, " side").await;
 
     app.handle_input(b" ");
-    wait_for_render_contains(&mut app, "[g] side").await;
-    app.handle_input(b"g");
+    wait_for_render_contains(&mut app, "[h] side").await;
+    app.handle_input(b"h");
     wait_for_render_contains(&mut app, "> side").await;
 
     app.handle_input(b"i/members\r");

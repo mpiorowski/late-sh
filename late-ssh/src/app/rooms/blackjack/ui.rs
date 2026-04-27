@@ -9,10 +9,10 @@ use ratatui::{
 use crate::app::{
     common::theme,
     games::{
-        blackjack::state::{BlackjackSnapshot, Outcome, Phase, State},
         cards::AsciiCardTheme,
         ui::{draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint},
     },
+    rooms::blackjack::state::{BlackjackSnapshot, Outcome, Phase, State},
 };
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {

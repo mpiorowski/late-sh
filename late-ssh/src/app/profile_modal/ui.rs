@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use crate::app::{
+    chat::showcase::svc::ShowcaseFeedItem,
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     settings_modal::data::country_label,
 };
@@ -114,7 +115,51 @@ fn build_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'static>> {
         ));
     }
 
+    let showcases = state.showcases_for_viewed();
+    if !showcases.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section_heading(&format!("Showcases ({})", showcases.len())));
+        for item in showcases {
+            lines.push(Line::from(""));
+            lines.extend(render_body_to_lines(
+                &showcase_markdown(item),
+                width,
+                Span::raw(""),
+                text,
+            ));
+        }
+    }
+
     lines
+}
+
+fn showcase_markdown(item: &ShowcaseFeedItem) -> String {
+    let s = &item.showcase;
+    let mut out = String::new();
+    out.push_str("### ");
+    out.push_str(s.title.trim());
+    out.push_str("\n\n> ");
+    out.push_str(s.url.trim());
+    let description = s.description.trim();
+    if !description.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(description);
+    }
+    if !s.tags.is_empty() {
+        out.push_str("\n\n");
+        let mut first = true;
+        for tag in &s.tags {
+            if !first {
+                out.push(' ');
+            }
+            first = false;
+            out.push('`');
+            out.push('#');
+            out.push_str(tag);
+            out.push('`');
+        }
+    }
+    out
 }
 
 fn section_heading(title: &str) -> Line<'static> {

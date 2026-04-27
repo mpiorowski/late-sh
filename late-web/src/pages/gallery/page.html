@@ -4,6 +4,20 @@
 
 {% block content %}
 <style>
+    @font-face {
+        font-family: "Symbols Nerd Font";
+        src:
+            url("/static/fonts/SymbolsNerdFont-Regular.woff2") format("woff2"),
+            url("/static/fonts/SymbolsNerdFont-Regular.ttf") format("truetype");
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+    }
+
+    :root {
+        --gallery-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Symbols Nerd Font", "Noto Sans Symbols 2", "Noto Sans Symbols", "Apple Color Emoji", "Segoe UI Emoji", monospace;
+    }
+
     html,
     body {
         overflow: hidden !important;
@@ -17,7 +31,7 @@
         color: #e5e7eb;
         display: flex;
         flex-direction: column;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-family: var(--gallery-font-family);
         z-index: 1;
     }
 
@@ -378,6 +392,7 @@
             cellW: 8,
             cellH: 16,
             fontSize: 14,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Symbols Nerd Font", "Noto Sans Symbols 2", "Noto Sans Symbols", "Apple Color Emoji", "Segoe UI Emoji", monospace',
             minScale: 0.1,
             maxScale: 12,
 
@@ -404,6 +419,7 @@
                 }
 
                 this.renderSnapshot();
+                this.renderWhenFontsReady();
 
                 this.$nextTick(() => {
                     this.fitToView();
@@ -417,6 +433,20 @@
 
             keyFor(x, y) {return x + ',' + y;},
 
+            fontSpec() {
+                return this.fontSize + 'px ' + this.fontFamily;
+            },
+
+            async renderWhenFontsReady() {
+                if (!document.fonts) return;
+                try {
+                    await document.fonts.load(this.fontSize + 'px "Symbols Nerd Font"');
+                    this.renderSnapshot();
+                } catch (_) {
+                    // Keep the initial render if the browser blocks or cannot load the webfont.
+                }
+            },
+
             renderSnapshot() {
                 const c = this.canvas;
                 c.width = this.snapshot.width * this.cellW;
@@ -427,7 +457,7 @@
                 const ctx = this.ctx;
                 ctx.fillStyle = '#111827';
                 ctx.fillRect(0, 0, c.width, c.height);
-                ctx.font = this.fontSize + 'px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+                ctx.font = this.fontSpec();
                 ctx.textBaseline = 'top';
 
                 for (const cell of this.cells) {

@@ -52,9 +52,23 @@ pub struct ArticleFeedItem {
 
 #[derive(Clone, Debug)]
 pub enum ArticleEvent {
-    Created { user_id: Uuid },
-    Failed { user_id: Uuid, error: String },
-    Deleted { user_id: Uuid },
-    UnreadCountUpdated { user_id: Uuid, unread_count: i64 },
-    NewArticlesAvailable { user_id: Uuid, unread_count: i64 },
+    Created {
+        user_id: Uuid,
+    },
+    Failed {
+        user_id: Uuid,
+        error: String,
+    },
+    Deleted {
+        user_id: Uuid,
+    },
+    UnreadCountUpdated {
+        user_id: Uuid,
+        unread_count: i64,
+        last_read_at: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    NewArticlesAvailable {
+        user_id: Uuid,
+        unread_count: i64,
+    },
 }

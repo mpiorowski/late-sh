@@ -8,6 +8,10 @@ Sources:
   Classical: Musopen (Public Domain) via Internet Archive
   Jazz:      Kevin MacLeod (CC-BY) via Internet Archive + HoliznaCC0 (CC0) via Bandcamp
 
+All downloads land in tmp/<genre>/ (the upload-staging area). Dev fixtures
+under music/<genre>/ and R2-backed production tracks are never touched. After
+the user confirms upload to R2, staged files in tmp/ should be removed.
+
 Dependencies: yt-dlp, ffmpeg, python3
 Usage: python3 scripts/fetch_cc_music.py [--genre lofi|ambient|classic|jazz|all] [--music-dir PATH] [--skip-m3u]
 """
@@ -15,7 +19,7 @@ Usage: python3 scripts/fetch_cc_music.py [--genre lofi|ambient|classic|jazz|all]
 import subprocess, json, os, sys, re, urllib.request, glob, argparse
 from pathlib import Path
 
-DEFAULT_MUSIC_DIR = Path(__file__).resolve().parent.parent / "music"
+DEFAULT_MUSIC_DIR = Path(__file__).resolve().parent.parent / "tmp"
 DEFAULT_LIQUIDSOAP_DIR = Path(__file__).resolve().parent.parent / "infra" / "liquidsoap"
 MUSIC_DIR = DEFAULT_MUSIC_DIR
 LIQUIDSOAP_DIR = DEFAULT_LIQUIDSOAP_DIR
@@ -26,10 +30,8 @@ LIQUIDSOAP_DIR = DEFAULT_LIQUIDSOAP_DIR
 
 BANDCAMP_ALBUMS = {
     "lofi": [
-        "https://holiznacc0.bandcamp.com/album/lofi-and-chill",
-        "https://holiznacc0.bandcamp.com/album/public-domain-lo-fi",
-        "https://holiznacc0.bandcamp.com/album/winter-lo-fi-2",
-        "https://holiznacc0.bandcamp.com/album/city-slacker",
+        "https://holiznacc0.bandcamp.com/album/waves-of-nostalgia-part-2",
+        "https://holiznacc0.bandcamp.com/album/eternal-skies-retro-gamer",
     ],
     "jazz": [
         "https://holiznacc0.bandcamp.com/album/lofi-jazz-guitar",
@@ -39,69 +41,86 @@ BANDCAMP_ALBUMS = {
 
 FMA_TRACKS = {
     "ambient": [
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/swirling-snowflakes-finale/", "Amarent", "Swirling Snowflakes - Finale"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/sweet-dreams-middle-eastern-remix/", "Amarent", "Sweet Dreams (Middle-Eastern Remix)"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/salt-lake-swerve-chillout-remix/", "Amarent", "Salt Lake Swerve (Chillout Remix)"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/cathay-lounge/", "Amarent", "Cathay Lounge"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/a-better-world/", "Amarent", "A Better World"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/sweet-dreams-2/", "Amarent", "Sweet Dreams"),
-        ("https://freemusicarchive.org/music/amarent/free-ambient-music/sweet-love-chill-remix/", "Amarent", "Sweet Love (Chill Remix)"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/outer-space/", "Amarent", "Outer Space"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/tuesday-night/", "Amarent", "Tuesday Night"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/tuesday-night-radio-edit/", "Amarent", "Tuesday Night (Radio Edit)"),
-        ("https://freemusicarchive.org/music/amarent/free-atmospheric-music/ethereal-2/", "Amarent", "Ethereal"),
-        ("https://freemusicarchive.org/music/Ketsa/modern-meditations/meditation-5/", "Ketsa", "Meditation"),
-        ("https://freemusicarchive.org/music/Ketsa/modern-meditations/morning-stillness/", "Ketsa", "Morning Stillness"),
-        ("https://freemusicarchive.org/music/Ketsa/modern-meditations/patterns-1/", "Ketsa", "Patterns"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/1-white-noise-part1mp3/", "The Imperfectionist", "1-White noise part.1.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/2-white-noise-part2mp3/", "The Imperfectionist", "2-White noise part.2.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/3-white-noise-part3mp3/", "The Imperfectionist", "3-White noise part.3.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/4-white-noise-part4mp3/", "The Imperfectionist", "4-White noise part.4.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/5-white-noise-part5mp3/", "The Imperfectionist", "5-White noise part.5.mp3"),
-        ("https://freemusicarchive.org/music/the-imperfectionist/white-noise/6-white-noise-part6mp3/", "The Imperfectionist", "6-White noise part.6.mp3"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_01_Closer_To_You/", "Sergey Cheremisinov", "Closer To You"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_02_Train/", "Sergey Cheremisinov", "Train"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_03_Waves/", "Sergey Cheremisinov", "Waves"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_04_When_You_Leave/", "Sergey Cheremisinov", "When You Leave"),
+        ("https://freemusicarchive.org/music/Sergey_Cheremisinov/Charms/Sergey_Cheremisinov_-_Charms_-_05_Fog/", "Sergey Cheremisinov", "Fog"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_01_Fouler_lhorizon/", "Komiku", "Fouler l'horizon"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_02_Le_Grand_Village/", "Komiku", "Le Grand Village"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_03_Champ_de_tournesol/", "Komiku", "Champ de tournesol"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_04_Barque_sur_le_lac/", "Komiku", "Barque sur le lac"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_09_De_lherbe_sous_les_pieds/", "Komiku", "De l'herbe sous les pieds"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_13_Bleu/", "Komiku", "Bleu"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure_/Komiku_-_Its_time_for_adventure_-_14_Un_coin_loin_du_monde/", "Komiku", "Un coin loin du monde"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_01_Balance/", "Komiku", "Balance"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_02_Chill_Out_Theme/", "Komiku", "Chill Out Theme"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_04_Time/", "Komiku", "Time"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_05_Down_the_river/", "Komiku", "Down the river"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_07_Frozen_Jungle/", "Komiku", "Frozen Jungle"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_2/Komiku_-_Its_time_for_adventure_vol_2_-_08_Dreaming_of_you/", "Komiku", "Dreaming of you"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_3/Komiku_-_Its_time_for_adventure_vol_3_-_01_Childhood_scene/", "Komiku", "Childhood scene"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_3/Komiku_-_Its_time_for_adventure_vol_3_-_07_The_place_that_never_get_old/", "Komiku", "The place that never gets old"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_5/Komiku_-_Its_time_for_adventure_vol_5_-_05_Xenobiological_Forest/", "Komiku", "Xenobiological Forest"),
+        ("https://freemusicarchive.org/music/Komiku/Its_time_for_adventure__vol_5/Komiku_-_Its_time_for_adventure_vol_5_-_06_Friendss_theme/", "Komiku", "Friends's theme"),
+        ("https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-1/", "HoliznaCC0", "Lullabies For The End Of The World 1"),
+        ("https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-2/", "HoliznaCC0", "Lullabies For The End Of The World 2"),
+        ("https://freemusicarchive.org/music/holiznacc0/lullabies-for-the-end-of-the-world/lullabies-for-the-end-of-the-world-3/", "HoliznaCC0", "Lullabies For The End Of The World 3"),
     ],
 }
 
 FMA_EXTRA_TRACKS = {
     "lofi": [
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/tetra/", "Ketsa", "Tetra"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/i-dream-of-you/", "Ketsa", "I Dream Of You"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/black-screen/", "Ketsa", "Black Screen"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/slow-dance/", "Ketsa", "Slow Dance"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/seconds-left/", "Ketsa", "Seconds Left"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/lowest-sun/", "Ketsa", "Lowest Sun"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/down-pitch/", "Ketsa", "Down Pitch"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/reclaimed/", "Ketsa", "Reclaimed"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/the-time-it-takes/", "Ketsa", "The Time It Takes"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/deep-waves/", "Ketsa", "Deep Waves"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/shining-still/", "Ketsa", "Shining Still"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/the-winter-months/", "Ketsa", "The Winter Months"),
-        ("https://freemusicarchive.org/music/Ketsa/lofi-downtempo/folded/", "Ketsa", "Folded"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/home-sigh/", "Ketsa", "Home Sigh"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/take-me-up/", "Ketsa", "Take Me Up"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/appointments/", "Ketsa", "Appointments"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/jazz-daze/", "Ketsa", "Jazz Daze"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/bring-dat/", "Ketsa", "Bring Dat"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/make-me-sad/", "Ketsa", "Make Me Sad"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/in-trouble/", "Ketsa", "In Trouble"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/worlds-a-stage/", "Ketsa", "World's A Stage"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/smoothness/", "Ketsa", "Smoothness"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/journal/", "Ketsa", "Journal"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/my-biz/", "Ketsa", "My Biz"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/aligning-frequencies/", "Ketsa", "Aligning Frequencies"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/therapy-1/", "Ketsa", "Therapy"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/sun-slides/", "Ketsa", "Sun Slides"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/to-do/", "Ketsa", "To do"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/grand-rising/", "Ketsa", "Grand Rising"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/the-cure/", "Ketsa", "The Cure"),
-        ("https://freemusicarchive.org/music/Ketsa/vintage-beats/keep-hold/", "Ketsa", "Keep Hold"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/one-more/", "JMHBM", "One More"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/night-city/", "JMHBM", "Night City"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/new-new/", "JMHBM", "New New"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/do-me-right/", "JMHBM", "Do Me Right"),
-        ("https://freemusicarchive.org/index.php/music/beat-mekanik/single/heavyweights/", "JMHBM", "Heavyweights"),
-        ("https://freemusicarchive.org/music/beat-mekanik/single/footsteps/", "JMHBM", "Footsteps"),
-        ("https://freemusicarchive.org/music/legacyalli/instrumental-by-legacyalli-2024/rf-lofi-funky-and-chunky/", "legacyAlli", "RF - LoFi Funky and Chunky"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-1/", "HoliznaCC0", "OST Music Box 1"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-2/", "HoliznaCC0", "OST Music Box 2"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-3/", "HoliznaCC0", "OST Music Box 3"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-4/", "HoliznaCC0", "OST Music Box 4"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-5/", "HoliznaCC0", "OST Music Box 5"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-6/", "HoliznaCC0", "OST Music Box 6"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/ost-music-box-7/", "HoliznaCC0", "OST Music Box 7"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/drifting-piano/", "HoliznaCC0", "Drifting Piano"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/a-small-town-on-pluto-music-box/", "HoliznaCC0", "A Small Town On Pluto (Music Box)"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/a-small-town-on-pluto-composed/", "HoliznaCC0", "A Small Town On Pluto (Composed)"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/game-travel-1-piano/", "HoliznaCC0", "Game Travel 1 (Piano)"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/vst-guitar/", "HoliznaCC0", "VST Guitar"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/cabin-fever/", "HoliznaCC0", "Cabin Fever"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/spring-on-the-horizon/", "HoliznaCC0", "Spring On The Horizon"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/creepy-piano-1/", "HoliznaCC0", "Creepy Piano 1"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/creepy-piano-2/", "HoliznaCC0", "Creepy Piano 2"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/creepy-piano-3/", "HoliznaCC0", "Creepy Piano 3"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/creepy-piano-4/", "HoliznaCC0", "Creepy Piano 4"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/dangerous-voyage/", "HoliznaCC0", "Dangerous Voyage"),
+        ("https://freemusicarchive.org/music/holiznacc0/background-music/dangerous-voyage-music-box/", "HoliznaCC0", "Dangerous Voyage (Music Box)"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/saviour-above/", "Ketsa", "Saviour Above"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/always-faithful/", "Ketsa", "Always Faithful"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/all-ways/", "Ketsa", "All Ways"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/feeling-1/", "Ketsa", "Feeling"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/importance-1/", "Ketsa", "Importance"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/trench-work/", "Ketsa", "Trench Work"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/night-flow-day-grow/", "Ketsa", "Night Flow Day Grow"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/will-make-you-happy/", "Ketsa", "Will Make You Happy"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/bright-state/", "Ketsa", "Bright State"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/cello/", "Ketsa", "Cello"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/dry-and-high/", "Ketsa", "Dry and High"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/the-road-1/", "Ketsa", "The Road"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/kinship/", "Ketsa", "Kinship"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/her-memory-fading/", "Ketsa", "Her Memory Fading"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/what-it-feels-like-1/", "Ketsa", "What It Feels Like"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/a-little-faith/", "Ketsa", "A Little Faith"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/tide-turns/", "Ketsa", "Tide Turns"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/longer-wait/", "Ketsa", "Longer Wait"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/life-is-great/", "Ketsa", "Life is Great"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/that-feeling/", "Ketsa", "That Feeling"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/london-west/", "Ketsa", "London West"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/dawn-faded/", "Ketsa", "Dawn Faded"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/good-feel/", "Ketsa", "Good Feel"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/here-for-you/", "Ketsa", "Here For You"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/brazilian-sunsets/", "Ketsa", "Brazilian Sunsets"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/too-late/", "Ketsa", "Too Late"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/the-road-2/", "Ketsa", "The Road 2"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/off-days/", "Ketsa", "Off Days"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/inside-dead/", "Ketsa", "Inside Dead"),
+        ("https://freemusicarchive.org/music/Ketsa/cc-by-free-to-use-for-anything/vision-2/", "Ketsa", "Vision"),
     ],
 }
 
@@ -213,6 +232,136 @@ IA_CURATED_TRACKS = {
 # Internet Archive items: (identifier, genre, max_tracks)
 IA_ITEMS = [
     ("Jazz_Sampler-9619", "jazz", 20),
+]
+
+# Second-pass classical expansion: ~100 chill picks for coding sessions, drawn
+# from explicitly CC0 / Public-Domain-marked archive.org items. These are
+# downloaded into tmp/classic/ and APPENDED to infra/liquidsoap/classic.m3u
+# (the existing 100-track manifest in R2 is left untouched). Triggered by
+# --classic-expand on the CLI.
+#
+# Sources:
+#   - musopen-chopin (CC0): Musopen's Complete Chopin Collection
+#   - bach-well-tempered-clavier-book-1 (PD mark): Kimiko Ishizaka's "Open
+#     Well-Tempered Clavier" Book I, the canonical PD recording
+#   - MusopenCollectionAsFlac (PD): chill movements not yet in the manifest
+IA_CLASSIC_EXPANSION = [
+    # ---- MusopenCollectionAsFlac: chill movements left over from pass 1 ----
+    ("MusopenCollectionAsFlac", "Mendelssohn_StringQuartetNo.6inFMinorOp.80/FelixMendelssohn-StringQuartetNo.6InFMinorOp.80-03-Adagio.mp3", "Felix Mendelssohn", "String Quartet No. 6 in F Minor, Op. 80 - III. Adagio"),
+    ("MusopenCollectionAsFlac", "Schubert_SonataInDMajorD.850/FranzSchubert-SonataInDMajorD.850-02-ConMoto.mp3", "Franz Schubert", "Sonata in D Major, D. 850 - II. Con moto"),
+    ("MusopenCollectionAsFlac", "Tchaikovsky_SymphonyPathetique/PyotrIlyichTchaikovsky-SymphonyNo.6InBMinorOp.74pathtique-04-FinaleAdagioLamentoso.mp3", "Pyotr Ilyich Tchaikovsky", "Symphony No. 6 in B Minor, Op. 74 'Pathetique' - IV. Finale Adagio lamentoso"),
+    ("MusopenCollectionAsFlac", "Brahms_SymphonyNo.1inCMinor/JohannesBrahms-SymphonyNo.1InCMinorOp.68-04-Adagio-PiAndante-AllegroNonTroppoMaConBrio.mp3", "Johannes Brahms", "Symphony No. 1 in C Minor, Op. 68 - IV. Adagio - Piu andante - Allegro non troppo"),
+    ("MusopenCollectionAsFlac", "Schubert_SonataInCMinorD.958/FranzSchubert-SonataInCMinorD.958-03-MenuettoAllegro.mp3", "Franz Schubert", "Sonata in C Minor, D. 958 - III. Menuetto Allegro"),
+
+    # ---- Kimiko Ishizaka, Open Well-Tempered Clavier Book I (CC0/PD mark) ----
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 01 Prelude No. 1 in C major, BWV 846.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 1 in C major, BWV 846"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 02 Fugue No. 1 in C major, BWV 846.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 1 in C major, BWV 846"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 03 Prelude No. 2 in C minor, BWV 847.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 2 in C minor, BWV 847"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 04 Fugue No. 2 in C minor, BWV 847.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 2 in C minor, BWV 847"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 05 Prelude No. 3 in C-sharp major, BWV 848.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 3 in C-sharp major, BWV 848"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 06 Fugue No. 3 in C-sharp major, BWV 848.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 3 in C-sharp major, BWV 848"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 07 Prelude No. 4 in C-sharp minor, BWV 849.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 4 in C-sharp minor, BWV 849"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 08 Fugue No. 4 in C-sharp minor, BWV 849.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 4 in C-sharp minor, BWV 849"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 09 Prelude No. 5 in D major, BWV 850.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 5 in D major, BWV 850"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 10 Fugue No. 5 in D major, BWV 850.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 5 in D major, BWV 850"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 11 Prelude No. 6 in D minor, BWV 851.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 6 in D minor, BWV 851"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 12 Fugue No. 6 in D minor, BWV 851.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 6 in D minor, BWV 851"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 13 Prelude No. 7 in E-flat major, BWV 852.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 7 in E-flat major, BWV 852"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 14 Fugue No. 7 in E-flat major, BWV 852.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 7 in E-flat major, BWV 852"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 15 Prelude No. 8 in E-flat minor, BWV 853.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 8 in E-flat minor, BWV 853"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 16 Fugue No. 8 in D-sharp minor, BWV 853.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 8 in D-sharp minor, BWV 853"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 17 Prelude No. 9 in E major, BWV 854.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 9 in E major, BWV 854"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 18 Fugue No. 9 in E major, BWV 854.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 9 in E major, BWV 854"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 19 Prelude No. 10 in E minor, BWV 855.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 10 in E minor, BWV 855"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 20 Fugue No. 10 in E minor, BWV 855.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 10 in E minor, BWV 855"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 21 Prelude No. 11 in F major, BWV 856.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 11 in F major, BWV 856"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 22 Fugue No. 11 in F major, BWV 856.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 11 in F major, BWV 856"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 23 Prelude No. 12 in F minor, BWV 857.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 12 in F minor, BWV 857"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 24 Fugue No. 12 in F minor, BWV 857.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 12 in F minor, BWV 857"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 25 Prelude No. 13 in F-sharp major, BWV 858.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 13 in F-sharp major, BWV 858"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 26 Fugue No. 13 in F-sharp major, BWV 858.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 13 in F-sharp major, BWV 858"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 27 Prelude No. 14 in F-sharp minor, BWV 859.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 14 in F-sharp minor, BWV 859"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 28 Fugue No. 14 in F-sharp minor, BWV 859.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 14 in F-sharp minor, BWV 859"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 29 Prelude No. 15 in G major, BWV 860.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 15 in G major, BWV 860"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 30 Fugue No. 15 in G major, BWV 860.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 15 in G major, BWV 860"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 31 Prelude No. 16 in G minor, BWV 861.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 16 in G minor, BWV 861"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 32 Fugue No. 16 in G minor, BWV 861.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 16 in G minor, BWV 861"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 33 Prelude No. 17 in A-flat major, BWV 862.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 17 in A-flat major, BWV 862"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 34 Fugue No. 17 in A-flat major, BWV 862.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 17 in A-flat major, BWV 862"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 35 Prelude No. 18 in G-sharp minor, BWV 863.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 18 in G-sharp minor, BWV 863"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 36 Fugue No. 18 in G-sharp minor, BWV 863.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 18 in G-sharp minor, BWV 863"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 37 Prelude No. 19 in A major, BWV 864.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 19 in A major, BWV 864"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 38 Fugue No. 19 in A major, BWV 864.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 19 in A major, BWV 864"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 39 Prelude No. 20 in A minor, BWV 865.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 20 in A minor, BWV 865"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 40 Fugue No. 20 in A minor, BWV 865.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 20 in A minor, BWV 865"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 41 Prelude No. 21 in B-flat major, BWV 866.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 21 in B-flat major, BWV 866"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 42 Fugue No. 21 in B-flat major, BWV 866.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 21 in B-flat major, BWV 866"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 43 Prelude No. 22 in B-flat minor, BWV 867.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 22 in B-flat minor, BWV 867"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 44 Fugue No. 22 in B-flat minor, BWV 867.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 22 in B-flat minor, BWV 867"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 45 Prelude No. 23 in B major, BWV 868.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 23 in B major, BWV 868"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 46 Fugue No. 23 in B major, BWV 868.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 23 in B major, BWV 868"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 47 Prelude No. 24 in B minor, BWV 869.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Prelude No. 24 in B minor, BWV 869"),
+    ("bach-well-tempered-clavier-book-1", "Kimiko Ishizaka - Bach- Well-Tempered Clavier, Book 1 - 48 Fugue No. 24 in B minor, BWV 869.mp3", "J.S. Bach (Kimiko Ishizaka)", "Well-Tempered Clavier Book I - Fugue No. 24 in B minor, BWV 869"),
+
+    # ---- Musopen Complete Chopin Collection (CC0) - Nocturnes ----
+    ("musopen-chopin", "NocturneOp.9No.1InBFlatMinor.mp3", "Frederic Chopin", "Nocturne Op. 9 No. 1 in B-flat minor"),
+    ("musopen-chopin", "Nocturne Op. 9 no. 2 in E flat major.mp3", "Frederic Chopin", "Nocturne Op. 9 No. 2 in E-flat major"),
+    ("musopen-chopin", "NocturneOp.9No.3.mp3", "Frederic Chopin", "Nocturne Op. 9 No. 3 in B major"),
+    ("musopen-chopin", "Nocturne Op. 15 no. 1 In F major.mp3", "Frederic Chopin", "Nocturne Op. 15 No. 1 in F major"),
+    ("musopen-chopin", "Nocturne Op. 27 no. 1 in C sharp minor.mp3", "Frederic Chopin", "Nocturne Op. 27 No. 1 in C-sharp minor"),
+    ("musopen-chopin", "Nocturne Op. 32 no. 1 in B major.mp3", "Frederic Chopin", "Nocturne Op. 32 No. 1 in B major"),
+    ("musopen-chopin", "Nocturne Op. 32 no. 2 in A flat major.mp3", "Frederic Chopin", "Nocturne Op. 32 No. 2 in A-flat major"),
+    ("musopen-chopin", "Nocturne Op. 48 no. 1 in C minor.mp3", "Frederic Chopin", "Nocturne Op. 48 No. 1 in C minor"),
+    ("musopen-chopin", "Nocturne Op. 48 no. 2 in F sharp minor.mp3", "Frederic Chopin", "Nocturne Op. 48 No. 2 in F-sharp minor"),
+    ("musopen-chopin", "Nocturne Op. 55 no. 1 in F minor.mp3", "Frederic Chopin", "Nocturne Op. 55 No. 1 in F minor"),
+    ("musopen-chopin", "Nocturne Op. 55 no. 2 in E flat major.mp3", "Frederic Chopin", "Nocturne Op. 55 No. 2 in E-flat major"),
+    ("musopen-chopin", "Nocturne Op. 62 no. 2 in E major.mp3", "Frederic Chopin", "Nocturne Op. 62 No. 2 in E major"),
+    ("musopen-chopin", "NocturneOp.72No.1InEMinor.mp3", "Frederic Chopin", "Nocturne Op. 72 No. 1 in E minor"),
+    ("musopen-chopin", "Nocturne B. 108 in C minor.mp3", "Frederic Chopin", "Nocturne B. 108 in C minor"),
+    ("musopen-chopin", "Nocturne B. 49 in C sharp minor 'Lento con gran espressione' (1).mp3", "Frederic Chopin", "Nocturne B. 49 in C-sharp minor 'Lento con gran espressione'"),
+    ("musopen-chopin", "NocturneOp27No2.mp3", "Frederic Chopin", "Nocturne Op. 27 No. 2 in D-flat major"),
+
+    # ---- Chopin: Mazurkas ----
+    ("musopen-chopin", "Mazurka Op. 17 no. 3 in A flat major.mp3", "Frederic Chopin", "Mazurka Op. 17 No. 3 in A-flat major"),
+    ("musopen-chopin", "Mazurka Op. 17 no. 4 in A minor.mp3", "Frederic Chopin", "Mazurka Op. 17 No. 4 in A minor"),
+    ("musopen-chopin", "Mazurka Op. 24 no. 4 in B flat minor.mp3", "Frederic Chopin", "Mazurka Op. 24 No. 4 in B-flat minor"),
+    ("musopen-chopin", "Mazurka Op. 50 no. 3 in C sharp minor.mp3", "Frederic Chopin", "Mazurka Op. 50 No. 3 in C-sharp minor"),
+    ("musopen-chopin", "Mazurka Op. 56 no. 1 in B major.mp3", "Frederic Chopin", "Mazurka Op. 56 No. 1 in B major"),
+    ("musopen-chopin", "Mazurka Op. 56 no. 3 in C minor.mp3", "Frederic Chopin", "Mazurka Op. 56 No. 3 in C minor"),
+    ("musopen-chopin", "Mazurka Op. 59 no. 1 in A minor.mp3", "Frederic Chopin", "Mazurka Op. 59 No. 1 in A minor"),
+    ("musopen-chopin", "Mazurka Op. 59 no. 3 in F sharp minor.mp3", "Frederic Chopin", "Mazurka Op. 59 No. 3 in F-sharp minor"),
+    ("musopen-chopin", "Mazurka Op. 50 no. 1 in G major.mp3", "Frederic Chopin", "Mazurka Op. 50 No. 1 in G major"),
+    ("musopen-chopin", "Mazurka Op. 50 no. 2 in A flat major.mp3", "Frederic Chopin", "Mazurka Op. 50 No. 2 in A-flat major"),
+    ("musopen-chopin", "Mazurka Op. 7 no. 3 in F minor.mp3", "Frederic Chopin", "Mazurka Op. 7 No. 3 in F minor"),
+    ("musopen-chopin", "Mazurka Op. 24 no. 3 in A flat major.mp3", "Frederic Chopin", "Mazurka Op. 24 No. 3 in A-flat major"),
+
+    # ---- Chopin: Waltzes (calmer, melodic ones) ----
+    ("musopen-chopin", "Waltz Op. 64 no. 2 in C sharp minor.mp3", "Frederic Chopin", "Waltz Op. 64 No. 2 in C-sharp minor"),
+    ("musopen-chopin", "Waltz Op. 69 no. 1 in A flat major.mp3", "Frederic Chopin", "Waltz Op. 69 No. 1 in A-flat major"),
+    ("musopen-chopin", "Waltz Op. 69 no. 2 in B minor.mp3", "Frederic Chopin", "Waltz Op. 69 No. 2 in B minor"),
+    ("musopen-chopin", "Waltz Op. 70 no. 2 in F minor.mp3", "Frederic Chopin", "Waltz Op. 70 No. 2 in F minor"),
+    ("musopen-chopin", "Waltz Op. 70 no. 3 in D flat major.mp3", "Frederic Chopin", "Waltz Op. 70 No. 3 in D-flat major"),
+    ("musopen-chopin", "WaltzOp.34No.2InAMinor.mp3", "Frederic Chopin", "Waltz Op. 34 No. 2 in A minor"),
+    ("musopen-chopin", "WaltzB.46InEFlatMajor.mp3", "Frederic Chopin", "Waltz B. 46 in E-flat major"),
+    ("musopen-chopin", "WaltzB.56InEMinor.mp3", "Frederic Chopin", "Waltz B. 56 in E minor"),
+    ("musopen-chopin", "WaltzOp.34No.3InFMajor.mp3", "Frederic Chopin", "Waltz Op. 34 No. 3 in F major"),
+    ("musopen-chopin", "WaltzB.21InAFlatMajor.mp3", "Frederic Chopin", "Waltz B. 21 in A-flat major"),
+
+    # ---- Chopin: Impromptus ----
+    ("musopen-chopin", "Fantasie Impromptu Op. 66.mp3", "Frederic Chopin", "Fantaisie-Impromptu Op. 66 in C-sharp minor"),
+    ("musopen-chopin", "Impromptu no. 1 - Op. 29.mp3", "Frederic Chopin", "Impromptu No. 1 Op. 29 in A-flat major"),
+    ("musopen-chopin", "Impromptu no. 2 - Op. 36.mp3", "Frederic Chopin", "Impromptu No. 2 Op. 36 in F-sharp major"),
+    ("musopen-chopin", "Impromptu no. 3 - Op. 51.mp3", "Frederic Chopin", "Impromptu No. 3 Op. 51 in G-flat major"),
+
+    # ---- Chopin: Preludes Op. 28 (calmer ones) ----
+    ("musopen-chopin", "Prelude Op. 28 no. 6.mp3", "Frederic Chopin", "Prelude Op. 28 No. 6 in B minor"),
+    ("musopen-chopin", "Prelude Op. 28 no. 7.mp3", "Frederic Chopin", "Prelude Op. 28 No. 7 in A major"),
+    ("musopen-chopin", "Prelude Op. 28 no. 13.mp3", "Frederic Chopin", "Prelude Op. 28 No. 13 in F-sharp major"),
+    ("musopen-chopin", "Prelude Op. 28 no. 15.mp3", "Frederic Chopin", "Prelude Op. 28 No. 15 in D-flat major 'Raindrop'"),
+    ("musopen-chopin", "Prelude Op. 28 no. 17.mp3", "Frederic Chopin", "Prelude Op. 28 No. 17 in A-flat major"),
+
+    # ---- Chopin: Cello Sonata Largo ----
+    ("musopen-chopin", "Sonata for Piano and Cello in G Minor, Op. 65 - III. Largo.mp3", "Frederic Chopin", "Sonata for Piano and Cello, Op. 65 - III. Largo"),
 ]
 
 
@@ -425,6 +574,115 @@ def download_ia(identifier: str, genre: str, max_tracks: int):
     print(f"  Downloaded {count} tracks for {genre}")
 
 
+def download_classic_expansion():
+    """Download the IA_CLASSIC_EXPANSION batch into tmp/classic/ (skipping any
+    files already present locally or already represented in classic.m3u)."""
+    out_dir = MUSIC_DIR / "classic"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_in_m3u = m3u_existing_container_paths("classic")
+
+    print(f"\n{'='*60}")
+    print(f"  Downloading classical expansion ({len(IA_CLASSIC_EXPANSION)} tracks)")
+    print(f"{'='*60}")
+
+    downloaded = 0
+    for i, (identifier, relative_path, artist, title) in enumerate(IA_CLASSIC_EXPANSION, start=1):
+        out_path = manifest_output_path("classic", artist, title)
+        container_path = f"/music/classic/{out_path.name}"
+        if container_path in existing_in_m3u:
+            print(f"  [skip-m3u] {artist} - {title}")
+            continue
+        if out_path.exists():
+            print(f"  [skip-file] {artist} - {title}")
+            continue
+
+        print(f"  [{i}/{len(IA_CLASSIC_EXPANSION)}] {artist} - {title}")
+        try:
+            dl_url = f"https://archive.org/download/{identifier}/{urllib.request.quote(relative_path)}"
+            urllib.request.urlretrieve(dl_url, str(out_path))
+            downloaded += 1
+        except Exception as e:
+            print(f"  [error] {e}")
+            if out_path.exists():
+                out_path.unlink()
+
+    print(f"  Downloaded {downloaded} new tracks to {out_dir}")
+
+
+def m3u_existing_container_paths(genre: str) -> set:
+    """Parse an existing .m3u and return the set of container paths already
+    represented (the part after the final ':' on annotate lines)."""
+    m3u_path = LIQUIDSOAP_DIR / f"{genre}.m3u"
+    if not m3u_path.exists():
+        return set()
+    paths = set()
+    for line in m3u_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # annotate:...:/music/<genre>/<file>
+        marker = f":/music/{genre}/"
+        idx = line.find(marker)
+        if idx >= 0:
+            paths.add(line[idx + 1:])
+        elif line.startswith(f"/music/{genre}/"):
+            paths.add(line)
+    return paths
+
+
+def append_classic_expansion_to_m3u():
+    """Append annotate lines for any IA_CLASSIC_EXPANSION tracks present in
+    tmp/classic/ but not yet in classic.m3u. Existing entries are untouched."""
+    m3u_path = LIQUIDSOAP_DIR / "classic.m3u"
+    existing_paths = m3u_existing_container_paths("classic")
+
+    new_lines = []
+    skipped_missing = 0
+    for identifier, relative_path, artist, title in IA_CLASSIC_EXPANSION:
+        mp3 = manifest_output_path("classic", artist, title)
+        container_path = f"/music/classic/{mp3.name}"
+        if container_path in existing_paths:
+            continue
+        if not mp3.exists():
+            skipped_missing += 1
+            continue
+
+        duration = ""
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json",
+                 "-show_format", str(mp3)],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                fmt = json.loads(result.stdout).get("format", {})
+                dur_secs = float(fmt.get("duration", 0))
+                if dur_secs > 0:
+                    duration = str(int(dur_secs))
+        except Exception:
+            pass
+
+        # liquidsoap annotate format expects double-quoted values; embed any
+        # apostrophes literally and replace any double quotes in source with
+        # single quotes (matches the existing manifest convention)
+        a = artist.replace('"', "'")
+        t = title.replace('"', "'")
+        dur_part = f',duration="{duration}"' if duration else ""
+        new_lines.append(f'annotate:artist="{a}",title="{t}"{dur_part}:{container_path}')
+
+    if not new_lines:
+        print(f"  No new tracks to append to {m3u_path.name} ({skipped_missing} missing locally)")
+        return
+
+    # Append, ensuring the existing file ends with a newline
+    existing_content = m3u_path.read_text() if m3u_path.exists() else ""
+    if existing_content and not existing_content.endswith("\n"):
+        existing_content += "\n"
+    m3u_path.write_text(existing_content + "\n".join(new_lines) + "\n")
+    print(f"  Appended {len(new_lines)} tracks to {m3u_path.name} (skipped {skipped_missing} missing locally)")
+
+
 def generate_m3u(genre: str):
     """Generate .m3u playlist from downloaded MP3 files."""
     music_path = MUSIC_DIR / genre
@@ -515,17 +773,33 @@ def main():
                         choices=["lofi", "ambient", "classic", "jazz", "all"],
                         help="Which genre to download (default: all)")
     parser.add_argument("--music-dir", type=Path, default=DEFAULT_MUSIC_DIR,
-                        help="Where to store downloaded music (default: repo music/)")
+                        help="Where to store downloaded music (default: repo tmp/, the upload-staging area)")
     parser.add_argument("--liquidsoap-dir", type=Path, default=DEFAULT_LIQUIDSOAP_DIR,
                         help="Where to write generated .m3u files (default: repo infra/liquidsoap/)")
     parser.add_argument("--m3u-only", action="store_true",
                         help="Only regenerate .m3u files from existing downloads")
     parser.add_argument("--skip-m3u", action="store_true",
                         help="Skip generating .m3u files")
+    parser.add_argument("--classic-expand", action="store_true",
+                        help="Download the IA_CLASSIC_EXPANSION batch into tmp/classic/ "
+                             "and append the new tracks to classic.m3u (existing entries "
+                             "are preserved). Skips all other genres and download paths.")
     args = parser.parse_args()
 
     MUSIC_DIR = args.music_dir.resolve()
     LIQUIDSOAP_DIR = args.liquidsoap_dir.resolve()
+
+    if args.classic_expand:
+        download_classic_expansion()
+        if not args.skip_m3u:
+            print(f"\n{'='*60}")
+            print("  Appending new classical tracks to classic.m3u")
+            print(f"{'='*60}")
+            append_classic_expansion_to_m3u()
+        print("\nDone! Next steps:")
+        print(f"  1. Review {LIQUIDSOAP_DIR}/classic.m3u (new entries appended at the end)")
+        print(f"  2. Upload tmp/classic/*.mp3 to R2, then clear tmp/classic/")
+        return
 
     genres = ["lofi", "ambient", "classic", "jazz"] if args.genre == "all" else [args.genre]
 

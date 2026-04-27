@@ -21,6 +21,7 @@ tracing-subscriber = { workspace = true }
 cpal.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
+getrandom.workspace = true
 rand_core.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 russh.workspace = true

@@ -26,6 +26,16 @@ impl ArticleFeedRead {
         Ok(())
     }
 
+    pub async fn last_read_at(client: &Client, user_id: Uuid) -> Result<Option<DateTime<Utc>>> {
+        let row = client
+            .query_opt(
+                "SELECT last_read_at FROM article_feed_reads WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.map(|row| row.get("last_read_at")).unwrap_or(None))
+    }
+
     pub async fn unread_count_for_user(client: &Client, user_id: Uuid) -> Result<i64> {
         let row = client
             .query_one(

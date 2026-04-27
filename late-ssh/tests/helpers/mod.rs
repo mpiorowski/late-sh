@@ -12,7 +12,6 @@ use late_ssh::app::bonsai::svc::BonsaiService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
-use late_ssh::app::games::blackjack::svc::BlackjackService;
 use late_ssh::app::games::chips::svc::ChipService;
 use late_ssh::app::games::leaderboard::svc::LeaderboardService;
 use late_ssh::app::games::minesweeper::svc::MinesweeperService;
@@ -23,6 +22,9 @@ use late_ssh::app::games::sudoku::svc::SudokuService;
 use late_ssh::app::games::tetris::svc::TetrisService;
 use late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::profile::svc::ProfileService;
+use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
+use late_ssh::app::rooms::blackjack::svc::BlackjackService;
+use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
 use late_ssh::config::{AiConfig, Config};
@@ -93,6 +95,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let chat_service = ChatService::new(db.clone(), notification_service.clone());
     let ai_service = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let showcase_service = late_ssh::app::chat::showcase::svc::ShowcaseService::new(db.clone());
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,
         config.ssh_rate_limit_window_secs,
@@ -106,9 +109,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = TetrisService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
+    let rooms_service = RoomsService::new(db.clone());
+    let blackjack_table_manager = BlackjackTableManager::new(chip_service.clone());
     let (blackjack_event_tx, _) = broadcast::channel(64);
-    let blackjack_service =
-        BlackjackService::new(chip_service.clone(), blackjack_event_tx, db.clone());
+    let blackjack_service = BlackjackService::new(chip_service.clone(), blackjack_event_tx);
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let nonogram_service =
         NonogramService::new(db.clone(), activity_tx.clone(), chip_service.clone());
@@ -130,6 +134,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         notification_service,
         ai_service,
         article_service,
+        showcase_service,
         profile_service,
         twenty_forty_eight_service,
         tetris_service,
@@ -140,6 +145,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         bonsai_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service,
+        rooms_service,
+        blackjack_table_manager,
         blackjack_service,
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
@@ -182,6 +189,7 @@ pub fn make_app_with_chat_service(
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
             chat_service.clone(),
         ),
+        showcase_service: late_ssh::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
@@ -213,10 +221,11 @@ pub fn make_app_with_chat_service(
             ChipService::new(db.clone()),
         ),
         initial_minesweeper_games: Vec::new(),
+        rooms_service: RoomsService::new(db.clone()),
+        blackjack_table_manager: BlackjackTableManager::new(ChipService::new(db.clone())),
         blackjack_service: BlackjackService::new(
             ChipService::new(db.clone()),
             broadcast::channel(64).0,
-            db.clone(),
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
@@ -280,6 +289,7 @@ pub fn make_app_with_paired_client(
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
             ChatService::new(db.clone(), NotificationService::new(db.clone())),
         ),
+        showcase_service: late_ssh::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
@@ -311,10 +321,11 @@ pub fn make_app_with_paired_client(
             ChipService::new(db.clone()),
         ),
         initial_minesweeper_games: Vec::new(),
+        rooms_service: RoomsService::new(db.clone()),
+        blackjack_table_manager: BlackjackTableManager::new(ChipService::new(db.clone())),
         blackjack_service: BlackjackService::new(
             ChipService::new(db.clone()),
             broadcast::channel(64).0,
-            db.clone(),
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),

@@ -172,7 +172,7 @@ pub struct GamesHubView<'a> {
     pub nonogram_state: &'a super::nonogram::state::State,
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
-    pub blackjack_state: &'a super::blackjack::state::State,
+    pub blackjack_state: &'a crate::app::rooms::blackjack::state::State,
     pub is_admin: bool,
     pub leaderboard: &'a Arc<LeaderboardData>,
     pub show_sidebar: bool,
@@ -209,7 +209,12 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             super::solitaire::ui::draw_game(frame, area, view.solitaire_state, view.show_sidebar);
             return;
         } else if view.game_selection == GAME_SELECTION_BLACKJACK && view.is_admin {
-            super::blackjack::ui::draw_game(frame, area, view.blackjack_state, view.show_sidebar);
+            crate::app::rooms::blackjack::ui::draw_game(
+                frame,
+                area,
+                view.blackjack_state,
+                view.show_sidebar,
+            );
             return;
         }
     }

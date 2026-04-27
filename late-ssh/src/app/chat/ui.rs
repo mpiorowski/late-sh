@@ -730,6 +730,11 @@ pub struct ChatRenderInput<'a> {
     pub notifications_selected: bool,
     pub notifications_unread_count: i64,
     pub notifications_view: super::notifications::ui::NotificationListView<'a>,
+    pub showcase_selected: bool,
+    pub showcase_unread_count: i64,
+    pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
+    pub showcase_state: Option<&'a super::showcase::state::State>,
+    pub showcase_composing: bool,
 }
 
 struct RoomListRows {
@@ -755,6 +760,8 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
         1
     } else if view.news_selected {
         chat_composer_lines_for_height(view.news_composer, composer_text_width)
+    } else if view.showcase_selected {
+        if view.showcase_composing { 8 } else { 1 }
     } else {
         chat_composer_lines_for_height(view.composer, composer_text_width).max(
             composer_placeholder_lines(&ComposerBlockView {
@@ -770,7 +777,7 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
             }),
         )
     };
-    let visible_composer_lines = total_composer_lines.min(5);
+    let visible_composer_lines = total_composer_lines.min(8);
     let composer_height = visible_composer_lines as u16 + 2;
     let layout =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
@@ -831,6 +838,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         !view.news_selected
             && !view.notifications_selected
             && !view.discover_selected
+            && !view.showcase_selected
             && view.selected_room_id == Some(room_id)
     };
 
@@ -921,6 +929,32 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         notifications_line,
         Some(RoomSlot::Notifications),
         view.notifications_selected,
+    );
+
+    let showcase_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.showcase_selected,
+        );
+        let style = if view.showcase_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.showcase_unread_count > 0 {
+            format!("{prefix}showcases ({})", view.showcase_unread_count)
+        } else {
+            format!("{prefix}showcases")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(
+        showcase_line,
+        Some(RoomSlot::Showcase),
+        view.showcase_selected,
     );
 
     let discover_line = {
@@ -1128,6 +1162,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         );
     } else if view.discover_selected {
         super::discover::ui::draw_discover_list(frame, messages_area, &view.discover_view);
+    } else if view.showcase_selected {
+        super::showcase::ui::draw_showcase_list(frame, messages_area, &view.showcase_view);
     } else if news_selected {
         super::news::ui::draw_article_list(frame, messages_area, &view.news_view);
     } else {
@@ -1219,6 +1255,16 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         )))
         .block(hint_block);
         frame.render_widget(hint_text, composer_area);
+    } else if view.showcase_selected {
+        if let Some(showcase_state) = view.showcase_state {
+            super::showcase::ui::draw_showcase_composer(
+                frame,
+                composer_area,
+                &super::showcase::ui::ShowcaseComposerView {
+                    state: showcase_state,
+                },
+            );
+        }
     } else if view.discover_selected {
         let hint_block = Block::default()
             .title(" Discover ")
@@ -1348,6 +1394,7 @@ mod tests {
             news_view: crate::app::chat::news::ui::ArticleListView {
                 articles: &[],
                 selected_index: 0,
+                marker_read_at: None,
             },
             discover_selected: false,
             discover_view: crate::app::chat::discover::ui::DiscoverListView {
@@ -1385,7 +1432,19 @@ mod tests {
             notifications_view: crate::app::chat::notifications::ui::NotificationListView {
                 items: &[],
                 selected_index: 0,
+                marker_read_at: None,
             },
+            showcase_selected: false,
+            showcase_unread_count: 0,
+            showcase_view: crate::app::chat::showcase::ui::ShowcaseListView {
+                items: &[],
+                selected_index: 0,
+                current_user_id: Uuid::nil(),
+                is_admin: false,
+                marker_read_at: None,
+            },
+            showcase_state: None,
+            showcase_composing: false,
         }
     }
 
@@ -1659,13 +1718,20 @@ mod tests {
             &news_composer,
         );
 
+        let area = Rect::new(1, 1, 74, 30);
+        let (_, rooms_area, _, _) = chat_layout(area, &view);
+        let inner = Block::default().borders(Borders::ALL).inner(rooms_area);
+        let room_rows = build_room_list_rows(&view, rooms_area);
+        let rust_row = room_rows
+            .hit_slots
+            .iter()
+            .position(|slot| *slot == Some(RoomSlot::Room(rust.id)))
+            .expect("rust room row");
+
         assert_eq!(
-            room_list_hit_test(Rect::new(1, 1, 74, 30), &view, 4, 9),
+            room_list_hit_test(area, &view, inner.x, inner.y + rust_row as u16),
             Some(RoomSlot::Room(rust.id))
         );
-        assert_eq!(
-            room_list_hit_test(Rect::new(1, 1, 74, 30), &view, 4, 2),
-            None
-        );
+        assert_eq!(room_list_hit_test(area, &view, inner.x, inner.y), None);
     }
 }

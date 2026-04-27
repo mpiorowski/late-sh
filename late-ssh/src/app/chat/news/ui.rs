@@ -1,5 +1,6 @@
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
+use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -13,6 +14,7 @@ use late_core::models::article::ArticleFeedItem;
 pub struct ArticleListView<'a> {
     pub articles: &'a [ArticleFeedItem],
     pub selected_index: usize,
+    pub marker_read_at: Option<DateTime<Utc>>,
 }
 
 const ITEM_HEIGHT: u16 = 10;
@@ -62,6 +64,10 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
             let article_idx = start_index + row;
             let item = &view.articles[article_idx];
             let article = &item.article;
+            let is_unread = view
+                .marker_read_at
+                .map(|last_read_at| article.created > last_read_at)
+                .unwrap_or(true);
 
             let bg_color = if article_idx == selected_index {
                 theme::BG_SELECTION()
@@ -98,13 +104,24 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
             let ascii_p = Paragraph::new(ascii_lines);
             frame.render_widget(ascii_p, thumb_area);
 
-            let mut text_lines = vec![
-                Line::from(vec![Span::styled(
-                    article.title.as_str(),
+            let mut title_spans = Vec::new();
+            if is_unread {
+                title_spans.push(Span::styled(
+                    "● ",
                     Style::default()
-                        .fg(theme::TEXT_BRIGHT())
+                        .fg(theme::AMBER())
                         .add_modifier(Modifier::BOLD),
-                )]),
+                ));
+            }
+            title_spans.push(Span::styled(
+                article.title.as_str(),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ));
+
+            let mut text_lines = vec![
+                Line::from(title_spans),
                 Line::from(vec![Span::styled(
                     article.url.as_str(),
                     Style::default()
