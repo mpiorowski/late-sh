@@ -35,9 +35,46 @@ pub enum ThemeKind {
     Kirii = 29,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeGroup {
+    Core,
+    Catppuccin,
+    Coffee,
+    Ports,
+    Copper,
+    Experimental,
+}
+
+impl ThemeGroup {
+    pub const ALL: [ThemeGroup; 6] = [
+        ThemeGroup::Core,
+        ThemeGroup::Catppuccin,
+        ThemeGroup::Coffee,
+        ThemeGroup::Ports,
+        ThemeGroup::Copper,
+        ThemeGroup::Experimental,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeGroup::Core => "Core",
+            ThemeGroup::Catppuccin => "Catppuccin",
+            ThemeGroup::Coffee => "Coffee",
+            ThemeGroup::Ports => "Ports",
+            ThemeGroup::Copper => "Copper",
+            ThemeGroup::Experimental => "Experimental",
+        }
+    }
+
+    pub fn bit(self) -> u8 {
+        1 << (self as u8)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct ThemeOption {
     pub kind: ThemeKind,
+    pub group: ThemeGroup,
     pub id: &'static str,
     pub label: &'static str,
 }
@@ -90,151 +127,181 @@ struct Palette {
 pub const OPTIONS: &[ThemeOption] = &[
     ThemeOption {
         kind: ThemeKind::Late,
+        group: ThemeGroup::Core,
         id: "late",
         label: "Late",
     },
     ThemeOption {
         kind: ThemeKind::Contrast,
+        group: ThemeGroup::Core,
         id: "contrast",
         label: "High Contrast",
     },
     ThemeOption {
         kind: ThemeKind::Purple,
+        group: ThemeGroup::Core,
         id: "purple",
         label: "Purple Haze",
     },
     ThemeOption {
         kind: ThemeKind::Mocha,
+        group: ThemeGroup::Catppuccin,
         id: "mocha",
         label: "Catppuccin Mocha",
     },
     ThemeOption {
         kind: ThemeKind::Macchiato,
+        group: ThemeGroup::Catppuccin,
         id: "macchiato",
         label: "Catppuccin Macchiato",
     },
     ThemeOption {
         kind: ThemeKind::Frappe,
+        group: ThemeGroup::Catppuccin,
         id: "frappe",
         label: "Catppuccin Frappé",
     },
     ThemeOption {
         kind: ThemeKind::Latte,
+        group: ThemeGroup::Catppuccin,
         id: "latte",
         label: "Catppuccin Latte",
     },
     ThemeOption {
         kind: ThemeKind::EggCoffee,
+        group: ThemeGroup::Coffee,
         id: "egg_coffee",
         label: "Egg Coffee",
     },
     ThemeOption {
         kind: ThemeKind::Americano,
+        group: ThemeGroup::Coffee,
         id: "americano",
         label: "Americano",
     },
     ThemeOption {
         kind: ThemeKind::Espresso,
+        group: ThemeGroup::Coffee,
         id: "espresso",
         label: "Espresso",
     },
     ThemeOption {
         kind: ThemeKind::GruvboxDark,
+        group: ThemeGroup::Ports,
         id: "gruvboxdark",
         label: "Gruvbox Dark",
     },
     ThemeOption {
         kind: ThemeKind::OneDarkPro,
+        group: ThemeGroup::Ports,
         id: "onedarkpro",
         label: "One Dark Pro",
     },
     ThemeOption {
         kind: ThemeKind::RosePine,
+        group: ThemeGroup::Ports,
         id: "rosepine",
         label: "Rose Pine",
     },
     ThemeOption {
         kind: ThemeKind::TokyoNight,
+        group: ThemeGroup::Ports,
         id: "tokyonight",
         label: "Tokyo Night",
     },
     ThemeOption {
         kind: ThemeKind::Kanagawa,
+        group: ThemeGroup::Ports,
         id: "kanagawa",
         label: "Kanagawa",
     },
     ThemeOption {
         kind: ThemeKind::Dracula,
+        group: ThemeGroup::Ports,
         id: "dracula",
         label: "Dracula",
     },
     ThemeOption {
         kind: ThemeKind::Oxocarbon,
+        group: ThemeGroup::Ports,
         id: "oxocarbon",
         label: "Oxocarbon",
     },
     ThemeOption {
         kind: ThemeKind::CopperFresh,
+        group: ThemeGroup::Copper,
         id: "copperfresh",
         label: "Copper Fresh",
     },
     ThemeOption {
         kind: ThemeKind::ExposedCopper,
+        group: ThemeGroup::Copper,
         id: "exposedcopper",
         label: "Exposed Copper",
     },
     ThemeOption {
         kind: ThemeKind::WeatheredCopper,
+        group: ThemeGroup::Copper,
         id: "weatheredcopper",
         label: "Weathered Copper",
     },
     ThemeOption {
         kind: ThemeKind::OxidizedCopper,
+        group: ThemeGroup::Copper,
         id: "oxidizedcopper",
         label: "Oxidized Copper",
     },
     ThemeOption {
         kind: ThemeKind::Arachne,
+        group: ThemeGroup::Experimental,
         id: "arachne",
         label: "Arachne",
     },
     ThemeOption {
         kind: ThemeKind::CyberAcme,
+        group: ThemeGroup::Experimental,
         id: "cyberacme",
         label: "CyberAcme",
     },
     ThemeOption {
         kind: ThemeKind::NuCaloric,
+        group: ThemeGroup::Experimental,
         id: "nucaloric",
         label: "NuCaloric",
     },
     ThemeOption {
         kind: ThemeKind::Sekiguchi,
+        group: ThemeGroup::Experimental,
         id: "sekiguchi",
         label: "Sekiguchi",
     },
     ThemeOption {
         kind: ThemeKind::Traxus,
+        group: ThemeGroup::Experimental,
         id: "traxus",
         label: "Traxus",
     },
     ThemeOption {
         kind: ThemeKind::Mida,
+        group: ThemeGroup::Experimental,
         id: "mida",
         label: "Mida",
     },
     ThemeOption {
         kind: ThemeKind::ENA,
+        group: ThemeGroup::Experimental,
         id: "ena",
         label: "ENA",
     },
     ThemeOption {
         kind: ThemeKind::ENADreamBbq,
+        group: ThemeGroup::Experimental,
         id: "enadreambbq",
         label: "ENA Dream BBQ",
     },
     ThemeOption {
         kind: ThemeKind::Kirii,
+        group: ThemeGroup::Experimental,
         id: "kirii",
         label: "Kirii",
     },

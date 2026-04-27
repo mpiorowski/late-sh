@@ -10,7 +10,7 @@ use crate::app::common::{markdown::render_body_to_lines, theme};
 
 use super::{
     data::country_label,
-    state::{BIO_MAX_LEN, PickerKind, Row, SettingsModalState, Tab},
+    state::{BIO_MAX_LEN, PickerKind, Row, SettingsModalState, Tab, ThemeTreeRow},
 };
 
 pub const MODAL_WIDTH: u16 = 96;
@@ -119,8 +119,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
             spans.extend([
                 Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" preview  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("PgUp/PgDn", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" page  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" close/open  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
@@ -190,12 +190,12 @@ fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let tree_area = sections[3];
     let width = tree_area.width as usize;
     let visible_height = tree_area.height as usize;
-    state.set_theme_visible_height(visible_height.saturating_sub(2).max(1));
+    state.set_theme_visible_height(visible_height.max(1));
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut last_group: Option<&'static str> = None;
-    for (idx, option) in theme::OPTIONS
-        .iter()
+    for (row_idx, row) in state
+        .theme_tree_rows()
+        .into_iter()
         .enumerate()
         .skip(state.theme_scroll_offset())
     {
@@ -203,35 +203,56 @@ fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             break;
         }
 
-        let group = theme_group(option.kind);
-        if last_group != Some(group) && lines.len() + 1 < visible_height {
-            lines.push(theme_group_line(group));
-            last_group = Some(group);
+        let selected = row_idx == state.theme_selected_row();
+        match row {
+            ThemeTreeRow::Group { group, collapsed } => {
+                lines.push(theme_group_line(group, collapsed, selected, width));
+            }
+            ThemeTreeRow::Theme {
+                option_index,
+                last_in_group,
+            } => {
+                lines.push(theme_option_line(
+                    theme::OPTIONS[option_index],
+                    selected,
+                    last_in_group,
+                    width,
+                ));
+            }
         }
-
-        if lines.len() >= visible_height {
-            break;
-        }
-        lines.push(theme_option_line(
-            *option,
-            idx == state.theme_index(),
-            idx + 1 == theme::OPTIONS.len() || theme_group(theme::OPTIONS[idx + 1].kind) != group,
-            width,
-        ));
     }
 
     frame.render_widget(Paragraph::new(lines), tree_area);
 }
 
-fn theme_group_line(group: &str) -> Line<'static> {
+fn theme_group_line(
+    group: theme::ThemeGroup,
+    collapsed: bool,
+    selected: bool,
+    width: usize,
+) -> Line<'static> {
+    let marker = if selected { "›" } else { " " };
+    let symbol = if collapsed { "▸" } else { "▾" };
+    let text = format!(" {marker} {symbol} {}", group.label());
+    let padding = width.saturating_sub(text.chars().count());
+    let style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
     Line::from(vec![
-        Span::styled("  ▾ ", Style::default().fg(theme::BORDER())),
-        Span::styled(
-            group.to_string(),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(text, style),
+        Span::styled(" ".repeat(padding), trailing_style),
     ])
 }
 
@@ -304,39 +325,6 @@ fn theme_option_line(
 
 fn swatch(color: ratatui::style::Color) -> Span<'static> {
     Span::styled("  ", Style::default().bg(color))
-}
-
-fn theme_group(kind: theme::ThemeKind) -> &'static str {
-    match kind {
-        theme::ThemeKind::Late | theme::ThemeKind::Contrast | theme::ThemeKind::Purple => "Core",
-        theme::ThemeKind::Mocha
-        | theme::ThemeKind::Macchiato
-        | theme::ThemeKind::Frappe
-        | theme::ThemeKind::Latte => "Catppuccin",
-        theme::ThemeKind::EggCoffee | theme::ThemeKind::Americano | theme::ThemeKind::Espresso => {
-            "Coffee"
-        }
-        theme::ThemeKind::GruvboxDark
-        | theme::ThemeKind::OneDarkPro
-        | theme::ThemeKind::RosePine
-        | theme::ThemeKind::TokyoNight
-        | theme::ThemeKind::Kanagawa
-        | theme::ThemeKind::Dracula
-        | theme::ThemeKind::Oxocarbon => "Ports",
-        theme::ThemeKind::CopperFresh
-        | theme::ThemeKind::ExposedCopper
-        | theme::ThemeKind::WeatheredCopper
-        | theme::ThemeKind::OxidizedCopper => "Copper",
-        theme::ThemeKind::Arachne
-        | theme::ThemeKind::CyberAcme
-        | theme::ThemeKind::NuCaloric
-        | theme::ThemeKind::Sekiguchi
-        | theme::ThemeKind::Traxus
-        | theme::ThemeKind::Mida
-        | theme::ThemeKind::ENA
-        | theme::ThemeKind::ENADreamBbq
-        | theme::ThemeKind::Kirii => "Experimental",
-    }
 }
 
 fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {

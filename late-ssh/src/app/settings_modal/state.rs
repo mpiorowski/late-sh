@@ -77,22 +77,34 @@ impl Row {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
-    Themes,
     Bio,
+    Themes,
     Favorites,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Settings, Tab::Themes, Tab::Bio, Tab::Favorites];
+    pub const ALL: [Tab; 4] = [Tab::Settings, Tab::Bio, Tab::Themes, Tab::Favorites];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
-            Tab::Themes => "Themes",
             Tab::Bio => "Bio",
+            Tab::Themes => "Themes",
             Tab::Favorites => "Favorites",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThemeTreeRow {
+    Group {
+        group: theme::ThemeGroup,
+        collapsed: bool,
+    },
+    Theme {
+        option_index: usize,
+        last_in_group: bool,
+    },
 }
 
 #[derive(Default)]
@@ -111,8 +123,10 @@ pub struct SettingsModalState {
     selected_tab: Tab,
     row_index: usize,
     theme_index: usize,
+    theme_selected_row: usize,
     theme_scroll_offset: usize,
     theme_visible_height: Cell<usize>,
+    theme_collapsed_groups: u8,
     editing_username: bool,
     username_input: TextArea<'static>,
     editing_bio: bool,
@@ -135,8 +149,10 @@ impl SettingsModalState {
             selected_tab: Tab::Settings,
             row_index: 0,
             theme_index: 0,
+            theme_selected_row: 0,
             theme_scroll_offset: 0,
             theme_visible_height: Cell::new(1),
+            theme_collapsed_groups: 0,
             editing_username: false,
             username_input: new_username_textarea(false),
             editing_bio: false,
@@ -222,8 +238,8 @@ impl SettingsModalState {
         self.row_index = (self.row_index as isize + delta).clamp(0, last) as usize;
     }
 
-    pub fn theme_index(&self) -> usize {
-        self.theme_index
+    pub fn theme_selected_row(&self) -> usize {
+        self.theme_selected_row
     }
 
     pub fn theme_scroll_offset(&self) -> usize {
@@ -235,28 +251,87 @@ impl SettingsModalState {
     }
 
     pub fn move_theme_cursor(&mut self, delta: isize) {
-        let last = theme::OPTIONS.len().saturating_sub(1) as isize;
-        let next = (self.theme_index as isize + delta).clamp(0, last) as usize;
-        self.select_theme_index(next);
+        let rows = self.theme_tree_rows();
+        let last = rows.len().saturating_sub(1) as isize;
+        self.theme_selected_row =
+            (self.theme_selected_row as isize + delta).clamp(0, last) as usize;
+        if let Some(ThemeTreeRow::Theme { option_index, .. }) =
+            rows.get(self.theme_selected_row).copied()
+        {
+            self.apply_theme_index(option_index);
+        }
+        self.keep_theme_cursor_visible();
     }
 
-    pub fn page_theme_cursor(&mut self, delta_pages: isize) {
-        let page = self.theme_visible_height.get().max(1) as isize;
-        self.move_theme_cursor(delta_pages * page);
+    pub fn theme_cursor_left(&mut self) {
+        let rows = self.theme_tree_rows();
+        match rows.get(self.theme_selected_row).copied() {
+            Some(ThemeTreeRow::Group {
+                group,
+                collapsed: false,
+            }) => self.collapse_theme_group(group),
+            Some(ThemeTreeRow::Theme { option_index, .. }) => {
+                self.collapse_theme_group(theme::OPTIONS[option_index].group);
+            }
+            _ => {}
+        }
     }
 
-    pub fn first_theme(&mut self) {
-        self.select_theme_index(0);
+    pub fn theme_cursor_right(&mut self) {
+        let rows = self.theme_tree_rows();
+        match rows.get(self.theme_selected_row).copied() {
+            Some(ThemeTreeRow::Group {
+                group,
+                collapsed: true,
+            }) => self.expand_theme_group(group),
+            Some(ThemeTreeRow::Group {
+                group,
+                collapsed: false,
+            }) => {
+                if let Some(row) = self.first_theme_row_for_group(group) {
+                    self.theme_selected_row = row;
+                    if let Some(ThemeTreeRow::Theme { option_index, .. }) =
+                        self.theme_tree_rows().get(row).copied()
+                    {
+                        self.apply_theme_index(option_index);
+                    }
+                    self.keep_theme_cursor_visible();
+                }
+            }
+            _ => {}
+        }
     }
 
-    pub fn last_theme(&mut self) {
-        self.select_theme_index(theme::OPTIONS.len().saturating_sub(1));
+    pub fn toggle_theme_tree_row(&mut self) {
+        let rows = self.theme_tree_rows();
+        if let Some(row) = rows.get(self.theme_selected_row).copied() {
+            match row {
+                ThemeTreeRow::Group { group, collapsed } => {
+                    if collapsed {
+                        self.expand_theme_group(group);
+                    } else {
+                        self.collapse_theme_group(group);
+                    }
+                }
+                ThemeTreeRow::Theme { option_index, .. } => self.select_theme_index(option_index),
+            }
+        }
     }
 
     pub fn select_theme_index(&mut self, index: usize) {
         let clamped = index.min(theme::OPTIONS.len().saturating_sub(1));
+        self.expand_theme_group(theme::OPTIONS[clamped].group);
         self.theme_index = clamped;
-        if let Some(option) = theme::OPTIONS.get(clamped) {
+        self.theme_selected_row = self
+            .theme_row_for_option(clamped)
+            .unwrap_or(self.theme_selected_row);
+        self.apply_theme_index(clamped);
+        self.keep_theme_cursor_visible();
+    }
+
+    fn apply_theme_index(&mut self, index: usize) {
+        if let Some(option) = theme::OPTIONS.get(index) {
+            self.theme_index = index;
             let current = self
                 .draft
                 .theme_id
@@ -272,6 +347,31 @@ impl SettingsModalState {
         }
     }
 
+    pub fn theme_tree_rows(&self) -> Vec<ThemeTreeRow> {
+        let mut rows = Vec::new();
+        for group in theme::ThemeGroup::ALL {
+            let collapsed = self.theme_group_collapsed(group);
+            rows.push(ThemeTreeRow::Group { group, collapsed });
+            if collapsed {
+                continue;
+            }
+
+            let option_indices: Vec<usize> = theme::OPTIONS
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, option)| (option.group == group).then_some(idx))
+                .collect();
+            let last_option_idx = option_indices.len().saturating_sub(1);
+            for (idx, option_index) in option_indices.into_iter().enumerate() {
+                rows.push(ThemeTreeRow::Theme {
+                    option_index,
+                    last_in_group: idx == last_option_idx,
+                });
+            }
+        }
+        rows
+    }
+
     fn sync_theme_index_to_draft(&mut self) {
         let current = self
             .draft
@@ -283,16 +383,60 @@ impl SettingsModalState {
             .iter()
             .position(|option| option.id == normalized)
             .unwrap_or(0);
+        self.expand_theme_group(theme::OPTIONS[self.theme_index].group);
+        self.theme_selected_row = self.theme_row_for_option(self.theme_index).unwrap_or(0);
         self.keep_theme_cursor_visible();
     }
 
     fn keep_theme_cursor_visible(&mut self) {
         let visible = self.theme_visible_height.get().max(1);
-        if self.theme_index < self.theme_scroll_offset {
-            self.theme_scroll_offset = self.theme_index;
-        } else if self.theme_index >= self.theme_scroll_offset + visible {
-            self.theme_scroll_offset = self.theme_index.saturating_sub(visible - 1);
+        let max_scroll = self.theme_tree_rows().len().saturating_sub(visible);
+        if self.theme_selected_row < self.theme_scroll_offset {
+            self.theme_scroll_offset = self.theme_selected_row;
+        } else if self.theme_selected_row >= self.theme_scroll_offset + visible {
+            self.theme_scroll_offset = self.theme_selected_row.saturating_sub(visible - 1);
         }
+        self.theme_scroll_offset = self.theme_scroll_offset.min(max_scroll);
+    }
+
+    fn theme_group_collapsed(&self, group: theme::ThemeGroup) -> bool {
+        self.theme_collapsed_groups & group.bit() != 0
+    }
+
+    fn expand_theme_group(&mut self, group: theme::ThemeGroup) {
+        self.theme_collapsed_groups &= !group.bit();
+        self.keep_theme_cursor_visible();
+    }
+
+    fn collapse_theme_group(&mut self, group: theme::ThemeGroup) {
+        self.theme_collapsed_groups |= group.bit();
+        self.theme_selected_row = self.theme_group_row(group).unwrap_or_else(|| {
+            self.theme_selected_row
+                .min(self.theme_tree_rows().len().saturating_sub(1))
+        });
+        self.keep_theme_cursor_visible();
+    }
+
+    fn theme_group_row(&self, group: theme::ThemeGroup) -> Option<usize> {
+        self.theme_tree_rows()
+            .iter()
+            .position(|row| matches!(row, ThemeTreeRow::Group { group: row_group, .. } if *row_group == group))
+    }
+
+    fn theme_row_for_option(&self, option_index: usize) -> Option<usize> {
+        self.theme_tree_rows().iter().position(
+            |row| matches!(row, ThemeTreeRow::Theme { option_index: row_index, .. } if *row_index == option_index),
+        )
+    }
+
+    fn first_theme_row_for_group(&self, group: theme::ThemeGroup) -> Option<usize> {
+        self.theme_tree_rows().iter().position(|row| {
+            matches!(
+                row,
+                ThemeTreeRow::Theme { option_index, .. }
+                    if theme::OPTIONS[*option_index].group == group
+            )
+        })
     }
 
     pub fn editing_username(&self) -> bool {

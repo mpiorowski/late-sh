@@ -76,19 +76,13 @@ fn handle_themes_tab_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B')
-        | ParsedInput::Arrow(b'C') => state.move_theme_cursor(1),
+        | ParsedInput::Arrow(b'B') => state.move_theme_cursor(1),
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A')
-        | ParsedInput::Arrow(b'D') => state.move_theme_cursor(-1),
-        ParsedInput::PageDown => state.page_theme_cursor(1),
-        ParsedInput::PageUp => state.page_theme_cursor(-1),
-        ParsedInput::Home => state.first_theme(),
-        ParsedInput::End => state.last_theme(),
-        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => {
-            state.select_theme_index(state.theme_index())
-        }
+        | ParsedInput::Arrow(b'A') => state.move_theme_cursor(-1),
+        ParsedInput::Arrow(b'D') => state.theme_cursor_left(),
+        ParsedInput::Arrow(b'C') => state.theme_cursor_right(),
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => state.toggle_theme_tree_row(),
         _ => {}
     }
 }
