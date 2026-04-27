@@ -905,32 +905,6 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
     };
     push_row(news_line, Some(RoomSlot::News), view.news_selected);
 
-    let notifications_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.notifications_selected,
-        );
-        let style = if view.notifications_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = if view.notifications_unread_count > 0 {
-            format!("{prefix}mentions ({})", view.notifications_unread_count)
-        } else {
-            format!("{prefix}mentions")
-        };
-        Line::from(Span::styled(label, style))
-    };
-    push_row(
-        notifications_line,
-        Some(RoomSlot::Notifications),
-        view.notifications_selected,
-    );
-
     let showcase_line = {
         let prefix = room_jump_prefix(
             view.room_jump_active.then(|| jump_keys.next()).flatten(),
@@ -955,6 +929,32 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         showcase_line,
         Some(RoomSlot::Showcase),
         view.showcase_selected,
+    );
+
+    let notifications_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.notifications_selected,
+        );
+        let style = if view.notifications_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.notifications_unread_count > 0 {
+            format!("{prefix}mentions ({})", view.notifications_unread_count)
+        } else {
+            format!("{prefix}mentions")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(
+        notifications_line,
+        Some(RoomSlot::Notifications),
+        view.notifications_selected,
     );
 
     let discover_line = {
@@ -1303,7 +1303,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter copy · i paste URL",
+                " j/k navigate · Enter copy URL · i paste URL",
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
@@ -1664,6 +1664,46 @@ mod tests {
     fn room_jump_prefix_shows_selected_marker_when_inactive() {
         assert_eq!(room_jump_prefix(None, false, true), "> ");
         assert_eq!(room_jump_prefix(None, false, false), "  ");
+    }
+
+    #[test]
+    fn room_list_rows_place_showcases_before_mentions_and_discover() {
+        let rooms = Vec::new();
+        let mut rows_cache = ChatRowsCache::default();
+        let usernames = HashMap::new();
+        let countries = HashMap::new();
+        let badges = HashMap::new();
+        let message_reactions = HashMap::new();
+        let unread_counts = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let composer = TextArea::default();
+        let news_composer = TextArea::default();
+        let view = chat_view(
+            &mut rows_cache,
+            &rooms,
+            None,
+            &usernames,
+            &countries,
+            &badges,
+            &message_reactions,
+            &unread_counts,
+            &bonsai_glyphs,
+            &composer,
+            &news_composer,
+        );
+
+        let room_rows = build_room_list_rows(&view, Rect::new(0, 0, 40, 20));
+        let hit_slots: Vec<_> = room_rows.hit_slots.into_iter().flatten().collect();
+
+        assert_eq!(
+            hit_slots,
+            vec![
+                RoomSlot::News,
+                RoomSlot::Showcase,
+                RoomSlot::Notifications,
+                RoomSlot::Discover,
+            ]
+        );
     }
 
     #[test]

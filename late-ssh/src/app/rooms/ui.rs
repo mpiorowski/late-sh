@@ -22,6 +22,7 @@ pub struct RoomsPageView<'a> {
     pub active_room: Option<&'a RoomListItem>,
     pub blackjack_state: &'a BlackjackState,
     pub is_admin: bool,
+    pub is_mod: bool,
 }
 
 pub fn draw_rooms_page(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
@@ -67,7 +68,7 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) 
         layout[4],
         view.snapshot,
         view.selected_index,
-        view.is_admin,
+        view.is_admin || view.is_mod,
     );
 }
 
@@ -174,7 +175,7 @@ fn draw_room_list(
             let status = if can_enter {
                 &room.status
             } else {
-                "admin only"
+                "admin/mod only"
             };
             Line::from(vec![
                 Span::styled(if selected { "> " } else { "  " }, name_style),

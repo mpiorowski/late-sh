@@ -531,72 +531,10 @@ impl ChatState {
     }
 
     /// Build the flat visual navigation order.
-    /// Order: core (general, announcements) → news → mentions → public rooms
-    /// (alpha) → private rooms (alpha) → DMs
+    /// Order: core (general, announcements) → news → showcases → mentions
+    /// → discover → public rooms (alpha) → private rooms (alpha) → DMs
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        let mut order = Vec::new();
-
-        // Core: permanent rooms, hardcoded order
-        let core_order = ["general", "announcements", "suggestions", "bugs"];
-        for slug in &core_order {
-            if let Some((room, _)) = self
-                .rooms
-                .iter()
-                .find(|(r, _)| r.permanent && r.slug.as_deref() == Some(slug))
-            {
-                order.push(RoomSlot::Room(room.id));
-            }
-        }
-        // Any other permanent rooms not in the hardcoded list
-        for (room, _) in &self.rooms {
-            if room.kind != "dm"
-                && room.permanent
-                && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
-            {
-                order.push(RoomSlot::Room(room.id));
-            }
-        }
-
-        // News
-        order.push(RoomSlot::News);
-
-        // Mentions / notifications
-        order.push(RoomSlot::Notifications);
-
-        // Showcase
-        order.push(RoomSlot::Showcase);
-
-        // Discover
-        order.push(RoomSlot::Discover);
-
-        // Public rooms (non-DM, non-permanent, alpha by slug)
-        let mut public: Vec<_> = self
-            .rooms
-            .iter()
-            .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
-            .collect();
-        public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-        order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-        // Private rooms (visibility=private, alpha by slug)
-        let mut private: Vec<_> = self
-            .rooms
-            .iter()
-            .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
-            .collect();
-        private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-        order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-        // DMs (sorted by display name to match nav rendering)
-        let mut dms: Vec<_> = self.rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
-        dms.sort_by(|(a, _), (b, _)| {
-            let name_a = self.dm_display_name(a);
-            let name_b = self.dm_display_name(b);
-            name_a.cmp(&name_b)
-        });
-        order.extend(dms.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-        order
+        visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames)
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -1710,6 +1648,66 @@ impl ChatState {
     }
 }
 
+fn visual_order_for_rooms(
+    rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    user_id: Uuid,
+    usernames: &HashMap<Uuid, String>,
+) -> Vec<RoomSlot> {
+    let mut order = Vec::new();
+
+    // Core: permanent rooms, hardcoded order
+    let core_order = ["general", "announcements", "suggestions", "bugs"];
+    for slug in &core_order {
+        if let Some((room, _)) = rooms
+            .iter()
+            .find(|(r, _)| r.permanent && r.slug.as_deref() == Some(slug))
+        {
+            order.push(RoomSlot::Room(room.id));
+        }
+    }
+    // Any other permanent rooms not in the hardcoded list
+    for (room, _) in rooms {
+        if room.kind != "dm"
+            && room.permanent
+            && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+        {
+            order.push(RoomSlot::Room(room.id));
+        }
+    }
+
+    order.push(RoomSlot::News);
+    order.push(RoomSlot::Showcase);
+    order.push(RoomSlot::Notifications);
+    order.push(RoomSlot::Discover);
+
+    // Public rooms (non-DM, non-permanent, alpha by slug)
+    let mut public: Vec<_> = rooms
+        .iter()
+        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
+        .collect();
+    public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
+    order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+
+    // Private rooms (visibility=private, alpha by slug)
+    let mut private: Vec<_> = rooms
+        .iter()
+        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
+        .collect();
+    private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
+    order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+
+    // DMs (sorted by display name to match nav rendering)
+    let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
+    dms.sort_by(|(a, _), (b, _)| {
+        let name_a = dm_sort_key(a, user_id, usernames);
+        let name_b = dm_sort_key(b, user_id, usernames);
+        name_a.cmp(&name_b)
+    });
+    order.extend(dms.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+
+    order
+}
+
 /// Sort key for DMs: resolves the other participant's username.
 /// Must match the sort used by the nav UI (`dm_label` in `ui.rs`).
 fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>) -> String {
@@ -2291,6 +2289,82 @@ mod tests {
         assert_eq!(wrapped_index(1, -5, 3), 2);
     }
 
+    fn make_room(
+        id: Uuid,
+        kind: &str,
+        visibility: &str,
+        permanent: bool,
+        slug: Option<&str>,
+    ) -> (ChatRoom, Vec<ChatMessage>) {
+        (
+            ChatRoom {
+                id,
+                created: chrono::Utc::now(),
+                updated: chrono::Utc::now(),
+                kind: kind.to_string(),
+                visibility: visibility.to_string(),
+                auto_join: permanent,
+                permanent,
+                slug: slug.map(str::to_string),
+                language_code: None,
+                dm_user_a: None,
+                dm_user_b: None,
+            },
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn visual_order_places_showcases_before_mentions_and_discover() {
+        let me = Uuid::from_u128(1);
+        let alice = Uuid::from_u128(2);
+        let bob = Uuid::from_u128(3);
+        let general = Uuid::from_u128(10);
+        let announcements = Uuid::from_u128(11);
+        let public_alpha = Uuid::from_u128(20);
+        let public_zeta = Uuid::from_u128(21);
+        let private_beta = Uuid::from_u128(30);
+        let dm_bob = make_dm(bob, me);
+        let dm_alice = make_dm(me, alice);
+
+        let mut usernames = HashMap::new();
+        usernames.insert(alice, "alice".to_string());
+        usernames.insert(bob, "bob".to_string());
+
+        let rooms = vec![
+            make_room(public_zeta, "topic", "public", false, Some("zeta")),
+            make_room(general, "general", "public", true, Some("general")),
+            (dm_bob.clone(), Vec::new()),
+            make_room(private_beta, "topic", "private", false, Some("beta")),
+            make_room(
+                announcements,
+                "topic",
+                "public",
+                true,
+                Some("announcements"),
+            ),
+            (dm_alice.clone(), Vec::new()),
+            make_room(public_alpha, "topic", "public", false, Some("alpha")),
+        ];
+
+        assert_eq!(
+            visual_order_for_rooms(&rooms, me, &usernames),
+            vec![
+                RoomSlot::Room(general),
+                RoomSlot::Room(announcements),
+                RoomSlot::News,
+                RoomSlot::Showcase,
+                RoomSlot::Notifications,
+                RoomSlot::Discover,
+                RoomSlot::Room(public_alpha),
+                RoomSlot::Room(public_zeta),
+                RoomSlot::Room(private_beta),
+                RoomSlot::Room(dm_alice.id),
+                RoomSlot::Room(dm_bob.id),
+            ]
+        );
+    }
+
     #[test]
     fn adjacent_composer_room_skips_virtual_slots() {
         let room_a = Uuid::from_u128(1);
@@ -2299,8 +2373,8 @@ mod tests {
         let order = vec![
             RoomSlot::Room(room_a),
             RoomSlot::News,
-            RoomSlot::Notifications,
             RoomSlot::Showcase,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
             RoomSlot::Room(room_b),
             RoomSlot::Room(room_c),
@@ -2324,8 +2398,8 @@ mod tests {
     fn adjacent_composer_room_returns_none_without_real_rooms() {
         let order = vec![
             RoomSlot::News,
-            RoomSlot::Notifications,
             RoomSlot::Showcase,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
         ];
         assert_eq!(adjacent_composer_room(&order, None, 1), None);
@@ -2386,8 +2460,8 @@ mod tests {
         let targets = [
             (b'a', RoomSlot::Room(room_id)),
             (b's', RoomSlot::News),
-            (b'd', RoomSlot::Notifications),
-            (b'f', RoomSlot::Showcase),
+            (b'd', RoomSlot::Showcase),
+            (b'f', RoomSlot::Notifications),
             (b'g', RoomSlot::Discover),
         ];
 
@@ -2401,11 +2475,11 @@ mod tests {
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b'D'),
-            Some(RoomSlot::Notifications)
+            Some(RoomSlot::Showcase)
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b'f'),
-            Some(RoomSlot::Showcase)
+            Some(RoomSlot::Notifications)
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b'G'),

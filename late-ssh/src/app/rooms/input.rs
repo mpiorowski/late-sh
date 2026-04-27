@@ -89,12 +89,14 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 
 fn handle_enter(app: &mut App) {
     if !app.rooms_add_form_open {
-        if !app.is_admin {
-            app.banner = Some(Banner::error("Admin only: rooms are locked for now."));
-            return;
-        }
         if app.rooms_selected_index > 0 {
             enter_selected_room(app);
+            return;
+        }
+        if !can_create_room(app.is_admin) {
+            app.banner = Some(Banner::error(
+                "Admin only: creating rooms is locked for now.",
+            ));
             return;
         }
         app.rooms_add_form_open = true;
@@ -104,8 +106,10 @@ fn handle_enter(app: &mut App) {
         return;
     }
 
-    if !app.is_admin {
-        app.banner = Some(Banner::error("Admin only: rooms are locked for now."));
+    if !can_create_room(app.is_admin) {
+        app.banner = Some(Banner::error(
+            "Admin only: creating rooms is locked for now.",
+        ));
         app.rooms_add_form_open = false;
         return;
     }
@@ -159,8 +163,10 @@ fn move_selection(app: &mut App, delta: isize) {
 }
 
 fn enter_selected_room(app: &mut App) {
-    if !app.is_admin {
-        app.banner = Some(Banner::error("Admin only: rooms are locked for now."));
+    if !can_enter_room(app.is_admin, app.is_mod) {
+        app.banner = Some(Banner::error(
+            "Admin or mod only: rooms are locked for now.",
+        ));
         return;
     }
 
@@ -197,5 +203,32 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
                 }
             }
         }
+    }
+}
+
+fn can_create_room(is_admin: bool) -> bool {
+    is_admin
+}
+
+fn can_enter_room(is_admin: bool, is_mod: bool) -> bool {
+    is_admin || is_mod
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_create_room, can_enter_room};
+
+    #[test]
+    fn room_creation_stays_admin_only() {
+        assert!(can_create_room(true));
+        assert!(!can_create_room(false));
+    }
+
+    #[test]
+    fn room_entry_allows_admins_and_mods() {
+        assert!(can_enter_room(true, false));
+        assert!(can_enter_room(false, true));
+        assert!(can_enter_room(true, true));
+        assert!(!can_enter_room(false, false));
     }
 }

@@ -550,7 +550,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             GameEntry {
                 idx: GAME_SELECTION_BLACKJACK,
                 name: "Blackjack",
-                descriptions: &["Hit or stand against the house. Single-player chips table."],
+                descriptions: &["Hit or stand against the house. Shared chips table."],
                 selected_style: Style::default()
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),
@@ -570,7 +570,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             GameEntry {
                 idx: GAME_SELECTION_BLACKJACK,
                 name: "Blackjack",
-                descriptions: &["Hit or stand against the house. Single-player chips table."],
+                descriptions: &["Hit or stand against the house. Shared chips table."],
                 selected_style: Style::default().fg(theme::TEXT_MUTED()),
                 normal_style: Style::default().fg(theme::TEXT_MUTED()),
                 description_style: Style::default().fg(theme::TEXT_MUTED()),
