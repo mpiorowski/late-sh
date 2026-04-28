@@ -540,7 +540,7 @@ impl ChatState {
             return Some(Banner::error("Admin only: pin messages"));
         }
         self.service
-            .toggle_message_pin_task(self.user_id, message.id, self.is_admin);
+            .toggle_message_pin_task(message.id, self.is_admin);
         let label = if message.pinned {
             "Unpinning message..."
         } else {

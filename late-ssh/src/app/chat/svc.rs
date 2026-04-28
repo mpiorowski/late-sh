@@ -1038,14 +1038,11 @@ impl ChatService {
         );
     }
 
-    pub fn toggle_message_pin_task(&self, user_id: Uuid, message_id: Uuid, is_admin: bool) {
+    pub fn toggle_message_pin_task(&self, message_id: Uuid, is_admin: bool) {
         let service = self.clone();
         tokio::spawn(
             async move {
-                if let Err(e) = service
-                    .toggle_message_pin(user_id, message_id, is_admin)
-                    .await
-                {
+                if let Err(e) = service.toggle_message_pin(message_id, is_admin).await {
                     late_core::error_span!(
                         "chat_pin_failed",
                         error = ?e,
@@ -1055,19 +1052,13 @@ impl ChatService {
             }
             .instrument(info_span!(
                 "chat.toggle_message_pin_task",
-                user_id = %user_id,
                 message_id = %message_id
             )),
         );
     }
 
-    #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, is_admin = is_admin))]
-    async fn toggle_message_pin(
-        &self,
-        user_id: Uuid,
-        message_id: Uuid,
-        is_admin: bool,
-    ) -> Result<()> {
+    #[tracing::instrument(skip(self), fields(message_id = %message_id, is_admin = is_admin))]
+    async fn toggle_message_pin(&self, message_id: Uuid, is_admin: bool) -> Result<()> {
         if !is_admin {
             anyhow::bail!("admin-only");
         }
@@ -1076,11 +1067,6 @@ impl ChatService {
         let message = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("message not found"))?;
-        let is_member = ChatRoomMember::is_member(&client, message.room_id, user_id).await?;
-        if !is_member {
-            anyhow::bail!("user is not a member of room");
-        }
-
         ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
         Ok(())
     }

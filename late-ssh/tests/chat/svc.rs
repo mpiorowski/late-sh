@@ -330,7 +330,7 @@ async fn admin_can_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(admin.id, message.id, true);
+    service.toggle_message_pin_task(message.id, true);
 
     timeout(Duration::from_secs(2), async {
         loop {
@@ -375,7 +375,7 @@ async fn non_admin_cannot_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(user.id, message.id, false);
+    service.toggle_message_pin_task(message.id, false);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let updated = ChatMessage::get(&client, message.id)
