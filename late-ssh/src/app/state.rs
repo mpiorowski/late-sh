@@ -356,6 +356,7 @@ impl App {
         self.chat.set_visible_room_id(visible_room_id);
         if changed && let Some(room_id) = visible_room_id {
             self.chat.mark_room_read(room_id);
+            self.chat.request_room_tail(room_id);
         }
     }
 
