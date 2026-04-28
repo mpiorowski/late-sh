@@ -11,6 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use helpers::{new_test_db, test_app_state, test_config};
 use ipnet::IpNet;
 use late_core::MutexRecover;
+use late_core::shutdown::CancellationToken;
 use late_core::tunnel_protocol::ControlFrame;
 use late_ssh::config::Config;
 use late_ssh::state::State;
@@ -26,6 +27,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 const TEST_SECRET: &str = "test-secret";
 
@@ -33,14 +35,18 @@ fn loopback_cidr() -> Vec<IpNet> {
     vec!["127.0.0.0/8".parse().expect("cidr")]
 }
 
-async fn spawn_tunnel(trusted: Vec<IpNet>) -> (SocketAddr, State, tokio::task::JoinHandle<()>) {
+type SpawnedTunnel = (
+    SocketAddr,
+    State,
+    CancellationToken,
+    tokio::task::JoinHandle<()>,
+);
+
+async fn spawn_tunnel(trusted: Vec<IpNet>) -> SpawnedTunnel {
     spawn_tunnel_with(trusted, |_| {}).await
 }
 
-async fn spawn_tunnel_with(
-    trusted: Vec<IpNet>,
-    tweak: impl FnOnce(&mut Config),
-) -> (SocketAddr, State, tokio::task::JoinHandle<()>) {
+async fn spawn_tunnel_with(trusted: Vec<IpNet>, tweak: impl FnOnce(&mut Config)) -> SpawnedTunnel {
     let test_db = new_test_db().await;
     let mut config = test_config(test_db.db.config().clone());
     config.tunnel_trusted_cidrs = trusted;
@@ -50,15 +56,19 @@ async fn spawn_tunnel_with(
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
+    let shutdown = CancellationToken::new();
 
     // Move the TestDb guard into the task so the Postgres container
     // outlives the server.
     let state_for_server = state.clone();
+    let shutdown_for_server = shutdown.clone();
     let task = tokio::spawn(async move {
         let _guard = test_db;
-        let _ = run_tunnel_server_with_listener(listener, state_for_server, None).await;
+        let _ =
+            run_tunnel_server_with_listener(listener, state_for_server, Some(shutdown_for_server))
+                .await;
     });
-    (addr, state, task)
+    (addr, state, shutdown, task)
 }
 
 /// Build a tungstenite request with the standard set of valid handshake
@@ -86,7 +96,7 @@ fn make_request(
 
 #[tokio::test]
 async fn tunnel_happy_path_yields_initial_frame_and_accepts_resize() {
-    let (addr, _state, server) = spawn_tunnel(loopback_cidr()).await;
+    let (addr, _state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
 
     let req = make_request(addr, "smoke-user");
     let (mut ws, response) = timeout(
@@ -144,7 +154,7 @@ async fn tunnel_happy_path_yields_initial_frame_and_accepts_resize() {
 
 #[tokio::test]
 async fn tunnel_rejects_wrong_secret_with_401() {
-    let (addr, _state, server) = spawn_tunnel(loopback_cidr()).await;
+    let (addr, _state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
     let status = raw_upgrade_status(addr, &[(HEADER_SECRET, "not-the-secret")]).await;
     assert_eq!(status, 401);
     server.abort();
@@ -152,7 +162,7 @@ async fn tunnel_rejects_wrong_secret_with_401() {
 
 #[tokio::test]
 async fn tunnel_rejects_missing_required_header_with_400() {
-    let (addr, _state, server) = spawn_tunnel(loopback_cidr()).await;
+    let (addr, _state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
     let status = raw_upgrade_status_omit(addr, HEADER_FINGERPRINT).await;
     assert_eq!(status, 400);
     server.abort();
@@ -161,7 +171,7 @@ async fn tunnel_rejects_missing_required_header_with_400() {
 #[tokio::test]
 async fn tunnel_rejects_untrusted_peer_with_403() {
     let trusted: Vec<IpNet> = vec!["192.0.2.0/24".parse().expect("cidr")];
-    let (addr, _state, server) = spawn_tunnel(trusted).await;
+    let (addr, _state, _shutdown, server) = spawn_tunnel(trusted).await;
     let status = raw_upgrade_status(addr, &[]).await;
     assert_eq!(status, 403);
     server.abort();
@@ -169,7 +179,7 @@ async fn tunnel_rejects_untrusted_peer_with_403() {
 
 #[tokio::test]
 async fn tunnel_session_registers_active_user_and_unregisters_on_close() {
-    let (addr, state, server) = spawn_tunnel(loopback_cidr()).await;
+    let (addr, state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
 
     let req = make_request(addr, "active-user");
     let (mut ws, _) = tokio_tungstenite::connect_async(req)
@@ -217,7 +227,7 @@ async fn tunnel_session_registers_active_user_and_unregisters_on_close() {
 
 #[tokio::test]
 async fn tunnel_session_emits_joined_activity_event() {
-    let (addr, state, server) = spawn_tunnel(loopback_cidr()).await;
+    let (addr, state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
 
     // Subscribe BEFORE the dial — broadcast only delivers messages sent
     // after subscription.
@@ -241,7 +251,7 @@ async fn tunnel_session_emits_joined_activity_event() {
 
 #[tokio::test]
 async fn tunnel_returns_503_when_global_conn_limit_reached() {
-    let (addr, _state, server) = spawn_tunnel_with(loopback_cidr(), |c| {
+    let (addr, _state, _shutdown, server) = spawn_tunnel_with(loopback_cidr(), |c| {
         c.max_conns_global = 1;
     })
     .await;
@@ -267,7 +277,7 @@ async fn tunnel_returns_503_when_global_conn_limit_reached() {
 
 #[tokio::test]
 async fn tunnel_returns_429_when_per_ip_conn_limit_reached() {
-    let (addr, _state, server) = spawn_tunnel_with(loopback_cidr(), |c| {
+    let (addr, _state, _shutdown, server) = spawn_tunnel_with(loopback_cidr(), |c| {
         c.max_conns_per_ip = 1;
     })
     .await;
@@ -288,6 +298,53 @@ async fn tunnel_returns_429_when_per_ip_conn_limit_reached() {
 
     drop(ws1);
     server.abort();
+}
+
+#[tokio::test]
+async fn tunnel_drain_emits_close_1000() {
+    let (addr, _state, shutdown, server) = spawn_tunnel(loopback_cidr()).await;
+
+    let req = make_request(addr, "drain-user");
+    let (mut ws, response) = tokio_tungstenite::connect_async(req)
+        .await
+        .expect("connect_async");
+    assert_eq!(response.status().as_u16(), 101);
+
+    // Drain the first frame to confirm the session is live before we
+    // trigger shutdown — otherwise we could race the cancel against
+    // upgrade completion.
+    let _ = timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("first frame timeout")
+        .expect("stream ended")
+        .expect("ws error");
+
+    shutdown.cancel();
+
+    // The receive loop's biased cancellation arm queues a 1000 Close;
+    // the writer task forwards it. Anything queued behind us in the
+    // mpsc (residual render frames) arrives first, so drain Binary
+    // until we see the Close.
+    let close_frame = loop {
+        let msg = timeout(Duration::from_secs(5), ws.next())
+            .await
+            .expect("close timeout")
+            .expect("stream ended")
+            .expect("ws error");
+        match msg {
+            Message::Binary(_) => continue,
+            Message::Close(Some(frame)) => break frame,
+            Message::Close(None) => panic!("expected Close with code, got Close(None)"),
+            other => panic!("expected Binary or Close, got {other:?}"),
+        }
+    };
+    assert_eq!(close_frame.code, CloseCode::Normal);
+
+    // Server task should wind down on its own once the cancellation
+    // propagates through axum's graceful shutdown.
+    let _ = timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server didn't exit after drain");
 }
 
 /// Send a handcrafted HTTP/1.1 Upgrade request and return the numeric

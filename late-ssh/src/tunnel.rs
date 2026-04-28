@@ -14,10 +14,10 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    Router,
+    Extension, Router,
     extract::{
         ConnectInfo, State as AxumState, WebSocketUpgrade,
-        ws::{Message, WebSocket},
+        ws::{CloseFrame, Message, WebSocket, close_code},
     },
     http::{HeaderMap, StatusCode},
     middleware,
@@ -28,6 +28,7 @@ use futures_util::{SinkExt, StreamExt};
 use ipnet::IpNet;
 use late_core::MutexRecover;
 use late_core::models::user::User;
+use late_core::shutdown::CancellationToken;
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::tunnel_protocol::ControlFrame;
 use std::net::{IpAddr, SocketAddr};
@@ -184,20 +185,29 @@ pub async fn run_tunnel_server(
 pub async fn run_tunnel_server_with_listener(
     listener: TcpListener,
     state: State,
-    shutdown: Option<late_core::shutdown::CancellationToken>,
+    shutdown: Option<CancellationToken>,
 ) -> Result<()> {
+    let shutdown = shutdown.unwrap_or_default();
+
+    // The same token is shared two ways:
+    //   - axum's `with_graceful_shutdown` to stop accepting new connections,
+    //   - per-session `handle_session` task via Extension, so an
+    //     in-flight WS can emit a 1000 close before the process exits.
     let app = Router::new()
         .route("/tunnel", get(tunnel_handler))
         .layer(middleware::from_fn(http_telemetry_middleware))
+        .layer(Extension(shutdown.clone()))
         .with_state(state);
 
-    let shutdown = shutdown.unwrap_or_default();
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(async move {
-        shutdown.cancelled().await;
+    .with_graceful_shutdown({
+        let shutdown = shutdown.clone();
+        async move {
+            shutdown.cancelled().await;
+        }
     })
     .await
     .context("tunnel server failed")?;
@@ -256,6 +266,7 @@ async fn tunnel_handler(
     ws: WebSocketUpgrade,
     AxumState(state): AxumState<State>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    Extension(shutdown): Extension<CancellationToken>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let handshake = match validate_handshake(
@@ -335,6 +346,11 @@ async fn tunnel_handler(
         guard.per_ip_incremented = true;
     }
 
+    // ensure_user only fails on infrastructure errors (DB unreachable, …)
+    // today — there is no User.banned column. HTTP 500 is the right
+    // semantic: the bastion's reconnect dispatcher will treat 5xx as
+    // retryable. When ban support lands, route ban rejections through
+    // a post-upgrade WS close 4002 instead.
     let (user, is_new_user) =
         match ensure_user(&state, &handshake.username, &handshake.fingerprint).await {
             Ok(pair) => pair,
@@ -389,7 +405,9 @@ async fn tunnel_handler(
         "tunnel handshake accepted; running session"
     );
 
-    ws.on_upgrade(move |socket| handle_session(socket, handshake, user, is_new_user, state, guard))
+    ws.on_upgrade(move |socket| {
+        handle_session(socket, handshake, user, is_new_user, state, guard, shutdown)
+    })
 }
 
 async fn handle_session(
@@ -399,6 +417,7 @@ async fn handle_session(
     is_new_user: bool,
     state: State,
     _guard: TunnelSessionGuard,
+    shutdown: CancellationToken,
 ) {
     let frame_drop_log_every = state.config.frame_drop_log_every;
     let activity_feed_rx = Some(state.activity_feed.subscribe());
@@ -453,10 +472,12 @@ async fn handle_session(
     });
 
     let signal = Arc::new(RenderSignal::new());
+    // The receive loop also needs `out_tx` to push a drain Close on
+    // shutdown, so hand a clone to the render loop's frame sink.
     let render = tokio::spawn(run_session(
         Arc::clone(&app),
         input_rx,
-        WsFrameSink::new(out_tx),
+        WsFrameSink::new(out_tx.clone()),
         frame_drop_log_every,
         Arc::clone(&signal),
     ));
@@ -473,52 +494,76 @@ async fn handle_session(
     signal.notify.notify_one();
 
     // Receive loop: input bytes (binary), resize control frames (text),
-    // and clean close from the client.
-    while let Some(msg) = ws_stream.next().await {
-        let msg = match msg {
-            Ok(m) => m,
-            Err(err) => {
-                tracing::debug!(error = ?err, "tunnel ws recv error");
+    // clean close from the client, AND server-drain cancellation. The
+    // drain arm emits an explicit close 1000 so the bastion's reconnect
+    // dispatcher can distinguish a graceful upgrade from a transport
+    // error and reconnect silently.
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                tracing::info!(
+                    peer_ip = %handshake.peer_ip,
+                    username = %handshake.username,
+                    "tunnel server draining; emitting close 1000"
+                );
+                let frame = CloseFrame {
+                    code: close_code::NORMAL,
+                    reason: "server drain".into(),
+                };
+                // Best-effort: writer task may already be gone if the
+                // peer or render loop closed first. Either way we exit.
+                let _ = out_tx.send(Message::Close(Some(frame))).await;
                 break;
             }
-        };
-
-        match msg {
-            Message::Binary(bytes) => match input_tx.try_reserve() {
-                Ok(permit) => {
-                    permit.send(bytes.into());
-                    signal.dirty.store(true, Ordering::Release);
-                    signal.notify.notify_one();
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    tracing::warn!(
-                        queue_cap = INPUT_QUEUE_CAP,
-                        "tunnel input queue full; dropping inbound bytes"
-                    );
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    tracing::debug!("tunnel input queue closed; render loop ended");
-                    break;
-                }
-            },
-            Message::Text(text) => match ControlFrame::from_json(text.as_str()) {
-                Ok(ControlFrame::Resize { cols, rows }) => {
-                    let mut app_guard = app.lock().await;
-                    if let Err(err) = app_guard.resize(cols, rows) {
-                        tracing::warn!(error = ?err, cols, rows, "tunnel app.resize failed");
+            next = ws_stream.next() => {
+                let Some(msg) = next else { break; };
+                let msg = match msg {
+                    Ok(m) => m,
+                    Err(err) => {
+                        tracing::debug!(error = ?err, "tunnel ws recv error");
+                        break;
                     }
-                    signal.dirty.store(true, Ordering::Release);
-                    signal.notify.notify_one();
+                };
+
+                match msg {
+                    Message::Binary(bytes) => match input_tx.try_reserve() {
+                        Ok(permit) => {
+                            permit.send(bytes.into());
+                            signal.dirty.store(true, Ordering::Release);
+                            signal.notify.notify_one();
+                        }
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            tracing::warn!(
+                                queue_cap = INPUT_QUEUE_CAP,
+                                "tunnel input queue full; dropping inbound bytes"
+                            );
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            tracing::debug!("tunnel input queue closed; render loop ended");
+                            break;
+                        }
+                    },
+                    Message::Text(text) => match ControlFrame::from_json(text.as_str()) {
+                        Ok(ControlFrame::Resize { cols, rows }) => {
+                            let mut app_guard = app.lock().await;
+                            if let Err(err) = app_guard.resize(cols, rows) {
+                                tracing::warn!(error = ?err, cols, rows, "tunnel app.resize failed");
+                            }
+                            signal.dirty.store(true, Ordering::Release);
+                            signal.notify.notify_one();
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = ?err, payload = %text.as_str(), "tunnel: bad control frame");
+                        }
+                    },
+                    Message::Close(_) => {
+                        tracing::debug!("tunnel: client sent Close");
+                        break;
+                    }
+                    _ => {}
                 }
-                Err(err) => {
-                    tracing::warn!(error = ?err, payload = %text.as_str(), "tunnel: bad control frame");
-                }
-            },
-            Message::Close(_) => {
-                tracing::debug!("tunnel: client sent Close");
-                break;
             }
-            _ => {}
         }
     }
 
