@@ -75,7 +75,12 @@ Env-driven. See `src/config.rs` for the canonical list. Required vars:
 - ✅ **Phase 2b** — I/O seam refactor in `late-ssh` so `App::new(SessionConfig)` runs on either a russh `Channel` or a WS pair (`FrameSink` trait).
 - ✅ **Phase 2c** — `/tunnel` constructs `SessionConfig` and runs the render loop over the WS streams; hand-written WS smoke client; full caller-side parity with `shell_request` (conn limits, active_users, activity feed, metrics).
 - ✅ **Phase 3** — bastion proxy logic: dial `/tunnel`, pump bytes, forward `resize`, close SSH on WS close. Includes PROXY v1 parsing on the listener (CIDR-trusted) so `X-Late-Peer-IP` reflects the real client IP behind NGINX.
-- ⏳ **Phase 4** — reconnect loop + plain-text "reconnecting…" messages.
+- 🚧 **Phase 4** — reconnect loop + plain-text "reconnecting…" messages.
+  - ✅ **4/1** — backend emits WS close 1000 on graceful drain (token-driven).
+  - ✅ **4/2** — bastion reconnect loop: retryable closes (1000/1001/1006) and HTTP 5xx → exponential backoff (100ms→5s, 30s budget) with `X-Late-Reconnect: 1` and stable `X-Late-Session-Id`. Terminal closes (4001/4002/4003) and HTTP 4xx end the session.
+  - ⏳ **4/3** — plain-text "reconnecting to late.sh…" message after 500ms grace.
+  - ⏳ **4/4** — ping/pong cadence + dead-backend detection.
+  - ⏳ **4/5** — live integration test against a real `service-ssh` restart.
 - ⏳ **Phase 5** — production cutover (`:22` swing).
 
 ## Running locally (Phase 1, smoke only)

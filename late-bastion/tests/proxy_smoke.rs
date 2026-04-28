@@ -14,7 +14,12 @@
 //!   - SSH `window-change` shows up as a `ControlFrame::Resize` text
 //!     frame on the backend.
 //!
-//! No reconnect-loop / close-code coverage here — that's Phase 4.
+//! Phase 4 additions (`ScriptedBackend`):
+//!   - On retryable WS close (1000), the bastion redials with the same
+//!     `X-Late-Session-Id` and `X-Late-Reconnect: 1`.
+//!   - On terminal WS close (4001), the bastion ends the session
+//!     without further dial attempts.
+//!   - On HTTP 4xx upgrade rejection (401), same: terminal, no redial.
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
@@ -23,8 +28,8 @@ use late_bastion::config::Config;
 use late_bastion::ssh::{Server, load_or_generate_key};
 use late_core::shutdown::CancellationToken;
 use late_core::tunnel_protocol::{
-    ControlFrame, HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_ROWS, HEADER_SECRET,
-    HEADER_SESSION_ID, HEADER_TERM,
+    ControlFrame, HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT, HEADER_ROWS,
+    HEADER_SECRET, HEADER_SESSION_ID, HEADER_TERM,
 };
 use russh::client::{self as russh_client, Handler as ClientHandler};
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, signature::rand_core::UnwrapErr};
@@ -37,8 +42,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
-use tokio_tungstenite::tungstenite::http::HeaderMap;
+use tokio_tungstenite::tungstenite::http::{HeaderMap, StatusCode};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
+use tokio_tungstenite::tungstenite::protocol::frame::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 const TEST_SECRET: &str = "test-secret";
 
@@ -489,5 +496,311 @@ async fn bastion_forwards_window_change_as_resize_text_frame() {
     }
     assert!(saw_resize, "expected a Resize text frame from the bastion");
 
+    bastion.shutdown();
+}
+
+/// One accepted-or-rejected connection's behavior, used by ScriptedBackend
+/// to drive multi-attempt reconnect tests.
+#[derive(Clone, Debug)]
+enum Behavior {
+    /// Complete the WS upgrade, then immediately send a Close frame with
+    /// the given code and exit. Used to exercise both retryable
+    /// (1000/1001/1006) and terminal (4001/4002/4003) dispatch paths.
+    CloseWithCode(u16, &'static str),
+    /// Reject the WS upgrade with the given HTTP status. Used to
+    /// exercise the dial-error classifier (4xx → terminal, 5xx → retry).
+    HttpReject(StatusCode),
+    /// Complete the upgrade and hold the connection open (drain inbound,
+    /// no outbound). Used as the "second attempt succeeds" terminator
+    /// for retry-and-recover tests.
+    AcceptAndHold,
+}
+
+/// Mock backend that handles a *sequence* of connection attempts. Each
+/// accepted TCP gets the next `Behavior` from the script; once the
+/// script is exhausted, additional accepts (which we don't want to see
+/// in terminal-close tests) get a default "Close 1000" so the bastion
+/// would-loop is observable without hanging.
+///
+/// All captured handshake headers go onto a single mpsc in accept order,
+/// so a test can both (a) verify the second handshake's `reconnect=1`
+/// header and (b) detect unwanted extra dials via `try_recv` timeout.
+struct ScriptedBackend {
+    addr: SocketAddr,
+    handshakes_rx: mpsc::Receiver<HeaderMap>,
+    cancel: CancellationToken,
+    _join: tokio::task::JoinHandle<()>,
+}
+
+impl ScriptedBackend {
+    async fn spawn(script: Vec<Behavior>) -> Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let (handshakes_tx, handshakes_rx) = mpsc::channel::<HeaderMap>(16);
+        let cancel = CancellationToken::new();
+        let cancel_for_task = cancel.clone();
+
+        let join = tokio::spawn(async move {
+            let mut script = script;
+            loop {
+                tokio::select! {
+                    _ = cancel_for_task.cancelled() => return,
+                    accept = listener.accept() => {
+                        let (tcp, _) = match accept {
+                            Ok(p) => p,
+                            Err(_) => continue,
+                        };
+                        let behavior = if script.is_empty() {
+                            Behavior::CloseWithCode(1000, "post-script")
+                        } else {
+                            script.remove(0)
+                        };
+                        let tx = handshakes_tx.clone();
+                        tokio::spawn(handle_scripted(tcp, behavior, tx));
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            addr,
+            handshakes_rx,
+            cancel,
+            _join: join,
+        })
+    }
+
+    fn ws_url(&self) -> String {
+        format!("ws://{}/tunnel", self.addr)
+    }
+
+    async fn next_handshake(&mut self) -> Option<HeaderMap> {
+        timeout(Duration::from_secs(5), self.handshakes_rx.recv())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// Assert no further handshake arrives within `wait`. Used by tests
+    /// that expect the bastion to have given up reconnecting.
+    async fn assert_no_redial(&mut self, wait: Duration) {
+        let result = timeout(wait, self.handshakes_rx.recv()).await;
+        if let Ok(Some(h)) = result {
+            panic!("unexpected redial attempt; headers: {h:?}");
+        }
+    }
+
+    fn shutdown(&self) {
+        self.cancel.cancel();
+    }
+}
+
+/// Complete a WS upgrade, capture the request headers onto `tx`, and
+/// return the WebSocketStream. Returns None on upgrade failure.
+async fn accept_capture(
+    tcp: TcpStream,
+    tx: &mpsc::Sender<HeaderMap>,
+) -> Option<tokio_tungstenite::WebSocketStream<TcpStream>> {
+    let captured: Arc<std::sync::Mutex<Option<HeaderMap>>> = Default::default();
+    let cap_clone = captured.clone();
+    let ws = tokio_tungstenite::accept_hdr_async(
+        tcp,
+        move |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+            *cap_clone.lock().unwrap() = Some(req.headers().clone());
+            Ok(resp)
+        },
+    )
+    .await
+    .ok()?;
+    let header_map = captured.lock().unwrap().take();
+    if let Some(h) = header_map {
+        let _ = tx.send(h).await;
+    }
+    Some(ws)
+}
+
+async fn handle_scripted(tcp: TcpStream, behavior: Behavior, tx: mpsc::Sender<HeaderMap>) {
+    match behavior {
+        Behavior::HttpReject(status) => {
+            // accept_hdr_async lets the callback reject with an HTTP response.
+            // The handshake headers ARE visible at callback time even when
+            // we reject — capture them so the test can correlate the
+            // attempt with this Behavior.
+            let captured: Arc<std::sync::Mutex<Option<HeaderMap>>> = Default::default();
+            let cap_clone = captured.clone();
+            let _ = tokio_tungstenite::accept_hdr_async(
+                tcp,
+                move |req: &Request, _resp: Response| -> Result<Response, ErrorResponse> {
+                    *cap_clone.lock().unwrap() = Some(req.headers().clone());
+                    let mut err: ErrorResponse = ErrorResponse::new(None);
+                    *err.status_mut() = status;
+                    Err(err)
+                },
+            )
+            .await;
+            let header_map = captured.lock().unwrap().take();
+            if let Some(h) = header_map {
+                let _ = tx.send(h).await;
+            }
+        }
+        Behavior::CloseWithCode(code, reason) => {
+            let Some(ws) = accept_capture(tcp, &tx).await else {
+                return;
+            };
+            let (mut sink, _stream) = ws.split();
+            let frame = CloseFrame {
+                code: CloseCode::from(code),
+                reason: reason.into(),
+            };
+            let _ = sink.send(WsMessage::Close(Some(frame))).await;
+            let _ = sink.close().await;
+        }
+        Behavior::AcceptAndHold => {
+            let Some(ws) = accept_capture(tcp, &tx).await else {
+                return;
+            };
+            let (mut sink, mut stream) = ws.split();
+            // Drain inbound until peer closes; don't send anything.
+            while let Some(Ok(msg)) = stream.next().await {
+                if matches!(msg, WsMessage::Close(_)) {
+                    break;
+                }
+            }
+            let _ = sink.close().await;
+        }
+    }
+}
+
+/// Open an SSH session against the bastion and advance through
+/// handshake → pty → shell. Returns the live channel so the test can
+/// hold it open while inspecting backend state.
+async fn open_user_session(
+    bastion_addr: SocketAddr,
+) -> (
+    russh_client::Handle<AnyHostKey>,
+    russh::Channel<russh::client::Msg>,
+) {
+    let user_key =
+        PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519).expect("key");
+    let client_config = Arc::new(russh_client::Config::default());
+    let mut session = russh_client::connect(client_config, bastion_addr, AnyHostKey)
+        .await
+        .expect("client connect");
+    let auth = session
+        .authenticate_publickey(
+            "alice",
+            PrivateKeyWithHashAlg::new(Arc::new(user_key), None),
+        )
+        .await
+        .expect("authenticate_publickey");
+    assert!(auth.success(), "auth not accepted");
+    let channel = session
+        .channel_open_session()
+        .await
+        .expect("channel_open_session");
+    channel
+        .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
+        .await
+        .expect("request_pty");
+    channel.request_shell(true).await.expect("request_shell");
+    (session, channel)
+}
+
+#[tokio::test]
+async fn bastion_redials_after_retryable_close_with_reconnect_header() {
+    // First connection: backend closes 1000 → bastion should retry.
+    // Second connection: backend holds → bastion proceeds normally.
+    let mut backend = ScriptedBackend::spawn(vec![
+        Behavior::CloseWithCode(1000, "drain"),
+        Behavior::AcceptAndHold,
+    ])
+    .await
+    .expect("backend");
+
+    let bastion = TestBastion::spawn(backend.ws_url()).await.expect("bastion");
+
+    let (_session, _channel) = open_user_session(bastion.addr).await;
+
+    // First handshake: fresh dial, no reconnect header.
+    let h1 = backend
+        .next_handshake()
+        .await
+        .expect("first handshake never arrived");
+    let sid1 = h1
+        .get(HEADER_SESSION_ID)
+        .expect("session id on first dial")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        h1.get(HEADER_RECONNECT).is_none(),
+        "first dial should not carry X-Late-Reconnect"
+    );
+
+    // Second handshake: same session_id, X-Late-Reconnect=1.
+    let h2 = backend
+        .next_handshake()
+        .await
+        .expect("redial never arrived");
+    assert_eq!(
+        h2.get(HEADER_RECONNECT)
+            .expect("reconnect header on second dial"),
+        "1",
+        "redial should set X-Late-Reconnect=1"
+    );
+    assert_eq!(
+        h2.get(HEADER_SESSION_ID).unwrap().to_str().unwrap(),
+        sid1,
+        "session id should be stable across reconnects"
+    );
+
+    backend.shutdown();
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_does_not_redial_after_terminal_close() {
+    // Terminal close (4001 = kicked) should end the user's session
+    // without further dial attempts.
+    let mut backend = ScriptedBackend::spawn(vec![Behavior::CloseWithCode(4001, "kicked")])
+        .await
+        .expect("backend");
+
+    let bastion = TestBastion::spawn(backend.ws_url()).await.expect("bastion");
+
+    let (_session, _channel) = open_user_session(bastion.addr).await;
+
+    let _h1 = backend
+        .next_handshake()
+        .await
+        .expect("first handshake never arrived");
+
+    // Generous window: the backoff initial delay is 100ms, so a single
+    // unwanted retry would land well within 2s.
+    backend.assert_no_redial(Duration::from_secs(2)).await;
+
+    backend.shutdown();
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_does_not_redial_after_http_4xx_rejection() {
+    // HTTP 401 on the upgrade should be classified as terminal.
+    let mut backend = ScriptedBackend::spawn(vec![Behavior::HttpReject(StatusCode::UNAUTHORIZED)])
+        .await
+        .expect("backend");
+
+    let bastion = TestBastion::spawn(backend.ws_url()).await.expect("bastion");
+
+    let (_session, _channel) = open_user_session(bastion.addr).await;
+
+    let _h1 = backend
+        .next_handshake()
+        .await
+        .expect("first handshake never arrived");
+
+    backend.assert_no_redial(Duration::from_secs(2)).await;
+
+    backend.shutdown();
     bastion.shutdown();
 }
