@@ -18,6 +18,7 @@ FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS base
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
+    make \
     pkg-config \
     libssl-dev \
     perl \

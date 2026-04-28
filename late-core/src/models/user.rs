@@ -11,7 +11,8 @@ crate::model! {
     struct User {
         @generated
         pub last_seen: DateTime<Utc>,
-        pub is_admin: bool;
+        pub is_admin: bool,
+        pub is_mod: bool;
 
         @data
         pub fingerprint: String,

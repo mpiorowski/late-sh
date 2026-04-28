@@ -126,7 +126,10 @@ impl AiService {
         }
 
         let body_text = res.text().await?;
-        tracing::info!(raw_response = %body_text, "Full Gemini API response");
+        tracing::debug!(
+            raw_response_len = body_text.len(),
+            "received Gemini API response"
+        );
         let body: GeminiResponse = serde_json::from_str(&body_text)?;
         if let Some(candidates) = body.candidates
             && let Some(first) = candidates.into_iter().next()

@@ -7,7 +7,10 @@ use dartboard_core::{
 use dartboard_local::{ConnectOutcome, Hello, LocalClient, ServerHandle};
 use late_core::{db::Db, models::artboard::Snapshot};
 use tokio::sync::{broadcast, mpsc as tokio_mpsc, watch};
+use tracing::{info, warn};
 use uuid::Uuid;
+
+const PAINT_REGION_LOG_THRESHOLD: usize = 50;
 
 use super::provenance::{
     ArtboardProvenance, SharedArtboardProvenance, apply_shared_op, clone_shared_provenance,
@@ -358,6 +361,12 @@ fn handle_server_msg(
             peers,
             snapshot,
         } => {
+            info!(
+                user = username,
+                cells = snapshot.iter().count(),
+                peers = peers.len(),
+                "artboard welcome"
+            );
             let _ = snapshot_tx.send(DartboardSnapshot {
                 canvas: snapshot,
                 provenance: clone_shared_provenance(shared_provenance),
@@ -370,41 +379,48 @@ fn handle_server_msg(
             });
         }
         ServerMsg::Ack { client_op_id, seq } => {
-            let mut snapshot = snapshot_tx.borrow().clone();
-            snapshot.last_seq = snapshot.last_seq.max(seq);
-            let _ = snapshot_tx.send(snapshot);
+            snapshot_tx.send_modify(|snapshot| {
+                snapshot.last_seq = snapshot.last_seq.max(seq);
+            });
             let _ = event_tx.send(DartboardEvent::Ack { client_op_id, seq });
         }
         ServerMsg::OpBroadcast { from, op, seq } => {
-            let mut snapshot = snapshot_tx.borrow().clone();
-            let before = snapshot.canvas.clone();
-            snapshot.canvas.apply(&op);
-            if let Some(actor) = actor_name(&snapshot, from, username) {
-                snapshot.provenance.apply_op(&before, &op, &actor);
-                apply_shared_op(shared_provenance, &before, &op, &actor);
-            } else if matches!(op, CanvasOp::Replace { .. }) {
-                snapshot.provenance = clone_shared_provenance(shared_provenance);
-            }
-            snapshot.last_seq = snapshot.last_seq.max(seq);
-            let _ = snapshot_tx.send(snapshot);
+            log_op(&op, username);
+            let needs_before = matches!(
+                op,
+                CanvasOp::ShiftRow { .. } | CanvasOp::ShiftCol { .. } | CanvasOp::Replace { .. }
+            );
+            snapshot_tx.send_modify(|snapshot| {
+                let actor = actor_name(snapshot, from, username);
+                let before = needs_before.then(|| snapshot.canvas.clone());
+                let before_ref = before.as_ref().unwrap_or(&snapshot.canvas);
+                if let Some(actor_str) = actor.as_deref() {
+                    snapshot.provenance.apply_op(before_ref, &op, actor_str);
+                    apply_shared_op(shared_provenance, before_ref, &op, actor_str);
+                } else if matches!(op, CanvasOp::Replace { .. }) {
+                    snapshot.provenance = clone_shared_provenance(shared_provenance);
+                }
+                snapshot.canvas.apply(&op);
+                snapshot.last_seq = snapshot.last_seq.max(seq);
+            });
         }
         ServerMsg::PeerJoined { peer } => {
-            let mut snapshot = snapshot_tx.borrow().clone();
-            if !snapshot
-                .peers
-                .iter()
-                .any(|existing| existing.user_id == peer.user_id)
-            {
-                snapshot.peers.push(peer.clone());
-                snapshot.peers.sort_by_key(|existing| existing.user_id);
-            }
-            let _ = snapshot_tx.send(snapshot);
+            snapshot_tx.send_modify(|snapshot| {
+                if !snapshot
+                    .peers
+                    .iter()
+                    .any(|existing| existing.user_id == peer.user_id)
+                {
+                    snapshot.peers.push(peer.clone());
+                    snapshot.peers.sort_by_key(|existing| existing.user_id);
+                }
+            });
             let _ = event_tx.send(DartboardEvent::PeerJoined { peer });
         }
         ServerMsg::PeerLeft { user_id } => {
-            let mut snapshot = snapshot_tx.borrow().clone();
-            snapshot.peers.retain(|peer| peer.user_id != user_id);
-            let _ = snapshot_tx.send(snapshot);
+            snapshot_tx.send_modify(|snapshot| {
+                snapshot.peers.retain(|peer| peer.user_id != user_id);
+            });
             let _ = event_tx.send(DartboardEvent::PeerLeft { user_id });
         }
         ServerMsg::Reject {
@@ -417,8 +433,29 @@ fn handle_server_msg(
             });
         }
         ServerMsg::ConnectRejected { reason } => {
+            warn!(user = username, reason = %reason, "artboard connect rejected");
             let _ = event_tx.send(DartboardEvent::ConnectRejected { reason });
         }
+    }
+}
+
+fn log_op(op: &CanvasOp, username: &str) {
+    match op {
+        CanvasOp::Replace { canvas } => {
+            info!(
+                user = username,
+                cells = canvas.iter().count(),
+                "artboard replace op"
+            );
+        }
+        CanvasOp::PaintRegion { cells } if cells.len() > PAINT_REGION_LOG_THRESHOLD => {
+            info!(
+                user = username,
+                cells = cells.len(),
+                "artboard paint region"
+            );
+        }
+        _ => {}
     }
 }
 

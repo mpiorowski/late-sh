@@ -150,6 +150,7 @@ pub struct SessionConfig {
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
     pub is_admin: bool,
+    pub is_mod: bool,
 
     /// Voting
     pub my_vote: Option<Genre>,
@@ -211,6 +212,7 @@ pub struct App {
     pub(super) activity: VecDeque<ActivityEvent>,
     pub(crate) user_id: Uuid,
     pub(crate) is_admin: bool,
+    pub(crate) is_mod: bool,
 
     /// Voting
     pub(crate) vote: vote::state::VoteState,
@@ -354,6 +356,7 @@ impl App {
         self.chat.set_visible_room_id(visible_room_id);
         if changed && let Some(room_id) = visible_room_id {
             self.chat.mark_room_read(room_id);
+            self.chat.request_room_tail(room_id);
         }
     }
 
@@ -672,6 +675,7 @@ impl App {
             activity: VecDeque::new(),
             user_id: config.user_id,
             is_admin: config.is_admin,
+            is_mod: config.is_mod,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
                 config.chat_service,

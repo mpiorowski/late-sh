@@ -118,6 +118,7 @@ struct DrawContext<'a> {
     activity: &'a std::collections::VecDeque<crate::state::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
+    is_mod: bool,
     show_right_sidebar: bool,
     show_games_sidebar: bool,
     show_settings: bool,
@@ -358,6 +359,7 @@ impl App {
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
+                        is_mod: self.is_mod,
                         show_right_sidebar,
                         show_games_sidebar,
                         show_settings: self.show_settings,
@@ -575,6 +577,7 @@ impl App {
                     active_room: ctx.rooms_active_room,
                     blackjack_state: ctx.blackjack_state,
                     is_admin: ctx.is_admin,
+                    is_mod: ctx.is_mod,
                 },
             ),
         }

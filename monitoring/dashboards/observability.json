@@ -44,21 +44,6 @@
         "includeAll": true,
         "multi": false,
         "current": {}
-      },
-      {
-        "name": "trace_service",
-        "label": "Trace Service",
-        "type": "query",
-        "query": "label_values(traces_span_metrics_calls_total, service_name)",
-        "datasource": {
-          "uid": "victoriametrics",
-          "type": "victoriametrics-metrics-datasource"
-        },
-        "refresh": 2,
-        "includeAll": true,
-        "allValue": "",
-        "multi": false,
-        "current": {}
       }
     ]
   },
@@ -599,7 +584,7 @@
         {
           "refId": "A",
           "expr": "{service.name=~\"$service\"}",
-          "queryType": "hits"
+          "queryType": "instant"
         }
       ],
       "options": {
@@ -855,7 +840,7 @@
         {
           "refId": "A",
           "expr": "{service.name=\"late-web\"} severity:ERROR",
-          "queryType": "hits"
+          "queryType": "instant"
         }
       ],
       "options": {
@@ -887,7 +872,7 @@
         {
           "refId": "A",
           "expr": "{service.name=\"late-ssh\"} severity:ERROR",
-          "queryType": "hits"
+          "queryType": "instant"
         }
       ],
       "options": {
@@ -909,8 +894,8 @@
     },
     {
       "type": "table",
-      "title": "Recent Traces",
-      "description": "Latest traces from VictoriaTraces. Use this for drill-down after the metrics and logs above identify the suspect service or route.",
+      "title": "Recent Traces: late-web",
+      "description": "Latest late-web traces from VictoriaTraces.",
       "datasource": {
         "uid": "victoriatraces",
         "type": "jaeger"
@@ -924,18 +909,18 @@
           },
           "queryType": "search",
           "tableType": "table",
-          "service": "$trace_service",
+          "service": "late-web",
           "tags": "",
           "minDuration": "",
           "maxDuration": "",
-          "limit": 50
+          "limit": 25
         }
       ],
       "transformations": [
         {
           "id": "limit",
           "options": {
-            "limitField": 50
+            "limitField": 25
           }
         },
         {
@@ -975,8 +960,81 @@
       },
       "gridPos": {
         "h": 12,
-        "w": 24,
+        "w": 12,
         "x": 0,
+        "y": 56
+      }
+    },
+    {
+      "type": "table",
+      "title": "Recent Traces: late-ssh",
+      "description": "Latest late-ssh traces from VictoriaTraces.",
+      "datasource": {
+        "uid": "victoriatraces",
+        "type": "jaeger"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "uid": "victoriatraces",
+            "type": "jaeger"
+          },
+          "queryType": "search",
+          "tableType": "table",
+          "service": "late-ssh",
+          "tags": "",
+          "minDuration": "",
+          "maxDuration": "",
+          "limit": 25
+        }
+      ],
+      "transformations": [
+        {
+          "id": "limit",
+          "options": {
+            "limitField": 25
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "durationMs": "Duration (ms)",
+              "rootService": "Service",
+              "rootSpanName": "Root Span",
+              "traceID": "Trace ID"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "filterable": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "Start time",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 12,
         "y": 56
       }
     },

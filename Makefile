@@ -102,7 +102,7 @@ check:
 	cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace --all-targets
 
 start: .env keys
-	docker compose -f docker-compose.yml up
+	docker compose -f docker-compose.yml up --build
 startm: .env keys
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
 down:
