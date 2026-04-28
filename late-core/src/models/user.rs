@@ -38,6 +38,9 @@ const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
 const TIMEZONE_KEY: &str = "timezone";
+const IDE_KEY: &str = "ide";
+const TERMINAL_KEY: &str = "terminal";
+const OS_KEY: &str = "os";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -421,6 +424,27 @@ pub fn extract_country(settings: &Value) -> Option<String> {
 pub fn extract_timezone(settings: &Value) -> Option<String> {
     settings
         .get(TIMEZONE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+pub fn extract_ide(settings: &Value) -> Option<String> {
+    extract_trimmed_profile_text(settings, IDE_KEY)
+}
+
+pub fn extract_terminal(settings: &Value) -> Option<String> {
+    extract_trimmed_profile_text(settings, TERMINAL_KEY)
+}
+
+pub fn extract_os(settings: &Value) -> Option<String> {
+    extract_trimmed_profile_text(settings, OS_KEY)
+}
+
+fn extract_trimmed_profile_text(settings: &Value, key: &str) -> Option<String> {
+    settings
+        .get(key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

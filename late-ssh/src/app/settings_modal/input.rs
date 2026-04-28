@@ -16,6 +16,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.settings_modal_state.editing_system_field().is_some() {
+        handle_system_input(app, event);
+        return;
+    }
+
     if app.settings_modal_state.editing_bio() {
         handle_bio_input(app, event);
         return;
@@ -219,6 +224,13 @@ fn is_close_event(event: &ParsedInput) -> bool {
 fn activate_selected_row(app: &mut App) {
     match app.settings_modal_state.selected_row() {
         Row::Username => app.settings_modal_state.start_username_edit(),
+        Row::Ide | Row::Terminal | Row::Os => {
+            if let Some(field) = crate::app::settings_modal::state::SystemField::from_row(
+                app.settings_modal_state.selected_row(),
+            ) {
+                app.settings_modal_state.start_system_field_edit(field);
+            }
+        }
         Row::Theme
         | Row::BackgroundColor
         | Row::DashboardHeader
@@ -232,6 +244,44 @@ fn activate_selected_row(app: &mut App) {
         | Row::NotifyFormat => app.settings_modal_state.cycle_setting(true),
         Row::Country => app.settings_modal_state.open_picker(PickerKind::Country),
         Row::Timezone => app.settings_modal_state.open_picker(PickerKind::Timezone),
+    }
+}
+
+fn handle_system_input(app: &mut App, event: ParsedInput) {
+    let state = &mut app.settings_modal_state;
+    match event {
+        ParsedInput::Byte(0x1B) => state.cancel_system_field_edit(),
+        ParsedInput::Byte(b'\r') => state.submit_system_field(),
+        ParsedInput::Byte(0x15) => state.clear_system_field(),
+        ParsedInput::Byte(0x01) => state.system_cursor_home(),
+        ParsedInput::Byte(0x05) => state.system_cursor_end(),
+        ParsedInput::Byte(0x19) => state.system_paste(),
+        ParsedInput::Byte(0x1F) => state.system_undo(),
+        ParsedInput::Byte(0x7F) => state.system_backspace(),
+        ParsedInput::Delete => state.system_delete_right(),
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => state.system_delete_word_left(),
+        ParsedInput::CtrlDelete => state.system_delete_word_right(),
+        ParsedInput::Arrow(b'C') => state.system_cursor_right(),
+        ParsedInput::Arrow(b'D') => state.system_cursor_left(),
+        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
+            state.system_cursor_word_right()
+        }
+        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => {
+            state.system_cursor_word_left()
+        }
+        ParsedInput::Paste(pasted) => {
+            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
+            for ch in cleaned.chars() {
+                if !ch.is_control() && ch != '\n' && ch != '\r' {
+                    state.system_push(ch);
+                }
+            }
+        }
+        ParsedInput::Char(ch) if !ch.is_control() => state.system_push(ch),
+        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
+            state.system_push(byte as char)
+        }
+        _ => {}
     }
 }
 

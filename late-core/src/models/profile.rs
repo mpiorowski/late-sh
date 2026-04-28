@@ -1,20 +1,26 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::user::{
     User, extract_bio, extract_country, extract_enable_background_color, extract_favorite_room_ids,
-    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_show_dashboard_header, extract_show_games_sidebar, extract_show_right_sidebar,
-    extract_show_settings_on_connect, extract_theme_id, extract_timezone,
+    extract_ide, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
+    extract_notify_kinds, extract_os, extract_show_dashboard_header, extract_show_games_sidebar,
+    extract_show_right_sidebar, extract_show_settings_on_connect, extract_terminal,
+    extract_theme_id, extract_timezone,
 };
 
 #[derive(Clone, Debug)]
 pub struct Profile {
+    pub created_at: Option<DateTime<Utc>>,
     pub username: String,
     pub bio: String,
     pub country: Option<String>,
     pub timezone: Option<String>,
+    pub ide: Option<String>,
+    pub terminal: Option<String>,
+    pub os: Option<String>,
     pub notify_kinds: Vec<String>,
     pub notify_bell: bool,
     pub notify_cooldown_mins: i32,
@@ -34,10 +40,14 @@ pub struct Profile {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            created_at: None,
             username: String::new(),
             bio: String::new(),
             country: None,
             timezone: None,
+            ide: None,
+            terminal: None,
+            os: None,
             notify_kinds: Vec::new(),
             notify_bell: false,
             notify_cooldown_mins: 0,
@@ -59,6 +69,9 @@ pub struct ProfileParams {
     pub bio: String,
     pub country: Option<String>,
     pub timezone: Option<String>,
+    pub ide: Option<String>,
+    pub terminal: Option<String>,
+    pub os: Option<String>,
     pub notify_kinds: Vec<String>,
     pub notify_bell: bool,
     pub notify_cooldown_mins: i32,
@@ -109,6 +122,9 @@ impl Profile {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
+        let ide = normalize_profile_text(params.ide.as_deref());
+        let terminal = normalize_profile_text(params.terminal.as_deref());
+        let os = normalize_profile_text(params.os.as_deref());
         let current_user = User::get(client, user_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
@@ -147,10 +163,13 @@ impl Profile {
                          'show_right_sidebar', $12::bool,
                          'show_games_sidebar', $13::bool,
                          'show_settings_on_connect', $14::bool,
-                         'favorite_room_ids', $15::jsonb
+                         'favorite_room_ids', $15::jsonb,
+                         'ide', $16::text,
+                         'terminal', $17::text,
+                         'os', $18::text
                      ),
                      updated = current_timestamp
-                 WHERE id = $16
+                 WHERE id = $19
                  RETURNING *",
                 &[
                     &params.username,
@@ -168,6 +187,9 @@ impl Profile {
                     &params.show_games_sidebar,
                     &params.show_settings_on_connect,
                     &favorite_room_ids_json,
+                    &ide,
+                    &terminal,
+                    &os,
                     &user_id,
                 ],
             )
@@ -178,10 +200,14 @@ impl Profile {
 
     fn from_user(user: &User) -> Self {
         Self {
+            created_at: Some(user.created),
             username: user.username.clone(),
             bio: extract_bio(&user.settings),
             country: extract_country(&user.settings),
             timezone: extract_timezone(&user.settings),
+            ide: extract_ide(&user.settings),
+            terminal: extract_terminal(&user.settings),
+            os: extract_os(&user.settings),
             notify_kinds: extract_notify_kinds(&user.settings),
             notify_bell: extract_notify_bell(&user.settings),
             notify_cooldown_mins: extract_notify_cooldown_mins(&user.settings),
@@ -195,6 +221,13 @@ impl Profile {
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
         }
     }
+}
+
+fn normalize_profile_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 /// Look up a user's display name by user_id. Returns "someone" on failure.

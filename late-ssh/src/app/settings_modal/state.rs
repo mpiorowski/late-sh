@@ -13,6 +13,7 @@ use super::data::{CountryOption, filter_countries, filter_timezones};
 use super::gem::GemState;
 
 const USERNAME_MAX_LEN: usize = 12;
+const SYSTEM_FIELD_MAX_LEN: usize = 48;
 pub const BIO_MAX_LEN: usize = 500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +37,9 @@ pub struct RoomOption {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Row {
     Username,
+    Ide,
+    Terminal,
+    Os,
     Theme,
     BackgroundColor,
     DashboardHeader,
@@ -52,8 +56,11 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 14] = [
+    pub const ALL: [Row; 17] = [
         Row::Username,
+        Row::Ide,
+        Row::Terminal,
+        Row::Os,
         Row::Theme,
         Row::BackgroundColor,
         Row::DashboardHeader,
@@ -68,6 +75,40 @@ impl Row {
         Row::Cooldown,
         Row::NotifyFormat,
     ];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SystemField {
+    Ide,
+    Terminal,
+    Os,
+}
+
+impl SystemField {
+    pub(crate) fn from_row(row: Row) -> Option<Self> {
+        match row {
+            Row::Ide => Some(Self::Ide),
+            Row::Terminal => Some(Self::Terminal),
+            Row::Os => Some(Self::Os),
+            _ => None,
+        }
+    }
+
+    fn value(self, profile: &Profile) -> Option<&str> {
+        match self {
+            Self::Ide => profile.ide.as_deref(),
+            Self::Terminal => profile.terminal.as_deref(),
+            Self::Os => profile.os.as_deref(),
+        }
+    }
+
+    fn set_value(self, profile: &mut Profile, value: Option<String>) {
+        match self {
+            Self::Ide => profile.ide = value,
+            Self::Terminal => profile.terminal = value,
+            Self::Os => profile.os = value,
+        }
+    }
 }
 
 /// Top-level tab in the settings modal. `Settings` holds every compact row
@@ -140,6 +181,8 @@ pub struct SettingsModalState {
     theme_collapsed_groups: u8,
     editing_username: bool,
     username_input: TextArea<'static>,
+    editing_system_field: Option<SystemField>,
+    system_input: TextArea<'static>,
     editing_bio: bool,
     bio_input: TextArea<'static>,
     picker: PickerState,
@@ -169,6 +212,8 @@ impl SettingsModalState {
             theme_collapsed_groups: 0,
             editing_username: false,
             username_input: new_username_textarea(false),
+            editing_system_field: None,
+            system_input: new_short_textarea(false),
             editing_bio: false,
             bio_input: new_bio_textarea(false),
             picker: PickerState::default(),
@@ -200,6 +245,8 @@ impl SettingsModalState {
         self.sync_theme_index_to_draft();
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
+        self.editing_system_field = None;
+        self.system_input = new_short_textarea(false);
         self.editing_bio = false;
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
@@ -232,6 +279,10 @@ impl SettingsModalState {
         if self.selected_tab == Tab::Settings && self.editing_username {
             // Leaving the Settings tab mid-username-edit → commit what's typed.
             self.submit_username();
+            self.save();
+        }
+        if self.selected_tab == Tab::Settings && self.editing_system_field.is_some() {
+            self.submit_system_field();
             self.save();
         }
         if next == Tab::Themes {
@@ -497,6 +548,14 @@ impl SettingsModalState {
         self.editing_username
     }
 
+    pub fn editing_system_field(&self) -> Option<SystemField> {
+        self.editing_system_field
+    }
+
+    pub fn editing_system_row(&self, row: Row) -> bool {
+        self.editing_system_field == SystemField::from_row(row)
+    }
+
     pub fn editing_bio(&self) -> bool {
         self.editing_bio
     }
@@ -511,6 +570,22 @@ impl SettingsModalState {
 
     fn username_char_count(&self) -> usize {
         self.username_input
+            .lines()
+            .iter()
+            .map(|l| l.chars().count())
+            .sum()
+    }
+
+    pub fn system_input(&self) -> &TextArea<'static> {
+        &self.system_input
+    }
+
+    fn system_text(&self) -> String {
+        self.system_input.lines().join("")
+    }
+
+    fn system_char_count(&self) -> usize {
+        self.system_input
             .lines()
             .iter()
             .map(|l| l.chars().count())
@@ -652,6 +727,7 @@ impl SettingsModalState {
     }
 
     pub fn start_username_edit(&mut self) {
+        self.editing_system_field = None;
         self.editing_username = true;
         self.username_input = new_username_textarea(true);
         self.username_input.insert_str(&self.draft.username);
@@ -728,6 +804,89 @@ impl SettingsModalState {
     pub fn clear_username(&mut self) {
         let editing = self.editing_username;
         self.username_input = new_username_textarea(editing);
+    }
+
+    pub fn start_system_field_edit(&mut self, field: SystemField) {
+        self.editing_username = false;
+        self.editing_system_field = Some(field);
+        self.system_input = new_short_textarea(true);
+        if let Some(value) = field.value(&self.draft) {
+            self.system_input.insert_str(value);
+        }
+    }
+
+    pub fn cancel_system_field_edit(&mut self) {
+        self.editing_system_field = None;
+        self.system_input = new_short_textarea(false);
+    }
+
+    pub fn submit_system_field(&mut self) {
+        let Some(field) = self.editing_system_field.take() else {
+            return;
+        };
+        let normalized = normalize_optional_text(&self.system_text());
+        self.system_input = new_short_textarea(false);
+        field.set_value(&mut self.draft, normalized);
+        self.save();
+    }
+
+    pub fn system_push(&mut self, ch: char) {
+        if self.system_char_count() < SYSTEM_FIELD_MAX_LEN {
+            self.system_input.insert_char(ch);
+        }
+    }
+
+    pub fn system_backspace(&mut self) {
+        self.system_input.delete_char();
+    }
+
+    pub fn system_delete_right(&mut self) {
+        self.system_input.delete_next_char();
+    }
+
+    pub fn system_delete_word_left(&mut self) {
+        self.system_input.delete_word();
+    }
+
+    pub fn system_delete_word_right(&mut self) {
+        self.system_input.delete_next_word();
+    }
+
+    pub fn system_cursor_left(&mut self) {
+        self.system_input.move_cursor(CursorMove::Back);
+    }
+
+    pub fn system_cursor_right(&mut self) {
+        self.system_input.move_cursor(CursorMove::Forward);
+    }
+
+    pub fn system_cursor_word_left(&mut self) {
+        self.system_input.move_cursor(CursorMove::WordBack);
+    }
+
+    pub fn system_cursor_word_right(&mut self) {
+        self.system_input.move_cursor(CursorMove::WordForward);
+    }
+
+    pub fn system_cursor_home(&mut self) {
+        self.system_input.move_cursor(CursorMove::Head);
+    }
+
+    pub fn system_cursor_end(&mut self) {
+        self.system_input.move_cursor(CursorMove::End);
+    }
+
+    pub fn system_paste(&mut self) {
+        let yank = self.system_input.yank_text();
+        insert_system_text_limited(&mut self.system_input, &yank);
+    }
+
+    pub fn system_undo(&mut self) {
+        self.system_input.undo();
+    }
+
+    pub fn clear_system_field(&mut self) {
+        self.system_input = new_short_textarea(self.editing_system_field.is_some());
     }
 
     pub fn start_bio_edit(&mut self) {
@@ -932,6 +1091,7 @@ impl SettingsModalState {
                 );
                 true
             }
+            Row::Ide | Row::Terminal | Row::Os => false,
             _ => false,
         };
         if mutated {
@@ -947,6 +1107,9 @@ impl SettingsModalState {
                 bio: self.draft.bio.clone(),
                 country: self.draft.country.clone(),
                 timezone: self.draft.timezone.clone(),
+                ide: self.draft.ide.clone(),
+                terminal: self.draft.terminal.clone(),
+                os: self.draft.os.clone(),
                 notify_kinds: self.draft.notify_kinds.clone(),
                 notify_bell: self.draft.notify_bell,
                 notify_cooldown_mins: self.draft.notify_cooldown_mins,
@@ -1030,9 +1193,29 @@ fn username_char_count_for_input(input: &TextArea<'static>) -> usize {
     input.lines().iter().map(|l| l.chars().count()).sum()
 }
 
+fn system_char_count_for_input(input: &TextArea<'static>) -> usize {
+    input.lines().iter().map(|l| l.chars().count()).sum()
+}
+
+fn normalize_optional_text(text: &str) -> Option<String> {
+    let normalized = text.trim().split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
 fn insert_username_text_limited(input: &mut TextArea<'static>, text: &str) {
     for ch in text.chars() {
         if username_char_count_for_input(input) >= USERNAME_MAX_LEN {
+            break;
+        }
+        if !ch.is_control() && ch != '\n' && ch != '\r' {
+            input.insert_char(ch);
+        }
+    }
+}
+
+fn insert_system_text_limited(input: &mut TextArea<'static>, text: &str) {
+    for ch in text.chars() {
+        if system_char_count_for_input(input) >= SYSTEM_FIELD_MAX_LEN {
             break;
         }
         if !ch.is_control() && ch != '\n' && ch != '\r' {
@@ -1088,6 +1271,10 @@ fn set_bio_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
 }
 
 fn new_username_textarea(editing: bool) -> TextArea<'static> {
+    new_short_textarea(editing)
+}
+
+fn new_short_textarea(editing: bool) -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_cursor_line_style(Style::default());
     ta.set_wrap_mode(WrapMode::None);
@@ -1115,6 +1302,27 @@ mod tests {
 
         assert_eq!(input.lines().join(""), "abcdefghijkx");
         assert_eq!(username_char_count_for_input(&input), USERNAME_MAX_LEN);
+    }
+
+    #[test]
+    fn system_yank_respects_max_length() {
+        let mut input = new_short_textarea(true);
+        input.insert_str("a".repeat(SYSTEM_FIELD_MAX_LEN - 1));
+        input.set_yank_text("xyz");
+        let yank = input.yank_text();
+
+        insert_system_text_limited(&mut input, &yank);
+
+        assert_eq!(system_char_count_for_input(&input), SYSTEM_FIELD_MAX_LEN);
+    }
+
+    #[test]
+    fn normalize_optional_text_trims_and_collapses_blank() {
+        assert_eq!(
+            normalize_optional_text("  VS   Code  ").as_deref(),
+            Some("VS Code")
+        );
+        assert_eq!(normalize_optional_text("   "), None);
     }
 
     #[test]
