@@ -9,4 +9,5 @@
 
 pub mod config;
 pub mod handshake;
+pub mod proxy;
 pub mod ssh;

@@ -21,6 +21,7 @@ ipnet.workspace = true
 
 # Async Runtime
 tokio = { workspace = true }
+futures-util = { workspace = true }
 
 # Memory allocator (matches late-ssh; bastion is long-lived)
 tikv-jemallocator = "0.6"

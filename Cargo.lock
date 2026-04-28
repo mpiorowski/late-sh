@@ -2645,6 +2645,7 @@ name = "late-bastion"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures-util",
  "getrandom 0.4.2",
  "ipnet",
  "late-core",

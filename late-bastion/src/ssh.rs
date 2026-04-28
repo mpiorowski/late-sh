@@ -1,12 +1,13 @@
-//! Minimal russh server skeleton for `late-bastion`.
+//! russh server for `late-bastion`.
 //!
-//! Phase 1 scope: load/generate host key, listen on the configured port,
-//! accept SSH connections, log channel events. **No proxy logic yet** —
-//! shell requests are answered with a stub message and a clean close.
+//! Phase 3: on `pty-req` + `shell`, hand the SSH channel to a per-shell
+//! proxy task that dials late-ssh `/tunnel` and pumps bytes between the
+//! two transports. The russh callback layer here is responsible only
+//! for stashing handshake-relevant state across SSH protocol events
+//! (auth → channel open → pty → shell → window-change), not for any
+//! protocol-aware byte handling.
 //!
-//! Subsequent phases (per `PERSISTENT-CONNECTION-GATEWAY.md` §10) will:
-//!   - Phase 3: dial late-ssh `/tunnel`, byte-pump bidirectionally, forward
-//!     `window-change` requests as WS `resize` text frames.
+//! Subsequent phase (per `PERSISTENT-CONNECTION-GATEWAY.md` §10):
 //!   - Phase 4: detect WS close codes, draw plain-text "reconnecting…"
 //!     message into the SSH channel, redial with backoff.
 
@@ -17,17 +18,19 @@ use russh::server::{Auth, Msg, Session};
 use russh::{Channel, ChannelId};
 #[cfg(unix)]
 use std::fs::Permissions;
+use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio::task::JoinSet;
+use uuid::Uuid;
 
 use crate::config::Config;
-
-const STUB_BANNER: &str = "\r\n  late-bastion stub: tunnel not yet wired (Phase 3).\r\n\r\n";
+use crate::handshake::HandshakeContext;
+use crate::proxy::{RESIZE_QUEUE_CAP, run_session};
 
 /// Server-wide state shared across accepted connections.
 #[derive(Clone)]
@@ -43,20 +46,37 @@ impl Server {
     }
 }
 
-/// Per-connection handler. Bastion is intentionally minimal: no DB lookup,
-/// no per-IP enforcement, no protocol-aware logic. Late-ssh handles all of
-/// that downstream of the WS handshake.
+/// Per-connection handler.
+///
+/// Bastion is intentionally minimal: no DB lookup, no per-IP
+/// enforcement, no protocol-aware logic on the byte stream. Late-ssh
+/// handles all of that downstream of the WS handshake. The state we
+/// hold is just what's needed to compose a `HandshakeContext` once
+/// `shell_request` fires — gathered across the russh callbacks (auth,
+/// channel-open, pty, window-change) as they arrive.
 pub struct ClientHandler {
+    config: Arc<Config>,
+    peer_addr: Option<SocketAddr>,
+    login_username: Option<String>,
     fingerprint: Option<String>,
+    term: Option<String>,
+    /// Latest known PTY dimensions. Updated on `pty_request` and on
+    /// every `window_change_request` (a resize CAN fire between the
+    /// pty and shell requests).
+    cols: u16,
+    rows: u16,
     over_limit: bool,
     _permit: Option<OwnedSemaphorePermit>,
     channel: Option<Channel<Msg>>,
+    /// Sender feeding `proxy::run_session`'s resize-event mpsc. Stays
+    /// `None` until `shell_request` spawns the proxy task.
+    resize_tx: Option<mpsc::Sender<(u16, u16)>>,
 }
 
 impl russh::server::Server for Server {
     type Handler = ClientHandler;
 
-    fn new_client(&mut self, _peer_addr: Option<std::net::SocketAddr>) -> ClientHandler {
+    fn new_client(&mut self, peer_addr: Option<SocketAddr>) -> ClientHandler {
         let permit = self.conn_limit.clone().try_acquire_owned().ok();
         let over_limit = permit.is_none();
         if over_limit {
@@ -66,10 +86,17 @@ impl russh::server::Server for Server {
             );
         }
         ClientHandler {
+            config: self.config.clone(),
+            peer_addr,
+            login_username: None,
             fingerprint: None,
+            term: None,
+            cols: 0,
+            rows: 0,
             over_limit,
             _permit: permit,
             channel: None,
+            resize_tx: None,
         }
     }
 }
@@ -86,7 +113,8 @@ impl russh::server::Handler for ClientHandler {
             return Ok(Auth::reject());
         }
         let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256).to_string();
-        tracing::info!(user, %fingerprint, "auth_publickey accepted (stub)");
+        tracing::info!(user, %fingerprint, "auth_publickey accepted");
+        self.login_username = Some(user.to_string());
         self.fingerprint = Some(fingerprint);
         Ok(Auth::Accept)
     }
@@ -116,23 +144,82 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::info!(term, col_width, row_height, "pty_request");
+        self.term = Some(term.to_string());
+        self.cols = col_width.try_into().unwrap_or(u16::MAX);
+        self.rows = row_height.try_into().unwrap_or(u16::MAX);
         Ok(())
     }
 
     async fn shell_request(
         &mut self,
-        channel: ChannelId,
+        channel_id: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        tracing::info!(?channel, "shell_request — writing stub banner and closing");
-        if let Err(e) = session.channel_success(channel) {
+        if let Err(e) = session.channel_success(channel_id) {
             tracing::warn!(error = ?e, "channel_success failed");
         }
+
+        let Some(channel) = self.channel.take() else {
+            tracing::warn!(?channel_id, "shell_request without an open channel");
+            let _ = session.handle().close(channel_id).await;
+            return Ok(());
+        };
+        let Some(fingerprint) = self.fingerprint.clone() else {
+            tracing::warn!(?channel_id, "shell_request before auth_publickey");
+            let _ = session.handle().close(channel_id).await;
+            return Ok(());
+        };
+        let username = self.login_username.clone().unwrap_or_default();
+        let term = self.term.clone().unwrap_or_else(|| "xterm-256color".into());
+        let Some(peer_addr) = self.peer_addr else {
+            tracing::warn!(?channel_id, "shell_request without a peer address");
+            let _ = session.handle().close(channel_id).await;
+            return Ok(());
+        };
+
+        let ctx = HandshakeContext {
+            fingerprint,
+            username,
+            peer_ip: peer_addr.ip(),
+            term,
+            cols: self.cols,
+            rows: self.rows,
+            reconnect: false,
+            session_id: Uuid::now_v7().to_string(),
+        };
+
+        let (resize_tx, resize_rx) = mpsc::channel::<(u16, u16)>(RESIZE_QUEUE_CAP);
+        self.resize_tx = Some(resize_tx);
+
+        let ws_url = self.config.backend_tunnel_url.clone();
+        let secret = self.config.backend_shared_secret.clone();
         let handle = session.handle();
-        let _ = handle.data(channel, STUB_BANNER.as_bytes().to_vec()).await;
-        // Close the channel cleanly. EOF first so the client flushes.
-        let _ = handle.eof(channel).await;
-        let _ = handle.close(channel).await;
+        let session_id = ctx.session_id.clone();
+
+        tracing::info!(
+            ?channel_id,
+            session_id = %ctx.session_id,
+            username = %ctx.username,
+            fingerprint = %ctx.fingerprint,
+            peer_ip = %ctx.peer_ip,
+            cols = ctx.cols,
+            rows = ctx.rows,
+            "shell_request — spawning tunnel proxy"
+        );
+
+        tokio::spawn(async move {
+            if let Err(e) = run_session(channel, ws_url, secret, ctx, resize_rx).await {
+                tracing::warn!(error = ?e, session_id = %session_id, "tunnel proxy session failed");
+            }
+            // Either path (Ok or Err): drop the SSH channel by closing
+            // it from the russh-handle side too, in case dropping the
+            // ChannelStream wasn't enough to flush the close to the
+            // user's client (russh holds an internal sender keyed on
+            // ChannelId).
+            let _ = handle.eof(channel_id).await;
+            let _ = handle.close(channel_id).await;
+        });
+
         Ok(())
     }
 
@@ -145,7 +232,26 @@ impl russh::server::Handler for ClientHandler {
         _pix_height: u32,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        tracing::debug!(col_width, row_height, "window_change_request");
+        let cols: u16 = col_width.try_into().unwrap_or(u16::MAX);
+        let rows: u16 = row_height.try_into().unwrap_or(u16::MAX);
+        self.cols = cols;
+        self.rows = rows;
+
+        if let Some(tx) = &self.resize_tx {
+            // try_send: russh awaits this callback and we don't want
+            // to backpressure the russh task on a slow consumer. Cap=4
+            // is plenty for human-driven resize events; on overflow we
+            // drop the stale event and let the next one win.
+            if let Err(e) = tx.try_send((cols, rows)) {
+                tracing::debug!(error = ?e, cols, rows, "resize event dropped");
+            }
+        } else {
+            // Resize landed before shell_request started the proxy.
+            // The latest values are already stashed in self.{cols,rows}
+            // and will be picked up by build_request when shell_request
+            // fires.
+            tracing::debug!(cols, rows, "window_change before shell_request — stashed");
+        }
         Ok(())
     }
 
@@ -155,7 +261,10 @@ impl russh::server::Handler for ClientHandler {
         _data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // Stub: discard input. Phase 3 forwards into the WS binary frame stream.
+        // Intentional no-op. russh delivers each ChannelMsg::Data to
+        // both the handler callback AND the per-channel queue read by
+        // `Channel::into_stream` — the proxy task consumes bytes via
+        // the latter, so handling them here would double-process.
         Ok(())
     }
 }
