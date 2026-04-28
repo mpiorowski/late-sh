@@ -606,10 +606,7 @@ mod tests {
             favorites_strip_hit_test(area, true, &pins, 0, 18, 6),
             Some(go_room)
         );
-        assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, 0, 40, 6),
-            None
-        );
+        assert_eq!(favorites_strip_hit_test(area, true, &pins, 0, 40, 6), None);
     }
 
     #[test]
