@@ -742,6 +742,9 @@ impl App {
         if app.screen == Screen::Artboard {
             app.enter_dartboard();
         }
+        if app.screen == Screen::Dashboard {
+            app.chat.request_pinned_messages();
+        }
         app.sync_visible_chat_room();
         Ok(app)
     }
@@ -814,6 +817,10 @@ impl App {
         if self.screen == Screen::Chat {
             self.chat.request_list();
             self.chat.sync_selection();
+        }
+
+        if self.screen == Screen::Dashboard {
+            self.chat.request_pinned_messages();
         }
 
         if self.screen == Screen::Artboard {

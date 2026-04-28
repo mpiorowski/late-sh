@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
+    markdown::wrap_plain_line,
     overlay::{Overlay, draw_overlay},
     theme,
 };
@@ -346,6 +347,54 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
             },
         );
     }
+}
+
+pub(crate) fn dashboard_pinned_height(message_count: usize, available_height: u16) -> u16 {
+    if message_count == 0 {
+        return 0;
+    }
+    // +1 for the bottom border. Always leave 4 rows for chat below.
+    let desired = message_count.saturating_add(1) as u16;
+    desired.min(available_height.saturating_sub(4))
+}
+
+pub(crate) fn draw_dashboard_pinned_messages(
+    frame: &mut Frame,
+    area: Rect,
+    messages: &[ChatMessage],
+) {
+    if area.height == 0 || messages.is_empty() {
+        return;
+    }
+
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(theme::AMBER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let amber = Style::default().fg(theme::AMBER());
+    let body_style = Style::default().fg(theme::CHAT_BODY());
+    let body_width = inner.width.saturating_sub(2).max(1) as usize;
+    let lines: Vec<Line<'static>> = messages
+        .iter()
+        .map(|msg| {
+            let first_line = msg.body.split('\n').next().unwrap_or("");
+            let body_text = wrap_plain_line(first_line, body_width)
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            Line::from(vec![
+                Span::styled("▌ ", amber),
+                Span::styled(body_text, body_style),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────

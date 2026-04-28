@@ -72,11 +72,14 @@ pub struct ChatState {
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pinned_messages: Vec<ChatMessage>,
     general_room_id: Option<Uuid>,
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
+    pinned_rx: watch::Receiver<Vec<ChatMessage>>,
+    pinned_tx: watch::Sender<Vec<ChatMessage>>,
     overlay: Option<Overlay>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
@@ -148,6 +151,7 @@ impl ChatState {
     ) -> Self {
         let event_rx = service.subscribe_events();
         let username_rx = service.subscribe_usernames();
+        let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
         let (room_tx, room_rx) = watch::channel(None);
         let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
@@ -159,11 +163,14 @@ impl ChatState {
             snapshot_rx,
             event_rx,
             rooms: Vec::new(),
+            pinned_messages: Vec::new(),
             general_room_id: None,
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             username_rx,
+            pinned_rx,
+            pinned_tx,
             overlay: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
@@ -241,6 +248,11 @@ impl ChatState {
         if let Some(room_id) = self.selected_room_id {
             self.request_room_tail(room_id);
         }
+    }
+
+    pub fn request_pinned_messages(&self) {
+        self.service
+            .load_pinned_messages_task(self.pinned_tx.clone());
     }
 
     pub fn request_room_tail(&mut self, room_id: Uuid) {
@@ -520,6 +532,21 @@ impl ChatState {
         self.service
             .toggle_message_reaction_task(self.user_id, message.id, kind);
         None
+    }
+
+    pub fn toggle_pin_selected_message_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+        let message = self.selected_message_in_room(room_id)?;
+        if !self.is_admin {
+            return Some(Banner::error("Admin only: pin messages"));
+        }
+        self.service
+            .toggle_message_pin_task(message.id, self.is_admin);
+        let label = if message.pinned {
+            "Unpinning message..."
+        } else {
+            "Pinning message..."
+        };
+        Some(Banner::success(label))
     }
 
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {
@@ -1124,6 +1151,7 @@ impl ChatState {
         self.sync_refresh_room_id();
         self.drain_username_directory();
         self.drain_snapshot();
+        self.drain_pinned_messages();
         let banner = self.drain_events();
         let news_banner = self.news.tick();
         let notif_banner = self.notifications.tick();
@@ -1289,6 +1317,10 @@ impl ChatState {
             .unwrap_or(&[])
     }
 
+    pub fn pinned_messages(&self) -> &[ChatMessage] {
+        &self.pinned_messages
+    }
+
     pub fn usernames(&self) -> &HashMap<Uuid, String> {
         &self.usernames
     }
@@ -1331,6 +1363,13 @@ impl ChatState {
             return;
         }
         self.all_usernames = self.username_rx.borrow_and_update().clone();
+    }
+
+    fn drain_pinned_messages(&mut self) {
+        if !self.pinned_rx.has_changed().unwrap_or(false) {
+            return;
+        }
+        self.pinned_messages = self.pinned_rx.borrow_and_update().clone();
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -2895,6 +2934,7 @@ mod tests {
             id,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
+            pinned: false,
             room_id: Uuid::from_u128(999),
             user_id: Uuid::from_u128(999),
             body: String::new(),

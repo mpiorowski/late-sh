@@ -304,6 +304,138 @@ async fn emits_send_failed_event_when_non_admin_posts_to_announcements() {
 }
 
 #[tokio::test]
+async fn admin_can_toggle_message_pin() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let admin = create_test_user(&test_db.db, "pin_admin").await;
+    let room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("general room");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: admin.id,
+            body: "pin me".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    service.toggle_message_pin_task(message.id, true);
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let updated = ChatMessage::get(&client, message.id)
+                .await
+                .expect("load message")
+                .expect("message exists");
+            if updated.pinned {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("pin timeout");
+}
+
+#[tokio::test]
+async fn non_admin_cannot_toggle_message_pin() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let user = create_test_user(&test_db.db, "pin_non_admin").await;
+    let room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("general room");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: user.id,
+            body: "do not pin me".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    service.toggle_message_pin_task(message.id, false);
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let updated = ChatMessage::get(&client, message.id)
+        .await
+        .expect("load message")
+        .expect("message exists");
+    assert!(!updated.pinned);
+}
+
+#[tokio::test]
+async fn pinned_messages_task_loads_global_pins() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let (pinned_tx, mut pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    let client = test_db.db.get().await.expect("db client");
+
+    let author = create_test_user(&test_db.db, "pin_author").await;
+    let visible_room = ChatRoom::get_or_create_public_room(&client, "pin-visible")
+        .await
+        .expect("visible room");
+    let hidden_room = ChatRoom::get_or_create_public_room(&client, "pin-hidden")
+        .await
+        .expect("hidden room");
+
+    let visible_message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: visible_room.id,
+            user_id: author.id,
+            body: "visible pin".to_string(),
+        },
+    )
+    .await
+    .expect("visible message");
+    let hidden_message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: hidden_room.id,
+            user_id: author.id,
+            body: "hidden pin".to_string(),
+        },
+    )
+    .await
+    .expect("hidden message");
+    ChatMessage::set_pinned(&client, visible_message.id, true)
+        .await
+        .expect("pin visible");
+    ChatMessage::set_pinned(&client, hidden_message.id, true)
+        .await
+        .expect("pin hidden");
+
+    service.load_pinned_messages_task(pinned_tx);
+
+    timeout(Duration::from_secs(2), pinned_rx.changed())
+        .await
+        .expect("pinned timeout")
+        .expect("pinned changed");
+    let messages = pinned_rx.borrow_and_update().clone();
+    assert!(messages.iter().any(|message| message.body == "visible pin"));
+    assert!(messages.iter().any(|message| message.body == "hidden pin"));
+}
+
+#[tokio::test]
 async fn publishes_summary_with_rooms_and_unread_counts() {
     let test_db = new_test_db().await;
     let service = ChatService::new(

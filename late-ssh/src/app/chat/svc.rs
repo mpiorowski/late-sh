@@ -31,6 +31,7 @@ use crate::metrics;
 
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
+const PINNED_MESSAGES_LIMIT: i64 = 100;
 const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
 
@@ -786,6 +787,31 @@ impl ChatService {
         );
     }
 
+    pub fn load_pinned_messages_task(&self, pinned_tx: watch::Sender<Vec<ChatMessage>>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    ChatMessage::list_pinned(&client, PINNED_MESSAGES_LIMIT).await
+                }
+                .await;
+                match result {
+                    Ok(messages) => {
+                        let _ = pinned_tx.send(messages);
+                    }
+                    Err(e) => late_core::error_span!(
+                        "chat_load_pinned_messages_failed",
+                        error = ?e,
+                        "failed to load pinned chat messages"
+                    ),
+                }
+            }
+            .instrument(info_span!("chat.load_pinned_messages_task")),
+        );
+    }
+
     pub fn send_message_task(
         &self,
         user_id: Uuid,
@@ -1005,6 +1031,37 @@ impl ChatService {
                 user_id = %user_id,
                 message_id = %message_id,
                 kind = kind
+            )),
+        );
+    }
+
+    pub fn toggle_message_pin_task(&self, message_id: Uuid, is_admin: bool) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<()> = async {
+                    if !is_admin {
+                        anyhow::bail!("admin-only");
+                    }
+                    let client = service.db.get().await?;
+                    let message = ChatMessage::get(&client, message_id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("message not found"))?;
+                    ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
+                    Ok(())
+                }
+                .await;
+                if let Err(e) = result {
+                    late_core::error_span!(
+                        "chat_pin_failed",
+                        error = ?e,
+                        "failed to toggle message pin"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.toggle_message_pin_task",
+                message_id = %message_id
             )),
         );
     }
