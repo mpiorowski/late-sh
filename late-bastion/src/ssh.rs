@@ -18,12 +18,12 @@ use russh::server::{Auth, Msg, Session};
 use russh::{Channel, ChannelId};
 #[cfg(unix)]
 use std::fs::Permissions;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -31,6 +31,10 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::handshake::HandshakeContext;
 use crate::proxy::{RESIZE_QUEUE_CAP, run_session};
+
+/// How long to wait for an upstream proxy to finish writing its PROXY v1
+/// header. Mirrors the late-ssh `:2222` listener's value (250ms).
+pub const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Server-wide state shared across accepted connections.
 #[derive(Clone)]
@@ -73,10 +77,18 @@ pub struct ClientHandler {
     resize_tx: Option<mpsc::Sender<(u16, u16)>>,
 }
 
-impl russh::server::Server for Server {
-    type Handler = ClientHandler;
-
-    fn new_client(&mut self, peer_addr: Option<SocketAddr>) -> ClientHandler {
+impl Server {
+    /// Build a [`ClientHandler`] given both the transport peer address
+    /// and the optional proxied address (resolved via PROXY v1 by the
+    /// accept loop). The handler's effective `peer_addr` — the value
+    /// the bastion forwards as `X-Late-Peer-IP` — is the proxied
+    /// address when present and trusted, falling back to the transport
+    /// peer otherwise.
+    pub fn new_client_with_addrs(
+        &self,
+        transport_peer_addr: Option<SocketAddr>,
+        proxied_peer_addr: Option<SocketAddr>,
+    ) -> ClientHandler {
         let permit = self.conn_limit.clone().try_acquire_owned().ok();
         let over_limit = permit.is_none();
         if over_limit {
@@ -85,6 +97,7 @@ impl russh::server::Server for Server {
                 "global connection cap reached; rejecting new client"
             );
         }
+        let peer_addr = proxied_peer_addr.or(transport_peer_addr);
         ClientHandler {
             config: self.config.clone(),
             peer_addr,
@@ -99,6 +112,49 @@ impl russh::server::Server for Server {
             resize_tx: None,
         }
     }
+}
+
+impl russh::server::Server for Server {
+    type Handler = ClientHandler;
+
+    /// Trait entrypoint used when no PROXY v1 resolution is happening
+    /// in front of us (e.g. tests that don't go through `run`). Treats
+    /// the transport peer as the effective peer.
+    fn new_client(&mut self, peer_addr: Option<SocketAddr>) -> ClientHandler {
+        self.new_client_with_addrs(peer_addr, None)
+    }
+}
+
+/// Whether the bastion will read a PROXY v1 header from a connection
+/// originating at `ip`. Pure-logic; used by the accept loop.
+pub fn is_trusted_proxy_peer(config: &Config, ip: IpAddr) -> bool {
+    config
+        .proxy_trusted_cidrs
+        .iter()
+        .any(|cidr| cidr.contains(&ip))
+}
+
+/// If PROXY v1 parsing is enabled and the transport peer is in the
+/// trusted CIDR list, read the PROXY v1 header off the front of the
+/// stream and return the asserted source address. Otherwise return
+/// `Ok(None)`.
+///
+/// Errors here are fatal for the connection: a misconfigured upstream
+/// or a malformed header is far more likely than a benign client that
+/// happens to mimic the proxy header, so dropping the connection is
+/// the safe call.
+pub async fn resolve_proxied_client_addr(
+    config: &Config,
+    stream: &mut TcpStream,
+    transport_peer_addr: SocketAddr,
+) -> Result<Option<SocketAddr>> {
+    if !config.proxy_protocol {
+        return Ok(None);
+    }
+    if !is_trusted_proxy_peer(config, transport_peer_addr.ip()) {
+        return Ok(None);
+    }
+    late_core::proxy_protocol::read_proxy_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
 }
 
 impl russh::server::Handler for ClientHandler {
@@ -316,12 +372,19 @@ pub async fn run(
     let addr = listener.local_addr()?;
     tracing::info!(address = %addr, "bastion ssh server listening");
 
+    if config.proxy_protocol && config.proxy_trusted_cidrs.is_empty() {
+        tracing::warn!(
+            "bastion proxy protocol is enabled but LATE_BASTION_PROXY_TRUSTED_CIDRS is empty; \
+             proxy headers will be rejected"
+        );
+    }
+
     let mut tasks: JoinSet<()> = JoinSet::new();
 
     loop {
         tokio::select! {
             accept_result = listener.accept() => {
-                let (tcp, peer_addr) = match accept_result {
+                let (mut tcp, transport_peer_addr) = match accept_result {
                     Ok(pair) => pair,
                     Err(e) => {
                         tracing::warn!(error = ?e, "accept failed");
@@ -334,17 +397,30 @@ pub async fn run(
                     tracing::warn!(error = ?e, "set_nodelay failed");
                 }
                 let russh_config = Arc::clone(&russh_config);
-                let mut server = server.clone();
+                let server = server.clone();
+                let config = Arc::clone(&config);
                 tasks.spawn(async move {
-                    let handler = russh::server::Server::new_client(&mut server, Some(peer_addr));
+                    let proxied_addr =
+                        match resolve_proxied_client_addr(&config, &mut tcp, transport_peer_addr).await {
+                            Ok(addr) => addr,
+                            Err(err) => {
+                                tracing::warn!(
+                                    ?transport_peer_addr,
+                                    error = ?err,
+                                    "failed to resolve proxy protocol header; dropping connection"
+                                );
+                                return;
+                            }
+                        };
+                    let handler = server.new_client_with_addrs(Some(transport_peer_addr), proxied_addr);
                     match russh::server::run_stream(russh_config, tcp, handler).await {
                         Ok(session) => {
                             if let Err(e) = session.await {
-                                tracing::debug!(error = ?e, ?peer_addr, "ssh session ended with error");
+                                tracing::debug!(error = ?e, ?transport_peer_addr, "ssh session ended with error");
                             }
                         }
                         Err(e) => {
-                            tracing::debug!(error = ?e, ?peer_addr, "ssh session init failed");
+                            tracing::debug!(error = ?e, ?transport_peer_addr, "ssh session init failed");
                         }
                     }
                 });
@@ -368,4 +444,67 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ipnet::IpNet;
+    use std::path::PathBuf;
+
+    fn config_with(proxy_protocol: bool, cidrs: &[&str]) -> Config {
+        Config {
+            ssh_port: 0,
+            host_key_path: PathBuf::from("/tmp/unused"),
+            ssh_idle_timeout: 60,
+            backend_tunnel_url: "ws://localhost:0/tunnel".to_string(),
+            backend_shared_secret: "x".to_string(),
+            max_conns_global: 1,
+            proxy_protocol,
+            proxy_trusted_cidrs: cidrs
+                .iter()
+                .map(|s| s.parse::<IpNet>().expect("cidr"))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn untrusted_peer_when_cidr_list_empty() {
+        let cfg = config_with(true, &[]);
+        assert!(!is_trusted_proxy_peer(
+            &cfg,
+            "10.0.0.1".parse::<IpAddr>().unwrap()
+        ));
+    }
+
+    #[test]
+    fn trusted_peer_inside_cidr() {
+        let cfg = config_with(true, &["10.42.0.0/16"]);
+        assert!(is_trusted_proxy_peer(
+            &cfg,
+            "10.42.7.5".parse::<IpAddr>().unwrap()
+        ));
+    }
+
+    #[test]
+    fn untrusted_peer_outside_cidr() {
+        let cfg = config_with(true, &["10.42.0.0/16"]);
+        assert!(!is_trusted_proxy_peer(
+            &cfg,
+            "192.0.2.5".parse::<IpAddr>().unwrap()
+        ));
+    }
+
+    #[test]
+    fn ipv6_cidr_match() {
+        let cfg = config_with(true, &["2001:db8::/32"]);
+        assert!(is_trusted_proxy_peer(
+            &cfg,
+            "2001:db8::1".parse::<IpAddr>().unwrap()
+        ));
+        assert!(!is_trusted_proxy_peer(
+            &cfg,
+            "2001:dead::1".parse::<IpAddr>().unwrap()
+        ));
+    }
 }

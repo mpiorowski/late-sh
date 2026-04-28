@@ -68,13 +68,13 @@ Env-driven. See `src/config.rs` for the canonical list. Required vars:
 ## Status
 
 - ✅ **Phase 1** — crate scaffolded; russh server boots; host key load/generate; stub shell handler.
-- ✅ **Phase 1** — PROXY v1 parser lifted to `late_core::proxy_protocol`. Bastion does not call it yet (Phase 3).
-- ✅ **Phase 2a** — `/tunnel` listener exists in `late-ssh` (`src/tunnel.rs`). Validates CIDR allowlist, pre-shared secret, and required handshake headers. Accepts the WS upgrade and closes immediately with code `1000`.
-- ✅ **Phase 2 (protocol)** — `late_core::tunnel_protocol::ControlFrame::Resize { cols, rows }` wire schema for `window-change` forwarding.
-- ✅ **Infra TF skeleton** — `service-ssh-internal-sv` ClusterIP for `:4001`, bastion Deployment/Service, NetworkPolicy, dual NGINX TCP entries (`:22` legacy, `:5222` bastion). Bastion side gated by `BASTION_ENABLED` (default `0`) until Phase 3.
-- ⏳ **Phase 2b** — I/O seam refactor in `late-ssh` so `App::new(SessionConfig)` runs on either a russh `Channel` or a WS pair.
-- ⏳ **Phase 2c** — wire `/tunnel` to construct `SessionConfig` and run `App::new` over the WS streams; hand-written WS smoke client.
-- ⏳ **Phase 3** — bastion proxy logic: dial `/tunnel`, pump bytes, forward `resize`, close SSH on WS close.
+- ✅ **Phase 1** — PROXY v1 parser lifted to `late_core::proxy_protocol`.
+- ✅ **Phase 2a** — `/tunnel` listener exists in `late-ssh` (`src/tunnel.rs`). Validates CIDR allowlist, pre-shared secret, and required handshake headers.
+- ✅ **Phase 2 (protocol)** — `late_core::tunnel_protocol::ControlFrame::Resize { cols, rows }` wire schema for `window-change` forwarding. Header constants (`HEADER_*`) live alongside `ControlFrame` so both ends of the wire reference one source of truth.
+- ✅ **Infra TF skeleton** — `service-ssh-internal-sv` ClusterIP for `:4001`, bastion Deployment/Service, NetworkPolicy, dual NGINX TCP entries (`:22` legacy, `:5222` bastion). Bastion side gated by `BASTION_ENABLED` (default `0`) until live cutover.
+- ✅ **Phase 2b** — I/O seam refactor in `late-ssh` so `App::new(SessionConfig)` runs on either a russh `Channel` or a WS pair (`FrameSink` trait).
+- ✅ **Phase 2c** — `/tunnel` constructs `SessionConfig` and runs the render loop over the WS streams; hand-written WS smoke client; full caller-side parity with `shell_request` (conn limits, active_users, activity feed, metrics).
+- ✅ **Phase 3** — bastion proxy logic: dial `/tunnel`, pump bytes, forward `resize`, close SSH on WS close. Includes PROXY v1 parsing on the listener (CIDR-trusted) so `X-Late-Peer-IP` reflects the real client IP behind NGINX.
 - ⏳ **Phase 4** — reconnect loop + plain-text "reconnecting…" messages.
 - ⏳ **Phase 5** — production cutover (`:22` swing).
 

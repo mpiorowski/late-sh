@@ -33,7 +33,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
@@ -175,6 +175,18 @@ struct TestBastion {
 
 impl TestBastion {
     async fn spawn(backend_url: String) -> Result<Self> {
+        Self::spawn_with(backend_url, false, vec![]).await
+    }
+
+    /// Spawn variant that lets a test enable PROXY v1 parsing and
+    /// configure the trusted CIDR list. The accept loop mirrors the
+    /// production `ssh::run` path so PROXY v1 behavior under test is
+    /// the same code that runs in the binary.
+    async fn spawn_with(
+        backend_url: String,
+        proxy_protocol: bool,
+        proxy_trusted_cidrs: Vec<ipnet::IpNet>,
+    ) -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
 
@@ -187,8 +199,8 @@ impl TestBastion {
             backend_tunnel_url: backend_url,
             backend_shared_secret: TEST_SECRET.to_string(),
             max_conns_global: 16,
-            proxy_protocol: false,
-            proxy_trusted_cidrs: vec![],
+            proxy_protocol,
+            proxy_trusted_cidrs,
         });
 
         let host_key = load_or_generate_key(&config.host_key_path)?;
@@ -207,14 +219,28 @@ impl TestBastion {
             loop {
                 tokio::select! {
                     accept = listener.accept() => {
-                        let (tcp, peer) = match accept {
+                        let (mut tcp, transport_peer_addr) = match accept {
                             Ok(p) => p,
                             Err(_) => continue,
                         };
                         let cfg = russh_config.clone();
-                        let mut s = server.clone();
+                        let server = server.clone();
+                        let config = Arc::clone(&config);
                         tokio::spawn(async move {
-                            let handler = russh::server::Server::new_client(&mut s, Some(peer));
+                            let proxied_addr = match late_bastion::ssh::resolve_proxied_client_addr(
+                                &config,
+                                &mut tcp,
+                                transport_peer_addr,
+                            )
+                            .await
+                            {
+                                Ok(a) => a,
+                                Err(_) => return,
+                            };
+                            let handler = server.new_client_with_addrs(
+                                Some(transport_peer_addr),
+                                proxied_addr,
+                            );
                             if let Ok(sess) = russh::server::run_stream(cfg, tcp, handler).await {
                                 let _ = sess.await;
                             }
@@ -343,6 +369,59 @@ async fn bastion_proxies_ssh_to_tunnel_with_full_handshake_and_byte_flow() {
     // calling `Channel::window_change` is no longer available.
     drop(user_reader);
     drop(user_writer);
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_uses_proxy_v1_source_ip_for_peer_ip_header() {
+    let mut backend = MockBackend::spawn().await.expect("backend");
+    // Trust loopback so the bastion accepts the PROXY v1 header from
+    // our test client.
+    let trusted: Vec<ipnet::IpNet> = vec!["127.0.0.0/8".parse().unwrap()];
+    let bastion = TestBastion::spawn_with(backend.ws_url(), true, trusted)
+        .await
+        .expect("bastion");
+
+    // Open a raw TCP stream so we can write the PROXY v1 line *before*
+    // russh's SSH version handshake.
+    let mut tcp = TcpStream::connect(bastion.addr).await.expect("tcp connect");
+    tcp.write_all(b"PROXY TCP4 198.51.100.42 203.0.113.7 54321 5222\r\n")
+        .await
+        .expect("write proxy v1");
+
+    let user_key = PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519)
+        .expect("user key");
+    let client_config = Arc::new(russh_client::Config::default());
+    let mut session = russh_client::connect_stream(client_config, tcp, AnyHostKey)
+        .await
+        .expect("connect_stream");
+
+    let auth_res = session
+        .authenticate_publickey(
+            "alice",
+            PrivateKeyWithHashAlg::new(Arc::new(user_key), None),
+        )
+        .await
+        .expect("authenticate_publickey");
+    assert!(auth_res.success(), "auth not accepted");
+
+    let channel = session
+        .channel_open_session()
+        .await
+        .expect("channel_open_session");
+    channel
+        .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
+        .await
+        .expect("request_pty");
+    channel.request_shell(true).await.expect("request_shell");
+
+    let headers = backend.wait_for_handshake().await;
+    assert_eq!(
+        headers.get(HEADER_PEER_IP).unwrap(),
+        "198.51.100.42",
+        "X-Late-Peer-IP should reflect the PROXY v1 source IP, not the transport peer"
+    );
+
     bastion.shutdown();
 }
 

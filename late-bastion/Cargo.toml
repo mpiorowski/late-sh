@@ -42,3 +42,4 @@ opentelemetry-http = { workspace = true, optional = true }
 
 [dev-dependencies]
 late-core = { workspace = true }
+ipnet = { workspace = true }
