@@ -10,6 +10,7 @@ use crate::app::common::theme;
 use crate::app::profile::svc::ProfileService;
 
 use super::data::{CountryOption, filter_countries, filter_timezones};
+use super::gem::GemState;
 
 const USERNAME_MAX_LEN: usize = 12;
 pub const BIO_MAX_LEN: usize = 500;
@@ -80,10 +81,19 @@ pub enum Tab {
     Bio,
     Themes,
     Favorites,
+    /// Hidden until the user has filled out at least one of bio, country,
+    /// or timezone. Currently houses the "Show settings on connect" toggle.
+    Special,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Settings, Tab::Bio, Tab::Themes, Tab::Favorites];
+    pub const ALL: [Tab; 5] = [
+        Tab::Settings,
+        Tab::Bio,
+        Tab::Themes,
+        Tab::Favorites,
+        Tab::Special,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -91,6 +101,7 @@ impl Tab {
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Favorites => "Favorites",
+            Tab::Special => "Special",
         }
     }
 }
@@ -138,6 +149,9 @@ pub struct SettingsModalState {
     /// Cursor in the Favorites tab: 0..favorites.len() selects a favorite,
     /// the final slot (favorites.len()) selects the "Add favorite…" row.
     favorites_index: usize,
+    /// Per-session gem easter egg on the Special tab. Persists across modal
+    /// open/close cycles for the lifetime of the SSH session.
+    gem: GemState,
 }
 
 impl SettingsModalState {
@@ -160,7 +174,16 @@ impl SettingsModalState {
             picker: PickerState::default(),
             available_rooms: Vec::new(),
             favorites_index: 0,
+            gem: GemState::new(),
         }
+    }
+
+    pub fn gem(&self) -> &GemState {
+        &self.gem
+    }
+
+    pub fn gem_mut(&mut self) -> &mut GemState {
+        &mut self.gem
     }
 
     pub fn open_from_profile(
@@ -195,17 +218,19 @@ impl SettingsModalState {
 
     /// Switch to the neighboring tab. Auto-saves + ends any in-flight bio
     /// edit when leaving the Bio tab so the preview reflects the draft.
+    /// Skips the Special tab while it's hidden (no bio/country/timezone).
     pub fn cycle_tab(&mut self, forward: bool) {
-        let idx = Tab::ALL
+        let visible = self.visible_tabs();
+        let idx = visible
             .iter()
             .position(|t| *t == self.selected_tab)
             .unwrap_or(0);
         let next_idx = if forward {
-            (idx + 1) % Tab::ALL.len()
+            (idx + 1) % visible.len()
         } else {
-            (idx + Tab::ALL.len() - 1) % Tab::ALL.len()
+            (idx + visible.len() - 1) % visible.len()
         };
-        let next = Tab::ALL[next_idx];
+        let next = visible[next_idx];
         if self.selected_tab == Tab::Bio && next != Tab::Bio && self.editing_bio {
             self.stop_bio_edit();
             self.save();
@@ -219,6 +244,41 @@ impl SettingsModalState {
             self.sync_theme_index_to_draft();
         }
         self.selected_tab = next;
+    }
+
+    /// Tabs to show in the tab strip in display order. The Special tab is
+    /// hidden until the user has filled out at least one of bio, country,
+    /// or timezone.
+    pub fn visible_tabs(&self) -> Vec<Tab> {
+        Tab::ALL
+            .iter()
+            .copied()
+            .filter(|tab| *tab != Tab::Special || self.special_tab_unlocked())
+            .collect()
+    }
+
+    pub fn special_tab_unlocked(&self) -> bool {
+        let bio_filled = !self.draft.bio.trim().is_empty();
+        let country_filled = self
+            .draft
+            .country
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        let timezone_filled = self
+            .draft
+            .timezone
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        bio_filled || country_filled || timezone_filled
+    }
+
+    /// Flip the "show settings on connect" toggle (the sole control on the
+    /// Special tab) and persist.
+    pub fn toggle_show_settings_on_connect(&mut self) {
+        self.draft.show_settings_on_connect ^= true;
+        self.save();
     }
 
     pub fn set_modal_width(&mut self, _modal_width: u16) {
@@ -907,6 +967,7 @@ impl SettingsModalState {
                 show_dashboard_header: self.draft.show_dashboard_header,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 show_games_sidebar: self.draft.show_games_sidebar,
+                show_settings_on_connect: self.draft.show_settings_on_connect,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
             },
         );

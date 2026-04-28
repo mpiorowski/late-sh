@@ -789,6 +789,7 @@ impl GhostService {
                 show_dashboard_header: profile.show_dashboard_header,
                 show_right_sidebar: profile.show_right_sidebar,
                 show_games_sidebar: profile.show_games_sidebar,
+                show_settings_on_connect: profile.show_settings_on_connect,
                 favorite_room_ids: profile.favorite_room_ids,
             },
         )

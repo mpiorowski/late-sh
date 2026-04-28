@@ -1,6 +1,7 @@
-use crate::app::input::{MouseEventKind, ParsedInput, sanitize_paste_markers};
+use crate::app::input::{MouseButton, MouseEventKind, ParsedInput, sanitize_paste_markers};
 use crate::app::state::App;
 
+use super::gem::GemKey;
 use super::state::{PickerKind, Row, Tab};
 use crate::app::settings_modal::state::SettingsModalState;
 
@@ -51,6 +52,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
 
     if app.settings_modal_state.selected_tab() == Tab::Favorites {
         handle_favorites_tab_input(app, event);
+        return;
+    }
+
+    if app.settings_modal_state.selected_tab() == Tab::Special {
+        handle_special_tab_input(app, event);
         return;
     }
 
@@ -118,6 +124,66 @@ fn handle_favorites_tab_input(app: &mut App, event: ParsedInput) {
             state.open_picker(PickerKind::Room);
         }
         _ => {}
+    }
+}
+
+/// Special tab: holds the "show settings on connect" toggle and the gem
+/// easter egg.
+///
+/// Key routing:
+/// - `Enter`, `←`, `→` flip the toggle (matching the cycle convention from
+///   the other tabs).
+/// - `h`, `j`, `k`, `l`, `Space`, `↑`, `↓` interact with the gem
+///   (consecutive duplicates of the same key are ignored).
+/// - Left-click on the gem's rendered footprint also interacts.
+fn handle_special_tab_input(app: &mut App, event: ParsedInput) {
+    match event {
+        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
+        ParsedInput::Byte(b'\r') | ParsedInput::Arrow(b'C') | ParsedInput::Arrow(b'D') => {
+            app.settings_modal_state.toggle_show_settings_on_connect();
+        }
+        ParsedInput::Mouse(mouse) => {
+            if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) {
+                let Some(x) = mouse.x.checked_sub(1) else {
+                    return;
+                };
+                let Some(y) = mouse.y.checked_sub(1) else {
+                    return;
+                };
+                let hit = app
+                    .settings_modal_state
+                    .gem()
+                    .hit_area
+                    .get()
+                    .filter(|rect| {
+                        x >= rect.x
+                            && x < rect.x + rect.width
+                            && y >= rect.y
+                            && y < rect.y + rect.height
+                    });
+                if hit.is_some() {
+                    app.settings_modal_state.gem_mut().handle_click();
+                }
+            }
+        }
+        _ => {
+            if let Some(key) = gem_key_for_event(&event) {
+                app.settings_modal_state.gem_mut().handle_key(key);
+            }
+        }
+    }
+}
+
+fn gem_key_for_event(event: &ParsedInput) -> Option<GemKey> {
+    match event {
+        ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => Some(GemKey::Space),
+        ParsedInput::Byte(b'h') | ParsedInput::Char('h') => Some(GemKey::H),
+        ParsedInput::Byte(b'j') | ParsedInput::Char('j') => Some(GemKey::J),
+        ParsedInput::Byte(b'k') | ParsedInput::Char('k') => Some(GemKey::K),
+        ParsedInput::Byte(b'l') | ParsedInput::Char('l') => Some(GemKey::L),
+        ParsedInput::Arrow(b'A') => Some(GemKey::Up),
+        ParsedInput::Arrow(b'B') => Some(GemKey::Down),
+        _ => None,
     }
 }
 

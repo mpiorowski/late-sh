@@ -6,7 +6,7 @@ use super::user::{
     User, extract_bio, extract_country, extract_enable_background_color, extract_favorite_room_ids,
     extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
     extract_show_dashboard_header, extract_show_games_sidebar, extract_show_right_sidebar,
-    extract_theme_id, extract_timezone,
+    extract_show_settings_on_connect, extract_theme_id, extract_timezone,
 };
 
 #[derive(Clone, Debug)]
@@ -25,6 +25,8 @@ pub struct Profile {
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub show_games_sidebar: bool,
+    /// When false, the settings modal is not auto-opened on connect.
+    pub show_settings_on_connect: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
 }
@@ -45,6 +47,7 @@ impl Default for Profile {
             show_dashboard_header: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
         }
     }
@@ -65,6 +68,7 @@ pub struct ProfileParams {
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub show_games_sidebar: bool,
+    pub show_settings_on_connect: bool,
     pub favorite_room_ids: Vec<Uuid>,
 }
 
@@ -79,7 +83,7 @@ impl Profile {
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
     /// enable_background_color/show_dashboard_header/show_right_sidebar/
-    /// show_games_sidebar into settings via
+    /// show_games_sidebar/show_settings_on_connect into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to unrelated keys
     /// (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
@@ -142,10 +146,11 @@ impl Profile {
                          'show_dashboard_header', $11::bool,
                          'show_right_sidebar', $12::bool,
                          'show_games_sidebar', $13::bool,
-                         'favorite_room_ids', $14::jsonb
+                         'show_settings_on_connect', $14::bool,
+                         'favorite_room_ids', $15::jsonb
                      ),
                      updated = current_timestamp
-                 WHERE id = $15
+                 WHERE id = $16
                  RETURNING *",
                 &[
                     &params.username,
@@ -161,6 +166,7 @@ impl Profile {
                     &params.show_dashboard_header,
                     &params.show_right_sidebar,
                     &params.show_games_sidebar,
+                    &params.show_settings_on_connect,
                     &favorite_room_ids_json,
                     &user_id,
                 ],
@@ -185,6 +191,7 @@ impl Profile {
             show_dashboard_header: extract_show_dashboard_header(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),
             show_games_sidebar: extract_show_games_sidebar(&user.settings),
+            show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
         }
     }

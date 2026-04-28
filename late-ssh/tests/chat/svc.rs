@@ -550,6 +550,7 @@ async fn publishes_snapshot_with_favorite_room_history() {
             show_dashboard_header: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            show_settings_on_connect: true,
             favorite_room_ids: vec![favorite_room.id],
         },
     )
