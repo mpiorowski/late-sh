@@ -137,8 +137,7 @@ impl ChatState {
     ) -> Self {
         let event_rx = service.subscribe_events();
         let (room_tx, room_rx) = watch::channel(None);
-        let (snapshot_rx, refresh_tx, bg_task) =
-            service.start_user_refresh_task(user_id, room_rx);
+        let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
         Self {
             service,
@@ -221,8 +220,16 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
     }
 
-    pub fn request_list(&self) {
+    pub fn request_list(&mut self) {
+        self.sync_refresh_room_id();
         let _ = self.refresh_tx.send(());
+    }
+
+    fn sync_refresh_room_id(&mut self) {
+        if self.refresh_room_id != self.selected_room_id {
+            self.refresh_room_id = self.selected_room_id;
+            let _ = self.room_tx.send(self.selected_room_id);
+        }
     }
 
     pub fn sync_selection(&mut self) {
@@ -1023,10 +1030,7 @@ impl ChatState {
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
-        if self.refresh_room_id != self.selected_room_id {
-            self.refresh_room_id = self.selected_room_id;
-            let _ = self.room_tx.send(self.selected_room_id);
-        }
+        self.sync_refresh_room_id();
         self.drain_snapshot();
         let banner = self.drain_events();
         let news_banner = self.news.tick();
