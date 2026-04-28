@@ -801,7 +801,7 @@ impl russh::server::Handler for ClientHandler {
             Err(e) => tracing::error!(error = ?e, "shell channel_success failed"),
         }
         if let (Some(chan), Some(app)) = (self.channel.take(), self.app.as_ref()) {
-            let mut input_rx = self.input_rx.take().ok_or_else(|| {
+            let input_rx = self.input_rx.take().ok_or_else(|| {
                 anyhow::anyhow!("session input receiver missing during shell request")
             })?;
             let channel_id = chan.id();
@@ -825,56 +825,14 @@ impl russh::server::Handler for ClientHandler {
             let frame_drop_log_every = self.state.config.frame_drop_log_every;
             let signal = Arc::new(RenderSignal::new());
             self.render_signal = Some(Arc::clone(&signal));
-            tokio::spawn(async move {
-                let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
-                world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                let mut previous_render: Option<Instant> = None;
-                let mut input_pending = false;
-                loop {
-                    let advance_world = match next_render_action(
-                        &mut world_tick,
-                        &signal,
-                        &mut input_pending,
-                        previous_render,
-                    )
-                    .await
-                    {
-                        RenderAction::AdvanceWorld => true,
-                        RenderAction::Render => false,
-                        RenderAction::Skip => continue,
-                    };
-                    match render_once(
-                        &app,
-                        &mut input_rx,
-                        &handle,
-                        channel_id,
-                        frame_drop_log_every,
-                        advance_world,
-                        &signal,
-                    )
-                    .await
-                    {
-                        Ok(should_quit) => {
-                            previous_render = Some(Instant::now());
-                            if should_quit {
-                                tracing::debug!("app requested quit, closing connection");
-                                clean_disconnect(&handle, channel_id).await;
-                                break;
-                            }
-                        }
-                        Err(err) => {
-                            tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
-                            let exit = App::leave_alt_screen();
-                            let _ =
-                                timeout(Duration::from_millis(50), handle.data(channel_id, exit))
-                                    .await;
-                            let _ = handle.eof(channel_id).await;
-                            let _ = handle.close(channel_id).await;
-                            break;
-                        }
-                    }
-                }
-            });
+            tokio::spawn(run_session(
+                app,
+                input_rx,
+                handle,
+                channel_id,
+                frame_drop_log_every,
+                signal,
+            ));
         }
         Ok(())
     }
@@ -971,6 +929,66 @@ impl russh::server::Handler for ClientHandler {
             signal.notify.notify_one();
         }
         Ok(())
+    }
+}
+
+/// Per-session render driver. Spawned from `shell_request`; owns the
+/// render loop until the app quits, the client EOFs, or the SSH handle
+/// errors. Pure extraction of what used to live inline inside
+/// `shell_request`'s `tokio::spawn` block.
+async fn run_session(
+    app: Arc<TokioMutex<crate::app::state::App>>,
+    mut input_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    handle: russh::server::Handle,
+    channel_id: ChannelId,
+    frame_drop_log_every: u64,
+    signal: Arc<RenderSignal>,
+) {
+    let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
+    world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut previous_render: Option<Instant> = None;
+    let mut input_pending = false;
+    loop {
+        let advance_world = match next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            previous_render,
+        )
+        .await
+        {
+            RenderAction::AdvanceWorld => true,
+            RenderAction::Render => false,
+            RenderAction::Skip => continue,
+        };
+        match render_once(
+            &app,
+            &mut input_rx,
+            &handle,
+            channel_id,
+            frame_drop_log_every,
+            advance_world,
+            &signal,
+        )
+        .await
+        {
+            Ok(should_quit) => {
+                previous_render = Some(Instant::now());
+                if should_quit {
+                    tracing::debug!("app requested quit, closing connection");
+                    clean_disconnect(&handle, channel_id).await;
+                    break;
+                }
+            }
+            Err(err) => {
+                tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
+                let exit = App::leave_alt_screen();
+                let _ = timeout(Duration::from_millis(50), handle.data(channel_id, exit)).await;
+                let _ = handle.eof(channel_id).await;
+                let _ = handle.close(channel_id).await;
+                break;
+            }
+        }
     }
 }
 
