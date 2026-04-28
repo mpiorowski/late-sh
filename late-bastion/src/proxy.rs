@@ -46,6 +46,34 @@ const BACKOFF_MAX: Duration = Duration::from_secs(5);
 /// disconnection event. Reset on every successful upgrade.
 const RECONNECT_BUDGET: Duration = Duration::from_secs(30);
 
+/// How long a reconnect window has to stretch before the bastion
+/// writes the plain-text "reconnecting…" message into the user's SSH
+/// stream. Below this, the gap is invisible — the new TUI's setup
+/// sequences cleanly overwrite a brief blip.
+const INITIAL_MESSAGE_DELAY: Duration = Duration::from_millis(500);
+
+/// Threshold for the escalated "still reconnecting…" message. The
+/// total reconnect budget is 30s, so the escalation can sit on screen
+/// for the bulk of a long outage.
+const ESCALATION_MESSAGE_DELAY: Duration = Duration::from_secs(5);
+
+/// Sent before the first plain-text reconnect message:
+/// - `\x1b[?1049l` exits any active alt-screen the previous backend's
+///   TUI may have entered.
+/// - `\x1b[0m` resets attribute (color, bold, …) state.
+/// - `\x1b[2J\x1b[H` clears the screen and homes the cursor so the
+///   message lands in a known-clean spot.
+///
+/// This is the *only* point at which the bastion writes its own bytes
+/// to the user's terminal (per PERSISTENT-CONNECTION-GATEWAY.md §5).
+const TERMINAL_RESET: &str = "\x1b[?1049l\x1b[0m\x1b[2J\x1b[H";
+
+/// Initial reconnect message; constants for tunability.
+const RECONNECTING_MSG: &str = "reconnecting to late.sh\u{2026}\r\n";
+
+/// Escalated reconnect message after `ESCALATION_MESSAGE_DELAY`.
+const STILL_RECONNECTING_MSG: &str = "still reconnecting\u{2026}\r\n";
+
 /// How a `connect_async` failure should be handled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DialOutcome {
@@ -157,9 +185,19 @@ pub async fn run_session(
     let (mut ssh_reader, mut ssh_writer) = tokio::io::split(stream);
     let mut ssh_buf = vec![0u8; SSH_READ_BUF];
 
+    // Becomes true after the first successful pump ends with a
+    // retryable close. Gates the plain-text reconnect message: a long
+    // gap on the *first* dial isn't a reconnect, so we don't talk
+    // about reconnecting then.
+    let mut is_redial = false;
+
     'session: loop {
         // === Dial with exponential backoff ===
         let mut backoff = ReconnectBackoff::new(RECONNECT_BUDGET);
+        // Per-window flags so escalation only fires once per gap.
+        let mut wrote_initial_message = false;
+        let mut wrote_escalation_message = false;
+
         let (mut ws_sink, mut ws_stream) = 'dial: loop {
             let req = build_request(&ws_url, &secret, &ctx)
                 .context("failed to build /tunnel handshake")?;
@@ -184,6 +222,28 @@ pub async fn run_session(
                         return finish(ssh_writer, &session_id, "dial terminal").await;
                     }
                     DialOutcome::Retryable => {
+                        // Once the gap stretches past the visibility
+                        // thresholds, write the user-facing message —
+                        // but only for *re*dials, not for the initial
+                        // dial (where there's no prior TUI to clear
+                        // and no continuity to explain).
+                        if is_redial {
+                            let elapsed = backoff.started.elapsed();
+                            if !wrote_initial_message && elapsed >= INITIAL_MESSAGE_DELAY {
+                                let payload = format!("{TERMINAL_RESET}{RECONNECTING_MSG}");
+                                let _ = ssh_writer.write_all(payload.as_bytes()).await;
+                                let _ = ssh_writer.flush().await;
+                                wrote_initial_message = true;
+                            }
+                            if !wrote_escalation_message && elapsed >= ESCALATION_MESSAGE_DELAY {
+                                let _ = ssh_writer
+                                    .write_all(STILL_RECONNECTING_MSG.as_bytes())
+                                    .await;
+                                let _ = ssh_writer.flush().await;
+                                wrote_escalation_message = true;
+                            }
+                        }
+
                         let Some(delay) = backoff.next_delay() else {
                             tracing::warn!(
                                 session_id = %session_id,
@@ -319,6 +379,7 @@ pub async fn run_session(
             }
             PumpOutcome::Retryable => {
                 ctx.reconnect = true;
+                is_redial = true;
                 continue 'session;
             }
         }

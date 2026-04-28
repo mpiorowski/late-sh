@@ -784,6 +784,79 @@ async fn bastion_does_not_redial_after_terminal_close() {
 }
 
 #[tokio::test]
+async fn bastion_writes_reconnect_message_during_long_outage() {
+    // Trajectory:
+    //   1. First WS upgrade succeeds; backend immediately closes 1000.
+    //      Pump fails fast; bastion enters its second 'session iter
+    //      (is_redial = true).
+    //   2. Mock backend rejects the next four dials with HTTP 503;
+    //      backoff sleeps cumulate to ~700ms, crossing the 500ms
+    //      visibility threshold. Bastion writes the plain-text
+    //      reconnect message to the user's SSH stream.
+    //   3. Fifth dial accepts and holds; recovery complete.
+    let backend = ScriptedBackend::spawn(vec![
+        Behavior::CloseWithCode(1000, "drain"),
+        Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
+        Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
+        Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
+        Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
+        Behavior::AcceptAndHold,
+    ])
+    .await
+    .expect("backend");
+
+    let bastion = TestBastion::spawn(backend.ws_url()).await.expect("bastion");
+    let (_session, channel) = open_user_session(bastion.addr).await;
+
+    // Read user-side bytes until we see the reconnect needle. The
+    // mock backend doesn't emit any binary frames, so the only bytes
+    // arriving here are the bastion's own reconnect-message write.
+    let stream = channel.into_stream();
+    let (mut reader, _writer) = tokio::io::split(stream);
+    let mut accumulated: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 1024];
+    let needle = "reconnecting to late.sh";
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            panic!(
+                "timeout waiting for reconnect message; got: {:?}",
+                String::from_utf8_lossy(&accumulated)
+            );
+        }
+        let n = timeout(deadline - now, reader.read(&mut chunk))
+            .await
+            .expect("read deadline")
+            .expect("read");
+        if n == 0 {
+            panic!(
+                "ssh stream EOF before message; got: {:?}",
+                String::from_utf8_lossy(&accumulated)
+            );
+        }
+        accumulated.extend_from_slice(&chunk[..n]);
+        if String::from_utf8_lossy(&accumulated).contains(needle) {
+            break;
+        }
+    }
+
+    let text = String::from_utf8_lossy(&accumulated);
+    // Terminal reset must precede the message so the user's terminal
+    // exits the previous TUI's alt-screen and clears formatting.
+    assert!(
+        text.contains("\x1b[?1049l"),
+        "expected alt-screen exit; got: {text:?}"
+    );
+    assert!(
+        text.contains("\x1b[2J"),
+        "expected screen clear; got: {text:?}"
+    );
+
+    bastion.shutdown();
+}
+
+#[tokio::test]
 async fn bastion_does_not_redial_after_http_4xx_rejection() {
     // HTTP 401 on the upgrade should be classified as terminal.
     let mut backend = ScriptedBackend::spawn(vec![Behavior::HttpReject(StatusCode::UNAUTHORIZED)])
