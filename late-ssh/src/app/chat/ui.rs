@@ -181,6 +181,14 @@ fn reaction_picker_placeholder_lines(dim: Style) -> Vec<Line<'static>> {
         reaction_spans.push(Span::styled(" ", dim));
         reaction_spans.push(Span::styled(reaction_label(key), dim));
     }
+    reaction_spans.push(Span::styled("  ", dim));
+    reaction_spans.push(Span::styled(
+        "f",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    reaction_spans.push(Span::styled(" list", dim));
 
     vec![Line::from(reaction_spans)]
 }
@@ -1044,11 +1052,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         } else {
             Style::default().fg(theme::TEXT())
         };
-        let label = if !view.discover_view.items.is_empty() {
-            format!("{prefix}discover ({})", view.discover_view.items.len())
-        } else {
-            format!("{prefix}discover")
-        };
+        let label = format!("{prefix}discover");
         Line::from(Span::styled(label, style))
     };
     push_row(
@@ -1659,6 +1663,10 @@ mod tests {
         assert!(
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
+        );
+        assert!(
+            row_1.contains("f list"),
+            "reaction owner hint missing from {row_1:?}",
         );
     }
 

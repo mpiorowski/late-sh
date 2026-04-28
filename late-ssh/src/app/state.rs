@@ -356,6 +356,7 @@ impl App {
         self.chat.set_visible_room_id(visible_room_id);
         if changed && let Some(room_id) = visible_room_id {
             self.chat.mark_room_read(room_id);
+            self.chat.request_room_tail(room_id);
         }
     }
 
@@ -741,6 +742,9 @@ impl App {
         if app.screen == Screen::Artboard {
             app.enter_dartboard();
         }
+        if app.screen == Screen::Dashboard {
+            app.chat.request_pinned_messages();
+        }
         app.sync_visible_chat_room();
         Ok(app)
     }
@@ -813,6 +817,10 @@ impl App {
         if self.screen == Screen::Chat {
             self.chat.request_list();
             self.chat.sync_selection();
+        }
+
+        if self.screen == Screen::Dashboard {
+            self.chat.request_pinned_messages();
         }
 
         if self.screen == Screen::Artboard {

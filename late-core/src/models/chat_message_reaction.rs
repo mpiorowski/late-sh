@@ -31,6 +31,12 @@ pub struct ChatMessageReactionSummary {
     pub count: i64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ChatMessageReactionOwners {
+    pub kind: i16,
+    pub user_ids: Vec<Uuid>,
+}
+
 impl ChatMessageReaction {
     pub async fn get_by_user_and_message(
         client: &Client,
@@ -121,5 +127,30 @@ impl ChatMessageReaction {
         }
 
         Ok(summaries)
+    }
+
+    pub async fn list_owners_for_message(
+        client: &Client,
+        message_id: Uuid,
+    ) -> Result<Vec<ChatMessageReactionOwners>> {
+        let rows = client
+            .query(
+                "SELECT kind,
+                        ARRAY_AGG(user_id ORDER BY created, user_id) AS user_ids
+                 FROM chat_message_reactions
+                 WHERE message_id = $1
+                 GROUP BY kind
+                 ORDER BY kind",
+                &[&message_id],
+            )
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ChatMessageReactionOwners {
+                kind: row.get("kind"),
+                user_ids: row.get("user_ids"),
+            })
+            .collect())
     }
 }

@@ -69,21 +69,15 @@ impl ChatMessage {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    pub async fn list_pinned_for_user(
-        client: &Client,
-        user_id: Uuid,
-        limit: i64,
-    ) -> Result<Vec<Self>> {
+    pub async fn list_pinned(client: &Client, limit: i64) -> Result<Vec<Self>> {
         let rows = client
             .query(
-                "SELECT cm.*
-                 FROM chat_messages cm
-                 JOIN chat_room_members crm ON crm.room_id = cm.room_id
-                 WHERE cm.pinned = true
-                   AND crm.user_id = $1
-                 ORDER BY cm.created DESC, cm.id DESC
-                 LIMIT $2",
-                &[&user_id, &limit],
+                "SELECT *
+                 FROM chat_messages
+                 WHERE pinned = true
+                 ORDER BY created DESC, id DESC
+                 LIMIT $1",
+                &[&limit],
             )
             .await?;
 
