@@ -44,7 +44,7 @@ Both NGINX TCP entries run in parallel through Phase 4, gated on which port the 
 
 | Phase | Scope                                                                                          | This crate's surface area |
 | ----- | ---------------------------------------------------------------------------------------------- | ------------------------- |
-| 1     | Crate scaffold (you are here): russh skeleton, host key, connection accept, stub shell reply. | All MVP surface stubbed.  |
+| 1     | Crate scaffold: russh skeleton, host key, connection accept, stub shell reply.                 | All MVP surface stubbed.  |
 | 2     | Backend `/tunnel` endpoint in `late-ssh`. Hand-written WS client smoke test.                   | None.                     |
 | 3     | Bastion proxy logic: dial `/tunnel`, byte-pump, forward `window-change` as `resize` frames.    | Most of the real work.    |
 | 4     | Reconnect loop + plain-text reconnect messages.                                                | Polish.                   |
@@ -65,14 +65,18 @@ Env-driven. See `src/config.rs` for the canonical list. Required vars:
 - `LATE_BASTION_PROXY_PROTOCOL` — `1` or `0`. Enable PROXY v1 parsing on the listener.
 - `LATE_BASTION_PROXY_TRUSTED_CIDRS` — comma-separated CIDRs allowed to send PROXY v1 headers.
 
-## Status (Phase 1)
+## Status
 
-- ✅ Crate scaffolded; russh server boots on the configured port.
-- ✅ Host key load/generate path mirrors `late-ssh`.
-- ✅ Stub shell handler — connecting to the bastion writes a placeholder banner and closes cleanly.
-- ⏳ PROXY v1 parsing not wired yet (lift to `late-core` is part of Phase 1; following commit).
-- ⏳ Backend `/tunnel` endpoint not yet built (Phase 2).
-- ⏳ No proxy logic; no WS client; no reconnect (Phase 3 / Phase 4).
+- ✅ **Phase 1** — crate scaffolded; russh server boots; host key load/generate; stub shell handler.
+- ✅ **Phase 1** — PROXY v1 parser lifted to `late_core::proxy_protocol`. Bastion does not call it yet (Phase 3).
+- ✅ **Phase 2a** — `/tunnel` listener exists in `late-ssh` (`src/tunnel.rs`). Validates CIDR allowlist, pre-shared secret, and required handshake headers. Accepts the WS upgrade and closes immediately with code `1000`.
+- ✅ **Phase 2 (protocol)** — `late_core::tunnel_protocol::ControlFrame::Resize { cols, rows }` wire schema for `window-change` forwarding.
+- ✅ **Infra TF skeleton** — `service-ssh-internal-sv` ClusterIP for `:4001`, bastion Deployment/Service, NetworkPolicy, dual NGINX TCP entries (`:22` legacy, `:5222` bastion). Bastion side gated by `BASTION_ENABLED` (default `0`) until Phase 3.
+- ⏳ **Phase 2b** — I/O seam refactor in `late-ssh` so `App::new(SessionConfig)` runs on either a russh `Channel` or a WS pair.
+- ⏳ **Phase 2c** — wire `/tunnel` to construct `SessionConfig` and run `App::new` over the WS streams; hand-written WS smoke client.
+- ⏳ **Phase 3** — bastion proxy logic: dial `/tunnel`, pump bytes, forward `resize`, close SSH on WS close.
+- ⏳ **Phase 4** — reconnect loop + plain-text "reconnecting…" messages.
+- ⏳ **Phase 5** — production cutover (`:22` swing).
 
 ## Running locally (Phase 1, smoke only)
 

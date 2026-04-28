@@ -11,6 +11,8 @@
 # =============================================================================
 
 resource "kubernetes_deployment_v1" "service_bastion" {
+  count = var.BASTION_ENABLED == "1" ? 1 : 0
+
   metadata {
     name = "service-bastion"
   }
@@ -172,6 +174,8 @@ resource "kubernetes_deployment_v1" "service_bastion" {
 }
 
 resource "kubernetes_service_v1" "service_bastion_sv" {
+  count = var.BASTION_ENABLED == "1" ? 1 : 0
+
   metadata {
     name = "service-bastion-sv"
   }

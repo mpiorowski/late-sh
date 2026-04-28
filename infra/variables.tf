@@ -122,21 +122,30 @@ variable "DB_POOL_SIZE" {
 # Bastion (late-bastion)
 # =============================================================================
 
-variable "BASTION_IMAGE_TAG" {
-  description = "Docker image for late-bastion (e.g., ghcr.io/org/late-bastion:sha-abc123)."
+variable "BASTION_ENABLED" {
+  description = "\"1\" to deploy the late-bastion pod and the :5222 NGINX TCP entry. Off by default until Phase 3 wires the bastion's /tunnel client."
   type        = string
+  default     = "0"
+}
+
+variable "BASTION_IMAGE_TAG" {
+  description = "Docker image for late-bastion (e.g., ghcr.io/org/late-bastion:sha-abc123). Unused when BASTION_ENABLED=0."
+  type        = string
+  default     = ""
 }
 
 variable "BASTION_HOST_KEY" {
-  description = "Ed25519 private key for the bastion's russh host key."
+  description = "Ed25519 private key for the bastion's russh host key. Always populates the secret so a future enable doesn't require re-applying secrets."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "BASTION_SHARED_SECRET" {
   description = "Pre-shared secret sent on the /tunnel WS upgrade. Mounted into both late-bastion and late-ssh."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "BASTION_SSH_PORT" {
