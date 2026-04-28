@@ -575,16 +575,22 @@ impl ChatService {
         &self,
         user_id: Uuid,
         room_rx: watch::Receiver<Option<Uuid>>,
-    ) -> (watch::Receiver<ChatSnapshot>, tokio::task::AbortHandle) {
+    ) -> (
+        watch::Receiver<ChatSnapshot>,
+        mpsc::UnboundedSender<()>,
+        tokio::task::AbortHandle,
+    ) {
         self.ensure_refresh_scheduler();
 
         let session_id = Uuid::now_v7();
         let (snapshot_tx, snapshot_rx) = watch::channel(ChatSnapshot::default());
+        let (force_refresh_tx, mut force_refresh_rx) = mpsc::unbounded_channel();
+        let initial_room_id = *room_rx.borrow();
         self.refresh_sessions.lock_recover().insert(
             session_id,
             ChatRefreshSession {
                 user_id,
-                selected_room_id: *room_rx.borrow(),
+                selected_room_id: initial_room_id,
                 snapshot_tx,
             },
         );
@@ -599,22 +605,34 @@ impl ChatService {
                     sessions: sessions.clone(),
                     session_id,
                 };
+                let mut last_selected_room_id = initial_room_id;
 
                 loop {
-                    if room_rx.changed().await.is_err() {
-                        break;
-                    }
+                    tokio::select! {
+                        changed = room_rx.changed() => {
+                            if changed.is_err() {
+                                break;
+                            }
 
-                    let selected_room_id = *room_rx.borrow_and_update();
-                    if let Some(session) = sessions.lock_recover().get_mut(&session_id) {
-                        session.selected_room_id = selected_room_id;
+                            let selected_room_id = *room_rx.borrow_and_update();
+                            if selected_room_id == last_selected_room_id {
+                                continue;
+                            }
+                            last_selected_room_id = selected_room_id;
+                            if let Some(session) = sessions.lock_recover().get_mut(&session_id) {
+                                session.selected_room_id = selected_room_id;
+                            }
+                            let _ = refresh_signal_tx.send(session_id);
+                        }
+                        Some(()) = force_refresh_rx.recv() => {
+                            let _ = refresh_signal_tx.send(session_id);
+                        }
                     }
-                    let _ = refresh_signal_tx.send(session_id);
                 }
             }
             .instrument(info_span!("chat.refresh_registration", user_id = %user_id, session_id = %session_id)),
         );
-        (snapshot_rx, handle.abort_handle())
+        (snapshot_rx, force_refresh_tx, handle.abort_handle())
     }
 
     pub fn list_chats_task(&self, user_id: Uuid, selected_room_id: Option<Uuid>) {

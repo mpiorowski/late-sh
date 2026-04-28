@@ -745,10 +745,12 @@ async fn shared_service_refresh_tasks_publish_per_session_snapshots() {
     .await
     .expect("message b");
 
-    let (_room_a_tx, room_a_rx) = tokio::sync::watch::channel(Some(room_a.id));
+    let (room_a_tx, room_a_rx) = tokio::sync::watch::channel(Some(room_a.id));
     let (_room_b_tx, room_b_rx) = tokio::sync::watch::channel(Some(room_b.id));
-    let (mut snapshot_a_rx, task_a) = service.start_user_refresh_task(user_a.id, room_a_rx);
-    let (mut snapshot_b_rx, task_b) = service.start_user_refresh_task(user_b.id, room_b_rx);
+    let (mut snapshot_a_rx, refresh_a, task_a) =
+        service.start_user_refresh_task(user_a.id, room_a_rx);
+    let (mut snapshot_b_rx, _refresh_b, task_b) =
+        service.start_user_refresh_task(user_b.id, room_b_rx);
 
     timeout(Duration::from_secs(2), snapshot_a_rx.changed())
         .await
@@ -776,6 +778,22 @@ async fn shared_service_refresh_tasks_publish_per_session_snapshots() {
                 .iter()
                 .any(|message| message.body == "only user b sees this")
     }));
+
+    room_a_tx
+        .send(Some(room_a.id))
+        .expect("same selected room send");
+    assert!(
+        timeout(Duration::from_millis(200), snapshot_a_rx.changed())
+            .await
+            .is_err(),
+        "unchanged selected room sends should not refresh the session"
+    );
+
+    refresh_a.send(()).expect("force refresh");
+    timeout(Duration::from_secs(2), snapshot_a_rx.changed())
+        .await
+        .expect("forced snapshot timeout")
+        .expect("forced snapshot changed");
 
     task_a.abort();
     task_b.abort();
