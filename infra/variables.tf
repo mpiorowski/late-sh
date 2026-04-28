@@ -119,6 +119,51 @@ variable "DB_POOL_SIZE" {
 }
 
 # =============================================================================
+# Bastion (late-bastion)
+# =============================================================================
+
+variable "BASTION_IMAGE_TAG" {
+  description = "Docker image for late-bastion (e.g., ghcr.io/org/late-bastion:sha-abc123)."
+  type        = string
+}
+
+variable "BASTION_HOST_KEY" {
+  description = "Ed25519 private key for the bastion's russh host key."
+  type        = string
+  sensitive   = true
+}
+
+variable "BASTION_SHARED_SECRET" {
+  description = "Pre-shared secret sent on the /tunnel WS upgrade. Mounted into both late-bastion and late-ssh."
+  type        = string
+  sensitive   = true
+}
+
+variable "BASTION_SSH_PORT" {
+  description = "Port the bastion russh server listens on inside the cluster."
+  type        = string
+  default     = "5222"
+}
+
+variable "BASTION_MAX_CONNS_GLOBAL" {
+  description = "Bastion: max simultaneous SSH connections (global cap)."
+  type        = string
+  default     = "10000"
+}
+
+variable "BASTION_SSH_IDLE_TIMEOUT" {
+  description = "Bastion: russh inactivity timeout in seconds."
+  type        = string
+  default     = "3600"
+}
+
+variable "BASTION_TUNNEL_TRUSTED_CIDRS" {
+  description = "CIDRs allowed to reach late-ssh /tunnel. Should match the bastion pod CIDR."
+  type        = string
+  default     = "10.42.0.0/16"
+}
+
+# =============================================================================
 # AI (Gemini)
 # =============================================================================
 
