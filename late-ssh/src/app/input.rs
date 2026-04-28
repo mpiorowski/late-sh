@@ -1306,6 +1306,10 @@ fn compose_room_switch_allowed(screen: Screen) -> bool {
 }
 
 fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
+    if app.chat.is_composing() || app.chat.news.composing() || app.chat.showcase.composing() {
+        return false;
+    }
+
     let room_id = match screen {
         Screen::Dashboard => app.dashboard_active_room_id(),
         Screen::Chat => app.chat.selected_room_id,
