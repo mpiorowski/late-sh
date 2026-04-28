@@ -79,7 +79,7 @@ Env-driven. See `src/config.rs` for the canonical list. Required vars:
   - ✅ **4/1** — backend emits WS close 1000 on graceful drain (token-driven).
   - ✅ **4/2** — bastion reconnect loop: retryable closes (1000/1001/1006) and HTTP 5xx → exponential backoff (100ms→5s, 30s budget) with `X-Late-Reconnect: 1` and stable `X-Late-Session-Id`. Terminal closes (4001/4002/4003) and HTTP 4xx end the session.
   - ✅ **4/3** — plain-text "reconnecting to late.sh…" written into the SSH stream after a 500ms gap (escalates to "still reconnecting…" at 5s). Preceded by a terminal-reset prefix (`\x1b[?1049l\x1b[0m\x1b[2J\x1b[H`) so the previous TUI's alt-screen / styling is cleared. Suppressed on the *first* dial — only fires when reopening a previously-good session.
-  - ⏳ **4/4** — ping/pong cadence + dead-backend detection.
+  - ✅ **4/4** — bastion sends a WS Ping every 2s; backend's tungstenite layer auto-pongs. >5s of silence (no inbound frame of any kind) is treated as a wedged backend and breaks the pump into the reconnect loop. In-cluster RTT is sub-ms, so the threshold has plenty of slack.
   - ⏳ **4/5** — live integration test against a real `service-ssh` restart.
 - ⏳ **Phase 5** — production cutover (`:22` swing).
 

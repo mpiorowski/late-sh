@@ -514,6 +514,11 @@ enum Behavior {
     /// no outbound). Used as the "second attempt succeeds" terminator
     /// for retry-and-recover tests.
     AcceptAndHold,
+    /// Complete the upgrade, then stop polling the WebSocket entirely
+    /// for the given duration. Bastion-sent Pings accumulate in the
+    /// TCP buffer with no auto-pong reply, so the bastion's silence
+    /// detector should trip and treat the connection as dead.
+    AcceptThenStall(Duration),
 }
 
 /// Mock backend that handles a *sequence* of connection attempts. Each
@@ -575,10 +580,15 @@ impl ScriptedBackend {
     }
 
     async fn next_handshake(&mut self) -> Option<HeaderMap> {
-        timeout(Duration::from_secs(5), self.handshakes_rx.recv())
-            .await
-            .ok()
-            .flatten()
+        self.next_handshake_within(Duration::from_secs(5)).await
+    }
+
+    /// Like `next_handshake` but with a caller-chosen timeout, for
+    /// scenarios where the bastion takes longer than the default 5s
+    /// to redial (e.g. silence-detection paths that wait out a
+    /// SILENCE_THRESHOLD-sized stall before retrying).
+    async fn next_handshake_within(&mut self, dur: Duration) -> Option<HeaderMap> {
+        timeout(dur, self.handshakes_rx.recv()).await.ok().flatten()
     }
 
     /// Assert no further handshake arrives within `wait`. Used by tests
@@ -667,6 +677,17 @@ async fn handle_scripted(tcp: TcpStream, behavior: Behavior, tx: mpsc::Sender<He
                 }
             }
             let _ = sink.close().await;
+        }
+        Behavior::AcceptThenStall(stall_for) => {
+            let Some(ws) = accept_capture(tcp, &tx).await else {
+                return;
+            };
+            // Hold the upgraded WebSocketStream alive but never poll
+            // it. Bastion-sent Pings sit in the TCP recv buffer; no
+            // pong is ever produced. The bastion's silence threshold
+            // should trip, breaking its pump and triggering a redial.
+            tokio::time::sleep(stall_for).await;
+            drop(ws);
         }
     }
 }
@@ -778,6 +799,49 @@ async fn bastion_does_not_redial_after_terminal_close() {
     // Generous window: the backoff initial delay is 100ms, so a single
     // unwanted retry would land well within 2s.
     backend.assert_no_redial(Duration::from_secs(2)).await;
+
+    backend.shutdown();
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_redials_when_backend_goes_silent() {
+    // First connection: backend accepts the upgrade then stalls. With
+    // no auto-pong reply, the bastion's silence detector trips at
+    // SILENCE_THRESHOLD (5s) and breaks its pump. The reconnect loop
+    // then redials, hitting the AcceptAndHold terminator.
+    let mut backend = ScriptedBackend::spawn(vec![
+        Behavior::AcceptThenStall(Duration::from_secs(15)),
+        Behavior::AcceptAndHold,
+    ])
+    .await
+    .expect("backend");
+
+    let bastion = TestBastion::spawn(backend.ws_url()).await.expect("bastion");
+    let (_session, _channel) = open_user_session(bastion.addr).await;
+
+    // First handshake: fresh dial.
+    let h1 = backend
+        .next_handshake()
+        .await
+        .expect("first handshake never arrived");
+    assert!(
+        h1.get(HEADER_RECONNECT).is_none(),
+        "first dial should not carry X-Late-Reconnect"
+    );
+
+    // After silence trip + redial, expect a second handshake within a
+    // generous window (silence threshold ≈ 5s + redial fastpath).
+    let h2 = backend
+        .next_handshake_within(Duration::from_secs(8))
+        .await
+        .expect("redial after silence trip never arrived");
+    assert_eq!(
+        h2.get(HEADER_RECONNECT)
+            .expect("reconnect header on redial"),
+        "1",
+        "silence-triggered redial should set X-Late-Reconnect=1"
+    );
 
     backend.shutdown();
     bastion.shutdown();

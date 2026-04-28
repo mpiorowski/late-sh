@@ -74,6 +74,23 @@ const RECONNECTING_MSG: &str = "reconnecting to late.sh\u{2026}\r\n";
 /// Escalated reconnect message after `ESCALATION_MESSAGE_DELAY`.
 const STILL_RECONNECTING_MSG: &str = "still reconnecting\u{2026}\r\n";
 
+/// Cadence of bastion → backend WS Pings. Tungstenite on the backend
+/// auto-replies with Pong, so each ping doubles as a "is the pod
+/// alive" probe and a NAT keepalive (the latter mostly irrelevant on
+/// in-cluster Service routing, but cheap insurance).
+const PING_INTERVAL: Duration = Duration::from_secs(2);
+
+/// If we go this long without *any* inbound frame from the backend
+/// (Pong, Binary, Text, …), assume the pod has wedged and break the
+/// pump as if we'd seen an abnormal close. The reconnect loop will
+/// redial against whatever pod the Service is now pointing to.
+///
+/// Dimensioned for an in-cluster (bastion → service-ssh-internal) hop:
+/// healthy RTT is sub-ms, even hot-loop event-loop stalls won't hit
+/// 5s. The user's `ssh` ↔ bastion leg has its own SSH-level
+/// keepalive separately and isn't affected by this threshold.
+const SILENCE_THRESHOLD: Duration = Duration::from_secs(5);
+
 /// How a `connect_async` failure should be handled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DialOutcome {
@@ -265,6 +282,15 @@ pub async fn run_session(
         };
 
         // === Pump bytes until either side ends ===
+        // Liveness tracking: any inbound WS frame counts as a sign the
+        // backend is alive. We also actively probe with WS Pings every
+        // PING_INTERVAL so a wedged backend (auto-pong loop stuck) is
+        // detectable even when the user is idle.
+        let mut last_inbound = Instant::now();
+        let mut ping_interval = tokio::time::interval(PING_INTERVAL);
+        // Don't pre-tick: the first tick fires immediately, sending a
+        // probe Ping to validate the connection is fully up.
+
         let outcome = loop {
             tokio::select! {
                 // SSH (user) → WS (backend) — opaque binary frames.
@@ -292,6 +318,12 @@ pub async fn run_session(
 
                 // WS (backend) → SSH (user) — opaque binary; ignore text/ping.
                 msg = ws_stream.next() => {
+                    // Any successfully-parsed inbound frame (Pong,
+                    // Binary, Text, Ping, Frame) means the backend is
+                    // still talking; reset the silence countdown.
+                    if matches!(msg, Some(Ok(_))) {
+                        last_inbound = Instant::now();
+                    }
                     match msg {
                         None => {
                             tracing::debug!(session_id = %session_id, "ws stream ended without close frame");
@@ -360,6 +392,22 @@ pub async fn run_session(
                             // is going away too — finish the loop on the next
                             // ssh_reader poll.
                         }
+                    }
+                }
+
+                // Liveness probe + dead-backend detector.
+                _ = ping_interval.tick() => {
+                    if last_inbound.elapsed() > SILENCE_THRESHOLD {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            silence_ms = last_inbound.elapsed().as_millis() as u64,
+                            "tunnel ws silent past threshold; treating as dead backend"
+                        );
+                        break PumpOutcome::Retryable;
+                    }
+                    if let Err(e) = ws_sink.send(WsMessage::Ping(Default::default())).await {
+                        tracing::debug!(error = ?e, session_id = %session_id, "ws send (ping) failed; treating as retryable");
+                        break PumpOutcome::Retryable;
                     }
                 }
             }
