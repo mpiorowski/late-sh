@@ -1,9 +1,11 @@
 //! `/tunnel` listener — bastion-only WebSocket entry point.
 //!
-//! Phase 2a scope: bind the private listener, validate handshake (IP
-//! allowlist, pre-shared secret, required headers), accept the upgrade,
-//! and close immediately with WS code 1000. **No proxy logic, no
-//! `App::new` wiring** — those land in Phase 2c.
+//! Phase 2c: bind the private listener, validate handshake (IP allowlist,
+//! pre-shared secret, required headers), look up the user, build a
+//! `SessionConfig`, and run the same `App::new` + `run_session` render
+//! loop that the russh path uses. The transport difference is confined
+//! to the `WsFrameSink` (output) and the receive loop below (input +
+//! resize control frames).
 //!
 //! The `:4001` listener is intentionally separate from the public `:4000`
 //! API listener (per `PERSISTENT-CONNECTION-GATEWAY.md` §3): mixing trust
@@ -15,19 +17,33 @@ use axum::{
     Router,
     extract::{
         ConnectInfo, State as AxumState, WebSocketUpgrade,
-        ws::{CloseFrame, Message, WebSocket, close_code},
+        ws::{Message, WebSocket},
     },
     http::{HeaderMap, StatusCode},
     middleware,
     response::IntoResponse,
     routing::get,
 };
+use futures_util::{SinkExt, StreamExt};
 use ipnet::IpNet;
+use late_core::models::user::User;
 use late_core::telemetry::http_telemetry_middleware;
+use late_core::tunnel_protocol::ControlFrame;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::net::TcpListener;
+use tokio::sync::{Mutex as TokioMutex, mpsc};
 
+use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
+use crate::session_io::WsFrameSink;
+use crate::ssh::{INPUT_QUEUE_CAP, RenderSignal, ensure_user, run_session};
 use crate::state::State;
+
+/// Bound on the writer-task mpsc that feeds `WsFrameSink`. Backpressure
+/// past this is surfaced to the render loop as `Ok(false)` (drop +
+/// repaint), matching the russh path's per-frame send timeout.
+const WS_OUT_BUFFER: usize = 8;
 
 /// Required client headers on the `/tunnel` upgrade. Captured here so the
 /// handler and tests stay in lockstep.
@@ -213,33 +229,192 @@ async fn tunnel_handler(
         }
     };
 
+    // Per-IP rate limiter, keyed on the bastion-asserted client IP per
+    // PERSISTENT-CONNECTION-GATEWAY.md §6 (bastion is intentionally
+    // ignorant of per-IP state; backend keys on X-Late-Peer-IP instead
+    // of the transport peer, which is always the bastion pod).
+    if !state.ssh_attempt_limiter.allow(handshake.peer_ip) {
+        tracing::warn!(
+            peer_ip = %handshake.peer_ip,
+            max_attempts = state.ssh_attempt_limiter.max_attempts(),
+            window_secs = state.ssh_attempt_limiter.window_secs(),
+            "tunnel rejected: per-IP rate limit exceeded"
+        );
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
+    let (user, is_new_user) =
+        match ensure_user(&state, &handshake.username, &handshake.fingerprint).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(error = ?e, "tunnel ensure_user failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+
     tracing::info!(
         peer_ip = %peer_addr.ip(),
         asserted_ip = %handshake.peer_ip,
-        username = %handshake.username,
+        username = %user.username,
         fingerprint = %handshake.fingerprint,
         term = %handshake.term,
         cols = handshake.cols,
         rows = handshake.rows,
         reconnect = handshake.reconnect,
         session_id = ?handshake.session_id,
-        "tunnel handshake accepted (stub — closing 1000)"
+        is_new_user,
+        "tunnel handshake accepted; running session"
     );
 
-    ws.on_upgrade(move |socket| handle_stub(socket, handshake))
+    ws.on_upgrade(move |socket| handle_session(socket, handshake, user, is_new_user, state))
 }
 
-async fn handle_stub(mut socket: WebSocket, handshake: TunnelHandshake) {
-    let frame = CloseFrame {
-        code: close_code::NORMAL,
-        reason: "tunnel stub: phase 2c not yet wired".into(),
+async fn handle_session(
+    socket: WebSocket,
+    handshake: TunnelHandshake,
+    user: User,
+    is_new_user: bool,
+    state: State,
+) {
+    let frame_drop_log_every = state.config.frame_drop_log_every;
+    let activity_feed_rx = Some(state.activity_feed.subscribe());
+    let session_token = uuid::Uuid::now_v7().to_string();
+
+    let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(INPUT_QUEUE_CAP);
+
+    let session_config = build_session_config(
+        &state,
+        SessionBootstrapInputs {
+            user,
+            is_new_user,
+            cols: handshake.cols,
+            rows: handshake.rows,
+            session_token,
+            session_rx: None,
+            activity_feed_rx,
+        },
+    )
+    .await;
+
+    let app = match crate::app::state::App::new(session_config) {
+        Ok(app) => Arc::new(TokioMutex::new(app)),
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to initialize tunnel app");
+            return;
+        }
     };
-    if let Err(err) = socket.send(Message::Close(Some(frame))).await {
-        tracing::debug!(error = ?err, "stub close send failed");
+
+    // Split the WS so the render loop's writer task and the receive loop
+    // can run concurrently without holding a single `&mut WebSocket`.
+    let (mut ws_sink, mut ws_stream) = socket.split();
+
+    // Writer task: drains an mpsc<Message> into the actual WS sink. The
+    // bounded mpsc's capacity is what gives `WsFrameSink::send_frame`
+    // its backpressure; capacity-saturated sends time out at 50ms and
+    // surface as drops to the render loop.
+    let (out_tx, mut out_rx) = mpsc::channel::<Message>(WS_OUT_BUFFER);
+    let writer = tokio::spawn(async move {
+        while let Some(msg) = out_rx.recv().await {
+            let was_close = matches!(msg, Message::Close(_));
+            if let Err(err) = ws_sink.send(msg).await {
+                tracing::debug!(error = ?err, "tunnel ws send failed");
+                break;
+            }
+            if was_close {
+                break;
+            }
+        }
+        // Best-effort flush.
+        let _ = ws_sink.close().await;
+    });
+
+    let signal = Arc::new(RenderSignal::new());
+    let render = tokio::spawn(run_session(
+        Arc::clone(&app),
+        input_rx,
+        WsFrameSink::new(out_tx),
+        frame_drop_log_every,
+        Arc::clone(&signal),
+    ));
+
+    // Initial alt-screen enter, mirroring shell_request's pre-loop write.
+    if let Err(err) =
+        signal
+            .dirty
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+    {
+        // Already dirty (e.g. resize fired before we got here); fine.
+        let _ = err;
     }
-    tracing::debug!(
+    signal.notify.notify_one();
+
+    // Receive loop: input bytes (binary), resize control frames (text),
+    // and clean close from the client.
+    while let Some(msg) = ws_stream.next().await {
+        let msg = match msg {
+            Ok(m) => m,
+            Err(err) => {
+                tracing::debug!(error = ?err, "tunnel ws recv error");
+                break;
+            }
+        };
+
+        match msg {
+            Message::Binary(bytes) => match input_tx.try_reserve() {
+                Ok(permit) => {
+                    permit.send(bytes.into());
+                    signal.dirty.store(true, Ordering::Release);
+                    signal.notify.notify_one();
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!(
+                        queue_cap = INPUT_QUEUE_CAP,
+                        "tunnel input queue full; dropping inbound bytes"
+                    );
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::debug!("tunnel input queue closed; render loop ended");
+                    break;
+                }
+            },
+            Message::Text(text) => match ControlFrame::from_json(text.as_str()) {
+                Ok(ControlFrame::Resize { cols, rows }) => {
+                    let mut app_guard = app.lock().await;
+                    if let Err(err) = app_guard.resize(cols, rows) {
+                        tracing::warn!(error = ?err, cols, rows, "tunnel app.resize failed");
+                    }
+                    signal.dirty.store(true, Ordering::Release);
+                    signal.notify.notify_one();
+                }
+                Err(err) => {
+                    tracing::warn!(error = ?err, payload = %text.as_str(), "tunnel: bad control frame");
+                }
+            },
+            Message::Close(_) => {
+                tracing::debug!("tunnel: client sent Close");
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    // Tell the render loop to stop, then drain the spawn handles. The
+    // render loop calls `clean_disconnect`/`eof_close`, which sends a
+    // `Message::Close` down the writer mpsc; the writer task forwards
+    // it and exits.
+    {
+        let mut app_guard = app.lock().await;
+        app_guard.running = false;
+    }
+    signal.notify.notify_one();
+
+    let _ = render.await;
+    let _ = writer.await;
+
+    tracing::info!(
+        peer_ip = %handshake.peer_ip,
         username = %handshake.username,
-        "tunnel stub closed cleanly"
+        "tunnel session ended"
     );
 }
 

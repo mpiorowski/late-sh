@@ -31,7 +31,7 @@ const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
-const INPUT_QUEUE_CAP: usize = 256;
+pub(crate) const INPUT_QUEUE_CAP: usize = 256;
 
 /// World tick advances animations, game clocks, splash timer, visualizer
 /// decay, etc. Keeps the rate users see animations at before this commit.
@@ -47,13 +47,13 @@ const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
 /// immediately before draining that queue under the app mutex. Using `Notify`
 /// alone leaves a stored permit after a batched render, causing one spurious
 /// identical frame per typing burst.
-struct RenderSignal {
-    dirty: AtomicBool,
-    notify: Notify,
+pub(crate) struct RenderSignal {
+    pub(crate) dirty: AtomicBool,
+    pub(crate) notify: Notify,
 }
 
 impl RenderSignal {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             dirty: AtomicBool::new(false),
             notify: Notify::new(),
@@ -771,7 +771,7 @@ impl russh::server::Handler for ClientHandler {
 /// Per-session render driver. Spawned from `shell_request` (russh path)
 /// and from the `/tunnel` handler in Phase 2c (WS path). Generic over
 /// `FrameSink` so both paths share this loop unchanged.
-async fn run_session<S: FrameSink>(
+pub(crate) async fn run_session<S: FrameSink>(
     app: Arc<TokioMutex<crate::app::state::App>>,
     mut input_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     sink: S,
@@ -957,7 +957,11 @@ async fn clean_disconnect<S: FrameSink>(sink: &S) {
 
 // Updated helper to take State
 /// Returns `(user, is_new)` — `is_new` is true when the user was just created.
-async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result<(User, bool)> {
+pub(crate) async fn ensure_user(
+    state: &State,
+    username: &str,
+    fingerprint: &str,
+) -> Result<(User, bool)> {
     tracing::debug!(username, fingerprint, "ensuring user exists");
     let client = state.db.get().await?;
     let row = User::find_by_fingerprint(&client, fingerprint).await?;
