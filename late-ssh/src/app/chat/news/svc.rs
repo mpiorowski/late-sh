@@ -23,6 +23,9 @@ const NEWS_SEPARATOR: &str = " || ";
 const ASCII_WIDTH: u32 = 12;
 const ASCII_HEIGHT: u32 = 6;
 const PROCESS_URL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const ARTICLE_IMAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+const ARTICLE_IMAGE_MAX_BYTES: u64 = 1_500_000;
+const ARTICLE_IMAGE_MAX_PIXELS: u64 = 4_000_000;
 
 #[derive(Clone)]
 pub struct ArticleService {
@@ -314,49 +317,9 @@ impl ArticleService {
             self.extract_via_ai(url).await?
         };
 
-        // 3. Fetch og:image and convert to ASCII — still no DB client
-        tracing::info!(%url, "fetching og:image and generating ASCII art");
-        let ascii_art = if let Some(img_url) = extraction
-            .image_url
-            .filter(|s| !s.trim().is_empty() && s != "null")
-        {
-            // Safely resolve relative URLs against the base URL
-            let parsed_base = reqwest::Url::parse(url)?;
-            let parsed_img = parsed_base.join(&img_url)?;
-
-            match self.http_client.get(parsed_img).send_traced().await {
-                Ok(res) => {
-                    let bytes = res.bytes().await?;
-                    late_core::ascii::bytes_to_ascii(&bytes, ASCII_WIDTH, ASCII_HEIGHT)
-                        .unwrap_or_else(|_| "Image Convert Error".to_string())
-                }
-                Err(_) => "Image Fetch Failed".to_string(),
-            }
-        } else {
-            // Generate a stable procedural ASCII pattern based on the URL hash.
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            url.hash(&mut hasher);
-            let mut seed = hasher.finish();
-
-            let chars = b" .:-=+*#%@";
-            let width = ASCII_WIDTH as usize;
-            let height = ASCII_HEIGHT as usize;
-            let mut art = String::with_capacity(width * height + height);
-            for y in 0..height {
-                for _x in 0..width {
-                    // Simple linear congruential generator step
-                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    // Use top bits for better pseudo-random distribution
-                    let idx = (seed >> 59) as usize % chars.len();
-                    art.push(chars[idx] as char);
-                }
-                if y < height - 1 {
-                    art.push('\n');
-                }
-            }
-            art
-        };
+        let ascii_art = self
+            .article_ascii_art(url, extraction.image_url.as_deref())
+            .await?;
 
         let announcement =
             build_news_chat_announcement(&extraction.title, &extraction.summary, url, &ascii_art);
@@ -423,6 +386,85 @@ impl ArticleService {
         self.publish_event(ArticleEvent::Created { user_id });
 
         Ok(())
+    }
+
+    async fn article_ascii_art(&self, url: &str, image_url: Option<&str>) -> Result<String> {
+        let Some(img_url) = image_url.filter(|s| !s.trim().is_empty() && *s != "null") else {
+            return Ok(procedural_ascii_art(url));
+        };
+
+        // Safely resolve relative URLs against the base URL.
+        let parsed_base = reqwest::Url::parse(url)?;
+        let parsed_img = parsed_base.join(img_url)?;
+
+        tracing::info!(%url, image_url = %parsed_img, "fetching article image for ASCII art");
+        match tokio::time::timeout(
+            ARTICLE_IMAGE_FETCH_TIMEOUT,
+            self.fetch_article_image_ascii(parsed_img),
+        )
+        .await
+        {
+            Ok(Ok(ascii_art)) => Ok(ascii_art),
+            Ok(Err(e)) => {
+                tracing::warn!(%url, error = ?e, "article image ASCII blocked; using procedural placeholder");
+                Ok(procedural_ascii_art(url))
+            }
+            Err(_) => {
+                tracing::warn!(
+                    %url,
+                    timeout_secs = ARTICLE_IMAGE_FETCH_TIMEOUT.as_secs(),
+                    "article image ASCII timed out; using procedural placeholder"
+                );
+                Ok(procedural_ascii_art(url))
+            }
+        }
+    }
+
+    async fn fetch_article_image_ascii(&self, url: reqwest::Url) -> Result<String> {
+        let mut res = self.http_client.get(url).send_traced().await?;
+        if !res.status().is_success() {
+            anyhow::bail!("image fetch returned HTTP {}", res.status());
+        }
+
+        if let Some(content_length) = res.content_length()
+            && content_length > ARTICLE_IMAGE_MAX_BYTES
+        {
+            anyhow::bail!(
+                "image content-length {} exceeds {} byte limit",
+                content_length,
+                ARTICLE_IMAGE_MAX_BYTES
+            );
+        }
+
+        let mut bytes = Vec::new();
+        while let Some(chunk) = res.chunk().await? {
+            let next_len = bytes.len() + chunk.len();
+            if next_len as u64 > ARTICLE_IMAGE_MAX_BYTES {
+                anyhow::bail!(
+                    "image body exceeded {} byte limit while streaming",
+                    ARTICLE_IMAGE_MAX_BYTES
+                );
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+
+        let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes.as_slice()))
+            .with_guessed_format()?
+            .into_dimensions()?;
+        let pixels = u64::from(width) * u64::from(height);
+        if pixels > ARTICLE_IMAGE_MAX_PIXELS {
+            anyhow::bail!(
+                "image dimensions {}x{} exceed {} pixel limit",
+                width,
+                height,
+                ARTICLE_IMAGE_MAX_PIXELS
+            );
+        }
+
+        Ok(
+            late_core::ascii::bytes_to_ascii(&bytes, ASCII_WIDTH, ASCII_HEIGHT)
+                .unwrap_or_else(|_| "Image Convert Error".to_string()),
+        )
     }
 
     /// AI-first extraction for non-YouTube URLs, with a Twitter/X oEmbed
@@ -731,6 +773,30 @@ fn extraction_looks_not_found(extraction: &ArticleExtraction) -> bool {
     markers
         .iter()
         .any(|marker| title.contains(marker) || summary.contains(marker))
+}
+
+fn procedural_ascii_art(url: &str) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut hasher);
+    let mut seed = hasher.finish();
+
+    let chars = b" .:-=+*#%@";
+    let width = ASCII_WIDTH as usize;
+    let height = ASCII_HEIGHT as usize;
+    let mut art = String::with_capacity(width * height + height);
+    for y in 0..height {
+        for _x in 0..width {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let idx = (seed >> 59) as usize % chars.len();
+            art.push(chars[idx] as char);
+        }
+        if y < height - 1 {
+            art.push('\n');
+        }
+    }
+    art
 }
 
 fn build_news_chat_announcement(title: &str, summary: &str, url: &str, ascii_art: &str) -> String {

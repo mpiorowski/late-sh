@@ -2710,6 +2710,7 @@ dependencies = [
  "dartboard-tui",
  "emojis",
  "getrandom 0.4.2",
+ "image",
  "ipnet",
  "late-core",
  "opentelemetry",
