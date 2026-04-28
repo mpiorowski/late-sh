@@ -22,7 +22,7 @@ use late_core::{
         user::User,
     },
 };
-use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, watch};
+use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::app::bonsai::state::stage_for;
@@ -44,7 +44,8 @@ pub struct ChatService {
     globals_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
     refresh_scheduler_started: Arc<AtomicBool>,
-    refresh_notify: Arc<Notify>,
+    refresh_signal_tx: mpsc::UnboundedSender<Uuid>,
+    refresh_signal_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<Uuid>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,10 +80,11 @@ impl Default for ChatGlobalsCache {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ChatRefreshSession {
     user_id: Uuid,
     selected_room_id: Option<Uuid>,
+    snapshot_tx: watch::Sender<ChatSnapshot>,
 }
 
 struct ChatRefreshSessionGuard {
@@ -253,6 +255,7 @@ impl ChatService {
     pub fn new(db: Db, notification_svc: super::notifications::svc::NotificationService) -> Self {
         let (snapshot_tx, snapshot_rx) = watch::channel(ChatSnapshot::default());
         let (evt_tx, _) = broadcast::channel(512);
+        let (refresh_signal_tx, refresh_signal_rx) = mpsc::unbounded_channel();
 
         Self {
             db,
@@ -264,7 +267,8 @@ impl ChatService {
             globals_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
             refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
-            refresh_notify: Arc::new(Notify::new()),
+            refresh_signal_tx,
+            refresh_signal_rx: Arc::new(Mutex::new(Some(refresh_signal_rx))),
         }
     }
     pub fn subscribe_state(&self) -> watch::Receiver<ChatSnapshot> {
@@ -360,6 +364,16 @@ impl ChatService {
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, selected_room_id = ?selected_room_id))]
     async fn list_chat_rooms(&self, user_id: Uuid, selected_room_id: Option<Uuid>) -> Result<()> {
+        let snapshot = self.build_chat_snapshot(user_id, selected_room_id).await?;
+        self.publish_snapshot(snapshot)
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id, selected_room_id = ?selected_room_id))]
+    async fn build_chat_snapshot(
+        &self,
+        user_id: Uuid,
+        selected_room_id: Option<Uuid>,
+    ) -> Result<ChatSnapshot> {
         let globals = self.chat_globals().await?;
         self.ensure_globals_refresh_task();
 
@@ -420,7 +434,7 @@ impl ChatService {
             })
             .collect();
 
-        self.publish_snapshot(ChatSnapshot {
+        Ok(ChatSnapshot {
             user_id: Some(user_id),
             chat_rooms: rooms,
             discover_rooms,
@@ -486,6 +500,11 @@ impl ChatService {
         }
 
         let service = self.clone();
+        let mut refresh_signal_rx = self
+            .refresh_signal_rx
+            .lock_recover()
+            .take()
+            .expect("chat refresh scheduler receiver missing");
         tokio::spawn(
             async move {
                 service.refresh_registered_sessions().await;
@@ -499,8 +518,8 @@ impl ChatService {
                         _ = interval.tick() => {
                             service.refresh_registered_sessions().await;
                         }
-                        _ = service.refresh_notify.notified() => {
-                            service.refresh_registered_sessions().await;
+                        Some(session_id) = refresh_signal_rx.recv() => {
+                            service.refresh_registered_session(session_id).await;
                         }
                     }
                 }
@@ -514,14 +533,34 @@ impl ChatService {
             .refresh_sessions
             .lock_recover()
             .values()
-            .copied()
+            .cloned()
             .collect();
 
         for session in sessions {
-            if let Err(e) = self
-                .list_chat_rooms(session.user_id, session.selected_room_id)
-                .await
-            {
+            self.refresh_session(session).await;
+        }
+    }
+
+    async fn refresh_registered_session(&self, session_id: Uuid) {
+        let session = self
+            .refresh_sessions
+            .lock_recover()
+            .get(&session_id)
+            .cloned();
+        if let Some(session) = session {
+            self.refresh_session(session).await;
+        }
+    }
+
+    async fn refresh_session(&self, session: ChatRefreshSession) {
+        match self
+            .build_chat_snapshot(session.user_id, session.selected_room_id)
+            .await
+        {
+            Ok(snapshot) => {
+                let _ = session.snapshot_tx.send(snapshot);
+            }
+            Err(e) => {
                 late_core::error_span!(
                     "chat_refresh_failed",
                     user_id = %session.user_id,
@@ -536,21 +575,23 @@ impl ChatService {
         &self,
         user_id: Uuid,
         room_rx: watch::Receiver<Option<Uuid>>,
-    ) -> tokio::task::AbortHandle {
+    ) -> (watch::Receiver<ChatSnapshot>, tokio::task::AbortHandle) {
         self.ensure_refresh_scheduler();
 
         let session_id = Uuid::now_v7();
+        let (snapshot_tx, snapshot_rx) = watch::channel(ChatSnapshot::default());
         self.refresh_sessions.lock_recover().insert(
             session_id,
             ChatRefreshSession {
                 user_id,
                 selected_room_id: *room_rx.borrow(),
+                snapshot_tx,
             },
         );
-        self.refresh_notify.notify_one();
+        let _ = self.refresh_signal_tx.send(session_id);
 
         let sessions = self.refresh_sessions.clone();
-        let notify = self.refresh_notify.clone();
+        let refresh_signal_tx = self.refresh_signal_tx.clone();
         let mut room_rx = room_rx;
         let handle = tokio::spawn(
             async move {
@@ -568,12 +609,12 @@ impl ChatService {
                     if let Some(session) = sessions.lock_recover().get_mut(&session_id) {
                         session.selected_room_id = selected_room_id;
                     }
-                    notify.notify_one();
+                    let _ = refresh_signal_tx.send(session_id);
                 }
             }
             .instrument(info_span!("chat.refresh_registration", user_id = %user_id, session_id = %session_id)),
         );
-        handle.abort_handle()
+        (snapshot_rx, handle.abort_handle())
     }
 
     pub fn list_chats_task(&self, user_id: Uuid, selected_room_id: Option<Uuid>) {

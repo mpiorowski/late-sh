@@ -133,10 +133,9 @@ impl ChatState {
         article_service: news::svc::ArticleService,
         showcase_service: showcase::svc::ShowcaseService,
     ) -> Self {
-        let snapshot_rx = service.subscribe_state();
         let event_rx = service.subscribe_events();
         let (room_tx, room_rx) = watch::channel(None);
-        let bg_task = service.start_user_refresh_task(user_id, room_rx);
+        let (snapshot_rx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
         Self {
             service,

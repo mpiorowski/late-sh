@@ -692,6 +692,96 @@ async fn publishes_snapshot_with_discover_rooms_for_public_rooms_user_has_not_jo
 }
 
 #[tokio::test]
+async fn shared_service_refresh_tasks_publish_per_session_snapshots() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let user_a = create_test_user(&test_db.db, "shared_refresh_a").await;
+    let user_b = create_test_user(&test_db.db, "shared_refresh_b").await;
+    let author = create_test_user(&test_db.db, "shared_refresh_author").await;
+
+    let room_a = ChatRoom::get_or_create_public_room(&client, "shared-a")
+        .await
+        .expect("room a");
+    let room_b = ChatRoom::get_or_create_public_room(&client, "shared-b")
+        .await
+        .expect("room b");
+
+    ChatRoomMember::join(&client, room_a.id, user_a.id)
+        .await
+        .expect("join user a");
+    ChatRoomMember::join(&client, room_a.id, author.id)
+        .await
+        .expect("join author a");
+    ChatRoomMember::join(&client, room_b.id, user_b.id)
+        .await
+        .expect("join user b");
+    ChatRoomMember::join(&client, room_b.id, author.id)
+        .await
+        .expect("join author b");
+
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room_a.id,
+            user_id: author.id,
+            body: "only user a sees this".to_string(),
+        },
+    )
+    .await
+    .expect("message a");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room_b.id,
+            user_id: author.id,
+            body: "only user b sees this".to_string(),
+        },
+    )
+    .await
+    .expect("message b");
+
+    let (_room_a_tx, room_a_rx) = tokio::sync::watch::channel(Some(room_a.id));
+    let (_room_b_tx, room_b_rx) = tokio::sync::watch::channel(Some(room_b.id));
+    let (mut snapshot_a_rx, task_a) = service.start_user_refresh_task(user_a.id, room_a_rx);
+    let (mut snapshot_b_rx, task_b) = service.start_user_refresh_task(user_b.id, room_b_rx);
+
+    timeout(Duration::from_secs(2), snapshot_a_rx.changed())
+        .await
+        .expect("snapshot a timeout")
+        .expect("snapshot a changed");
+    timeout(Duration::from_secs(2), snapshot_b_rx.changed())
+        .await
+        .expect("snapshot b timeout")
+        .expect("snapshot b changed");
+
+    let snapshot_a = snapshot_a_rx.borrow_and_update().clone();
+    let snapshot_b = snapshot_b_rx.borrow_and_update().clone();
+
+    assert_eq!(snapshot_a.user_id, Some(user_a.id));
+    assert_eq!(snapshot_b.user_id, Some(user_b.id));
+    assert!(snapshot_a.chat_rooms.iter().any(|(room, messages)| {
+        room.id == room_a.id
+            && messages
+                .iter()
+                .any(|message| message.body == "only user a sees this")
+    }));
+    assert!(snapshot_b.chat_rooms.iter().any(|(room, messages)| {
+        room.id == room_b.id
+            && messages
+                .iter()
+                .any(|message| message.body == "only user b sees this")
+    }));
+
+    task_a.abort();
+    task_b.abort();
+}
+
+#[tokio::test]
 async fn join_public_room_task_only_adds_requesting_user() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
