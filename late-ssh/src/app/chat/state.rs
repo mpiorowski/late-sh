@@ -64,6 +64,7 @@ pub struct ChatState {
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pinned_messages: Vec<ChatMessage>,
     general_room_id: Option<Uuid>,
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
@@ -146,6 +147,7 @@ impl ChatState {
             snapshot_rx,
             event_rx,
             rooms: Vec::new(),
+            pinned_messages: Vec::new(),
             general_room_id: None,
             usernames: HashMap::new(),
             countries: HashMap::new(),
@@ -469,6 +471,21 @@ impl ChatState {
         self.service
             .toggle_message_reaction_task(self.user_id, message.id, kind);
         None
+    }
+
+    pub fn toggle_pin_selected_message_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+        let message = self.selected_message_in_room(room_id)?;
+        if !self.is_admin {
+            return Some(Banner::error("Admin only: pin messages"));
+        }
+        self.service
+            .toggle_message_pin_task(self.user_id, message.id, self.is_admin);
+        let label = if message.pinned {
+            "Unpinning message..."
+        } else {
+            "Pinning message..."
+        };
+        Some(Banner::success(label))
     }
 
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {
@@ -1186,6 +1203,10 @@ impl ChatState {
             .unwrap_or(&[])
     }
 
+    pub fn pinned_messages(&self) -> &[ChatMessage] {
+        &self.pinned_messages
+    }
+
     pub fn usernames(&self) -> &HashMap<Uuid, String> {
         &self.usernames
     }
@@ -1216,6 +1237,7 @@ impl ChatState {
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
+        self.pinned_messages = self.filter_messages(snapshot.pinned_messages);
         self.discover.set_items(snapshot.discover_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
@@ -1389,6 +1411,7 @@ impl ChatState {
                     message_id,
                 } => {
                     self.remove_message(room_id, message_id);
+                    self.remove_pinned_message(message_id);
                     if self.user_id == user_id {
                         banner = Some(Banner::success("Message deleted"));
                     }
@@ -1402,7 +1425,34 @@ impl ChatState {
                     {
                         continue;
                     }
-                    self.replace_message(message);
+                    self.replace_message(message.clone());
+                    if message.pinned {
+                        self.apply_pinned_message(message);
+                    }
+                }
+                ChatEvent::MessagePinUpdated {
+                    user_id,
+                    message,
+                    target_user_ids,
+                } => {
+                    if let Some(targets) = target_user_ids
+                        && !targets.contains(&self.user_id)
+                    {
+                        continue;
+                    }
+                    self.replace_message(message.clone());
+                    self.apply_pinned_message(message.clone());
+                    if self.user_id == user_id {
+                        let label = if message.pinned {
+                            "Message pinned"
+                        } else {
+                            "Message unpinned"
+                        };
+                        banner = Some(Banner::success(label));
+                    }
+                }
+                ChatEvent::MessagePinFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
                 }
                 ChatEvent::MessageReactionsUpdated {
                     room_id: _,
@@ -1546,6 +1596,10 @@ impl ChatState {
         self.message_reactions.remove(&message_id);
     }
 
+    fn remove_pinned_message(&mut self, message_id: Uuid) {
+        self.pinned_messages.retain(|m| m.id != message_id);
+    }
+
     fn replace_message(&mut self, message: ChatMessage) {
         if let Some((_, messages)) = self
             .rooms
@@ -1554,6 +1608,19 @@ impl ChatState {
             && let Some(existing) = messages.iter_mut().find(|m| m.id == message.id)
         {
             *existing = message;
+        }
+    }
+
+    fn apply_pinned_message(&mut self, message: ChatMessage) {
+        self.remove_pinned_message(message.id);
+        let is_joined_room = self
+            .rooms
+            .iter()
+            .any(|(room, _)| room.id == message.room_id);
+        if message.pinned && is_joined_room && !self.message_is_ignored(&message) {
+            self.pinned_messages.push(message);
+            self.pinned_messages
+                .sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
         }
     }
 
@@ -1610,6 +1677,7 @@ impl ChatState {
             .rooms
             .iter()
             .flat_map(|(_, messages)| messages.iter().map(|message| message.id))
+            .chain(self.pinned_messages.iter().map(|message| message.id))
             .collect();
         let mut merged: HashMap<Uuid, Vec<ChatMessageReactionSummary>> = self
             .message_reactions
@@ -1644,6 +1712,8 @@ impl ChatState {
             }
             messages.retain(|m| !ignored.contains(&m.user_id));
         }
+        self.pinned_messages
+            .retain(|m| !ignored.contains(&m.user_id));
         self.sync_selection();
     }
 }
@@ -2688,6 +2758,7 @@ mod tests {
             id,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
+            pinned: false,
             room_id: Uuid::from_u128(999),
             user_id: Uuid::from_u128(999),
             body: String::new(),

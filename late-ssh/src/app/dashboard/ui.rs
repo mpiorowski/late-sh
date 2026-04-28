@@ -285,6 +285,7 @@ mod tests {
             jazz: 0,
         };
         let mut rows_cache = ChatRowsCache::default();
+        let mut pinned_rows_cache = ChatRowsCache::default();
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
         let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
@@ -308,8 +309,10 @@ mod tests {
                         favorites_strip: None,
                         chat_view: DashboardChatView {
                             messages: &[],
+                            pinned_messages: &[],
                             overlay: None,
                             rows_cache: &mut rows_cache,
+                            pinned_rows_cache: &mut pinned_rows_cache,
                             usernames: &usernames,
                             countries: &countries,
                             badges: &badges,
@@ -403,6 +406,7 @@ mod tests {
             jazz: 0,
         };
         let mut rows_cache = ChatRowsCache::default();
+        let mut pinned_rows_cache = ChatRowsCache::default();
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
         let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
@@ -426,8 +430,10 @@ mod tests {
                         favorites_strip: None,
                         chat_view: DashboardChatView {
                             messages: &[],
+                            pinned_messages: &[],
                             overlay: None,
                             rows_cache: &mut rows_cache,
+                            pinned_rows_cache: &mut pinned_rows_cache,
                             usernames: &usernames,
                             countries: &countries,
                             badges: &badges,
@@ -476,6 +482,7 @@ mod tests {
             jazz: 0,
         };
         let mut rows_cache = ChatRowsCache::default();
+        let mut pinned_rows_cache = ChatRowsCache::default();
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
         let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
@@ -504,8 +511,10 @@ mod tests {
                         ]),
                         chat_view: DashboardChatView {
                             messages: &[],
+                            pinned_messages: &[],
                             overlay: None,
                             rows_cache: &mut rows_cache,
+                            pinned_rows_cache: &mut pinned_rows_cache,
                             usernames: &usernames,
                             countries: &countries,
                             badges: &badges,

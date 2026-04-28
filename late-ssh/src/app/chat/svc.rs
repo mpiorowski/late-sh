@@ -22,6 +22,7 @@ use crate::metrics;
 
 const HISTORY_LIMIT: i64 = 1000;
 const DELTA_LIMIT: i64 = 256;
+const PINNED_MESSAGES_LIMIT: i64 = 100;
 
 #[derive(Clone)]
 pub struct ChatService {
@@ -45,6 +46,7 @@ pub struct DiscoverRoomItem {
 pub struct ChatSnapshot {
     pub user_id: Option<Uuid>,
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pub pinned_messages: Vec<ChatMessage>,
     pub discover_rooms: Vec<DiscoverRoomItem>,
     pub message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub general_room_id: Option<Uuid>,
@@ -65,6 +67,15 @@ pub enum ChatEvent {
     MessageEdited {
         message: ChatMessage,
         target_user_ids: Option<Vec<Uuid>>,
+    },
+    MessagePinUpdated {
+        user_id: Uuid,
+        message: ChatMessage,
+        target_user_ids: Option<Vec<Uuid>>,
+    },
+    MessagePinFailed {
+        user_id: Uuid,
+        message: String,
     },
     MessageReactionsUpdated {
         room_id: Uuid,
@@ -257,9 +268,12 @@ impl ChatService {
 
         let recent_messages =
             ChatMessage::list_recent_for_rooms(&client, &preload_room_ids, HISTORY_LIMIT).await?;
+        let pinned_messages =
+            ChatMessage::list_pinned_for_user(&client, user_id, PINNED_MESSAGES_LIMIT).await?;
         let message_ids: Vec<Uuid> = recent_messages
             .values()
             .flat_map(|messages| messages.iter().map(|message| message.id))
+            .chain(pinned_messages.iter().map(|message| message.id))
             .collect();
         let message_reactions =
             ChatMessageReaction::list_summaries_for_messages(&client, &message_ids).await?;
@@ -295,6 +309,7 @@ impl ChatService {
         self.publish_snapshot(ChatSnapshot {
             user_id: Some(user_id),
             chat_rooms: rooms,
+            pinned_messages,
             discover_rooms,
             message_reactions,
             general_room_id,
@@ -705,6 +720,72 @@ impl ChatService {
                 kind = kind
             )),
         );
+    }
+
+    pub fn toggle_message_pin_task(&self, user_id: Uuid, message_id: Uuid, is_admin: bool) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                match service
+                    .toggle_message_pin(user_id, message_id, is_admin)
+                    .await
+                {
+                    Ok((message, target_user_ids)) => {
+                        let _ = service.evt_tx.send(ChatEvent::MessagePinUpdated {
+                            user_id,
+                            message,
+                            target_user_ids,
+                        });
+                    }
+                    Err(e) => {
+                        let message = if e.to_string().contains("admin") {
+                            "Admin only: pin messages"
+                        } else {
+                            "Could not update pinned message."
+                        };
+                        let _ = service.evt_tx.send(ChatEvent::MessagePinFailed {
+                            user_id,
+                            message: message.to_string(),
+                        });
+                        late_core::error_span!(
+                            "chat_pin_failed",
+                            error = ?e,
+                            "failed to toggle message pin"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.toggle_message_pin_task",
+                user_id = %user_id,
+                message_id = %message_id
+            )),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, is_admin = is_admin))]
+    async fn toggle_message_pin(
+        &self,
+        user_id: Uuid,
+        message_id: Uuid,
+        is_admin: bool,
+    ) -> Result<(ChatMessage, Option<Vec<Uuid>>)> {
+        if !is_admin {
+            anyhow::bail!("admin-only");
+        }
+
+        let client = self.db.get().await?;
+        let message = ChatMessage::get(&client, message_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("message not found"))?;
+        let is_member = ChatRoomMember::is_member(&client, message.room_id, user_id).await?;
+        if !is_member {
+            anyhow::bail!("user is not a member of room");
+        }
+
+        let updated = ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
+        let target_user_ids = Some(ChatRoomMember::list_user_ids(&client, message.room_id).await?);
+        Ok((updated, target_user_ids))
     }
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, kind = kind))]

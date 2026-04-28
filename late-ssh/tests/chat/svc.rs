@@ -303,6 +303,95 @@ async fn emits_send_failed_event_when_non_admin_posts_to_announcements() {
 }
 
 #[tokio::test]
+async fn admin_can_toggle_message_pin() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let admin = create_test_user(&test_db.db, "pin_admin").await;
+    let room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("general room");
+    ChatRoomMember::join(&client, room.id, admin.id)
+        .await
+        .expect("join");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: admin.id,
+            body: "pin me".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    service.toggle_message_pin_task(admin.id, message.id, true);
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::MessagePinUpdated {
+            user_id, message, ..
+        } => {
+            assert_eq!(user_id, admin.id);
+            assert_eq!(message.body, "pin me");
+            assert!(message.pinned);
+        }
+        other => panic!("expected message pin updated event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn non_admin_cannot_toggle_message_pin() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let user = create_test_user(&test_db.db, "pin_non_admin").await;
+    let room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("general room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: user.id,
+            body: "do not pin me".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    service.toggle_message_pin_task(user.id, message.id, false);
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::MessagePinFailed { user_id, message } => {
+            assert_eq!(user_id, user.id);
+            assert_eq!(message, "Admin only: pin messages");
+        }
+        other => panic!("expected message pin failed event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() {
     let test_db = new_test_db().await;
     let service = ChatService::new(

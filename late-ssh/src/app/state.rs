@@ -220,6 +220,7 @@ pub struct App {
     /// Chat
     pub(crate) chat: chat::state::ChatState,
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
+    pub(crate) dashboard_pinned_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
 
     /// Which favorite room the dashboard's chat card is currently showing,
@@ -686,6 +687,7 @@ impl App {
                 config.showcase_service.clone(),
             ),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            dashboard_pinned_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             dashboard_favorite_index: 0,
             dashboard_previous_favorite_index: None,

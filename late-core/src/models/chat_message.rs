@@ -8,6 +8,8 @@ crate::model! {
     table = "chat_messages";
     params = ChatMessageParams;
     struct ChatMessage {
+        @generated
+        pub pinned: bool;
         @data
         pub room_id: Uuid,
         pub user_id: Uuid,
@@ -61,6 +63,27 @@ impl ChatMessage {
                  ORDER BY created DESC, id DESC
                  LIMIT $2",
                 &[&room_id, &limit],
+            )
+            .await?;
+
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    pub async fn list_pinned_for_user(
+        client: &Client,
+        user_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT cm.*
+                 FROM chat_messages cm
+                 JOIN chat_room_members crm ON crm.room_id = cm.room_id
+                 WHERE cm.pinned = true
+                   AND crm.user_id = $1
+                 ORDER BY cm.created DESC, cm.id DESC
+                 LIMIT $2",
+                &[&user_id, &limit],
             )
             .await?;
 
@@ -150,6 +173,19 @@ impl ChatMessage {
             .execute("DELETE FROM chat_messages WHERE id = $1", &[&message_id])
             .await?;
         Ok(count)
+    }
+
+    pub async fn set_pinned(client: &Client, message_id: Uuid, pinned: bool) -> Result<Self> {
+        let row = client
+            .query_one(
+                "UPDATE chat_messages
+                 SET pinned = $2, updated = current_timestamp
+                 WHERE id = $1
+                 RETURNING *",
+                &[&message_id, &pinned],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
     /// Delete a news announcement chat message posted by a specific user
