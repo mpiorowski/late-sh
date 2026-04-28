@@ -224,7 +224,7 @@ fn is_close_event(event: &ParsedInput) -> bool {
 fn activate_selected_row(app: &mut App) {
     match app.settings_modal_state.selected_row() {
         Row::Username => app.settings_modal_state.start_username_edit(),
-        Row::Ide | Row::Terminal | Row::Os => {
+        Row::Ide | Row::Terminal | Row::Os | Row::Langs => {
             if let Some(field) = crate::app::settings_modal::state::SystemField::from_row(
                 app.settings_modal_state.selected_row(),
             ) {

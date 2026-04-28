@@ -100,10 +100,6 @@ impl ProfileModalState {
             .collect()
     }
 
-    pub fn showcase_count_for_viewed(&self) -> usize {
-        self.showcases_for_viewed().len()
-    }
-
     pub fn bonsai(&self) -> Option<&Tree> {
         self.bonsai.as_ref()
     }

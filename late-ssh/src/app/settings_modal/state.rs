@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::user::sanitize_username_input;
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -40,6 +40,7 @@ pub enum Row {
     Ide,
     Terminal,
     Os,
+    Langs,
     Theme,
     BackgroundColor,
     DashboardHeader,
@@ -56,11 +57,12 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 17] = [
+    pub const ALL: [Row; 18] = [
         Row::Username,
         Row::Ide,
         Row::Terminal,
         Row::Os,
+        Row::Langs,
         Row::Theme,
         Row::BackgroundColor,
         Row::DashboardHeader,
@@ -82,6 +84,7 @@ pub enum SystemField {
     Ide,
     Terminal,
     Os,
+    Langs,
 }
 
 impl SystemField {
@@ -90,23 +93,28 @@ impl SystemField {
             Row::Ide => Some(Self::Ide),
             Row::Terminal => Some(Self::Terminal),
             Row::Os => Some(Self::Os),
+            Row::Langs => Some(Self::Langs),
             _ => None,
         }
     }
 
-    fn value(self, profile: &Profile) -> Option<&str> {
+    fn value(self, profile: &Profile) -> Option<String> {
         match self {
-            Self::Ide => profile.ide.as_deref(),
-            Self::Terminal => profile.terminal.as_deref(),
-            Self::Os => profile.os.as_deref(),
+            Self::Ide => profile.ide.clone(),
+            Self::Terminal => profile.terminal.clone(),
+            Self::Os => profile.os.clone(),
+            Self::Langs => (!profile.langs.is_empty()).then(|| profile.langs.join(", ")),
         }
     }
 
-    fn set_value(self, profile: &mut Profile, value: Option<String>) {
+    fn set_value(self, profile: &mut Profile, text: String) {
         match self {
-            Self::Ide => profile.ide = value,
-            Self::Terminal => profile.terminal = value,
-            Self::Os => profile.os = value,
+            Self::Ide => profile.ide = normalize_optional_text(&text),
+            Self::Terminal => profile.terminal = normalize_optional_text(&text),
+            Self::Os => profile.os = normalize_optional_text(&text),
+            Self::Langs => {
+                profile.langs = normalize_profile_tags([text.as_str()]);
+            }
         }
     }
 }
@@ -811,7 +819,7 @@ impl SettingsModalState {
         self.editing_system_field = Some(field);
         self.system_input = new_short_textarea(true);
         if let Some(value) = field.value(&self.draft) {
-            self.system_input.insert_str(value);
+            self.system_input.insert_str(&value);
         }
     }
 
@@ -824,9 +832,9 @@ impl SettingsModalState {
         let Some(field) = self.editing_system_field.take() else {
             return;
         };
-        let normalized = normalize_optional_text(&self.system_text());
+        let text = self.system_text();
         self.system_input = new_short_textarea(false);
-        field.set_value(&mut self.draft, normalized);
+        field.set_value(&mut self.draft, text);
         self.save();
     }
 
@@ -1091,7 +1099,7 @@ impl SettingsModalState {
                 );
                 true
             }
-            Row::Ide | Row::Terminal | Row::Os => false,
+            Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
             _ => false,
         };
         if mutated {
@@ -1110,6 +1118,7 @@ impl SettingsModalState {
                 ide: self.draft.ide.clone(),
                 terminal: self.draft.terminal.clone(),
                 os: self.draft.os.clone(),
+                langs: self.draft.langs.clone(),
                 notify_kinds: self.draft.notify_kinds.clone(),
                 notify_bell: self.draft.notify_bell,
                 notify_cooldown_mins: self.draft.notify_cooldown_mins,
@@ -1198,7 +1207,7 @@ fn system_char_count_for_input(input: &TextArea<'static>) -> usize {
 }
 
 fn normalize_optional_text(text: &str) -> Option<String> {
-    let normalized = text.trim().split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     (!normalized.is_empty()).then_some(normalized)
 }
 

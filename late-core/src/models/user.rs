@@ -41,6 +41,7 @@ const TIMEZONE_KEY: &str = "timezone";
 const IDE_KEY: &str = "ide";
 const TERMINAL_KEY: &str = "terminal";
 const OS_KEY: &str = "os";
+const LANGS_KEY: &str = "langs";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -442,6 +443,26 @@ pub fn extract_os(settings: &Value) -> Option<String> {
     extract_trimmed_profile_text(settings, OS_KEY)
 }
 
+pub fn extract_langs(settings: &Value) -> Vec<String> {
+    let Some(value) = settings.get(LANGS_KEY) else {
+        return Vec::new();
+    };
+
+    let raw_tags: Vec<String> = if let Some(entries) = value.as_array() {
+        entries
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect()
+    } else if let Some(text) = value.as_str() {
+        vec![text.to_string()]
+    } else {
+        Vec::new()
+    };
+
+    normalize_profile_tags(raw_tags.iter().map(String::as_str))
+}
+
 fn extract_trimmed_profile_text(settings: &Value, key: &str) -> Option<String> {
     settings
         .get(key)
@@ -449,6 +470,30 @@ fn extract_trimmed_profile_text(settings: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn normalize_profile_tags<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for value in values {
+        for raw in value.split(|c: char| c == ',' || c.is_whitespace()) {
+            let tag: String = raw
+                .trim()
+                .trim_matches('#')
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.'))
+                .collect();
+            if tag.is_empty() || tag.len() > 24 || !seen.insert(tag.clone()) {
+                continue;
+            }
+            out.push(tag);
+            if out.len() >= 8 {
+                return out;
+            }
+        }
+    }
+    out
 }
 
 pub fn sanitize_username_input(username: &str) -> String {

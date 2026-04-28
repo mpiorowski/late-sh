@@ -678,6 +678,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             ide: None,
             terminal: None,
             os: None,
+            langs: Vec::new(),
             notify_kinds: Vec::new(),
             notify_bell: false,
             notify_cooldown_mins: 0,

@@ -2,7 +2,7 @@ use chrono::Utc;
 use late_core::models::bonsai::Tree;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Flex, Layout, Margin, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -19,72 +19,88 @@ use super::state::ProfileModalState;
 
 const MODAL_WIDTH: u16 = 92;
 const MODAL_HEIGHT: u16 = 28;
+// Match the right-sidebar bonsai card width (see common/sidebar.rs).
+const BONSAI_CARD_WIDTH: u16 = 24;
+const FETCH_STRIP_HEIGHT: u16 = 4;
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .title(format!(" {} ", state.title()))
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    let content_area = inner.inner(Margin {
-        horizontal: 1,
-        vertical: 0,
-    });
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(10),
+        Constraint::Length(FETCH_STRIP_HEIGHT),
+        Constraint::Length(1),
+    ])
+    .split(popup);
 
-    let layout = Layout::vertical([Constraint::Min(8), Constraint::Length(1)]).split(content_area);
-    let body_area = layout[0];
-    let use_side_boxes = body_area.width >= 74;
-    let body_columns = if use_side_boxes {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(42), Constraint::Length(30)])
-            .split(body_area)
+    draw_title(frame, layout[0], &state.title());
+
+    let wide = layout[1].width >= 80;
+    if wide {
+        let body = Layout::horizontal([Constraint::Min(50), Constraint::Length(BONSAI_CARD_WIDTH)])
+            .split(layout[1]);
+        draw_profile_card(frame, body[0], state);
+        draw_bonsai_card(frame, body[1], state.bonsai());
     } else {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(100)])
-            .split(body_area)
-    };
-
-    let lines = build_lines(state, body_columns[0].width as usize);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((state.scroll_offset(), 0)),
-        body_columns[0],
-    );
-
-    if use_side_boxes {
-        draw_side_boxes(frame, body_columns[1], state);
+        draw_profile_card(frame, layout[1], state);
     }
 
+    draw_late_fetch_strip(frame, layout[2], state);
+    draw_footer(frame, layout[3]);
+}
+
+fn draw_title(frame: &mut Frame, area: Rect, title: &str) {
+    let line = Line::from(Span::styled(
+        format!(" {} ", title),
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    ))
+    .centered();
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn draw_footer(frame: &mut Frame, area: Rect) {
     let footer = Line::from(vec![
         Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
-    frame.render_widget(Paragraph::new(footer), layout[1]);
+    frame.render_widget(Paragraph::new(footer), area);
 }
 
-fn draw_side_boxes(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let boxes = Layout::vertical([Constraint::Length(12), Constraint::Min(8)]).split(area);
-    draw_bonsa_box(frame, boxes[0], state.bonsai());
-    draw_late_fetch_box(frame, boxes[1], state);
-}
-
-fn draw_bonsa_box(frame: &mut Frame, area: Rect, tree: Option<&Tree>) {
+fn draw_profile_card(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let block = Block::default()
-        .title(" bonsa ")
+        .title(" profile ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let content = inner.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    let lines = build_profile_lines(state, content.width as usize);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((state.scroll_offset(), 0)),
+        content,
+    );
+}
+
+fn draw_bonsai_card(frame: &mut Frame, area: Rect, tree: Option<&Tree>) {
+    let block = Block::default()
+        .title(" bonsai ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -118,17 +134,26 @@ fn draw_bonsa_box(frame: &mut Frame, area: Rect, tree: Option<&Tree>) {
 
     let mut lines =
         render_tree_art_lines(stage, tree.seed, wilting, inner.width as usize, 0.0, None);
-    lines.push(
-        Line::from(vec![Span::styled(
-            format!("{} · {}d", stage.label(), age_days),
-            Style::default().fg(theme::TEXT_DIM()),
-        )])
-        .centered(),
-    );
+
+    let visible = inner.height as usize;
+    let label_line = Line::from(vec![Span::styled(
+        format!("{} · {}d", stage.label(), age_days),
+        Style::default().fg(theme::TEXT_DIM()),
+    )])
+    .centered();
+
+    if lines.len() + 1 < visible {
+        let pad = visible.saturating_sub(lines.len() + 1);
+        for _ in 0..pad {
+            lines.insert(0, Line::from(""));
+        }
+    }
+    lines.push(label_line);
+
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_late_fetch_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+fn draw_late_fetch_strip(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let block = Block::default()
         .title(" late.fetch ")
         .title_style(
@@ -145,55 +170,83 @@ fn draw_late_fetch_box(frame: &mut Frame, area: Rect, state: &ProfileModalState)
         return;
     };
 
-    let theme_id = profile.theme_id.as_deref().unwrap_or("late");
-    let rows = [
-        (
-            "created",
-            profile
-                .created_at
-                .as_ref()
-                .map(format_created_at)
-                .unwrap_or_else(|| "unknown".to_string()),
-        ),
-        ("theme", theme::label_for_id(theme_id).to_string()),
-        (
-            "ide",
-            profile.ide.clone().unwrap_or_else(|| "not set".to_string()),
-        ),
-        (
-            "terminal",
-            profile
-                .terminal
-                .clone()
-                .unwrap_or_else(|| "not set".to_string()),
-        ),
-        (
-            "os",
-            profile.os.clone().unwrap_or_else(|| "not set".to_string()),
-        ),
-        ("showcases", state.showcase_count_for_viewed().to_string()),
-    ];
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let label = Style::default().fg(theme::AMBER_DIM());
+    let value = Style::default().fg(theme::TEXT());
 
-    let lines: Vec<Line<'static>> = rows
-        .into_iter()
-        .map(|(label, value)| {
-            Line::from(vec![
-                Span::styled(
-                    format!("{label:<9} "),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-                Span::styled(value, Style::default().fg(theme::TEXT())),
-            ])
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    let theme_id = profile.theme_id.as_deref().unwrap_or("late");
+    let created = profile
+        .created_at
+        .as_ref()
+        .map(format_created_at)
+        .unwrap_or_else(|| "unknown".to_string());
+    let ide = profile.ide.clone().unwrap_or_else(|| "—".to_string());
+    let terminal = profile.terminal.clone().unwrap_or_else(|| "—".to_string());
+    let os = profile.os.clone().unwrap_or_else(|| "—".to_string());
+    let theme_label = theme::label_for_id(theme_id).to_string();
+    let langs = if profile.langs.is_empty() {
+        "—".to_string()
+    } else {
+        profile.langs.join(", ")
+    };
+
+    let inner_w = inner.width as usize;
+    let col_w = inner_w / 3;
+
+    let row1 = Line::from(format_three_cells(
+        ("created", &created),
+        ("ide", &ide),
+        ("os", &os),
+        col_w,
+        label,
+        value,
+        dim,
+    ));
+    let row2 = Line::from(format_three_cells(
+        ("theme", &theme_label),
+        ("terminal", &terminal),
+        ("langs", &langs),
+        col_w,
+        label,
+        value,
+        dim,
+    ));
+
+    frame.render_widget(Paragraph::new(vec![row1, row2]), inner);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn format_three_cells(
+    a: (&str, &str),
+    b: (&str, &str),
+    c: (&str, &str),
+    col_w: usize,
+    label_style: Style,
+    value_style: Style,
+    sep_style: Style,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (i, (label, value)) in [a, b, c].into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("│ ", sep_style));
+        }
+        let label_padded = format!("{label:<9} ");
+        let used = label_padded.chars().count() + value.chars().count();
+        let pad = col_w.saturating_sub(used + if i < 2 { 2 } else { 0 });
+        spans.push(Span::styled(label_padded, label_style));
+        spans.push(Span::styled(value.to_string(), value_style));
+        if i < 2 {
+            spans.push(Span::raw(" ".repeat(pad)));
+        }
+    }
+    spans
 }
 
 fn format_created_at(created_at: &chrono::DateTime<Utc>) -> String {
     created_at.format("%Y-%m-%d").to_string()
 }
 
-fn build_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'static>> {
+fn build_profile_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let text = Style::default().fg(theme::TEXT());
 
@@ -212,8 +265,6 @@ fn build_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'static>> {
     };
 
     let mut lines = vec![
-        Line::from(""),
-        section_heading("Profile"),
         Line::from(vec![
             Span::styled("Username: ", dim),
             Span::styled(username.to_string(), text),

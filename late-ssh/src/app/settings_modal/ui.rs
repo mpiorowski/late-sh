@@ -347,6 +347,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // IDE row
         Constraint::Length(1), // Terminal row
         Constraint::Length(1), // OS row
+        Constraint::Length(1), // Languages row
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Appearance heading
         Constraint::Length(1), // Theme
@@ -399,7 +400,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             Row::Ide,
             width,
             "IDE",
-            system_field_value(state, Row::Ide, state.draft().ide.as_deref()),
+            system_field_value(state, Row::Ide, state.draft().ide.clone()),
         )),
         sections[2],
     );
@@ -409,7 +410,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             Row::Terminal,
             width,
             "Terminal",
-            system_field_value(state, Row::Terminal, state.draft().terminal.as_deref()),
+            system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
         )),
         sections[3],
     );
@@ -419,12 +420,26 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             Row::Os,
             width,
             "OS",
-            system_field_value(state, Row::Os, state.draft().os.as_deref()),
+            system_field_value(state, Row::Os, state.draft().os.clone()),
         )),
         sections[4],
     );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Langs,
+            width,
+            "Langs",
+            system_field_value(
+                state,
+                Row::Langs,
+                (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
+            ),
+        )),
+        sections[5],
+    );
 
-    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[6]);
+    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[7]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -437,7 +452,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[7],
+        sections[8],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -447,7 +462,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Background",
             toggle_span(state.draft().enable_background_color),
         )),
-        sections[8],
+        sections[9],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -457,7 +472,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Stream + vote",
             toggle_span(state.draft().show_dashboard_header),
         )),
-        sections[9],
+        sections[10],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -467,7 +482,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Right sidebar",
             toggle_span(state.draft().show_right_sidebar),
         )),
-        sections[10],
+        sections[11],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -477,10 +492,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Games sidebar",
             toggle_span(state.draft().show_games_sidebar),
         )),
-        sections[11],
+        sections[12],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Location")), sections[13]);
+    frame.render_widget(Paragraph::new(section_heading("Location")), sections[14]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -489,7 +504,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Country",
             value_with_picker_hint(country_label(state.draft().country.as_deref())),
         )),
-        sections[14],
+        sections[15],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -505,12 +520,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                     .unwrap_or_else(|| "not set".to_string()),
             ),
         )),
-        sections[15],
+        sections[16],
     );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[17],
+        sections[18],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -520,7 +535,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[18],
+        sections[19],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -530,7 +545,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[19],
+        sections[20],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -540,7 +555,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[20],
+        sections[21],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -550,7 +565,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[21],
+        sections[22],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -567,7 +582,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[22],
+        sections[23],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -580,7 +595,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[23],
+        sections[24],
     );
 }
 
@@ -1192,20 +1207,37 @@ fn value_span(text: impl Into<String>, color: ratatui::style::Color) -> ValueSpa
     }
 }
 
-fn system_field_value(state: &SettingsModalState, row: Row, value: Option<&str>) -> ValueSpan {
+fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String>) -> ValueSpan {
     if state.editing_system_row(row) {
         let typed = state.system_input().lines().join("");
         if typed.is_empty() {
-            value_span("typing…", theme::AMBER())
+            if row == Row::Langs {
+                value_span("rust, go, typescript…", theme::AMBER())
+            } else {
+                value_span("typing…", theme::AMBER())
+            }
         } else {
             value_span(format!("{}█", typed), theme::AMBER())
         }
     } else {
-        match value.map(str::trim).filter(|value| !value.is_empty()) {
+        match value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             Some(value) => value_span(value.to_string(), theme::TEXT_BRIGHT()),
+            None if row == Row::Langs => value_span("comma sep…", theme::TEXT_FAINT()),
             None => value_span("not set", theme::TEXT_FAINT()),
         }
     }
+}
+
+fn format_lang_tags(langs: &[String]) -> String {
+    langs
+        .iter()
+        .map(|lang| format!("#{lang}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn toggle_span(enabled: bool) -> ValueSpan {

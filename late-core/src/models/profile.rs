@@ -1,14 +1,15 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use std::collections::BTreeSet;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::user::{
     User, extract_bio, extract_country, extract_enable_background_color, extract_favorite_room_ids,
-    extract_ide, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
-    extract_notify_kinds, extract_os, extract_show_dashboard_header, extract_show_games_sidebar,
-    extract_show_right_sidebar, extract_show_settings_on_connect, extract_terminal,
-    extract_theme_id, extract_timezone,
+    extract_ide, extract_langs, extract_notify_bell, extract_notify_cooldown_mins,
+    extract_notify_format, extract_notify_kinds, extract_os, extract_show_dashboard_header,
+    extract_show_games_sidebar, extract_show_right_sidebar, extract_show_settings_on_connect,
+    extract_terminal, extract_theme_id, extract_timezone,
 };
 
 #[derive(Clone, Debug)]
@@ -21,6 +22,7 @@ pub struct Profile {
     pub ide: Option<String>,
     pub terminal: Option<String>,
     pub os: Option<String>,
+    pub langs: Vec<String>,
     pub notify_kinds: Vec<String>,
     pub notify_bell: bool,
     pub notify_cooldown_mins: i32,
@@ -48,6 +50,7 @@ impl Default for Profile {
             ide: None,
             terminal: None,
             os: None,
+            langs: Vec::new(),
             notify_kinds: Vec::new(),
             notify_bell: false,
             notify_cooldown_mins: 0,
@@ -72,6 +75,7 @@ pub struct ProfileParams {
     pub ide: Option<String>,
     pub terminal: Option<String>,
     pub os: Option<String>,
+    pub langs: Vec<String>,
     pub notify_kinds: Vec<String>,
     pub notify_bell: bool,
     pub notify_cooldown_mins: i32,
@@ -125,6 +129,8 @@ impl Profile {
         let ide = normalize_profile_text(params.ide.as_deref());
         let terminal = normalize_profile_text(params.terminal.as_deref());
         let os = normalize_profile_text(params.os.as_deref());
+        let langs = normalize_profile_tags(params.langs.iter().map(String::as_str));
+        let langs_json = serde_json::to_value(&langs)?;
         let current_user = User::get(client, user_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
@@ -166,10 +172,11 @@ impl Profile {
                          'favorite_room_ids', $15::jsonb,
                          'ide', $16::text,
                          'terminal', $17::text,
-                         'os', $18::text
+                         'os', $18::text,
+                         'langs', $19::jsonb
                      ),
                      updated = current_timestamp
-                 WHERE id = $19
+                 WHERE id = $20
                  RETURNING *",
                 &[
                     &params.username,
@@ -190,6 +197,7 @@ impl Profile {
                     &ide,
                     &terminal,
                     &os,
+                    &langs_json,
                     &user_id,
                 ],
             )
@@ -208,6 +216,7 @@ impl Profile {
             ide: extract_ide(&user.settings),
             terminal: extract_terminal(&user.settings),
             os: extract_os(&user.settings),
+            langs: extract_langs(&user.settings),
             notify_kinds: extract_notify_kinds(&user.settings),
             notify_bell: extract_notify_bell(&user.settings),
             notify_cooldown_mins: extract_notify_cooldown_mins(&user.settings),
@@ -228,6 +237,30 @@ fn normalize_profile_text(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+pub fn normalize_profile_tags<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for value in values {
+        for raw in value.split(|c: char| c == ',' || c.is_whitespace()) {
+            let tag: String = raw
+                .trim()
+                .trim_matches('#')
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.'))
+                .collect();
+            if tag.is_empty() || tag.len() > 24 || !seen.insert(tag.clone()) {
+                continue;
+            }
+            out.push(tag);
+            if out.len() >= 8 {
+                return out;
+            }
+        }
+    }
+    out
 }
 
 /// Look up a user's display name by user_id. Returns "someone" on failure.

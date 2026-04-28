@@ -783,6 +783,7 @@ impl GhostService {
                 ide: profile.ide,
                 terminal: profile.terminal,
                 os: profile.os,
+                langs: profile.langs,
                 notify_kinds: profile.notify_kinds,
                 notify_bell: profile.notify_bell,
                 notify_cooldown_mins: profile.notify_cooldown_mins,
