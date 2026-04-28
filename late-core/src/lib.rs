@@ -7,6 +7,7 @@ pub mod icecast;
 pub mod model;
 pub mod models;
 pub mod nonogram;
+pub mod proxy_protocol;
 pub mod rate_limit;
 pub mod shutdown;
 pub mod telemetry;

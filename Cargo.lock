@@ -2641,6 +2641,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
+name = "late-bastion"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "getrandom 0.4.2",
+ "ipnet",
+ "late-core",
+ "opentelemetry",
+ "opentelemetry-http",
+ "pkcs5",
+ "rand_core 0.6.4",
+ "russh",
+ "serde",
+ "serde_json",
+ "tikv-jemallocator",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "late-cli"
 version = "0.1.0"
 dependencies = [
