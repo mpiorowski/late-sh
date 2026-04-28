@@ -483,6 +483,21 @@ async fn handle_session(
     ));
 
     // Initial alt-screen enter, mirroring shell_request's pre-loop write.
+    // The russh path explicitly pushes `App::enter_alt_screen()` bytes
+    // through the SSH channel before spawning the render loop; the
+    // tunnel path needs to do the same, otherwise the TUI's first paint
+    // lands in the user's normal scrollback instead of alt-screen.
+    // (Just dirtying the render signal isn't enough — ratatui's first
+    // paint diffs forward from an empty terminal and never emits the
+    // `\x1b[?1049h` toggle on its own.)
+    let _ = out_tx
+        .send(Message::Binary(
+            crate::app::state::App::enter_alt_screen().into(),
+        ))
+        .await;
+
+    // Wake the render loop so its first paint goes out promptly without
+    // waiting for input.
     if let Err(err) =
         signal
             .dirty
