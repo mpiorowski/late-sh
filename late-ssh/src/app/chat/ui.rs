@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
+    markdown::wrap_plain_line,
     overlay::{Overlay, draw_overlay},
     theme,
 };
@@ -39,7 +40,6 @@ fn custom_badge_for_username(username: &str) -> Option<&'static str> {
 
 pub struct DashboardChatView<'a> {
     pub messages: &'a [ChatMessage],
-    pub pinned_messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
@@ -292,19 +292,6 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     let messages_area = layout[0];
     let composer_area = Some(layout[2]);
 
-    let pinned_height = dashboard_pinned_height(view.pinned_messages, messages_area.height);
-    let (pinned_area, messages_area) = if pinned_height > 0 {
-        let split = Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)])
-            .split(messages_area);
-        (Some(split[0]), split[1])
-    } else {
-        (None, messages_area)
-    };
-
-    if let Some(area) = pinned_area {
-        draw_dashboard_pinned_messages(frame, area, view.pinned_messages);
-    }
-
     let mut lines = Vec::new();
     if view.messages.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -354,17 +341,27 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     }
 }
 
-fn dashboard_pinned_height(messages: &[ChatMessage], available_height: u16) -> u16 {
-    if messages.is_empty() {
+pub(crate) fn dashboard_pinned_height(
+    messages: &[ChatMessage],
+    available_height: u16,
+    width: u16,
+) -> u16 {
+    if messages.is_empty() || width <= 2 {
         return 0;
     }
-    // One row per pinned message + one bottom-border row separating it from chat.
-    let desired = (messages.len() as u16).saturating_add(1);
+    // +1 for the bottom border that closes the strip.
+    let desired = pinned_body_lines(messages, width as usize)
+        .len()
+        .saturating_add(1) as u16;
     // Always leave at least 4 rows for the chat itself; otherwise hide the strip.
     desired.min(available_height.saturating_sub(4))
 }
 
-fn draw_dashboard_pinned_messages(frame: &mut Frame, area: Rect, messages: &[ChatMessage]) {
+pub(crate) fn draw_dashboard_pinned_messages(
+    frame: &mut Frame,
+    area: Rect,
+    messages: &[ChatMessage],
+) {
     if area.height == 0 || messages.is_empty() {
         return;
     }
@@ -379,42 +376,42 @@ fn draw_dashboard_pinned_messages(frame: &mut Frame, area: Rect, messages: &[Cha
         return;
     }
 
-    let amber = Style::default().fg(theme::AMBER());
-    let body_style = Style::default().fg(theme::CHAT_BODY());
-    let body_width = (inner.width as usize).saturating_sub(2);
-
-    let lines: Vec<Line<'static>> = messages
-        .iter()
-        .take(inner.height as usize)
-        .map(|msg| {
-            let body = pinned_body_oneline(&msg.body, body_width);
-            Line::from(vec![
-                Span::styled("▌ ", amber),
-                Span::styled(body, body_style),
-            ])
-        })
-        .collect();
+    let lines = pinned_body_lines(messages, inner.width as usize);
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn pinned_body_oneline(body: &str, max_chars: usize) -> String {
-    let collapsed = body
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    if max_chars == 0 {
-        return String::new();
+/// Render the pinned-strip body for `messages`: each message contributes one
+/// or more rows, splitting on `\n` (no stripping) and soft-wrapping each line
+/// to `width`. The first row of every message is prefixed with an amber
+/// `▌ `; continuation rows use a 2-space indent so message boundaries stay
+/// visually scannable without a separator gap.
+fn pinned_body_lines(messages: &[ChatMessage], width: usize) -> Vec<Line<'static>> {
+    let amber = Style::default().fg(theme::AMBER());
+    let body_style = Style::default().fg(theme::CHAT_BODY());
+    let body_width = width.saturating_sub(2).max(1);
+    let mut lines = Vec::new();
+
+    for msg in messages {
+        let mut first_row_of_msg = true;
+        for raw_line in msg.body.split('\n') {
+            let chunks = if raw_line.trim().is_empty() {
+                vec![String::new()]
+            } else {
+                wrap_plain_line(raw_line, body_width)
+            };
+            for chunk in chunks {
+                let prefix = if first_row_of_msg {
+                    Span::styled("▌ ", amber)
+                } else {
+                    Span::raw("  ")
+                };
+                lines.push(Line::from(vec![prefix, Span::styled(chunk, body_style)]));
+                first_row_of_msg = false;
+            }
+        }
     }
-    let chars: Vec<char> = collapsed.chars().collect();
-    if chars.len() <= max_chars {
-        return collapsed;
-    }
-    let cut = max_chars.saturating_sub(3);
-    let mut out: String = chars.into_iter().take(cut).collect();
-    out.push_str("...");
-    out
+
+    lines
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────
