@@ -180,6 +180,14 @@ fn reaction_picker_placeholder_lines(dim: Style) -> Vec<Line<'static>> {
         reaction_spans.push(Span::styled(" ", dim));
         reaction_spans.push(Span::styled(reaction_label(key), dim));
     }
+    reaction_spans.push(Span::styled("  ", dim));
+    reaction_spans.push(Span::styled(
+        "f",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    reaction_spans.push(Span::styled(" list", dim));
 
     vec![Line::from(reaction_spans)]
 }
@@ -1581,6 +1589,10 @@ mod tests {
         assert!(
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
+        );
+        assert!(
+            row_1.contains("f list"),
+            "reaction owner hint missing from {row_1:?}",
         );
     }
 

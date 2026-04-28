@@ -67,7 +67,7 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
     );
 
     let hint = if overlay.close_on_any_key {
-        "any key close"
+        "↑/↓ j/k scroll · other key close"
     } else {
         "↑/↓ j/k scroll · Esc/q close"
     };

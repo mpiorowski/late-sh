@@ -1642,10 +1642,12 @@ impl ChatState {
                     user_id,
                     message_id,
                     owners,
+                    usernames,
                 } if self.user_id == user_id
                     && self.pending_reaction_owners_message_id == Some(message_id) =>
                 {
                     self.pending_reaction_owners_message_id = None;
+                    self.usernames.extend(usernames);
                     let lines = self.reaction_owner_lines(&owners);
                     self.overlay = Some(Overlay::dismissible("Reactions", lines));
                 }
