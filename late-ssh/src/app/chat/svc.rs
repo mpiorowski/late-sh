@@ -1,9 +1,17 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 use uuid::Uuid;
 
 use late_core::{
+    MutexRecover,
     db::Db,
     models::{
         bonsai::Tree,
@@ -14,7 +22,7 @@ use late_core::{
         user::User,
     },
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, watch};
 use tracing::{Instrument, info_span};
 
 use crate::app::bonsai::state::stage_for;
@@ -22,6 +30,8 @@ use crate::metrics;
 
 const HISTORY_LIMIT: i64 = 1000;
 const DELTA_LIMIT: i64 = 256;
+const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+const CHAT_GLOBALS_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ChatService {
@@ -30,6 +40,11 @@ pub struct ChatService {
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     evt_tx: broadcast::Sender<ChatEvent>,
     notification_svc: super::notifications::svc::NotificationService,
+    globals_cache: Arc<AsyncMutex<ChatGlobalsCache>>,
+    globals_refresh_started: Arc<AtomicBool>,
+    refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
+    refresh_scheduler_started: Arc<AtomicBool>,
+    refresh_notify: Arc<Notify>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,6 +54,46 @@ pub struct DiscoverRoomItem {
     pub member_count: i64,
     pub message_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Default)]
+struct ChatGlobals {
+    discover_rooms: Vec<DiscoverRoomItem>,
+    usernames: HashMap<Uuid, String>,
+    countries: HashMap<Uuid, String>,
+    all_usernames: Vec<String>,
+    bonsai_glyphs: HashMap<Uuid, String>,
+}
+
+struct ChatGlobalsCache {
+    snapshot: Arc<ChatGlobals>,
+    refreshed_at: Option<Instant>,
+}
+
+impl Default for ChatGlobalsCache {
+    fn default() -> Self {
+        Self {
+            snapshot: Arc::new(ChatGlobals::default()),
+            refreshed_at: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ChatRefreshSession {
+    user_id: Uuid,
+    selected_room_id: Option<Uuid>,
+}
+
+struct ChatRefreshSessionGuard {
+    sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
+    session_id: Uuid,
+}
+
+impl Drop for ChatRefreshSessionGuard {
+    fn drop(&mut self) {
+        self.sessions.lock_recover().remove(&self.session_id);
+    }
 }
 
 #[derive(Clone, Default)]
@@ -205,6 +260,11 @@ impl ChatService {
             snapshot_rx,
             evt_tx,
             notification_svc,
+            globals_cache: Arc::new(AsyncMutex::new(ChatGlobalsCache::default())),
+            globals_refresh_started: Arc::new(AtomicBool::new(false)),
+            refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
+            refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
+            refresh_notify: Arc::new(Notify::new()),
         }
     }
     pub fn subscribe_state(&self) -> watch::Receiver<ChatSnapshot> {
@@ -219,11 +279,92 @@ impl ChatService {
         Ok(())
     }
 
+    async fn chat_globals(&self) -> Result<Arc<ChatGlobals>> {
+        self.refresh_chat_globals(false).await
+    }
+
+    async fn refresh_chat_globals(&self, force: bool) -> Result<Arc<ChatGlobals>> {
+        let mut cache = self.globals_cache.lock().await;
+        if !force
+            && let Some(refreshed_at) = cache.refreshed_at
+            && refreshed_at.elapsed() < CHAT_GLOBALS_TTL
+        {
+            return Ok(cache.snapshot.clone());
+        }
+
+        let client = self.db.get().await?;
+        let globals = Arc::new(Self::load_chat_globals(&client).await?);
+        cache.snapshot = globals.clone();
+        cache.refreshed_at = Some(Instant::now());
+        Ok(globals)
+    }
+
+    async fn load_chat_globals(client: &tokio_postgres::Client) -> Result<ChatGlobals> {
+        let discover_rooms = Self::list_all_discover_rooms(client).await?;
+        let usernames = User::list_all_username_map(client).await?;
+        let countries = User::list_all_country_map(client).await?;
+        let mut all_usernames: Vec<String> = usernames.values().cloned().collect();
+        all_usernames.sort();
+        let bonsai_glyphs: HashMap<Uuid, String> = Tree::list_all(client)
+            .await?
+            .into_iter()
+            .filter_map(|t| {
+                let glyph = stage_for(t.is_alive, t.growth_points).glyph();
+                if glyph.is_empty() {
+                    None
+                } else {
+                    Some((t.user_id, glyph.to_string()))
+                }
+            })
+            .collect();
+
+        Ok(ChatGlobals {
+            discover_rooms,
+            usernames,
+            countries,
+            all_usernames,
+            bonsai_glyphs,
+        })
+    }
+
+    fn ensure_globals_refresh_task(&self) {
+        if self
+            .globals_refresh_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let mut interval = tokio::time::interval(CHAT_GLOBALS_TTL);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await;
+
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = service.refresh_chat_globals(true).await {
+                        late_core::error_span!(
+                            "chat_globals_refresh_failed",
+                            error = ?e,
+                            "chat globals refresh failed"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!("chat.globals_refresh_loop")),
+        );
+    }
+
     #[tracing::instrument(skip(self), fields(user_id = %user_id, selected_room_id = ?selected_room_id))]
     async fn list_chat_rooms(&self, user_id: Uuid, selected_room_id: Option<Uuid>) -> Result<()> {
+        let globals = self.chat_globals().await?;
+        self.ensure_globals_refresh_task();
+
         let client = self.db.get().await?;
         let rooms = ChatRoom::list_for_user(&client, user_id).await?;
-        let discover_rooms = self.list_discover_rooms(&client, user_id).await?;
         let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
         let favorite_room_ids = User::favorite_room_ids(&client, user_id).await?;
         let general_room_id = rooms
@@ -255,6 +396,12 @@ impl ChatService {
             push_preload(room_id);
         }
 
+        let discover_rooms = globals
+            .discover_rooms
+            .iter()
+            .filter(|room| !joined_ids.contains(&room.room_id))
+            .cloned()
+            .collect();
         let recent_messages =
             ChatMessage::list_recent_for_rooms(&client, &preload_room_ids, HISTORY_LIMIT).await?;
         let message_ids: Vec<Uuid> = recent_messages
@@ -263,26 +410,7 @@ impl ChatService {
             .collect();
         let message_reactions =
             ChatMessageReaction::list_summaries_for_messages(&client, &message_ids).await?;
-        // General stays warm for the dashboard even when another room is
-        // selected. Favorites ride in the same preload set so the dashboard
-        // quick-switch never depends on a prior manual visit or lucky delta.
-        let usernames = User::list_all_username_map(&client).await?;
-        let countries = User::list_all_country_map(&client).await?;
-        let mut all_usernames: Vec<String> = usernames.values().cloned().collect();
-        all_usernames.sort();
         let ignored_user_ids = User::ignored_user_ids(&client, user_id).await?;
-        let bonsai_glyphs: HashMap<Uuid, String> = Tree::list_all(&client)
-            .await?
-            .into_iter()
-            .filter_map(|t| {
-                let glyph = stage_for(t.is_alive, t.growth_points).glyph();
-                if glyph.is_empty() {
-                    None
-                } else {
-                    Some((t.user_id, glyph.to_string()))
-                }
-            })
-            .collect();
 
         let rooms = rooms
             .into_iter()
@@ -298,19 +426,17 @@ impl ChatService {
             discover_rooms,
             message_reactions,
             general_room_id,
-            usernames,
-            countries,
+            usernames: globals.usernames.clone(),
+            countries: globals.countries.clone(),
             unread_counts,
-            all_usernames,
-            bonsai_glyphs,
+            all_usernames: globals.all_usernames.clone(),
+            bonsai_glyphs: globals.bonsai_glyphs.clone(),
             ignored_user_ids,
         })
     }
 
-    async fn list_discover_rooms(
-        &self,
+    async fn list_all_discover_rooms(
         client: &tokio_postgres::Client,
-        user_id: Uuid,
     ) -> Result<Vec<DiscoverRoomItem>> {
         let rows = client
             .query(
@@ -325,19 +451,13 @@ impl ChatService {
                  WHERE r.kind = 'topic'
                    AND r.visibility = 'public'
                    AND r.permanent = false
-                   AND NOT EXISTS (
-                       SELECT 1
-                       FROM chat_room_members self_member
-                       WHERE self_member.room_id = r.id
-                         AND self_member.user_id = $1
-                   )
                  GROUP BY r.id, r.slug
                  ORDER BY
                     COALESCE(MAX(msg.created), r.created) DESC,
                     message_count DESC,
                     member_count DESC,
                     r.slug ASC",
-                &[&user_id],
+                &[],
             )
             .await?;
 
@@ -356,27 +476,102 @@ impl ChatService {
             .collect())
     }
 
+    fn ensure_refresh_scheduler(&self) {
+        if self
+            .refresh_scheduler_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                service.refresh_registered_sessions().await;
+
+                let mut interval = tokio::time::interval(CHAT_REFRESH_INTERVAL);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await;
+
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            service.refresh_registered_sessions().await;
+                        }
+                        _ = service.refresh_notify.notified() => {
+                            service.refresh_registered_sessions().await;
+                        }
+                    }
+                }
+            }
+            .instrument(info_span!("chat.refresh_scheduler")),
+        );
+    }
+
+    async fn refresh_registered_sessions(&self) {
+        let sessions: Vec<ChatRefreshSession> = self
+            .refresh_sessions
+            .lock_recover()
+            .values()
+            .copied()
+            .collect();
+
+        for session in sessions {
+            if let Err(e) = self
+                .list_chat_rooms(session.user_id, session.selected_room_id)
+                .await
+            {
+                late_core::error_span!(
+                    "chat_refresh_failed",
+                    user_id = %session.user_id,
+                    error = ?e,
+                    "chat service refresh failed"
+                );
+            }
+        }
+    }
+
     pub fn start_user_refresh_task(
         &self,
         user_id: Uuid,
         room_rx: watch::Receiver<Option<Uuid>>,
     ) -> tokio::task::AbortHandle {
-        let service = self.clone();
+        self.ensure_refresh_scheduler();
+
+        let session_id = Uuid::now_v7();
+        self.refresh_sessions.lock_recover().insert(
+            session_id,
+            ChatRefreshSession {
+                user_id,
+                selected_room_id: *room_rx.borrow(),
+            },
+        );
+        self.refresh_notify.notify_one();
+
+        let sessions = self.refresh_sessions.clone();
+        let notify = self.refresh_notify.clone();
+        let mut room_rx = room_rx;
         let handle = tokio::spawn(
             async move {
+                let _guard = ChatRefreshSessionGuard {
+                    sessions: sessions.clone(),
+                    session_id,
+                };
+
                 loop {
-                    let room_id = *room_rx.borrow();
-                    if let Err(e) = service.list_chat_rooms(user_id, room_id).await {
-                        late_core::error_span!(
-                            "chat_refresh_failed",
-                            error = ?e,
-                            "chat service refresh failed"
-                        );
+                    if room_rx.changed().await.is_err() {
+                        break;
                     }
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+                    let selected_room_id = *room_rx.borrow_and_update();
+                    if let Some(session) = sessions.lock_recover().get_mut(&session_id) {
+                        session.selected_room_id = selected_room_id;
+                    }
+                    notify.notify_one();
                 }
             }
-            .instrument(info_span!("chat.refresh_loop", user_id = %user_id)),
+            .instrument(info_span!("chat.refresh_registration", user_id = %user_id, session_id = %session_id)),
         );
         handle.abort_handle()
     }
