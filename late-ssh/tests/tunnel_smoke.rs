@@ -10,7 +10,10 @@ mod helpers;
 use futures_util::{SinkExt, StreamExt};
 use helpers::{new_test_db, test_app_state, test_config};
 use ipnet::IpNet;
+use late_core::MutexRecover;
 use late_core::tunnel_protocol::ControlFrame;
+use late_ssh::config::Config;
+use late_ssh::state::State;
 use late_ssh::tunnel::{
     HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_ROWS, HEADER_SECRET, HEADER_TERM,
     HEADER_USERNAME, run_tunnel_server_with_listener,
@@ -30,11 +33,19 @@ fn loopback_cidr() -> Vec<IpNet> {
     vec!["127.0.0.0/8".parse().expect("cidr")]
 }
 
-async fn spawn_tunnel(trusted: Vec<IpNet>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+async fn spawn_tunnel(trusted: Vec<IpNet>) -> (SocketAddr, State, tokio::task::JoinHandle<()>) {
+    spawn_tunnel_with(trusted, |_| {}).await
+}
+
+async fn spawn_tunnel_with(
+    trusted: Vec<IpNet>,
+    tweak: impl FnOnce(&mut Config),
+) -> (SocketAddr, State, tokio::task::JoinHandle<()>) {
     let test_db = new_test_db().await;
     let mut config = test_config(test_db.db.config().clone());
     config.tunnel_trusted_cidrs = trusted;
     config.tunnel_shared_secret = TEST_SECRET.to_string();
+    tweak(&mut config);
     let state = test_app_state(test_db.db.clone(), config);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -42,11 +53,12 @@ async fn spawn_tunnel(trusted: Vec<IpNet>) -> (SocketAddr, tokio::task::JoinHand
 
     // Move the TestDb guard into the task so the Postgres container
     // outlives the server.
+    let state_for_server = state.clone();
     let task = tokio::spawn(async move {
         let _guard = test_db;
-        let _ = run_tunnel_server_with_listener(listener, state, None).await;
+        let _ = run_tunnel_server_with_listener(listener, state_for_server, None).await;
     });
-    (addr, task)
+    (addr, state, task)
 }
 
 /// Build a tungstenite request with the standard set of valid handshake
@@ -74,7 +86,7 @@ fn make_request(
 
 #[tokio::test]
 async fn tunnel_happy_path_yields_initial_frame_and_accepts_resize() {
-    let (addr, server) = spawn_tunnel(loopback_cidr()).await;
+    let (addr, _state, server) = spawn_tunnel(loopback_cidr()).await;
 
     let req = make_request(addr, "smoke-user");
     let (mut ws, response) = timeout(
@@ -132,7 +144,7 @@ async fn tunnel_happy_path_yields_initial_frame_and_accepts_resize() {
 
 #[tokio::test]
 async fn tunnel_rejects_wrong_secret_with_401() {
-    let (addr, server) = spawn_tunnel(loopback_cidr()).await;
+    let (addr, _state, server) = spawn_tunnel(loopback_cidr()).await;
     let status = raw_upgrade_status(addr, &[(HEADER_SECRET, "not-the-secret")]).await;
     assert_eq!(status, 401);
     server.abort();
@@ -140,10 +152,7 @@ async fn tunnel_rejects_wrong_secret_with_401() {
 
 #[tokio::test]
 async fn tunnel_rejects_missing_required_header_with_400() {
-    let (addr, server) = spawn_tunnel(loopback_cidr()).await;
-    // Drop X-Late-Fingerprint by overriding to empty and then physically
-    // omitting it in the raw request. Easiest: build the request without
-    // the fingerprint header.
+    let (addr, _state, server) = spawn_tunnel(loopback_cidr()).await;
     let status = raw_upgrade_status_omit(addr, HEADER_FINGERPRINT).await;
     assert_eq!(status, 400);
     server.abort();
@@ -151,12 +160,133 @@ async fn tunnel_rejects_missing_required_header_with_400() {
 
 #[tokio::test]
 async fn tunnel_rejects_untrusted_peer_with_403() {
-    // Allowlist a range that excludes the loopback connection's actual
-    // peer IP (127.0.0.1).
     let trusted: Vec<IpNet> = vec!["192.0.2.0/24".parse().expect("cidr")];
-    let (addr, server) = spawn_tunnel(trusted).await;
+    let (addr, _state, server) = spawn_tunnel(trusted).await;
     let status = raw_upgrade_status(addr, &[]).await;
     assert_eq!(status, 403);
+    server.abort();
+}
+
+#[tokio::test]
+async fn tunnel_session_registers_active_user_and_unregisters_on_close() {
+    let (addr, state, server) = spawn_tunnel(loopback_cidr()).await;
+
+    let req = make_request(addr, "active-user");
+    let (mut ws, _) = tokio_tungstenite::connect_async(req)
+        .await
+        .expect("connect");
+
+    // Wait for the first frame. By the time bytes arrive, the registration
+    // block in `tunnel_handler` has already run — it's synchronous before
+    // `ws.on_upgrade`.
+    let _ = timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("first frame timeout");
+
+    {
+        let active = state.active_users.lock_recover();
+        let usernames: Vec<_> = active.values().map(|a| a.username.clone()).collect();
+        assert!(
+            usernames.iter().any(|u| u == "active-user"),
+            "expected active-user registered, got {usernames:?}"
+        );
+    }
+
+    let _ = ws.close(None).await;
+    drop(ws);
+
+    // Server-side teardown is async (render task drains, then the guard
+    // drops). Poll briefly for active_users to empty.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        {
+            let active = state.active_users.lock_recover();
+            if active.is_empty() {
+                break;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            let active = state.active_users.lock_recover();
+            panic!("active_users did not drain: {:?}", *active);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn tunnel_session_emits_joined_activity_event() {
+    let (addr, state, server) = spawn_tunnel(loopback_cidr()).await;
+
+    // Subscribe BEFORE the dial — broadcast only delivers messages sent
+    // after subscription.
+    let mut activity_rx = state.activity_feed.subscribe();
+
+    let req = make_request(addr, "activity-user");
+    let (mut ws, _) = tokio_tungstenite::connect_async(req)
+        .await
+        .expect("connect");
+
+    let event = timeout(Duration::from_secs(5), activity_rx.recv())
+        .await
+        .expect("activity timeout")
+        .expect("activity recv");
+    assert_eq!(event.username, "activity-user");
+    assert_eq!(event.action, "joined");
+
+    let _ = ws.close(None).await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn tunnel_returns_503_when_global_conn_limit_reached() {
+    let (addr, _state, server) = spawn_tunnel_with(loopback_cidr(), |c| {
+        c.max_conns_global = 1;
+    })
+    .await;
+
+    // Open the first session and hold it. Wait for the first frame so we
+    // know the global permit has been acquired before issuing the second
+    // attempt.
+    let req1 = make_request(addr, "global-1");
+    let (mut ws1, _) = tokio_tungstenite::connect_async(req1)
+        .await
+        .expect("connect 1");
+    let _ = timeout(Duration::from_secs(5), ws1.next())
+        .await
+        .expect("first frame timeout");
+
+    let status = raw_upgrade_status(addr, &[]).await;
+    assert_eq!(status, 503, "second attempt should hit global cap");
+
+    // Drop only after the assertion so the permit stays held.
+    drop(ws1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn tunnel_returns_429_when_per_ip_conn_limit_reached() {
+    let (addr, _state, server) = spawn_tunnel_with(loopback_cidr(), |c| {
+        c.max_conns_per_ip = 1;
+    })
+    .await;
+
+    let req1 = make_request(addr, "perip-1");
+    let (mut ws1, _) = tokio_tungstenite::connect_async(req1)
+        .await
+        .expect("connect 1");
+    let _ = timeout(Duration::from_secs(5), ws1.next())
+        .await
+        .expect("first frame timeout");
+
+    let status = raw_upgrade_status(addr, &[]).await;
+    assert_eq!(
+        status, 429,
+        "second attempt from same IP should hit per-IP cap"
+    );
+
+    drop(ws1);
     server.abort();
 }
 

@@ -26,19 +26,23 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use ipnet::IpNet;
+use late_core::MutexRecover;
 use late_core::models::user::User;
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::tunnel_protocol::ControlFrame;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex as TokioMutex, mpsc};
+use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit, mpsc};
+use uuid::Uuid;
 
+use crate::metrics;
 use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
 use crate::session_io::WsFrameSink;
 use crate::ssh::{INPUT_QUEUE_CAP, RenderSignal, ensure_user, run_session};
-use crate::state::State;
+use crate::state::{ActiveUser, ActivityEvent, State};
 
 /// Bound on the writer-task mpsc that feeds `WsFrameSink`. Backpressure
 /// past this is surfaced to the render loop as `Ok(false)` (drop +
@@ -205,6 +209,53 @@ pub async fn run_tunnel_server_with_listener(
     Ok(())
 }
 
+/// Owns the session-scoped accounting that `shell_request` keeps in
+/// `ClientHandler`: the global conn-limit permit, the per-IP count
+/// increment, the `active_users` increment, and the active-session
+/// metric. Drop reverses them in the opposite order from acquisition.
+///
+/// Field order matters for Drop semantics: Rust drops fields top-to-
+/// bottom, so `_conn_permit` is declared last to release the global
+/// slot only after per-IP and per-user state have been cleaned up,
+/// matching the russh path.
+struct TunnelSessionGuard {
+    state: State,
+    peer_ip: IpAddr,
+    user_id: Option<Uuid>,
+    per_ip_incremented: bool,
+    active_user_incremented: bool,
+    _conn_permit: OwnedSemaphorePermit,
+}
+
+impl Drop for TunnelSessionGuard {
+    fn drop(&mut self) {
+        if self.active_user_incremented
+            && let Some(user_id) = self.user_id
+        {
+            metrics::add_ssh_session(-1);
+            let mut active_users = self.state.active_users.lock_recover();
+            if let Some(active) = active_users.get_mut(&user_id) {
+                if active.connection_count <= 1 {
+                    active_users.remove(&user_id);
+                } else {
+                    active.connection_count -= 1;
+                }
+            }
+        }
+
+        if self.per_ip_incremented {
+            let mut counts = self.state.conn_counts.lock_recover();
+            if let Some(count) = counts.get_mut(&self.peer_ip) {
+                if *count <= 1 {
+                    counts.remove(&self.peer_ip);
+                } else {
+                    *count -= 1;
+                }
+            }
+        }
+    }
+}
+
 async fn tunnel_handler(
     ws: WebSocketUpgrade,
     AxumState(state): AxumState<State>,
@@ -229,6 +280,10 @@ async fn tunnel_handler(
         }
     };
 
+    // Past CIDR + secret checks: this is a real connection attempt
+    // from a trusted bastion, so count it.
+    metrics::record_ssh_connection();
+
     // Per-IP rate limiter, keyed on the bastion-asserted client IP per
     // PERSISTENT-CONNECTION-GATEWAY.md §6 (bastion is intentionally
     // ignorant of per-IP state; backend keys on X-Late-Peer-IP instead
@@ -243,6 +298,47 @@ async fn tunnel_handler(
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
 
+    // Global concurrent-session limit. Acquire the permit BEFORE
+    // touching per-IP counts so a saturated server fails fast without
+    // mutating shared state.
+    let permit = match state.conn_limit.clone().try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            tracing::warn!(
+                peer_ip = %handshake.peer_ip,
+                "tunnel rejected: global connection limit reached"
+            );
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+
+    // Construct the guard now so per-IP / active_user increments below
+    // unwind via Drop on any subsequent error path.
+    let mut guard = TunnelSessionGuard {
+        state: state.clone(),
+        peer_ip: handshake.peer_ip,
+        user_id: None,
+        per_ip_incremented: false,
+        active_user_incremented: false,
+        _conn_permit: permit,
+    };
+
+    // Per-IP concurrent-connection cap.
+    {
+        let mut counts = state.conn_counts.lock_recover();
+        let count = counts.entry(handshake.peer_ip).or_insert(0);
+        if *count >= state.config.max_conns_per_ip {
+            tracing::warn!(
+                peer_ip = %handshake.peer_ip,
+                limit = state.config.max_conns_per_ip,
+                "tunnel rejected: per-IP connection limit reached"
+            );
+            return StatusCode::TOO_MANY_REQUESTS.into_response();
+        }
+        *count += 1;
+        guard.per_ip_incremented = true;
+    }
+
     let (user, is_new_user) =
         match ensure_user(&state, &handshake.username, &handshake.fingerprint).await {
             Ok(pair) => pair,
@@ -251,6 +347,37 @@ async fn tunnel_handler(
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
+
+    // Register in `active_users` and bump the active-session metric.
+    // Mirrors the auth_publickey block in the russh path.
+    {
+        let mut active_users = state.active_users.lock_recover();
+        if let Some(active) = active_users.get_mut(&user.id) {
+            active.connection_count += 1;
+            active.username = user.username.clone();
+            active.last_login_at = Instant::now();
+        } else {
+            active_users.insert(
+                user.id,
+                ActiveUser {
+                    username: user.username.clone(),
+                    connection_count: 1,
+                    last_login_at: Instant::now(),
+                },
+            );
+        }
+    }
+    metrics::add_ssh_session(1);
+    guard.user_id = Some(user.id);
+    guard.active_user_incremented = true;
+
+    // Broadcast the join. Subscribers attach in their own time; a send
+    // failure here just means no one was listening.
+    let _ = state.activity_feed.send(ActivityEvent {
+        username: user.username.clone(),
+        action: "joined".to_string(),
+        at: Instant::now(),
+    });
 
     tracing::info!(
         peer_ip = %peer_addr.ip(),
@@ -266,7 +393,7 @@ async fn tunnel_handler(
         "tunnel handshake accepted; running session"
     );
 
-    ws.on_upgrade(move |socket| handle_session(socket, handshake, user, is_new_user, state))
+    ws.on_upgrade(move |socket| handle_session(socket, handshake, user, is_new_user, state, guard))
 }
 
 async fn handle_session(
@@ -275,6 +402,7 @@ async fn handle_session(
     user: User,
     is_new_user: bool,
     state: State,
+    _guard: TunnelSessionGuard,
 ) {
     let frame_drop_log_every = state.config.frame_drop_log_every;
     let activity_feed_rx = Some(state.activity_feed.subscribe());
