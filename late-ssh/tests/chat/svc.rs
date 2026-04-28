@@ -316,9 +316,6 @@ async fn admin_can_toggle_message_pin() {
     let room = ChatRoom::ensure_general(&client)
         .await
         .expect("general room");
-    ChatRoomMember::join(&client, room.id, admin.id)
-        .await
-        .expect("join");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
@@ -361,9 +358,6 @@ async fn non_admin_cannot_toggle_message_pin() {
     let room = ChatRoom::ensure_general(&client)
         .await
         .expect("general room");
-    ChatRoomMember::join(&client, room.id, user.id)
-        .await
-        .expect("join");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
@@ -402,12 +396,6 @@ async fn pinned_messages_task_loads_global_pins() {
     let hidden_room = ChatRoom::get_or_create_public_room(&client, "pin-hidden")
         .await
         .expect("hidden room");
-    ChatRoomMember::join(&client, visible_room.id, author.id)
-        .await
-        .expect("join author visible");
-    ChatRoomMember::join(&client, hidden_room.id, author.id)
-        .await
-        .expect("join author hidden");
 
     let visible_message = ChatMessage::create(
         &client,

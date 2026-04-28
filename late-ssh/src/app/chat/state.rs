@@ -1369,8 +1369,7 @@ impl ChatState {
         if !self.pinned_rx.has_changed().unwrap_or(false) {
             return;
         }
-        let messages = self.pinned_rx.borrow_and_update().clone();
-        self.pinned_messages = self.filter_messages(messages);
+        self.pinned_messages = self.pinned_rx.borrow_and_update().clone();
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -1907,8 +1906,6 @@ impl ChatState {
             }
             messages.retain(|m| !ignored.contains(&m.user_id));
         }
-        self.pinned_messages
-            .retain(|m| !ignored.contains(&m.user_id));
         self.sync_selection();
     }
 }

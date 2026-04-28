@@ -787,28 +787,25 @@ impl ChatService {
         );
     }
 
-    #[tracing::instrument(skip(self))]
-    async fn load_pinned_messages(&self) -> Result<Vec<ChatMessage>> {
-        let _permit = self.read_permits.acquire().await?;
-        let client = self.db.get().await?;
-        ChatMessage::list_pinned(&client, PINNED_MESSAGES_LIMIT).await
-    }
-
     pub fn load_pinned_messages_task(&self, pinned_tx: watch::Sender<Vec<ChatMessage>>) {
         let service = self.clone();
         tokio::spawn(
             async move {
-                match service.load_pinned_messages().await {
+                let result = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    ChatMessage::list_pinned(&client, PINNED_MESSAGES_LIMIT).await
+                }
+                .await;
+                match result {
                     Ok(messages) => {
                         let _ = pinned_tx.send(messages);
                     }
-                    Err(e) => {
-                        late_core::error_span!(
-                            "chat_load_pinned_messages_failed",
-                            error = ?e,
-                            "failed to load pinned chat messages"
-                        );
-                    }
+                    Err(e) => late_core::error_span!(
+                        "chat_load_pinned_messages_failed",
+                        error = ?e,
+                        "failed to load pinned chat messages"
+                    ),
                 }
             }
             .instrument(info_span!("chat.load_pinned_messages_task")),
@@ -1042,7 +1039,19 @@ impl ChatService {
         let service = self.clone();
         tokio::spawn(
             async move {
-                if let Err(e) = service.toggle_message_pin(message_id, is_admin).await {
+                let result: Result<()> = async {
+                    if !is_admin {
+                        anyhow::bail!("admin-only");
+                    }
+                    let client = service.db.get().await?;
+                    let message = ChatMessage::get(&client, message_id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("message not found"))?;
+                    ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
+                    Ok(())
+                }
+                .await;
+                if let Err(e) = result {
                     late_core::error_span!(
                         "chat_pin_failed",
                         error = ?e,
@@ -1055,20 +1064,6 @@ impl ChatService {
                 message_id = %message_id
             )),
         );
-    }
-
-    #[tracing::instrument(skip(self), fields(message_id = %message_id, is_admin = is_admin))]
-    async fn toggle_message_pin(&self, message_id: Uuid, is_admin: bool) -> Result<()> {
-        if !is_admin {
-            anyhow::bail!("admin-only");
-        }
-
-        let client = self.db.get().await?;
-        let message = ChatMessage::get(&client, message_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("message not found"))?;
-        ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
-        Ok(())
     }
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, kind = kind))]
