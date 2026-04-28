@@ -19,8 +19,9 @@ use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
-use crate::app::state::{App, SessionConfig};
+use crate::app::state::App;
 use crate::metrics;
+use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
 use crate::session_io::{FrameSink, RusshFrameSink};
 use crate::state::{ActivityEvent, State};
 
@@ -516,192 +517,27 @@ impl russh::server::Handler for ClientHandler {
             .take()
             .ok_or_else(|| anyhow::anyhow!("cli session receiver missing during pty request"))?;
 
-        let article_service = self.state.article_service.clone();
-        let vote_service = self.state.vote_service.clone();
-        let chat_service = self.state.chat_service.clone();
-        let profile_service = self.state.profile_service.clone();
-        let twenty_forty_eight_service = self.state.twenty_forty_eight_service.clone();
-        let sudoku_service = self.state.sudoku_service.clone();
-        let nonogram_service = self.state.nonogram_service.clone();
-        let solitaire_service = self.state.solitaire_service.clone();
-        let nonogram_library = self.state.nonogram_library.clone();
+        let user = self.user.clone().ok_or_else(|| {
+            tracing::error!("pty request without authenticated user");
+            anyhow::anyhow!("unauthenticated pty request")
+        })?;
 
-        let user = match self.user.as_ref() {
-            Some(user) => user,
-            None => {
-                tracing::error!("pty request without authenticated user");
-                return Err(anyhow::anyhow!("unauthenticated pty request"));
-            }
-        };
-
-        let user_id = user.id;
-
-        let my_vote = match self.state.vote_service.get_user_vote(user_id).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to get user vote");
-                None
-            }
-        };
-
-        let initial_2048_game = match self
-            .state
-            .twenty_forty_eight_service
-            .load_game(user_id)
-            .await
-        {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load 2048 game state");
-                None
-            }
-        };
-        let initial_2048_high_score = match self
-            .state
-            .twenty_forty_eight_service
-            .load_high_score(user_id)
-            .await
-        {
-            Ok(score) => score,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load 2048 high score");
-                None
-            }
-        };
-        let initial_tetris_game = match self.state.tetris_service.load_game(user_id).await {
-            Ok(game) => game,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load tetris game state");
-                None
-            }
-        };
-        let initial_tetris_high_score =
-            match self.state.tetris_service.load_high_score(user_id).await {
-                Ok(score) => score,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load tetris high score");
-                    None
-                }
-            };
-
-        let initial_sudoku_games = match self.state.sudoku_service.load_games(user_id).await {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load sudoku game states");
-                Vec::new()
-            }
-        };
-        let initial_nonogram_games = match self.state.nonogram_service.load_games(user_id).await {
-            Ok(games) => games,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load nonogram game states");
-                Vec::new()
-            }
-        };
-        let initial_solitaire_games = match self.state.solitaire_service.load_games(user_id).await {
-            Ok(games) => games,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load solitaire game states");
-                Vec::new()
-            }
-        };
-        let initial_minesweeper_games =
-            match self.state.minesweeper_service.load_games(user_id).await {
-                Ok(games) => games,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load minesweeper game states");
-                    Vec::new()
-                }
-            };
-        let (initial_bonsai_tree, initial_bonsai_care) = match self
-            .state
-            .bonsai_service
-            .ensure_tree_with_care(user_id)
-            .await
-        {
-            Ok((tree, care)) => (Some(tree), Some(care)),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None)
-            }
-        };
-
-        // Grant daily chip stipend on login
-        let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
-            Ok(chips) => chips.balance,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to grant daily chip stipend");
-                0
-            }
-        };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
-        let app = crate::app::state::App::new(SessionConfig {
-            // Terminal / layout
-            cols: col_width as u16,
-            rows: row_height as u16,
-
-            // Services / data sources
-            vote_service,
-            chat_service,
-            notification_service: self.state.notification_service.clone(),
-            article_service,
-            showcase_service: self.state.showcase_service.clone(),
-            profile_service,
-            twenty_forty_eight_service,
-            initial_2048_game,
-            initial_2048_high_score,
-            tetris_service: self.state.tetris_service.clone(),
-            initial_tetris_game,
-            initial_tetris_high_score,
-            sudoku_service,
-            initial_sudoku_games,
-            nonogram_service,
-            initial_nonogram_games,
-            solitaire_service,
-            initial_solitaire_games,
-            minesweeper_service: self.state.minesweeper_service.clone(),
-            initial_minesweeper_games,
-            rooms_service: self.state.rooms_service.clone(),
-            blackjack_table_manager: self.state.blackjack_table_manager.clone(),
-            blackjack_service: self.state.blackjack_service.clone(),
-            dartboard_server: self.state.dartboard_server.clone(),
-            dartboard_provenance: self.state.dartboard_provenance.clone(),
-            artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
-                self.state.db.clone(),
-            ),
-            username: user.username.clone(),
-            bonsai_service: self.state.bonsai_service.clone(),
-            initial_bonsai_tree,
-            initial_bonsai_care,
-            nonogram_library,
-            initial_chip_balance,
-            leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),
-
-            // Session / connection
-            web_url: self.state.config.web_url.clone(),
-            session_token,
-            session_registry: Some(self.state.session_registry.clone()),
-            paired_client_registry: Some(self.state.paired_client_registry.clone()),
-            web_chat_registry: Some(self.state.web_chat_registry.clone()),
-            session_rx: Some(session_rx),
-            now_playing_rx: Some(self.state.now_playing_rx.clone()),
-            active_users: Some(self.state.active_users.clone()),
-            activity_feed_rx: self.activity_feed_rx.take(),
-            user_id,
-            is_admin: user.is_admin || self.state.config.force_admin,
-            is_mod: user.is_mod,
-
-            // Voting
-            my_vote,
-            is_new_user: self.is_new_user,
-
-            // Display config
-            initial_theme_id: late_ssh_theme_id(&user.settings),
-
-            // Server state
-            is_draining: self.state.is_draining.clone(),
-        })
-        .context("failed to initialize app for PTY session")?;
+        let session_config = build_session_config(
+            &self.state,
+            SessionBootstrapInputs {
+                user,
+                is_new_user: self.is_new_user,
+                cols: col_width as u16,
+                rows: row_height as u16,
+                session_token,
+                session_rx: Some(session_rx),
+                activity_feed_rx: self.activity_feed_rx.take(),
+            },
+        )
+        .await;
+        let app = crate::app::state::App::new(session_config)
+            .context("failed to initialize app for PTY session")?;
         self.app = Some(Arc::new(TokioMutex::new(app)));
         self.input_tx = Some(input_tx);
         self.input_rx = Some(input_rx);
@@ -1166,7 +1002,7 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
     Ok((user, is_new_user))
 }
 
-fn late_ssh_theme_id(settings: &Value) -> String {
+pub(crate) fn late_ssh_theme_id(settings: &Value) -> String {
     extract_theme_id(settings).unwrap_or_else(|| "late".to_string())
 }
 

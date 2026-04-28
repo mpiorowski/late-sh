@@ -4,6 +4,7 @@ pub mod config;
 pub mod dartboard;
 pub mod metrics;
 pub mod session;
+pub mod session_bootstrap;
 pub mod session_io;
 pub mod ssh;
 pub mod state;
