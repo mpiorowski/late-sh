@@ -24,6 +24,28 @@ services:
       timeout: 5s
       retries: 3
 
+  service-bastion:
+    build:
+      context: .
+      target: dev-bastion
+    container_name: late-bastion
+    ports:
+      - "${LATE_BASTION_SSH_PORT}:${LATE_BASTION_SSH_PORT}"
+    env_file: .env
+    volumes:
+      - .:/app
+      - cargo-registry-bastion:/usr/local/cargo/registry
+      - cargo-git-bastion:/usr/local/cargo/git
+      - cargo-target-bastion:/app/target
+    depends_on:
+      service-ssh:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/${LATE_BASTION_SSH_PORT}' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   service-web:
     build:
       context: .
@@ -96,3 +118,6 @@ volumes:
   cargo-registry-web:
   cargo-git-web:
   cargo-target-web:
+  cargo-registry-bastion:
+  cargo-git-bastion:
+  cargo-target-bastion:
