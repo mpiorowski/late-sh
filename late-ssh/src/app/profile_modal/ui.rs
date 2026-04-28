@@ -28,38 +28,24 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     frame.render_widget(Clear, popup);
 
     let layout = Layout::vertical([
-        Constraint::Length(1),
         Constraint::Min(10),
         Constraint::Length(FETCH_STRIP_HEIGHT),
         Constraint::Length(1),
     ])
     .split(popup);
 
-    draw_title(frame, layout[0], &state.title());
-
-    let wide = layout[1].width >= 80;
+    let wide = layout[0].width >= 80;
     if wide {
         let body = Layout::horizontal([Constraint::Min(50), Constraint::Length(BONSAI_CARD_WIDTH)])
-            .split(layout[1]);
+            .split(layout[0]);
         draw_profile_card(frame, body[0], state);
         draw_bonsai_card(frame, body[1], state.bonsai());
     } else {
-        draw_profile_card(frame, layout[1], state);
+        draw_profile_card(frame, layout[0], state);
     }
 
-    draw_late_fetch_strip(frame, layout[2], state);
-    draw_footer(frame, layout[3]);
-}
-
-fn draw_title(frame: &mut Frame, area: Rect, title: &str) {
-    let line = Line::from(Span::styled(
-        format!(" {} ", title),
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .add_modifier(Modifier::BOLD),
-    ))
-    .centered();
-    frame.render_widget(Paragraph::new(line), area);
+    draw_late_fetch_strip(frame, layout[1], state);
+    draw_footer(frame, layout[2]);
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect) {

@@ -104,19 +104,6 @@ impl ProfileModalState {
         self.bonsai.as_ref()
     }
 
-    pub fn title(&self) -> String {
-        if let Some(profile) = &self.profile
-            && !profile.username.trim().is_empty()
-        {
-            return format!("Profile · {}", profile.username.trim());
-        }
-        if self.fallback_name.trim().is_empty() {
-            "Profile".to_string()
-        } else {
-            format!("Profile · {}", self.fallback_name.trim())
-        }
-    }
-
     pub fn profile(&self) -> Option<&Profile> {
         self.profile.as_ref()
     }
