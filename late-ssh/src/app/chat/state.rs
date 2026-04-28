@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 
 use late_core::{
     MutexRecover,
@@ -8,7 +11,10 @@ use late_core::{
     },
 };
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{
+    broadcast::error::TryRecvError,
+    mpsc, watch,
+};
 use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
@@ -68,6 +74,7 @@ pub struct ChatState {
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
+    username_rx: watch::Receiver<Arc<Vec<String>>>,
     overlay: Option<Overlay>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
@@ -75,6 +82,7 @@ pub struct ChatState {
     room_tx: watch::Sender<Option<Uuid>>,
     refresh_tx: mpsc::UnboundedSender<()>,
     refresh_room_id: Option<Uuid>,
+    loading_tail_rooms: HashSet<Uuid>,
     pub(crate) selected_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
@@ -83,7 +91,7 @@ pub struct ChatState {
     pending_send_notices: VecDeque<Uuid>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
-    pub(crate) all_usernames: Vec<String>,
+    pub(crate) all_usernames: Arc<Vec<String>>,
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub(crate) selected_message_id: Option<Uuid>,
@@ -136,6 +144,7 @@ impl ChatState {
         showcase_service: showcase::svc::ShowcaseService,
     ) -> Self {
         let event_rx = service.subscribe_events();
+        let username_rx = service.subscribe_usernames();
         let (room_tx, room_rx) = watch::channel(None);
         let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
@@ -151,6 +160,7 @@ impl ChatState {
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
+            username_rx,
             overlay: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
@@ -158,6 +168,7 @@ impl ChatState {
             room_tx,
             refresh_tx,
             refresh_room_id: None,
+            loading_tail_rooms: HashSet::new(),
             selected_room_id: None,
             room_jump_active: false,
             composer: new_chat_textarea(),
@@ -166,7 +177,7 @@ impl ChatState {
             pending_send_notices: VecDeque::new(),
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
-            all_usernames: Vec::new(),
+            all_usernames: Arc::new(Vec::new()),
             bonsai_glyphs: HashMap::new(),
             message_reactions: HashMap::new(),
             selected_message_id: None,
@@ -223,6 +234,15 @@ impl ChatState {
     pub fn request_list(&mut self) {
         self.sync_refresh_room_id();
         let _ = self.refresh_tx.send(());
+        if let Some(room_id) = self.selected_room_id {
+            self.request_room_tail(room_id);
+        }
+    }
+
+    pub fn request_room_tail(&mut self, room_id: Uuid) {
+        if self.loading_tail_rooms.insert(room_id) {
+            self.service.load_room_tail_task(self.user_id, room_id);
+        }
     }
 
     fn sync_refresh_room_id(&mut self) {
@@ -1031,6 +1051,7 @@ impl ChatState {
 
     pub fn tick(&mut self) -> Option<Banner> {
         self.sync_refresh_room_id();
+        self.drain_username_directory();
         self.drain_snapshot();
         let banner = self.drain_events();
         let news_banner = self.news.tick();
@@ -1075,6 +1096,7 @@ impl ChatState {
         self.showcase_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
+        self.service.list_discover_rooms_task(self.user_id);
     }
 
     pub fn select_showcase(&mut self) {
@@ -1131,7 +1153,7 @@ impl ChatState {
         let query = &text[offset + 1..];
         let query_lower = query.to_ascii_lowercase();
         let active_users = self.active_users.as_ref();
-        let matches = rank_mention_matches(&self.all_usernames, &query_lower, || {
+        let matches = rank_mention_matches(self.all_usernames.as_ref(), &query_lower, || {
             online_username_set(active_users)
         });
 
@@ -1222,26 +1244,43 @@ impl ChatState {
             return;
         }
 
-        self.usernames = snapshot.usernames;
+        self.usernames.extend(snapshot.usernames);
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
-        self.discover.set_items(snapshot.discover_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
-        self.all_usernames = snapshot.all_usernames;
-        self.bonsai_glyphs = snapshot.bonsai_glyphs;
+        self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
         self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
         self.sync_selection();
     }
 
+    fn drain_username_directory(&mut self) {
+        if !self.username_rx.has_changed().unwrap_or(false) {
+            return;
+        }
+        self.all_usernames = self.username_rx.borrow_and_update().clone();
+    }
+
     fn drain_events(&mut self) -> Option<Banner> {
         let mut banner = None;
-        while let Ok(event) = self.event_rx.try_recv() {
+        loop {
+            let event = match self.event_rx.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Lagged(_)) => {
+                    if let Some(room_id) = self.visible_room_id {
+                        self.request_room_tail(room_id);
+                    }
+                    continue;
+                }
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
             match event {
                 ChatEvent::MessageCreated {
                     message,
                     target_user_ids,
+                    author_username,
+                    author_bonsai_glyph,
                 } => {
                     let is_targeted = target_user_ids.is_some();
                     if let Some(targets) = target_user_ids
@@ -1289,6 +1328,12 @@ impl ChatState {
                             }
                         }
                     }
+                    if let Some(username) = author_username {
+                        self.usernames.insert(message.user_id, username);
+                    }
+                    if let Some(glyph) = author_bonsai_glyph {
+                        self.bonsai_glyphs.insert(message.user_id, glyph);
+                    }
                     self.push_message(message);
                 }
                 ChatEvent::SendSucceeded {
@@ -1308,6 +1353,25 @@ impl ChatState {
                             self.push_message(message);
                         }
                     }
+                }
+                ChatEvent::RoomTailLoaded {
+                    user_id,
+                    room_id,
+                    messages,
+                    message_reactions,
+                    usernames,
+                    bonsai_glyphs,
+                } if self.user_id == user_id => {
+                    self.loading_tail_rooms.remove(&room_id);
+                    self.usernames.extend(usernames);
+                    self.bonsai_glyphs.extend(bonsai_glyphs);
+                    self.merge_room_tail(room_id, messages);
+                    for (message_id, reactions) in message_reactions {
+                        self.message_reactions.insert(message_id, reactions);
+                    }
+                }
+                ChatEvent::RoomTailLoadFailed { user_id, room_id } if self.user_id == user_id => {
+                    self.loading_tail_rooms.remove(&room_id);
                 }
                 ChatEvent::SendFailed {
                     user_id,
@@ -1406,13 +1470,27 @@ impl ChatState {
                 ChatEvent::MessageEdited {
                     message,
                     target_user_ids,
+                    author_username,
+                    author_bonsai_glyph,
                 } => {
                     if let Some(targets) = target_user_ids
                         && !targets.contains(&self.user_id)
                     {
                         continue;
                     }
+                    if let Some(username) = author_username {
+                        self.usernames.insert(message.user_id, username);
+                    }
+                    if let Some(glyph) = author_bonsai_glyph {
+                        self.bonsai_glyphs.insert(message.user_id, glyph);
+                    }
                     self.replace_message(message);
+                }
+                ChatEvent::DiscoverRoomsLoaded { user_id, rooms } if self.user_id == user_id => {
+                    self.discover.set_items(rooms);
+                }
+                ChatEvent::DiscoverRoomsFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
                 }
                 ChatEvent::MessageReactionsUpdated {
                     room_id: _,
@@ -1530,13 +1608,13 @@ impl ChatState {
         // Service snapshots are newest-first; keep same order for cheap appends at the front.
         let room_id = message.room_id;
         messages.insert(0, message);
-        if messages.len() > 1000 {
+        if messages.len() > 500 {
             let removed_ids: Vec<Uuid> = messages
                 .iter()
-                .skip(1000)
+                .skip(500)
                 .map(|message| message.id)
                 .collect();
-            messages.truncate(1000);
+            messages.truncate(500);
             for message_id in removed_ids {
                 self.message_reactions.remove(&message_id);
             }
@@ -1554,6 +1632,33 @@ impl ChatState {
             messages.retain(|m| m.id != message_id);
         }
         self.message_reactions.remove(&message_id);
+    }
+
+    fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
+        let Some((room, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id)
+        else {
+            return;
+        };
+
+        let mut merged = Vec::with_capacity(stored.len() + messages.len());
+        let mut seen = HashSet::new();
+        for message in messages.into_iter().chain(stored.iter().cloned()) {
+            if seen.insert(message.id) {
+                merged.push(message);
+            }
+        }
+        merged.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
+        merged.truncate(500);
+
+        *stored = if room.kind == "dm" {
+            merged
+        } else {
+            let ignored = &self.ignored_user_ids;
+            merged
+                .into_iter()
+                .filter(|message| !ignored.contains(&message.user_id))
+                .collect()
+        };
     }
 
     fn replace_message(&mut self, message: ChatMessage) {
