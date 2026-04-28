@@ -738,14 +738,9 @@ impl ChatService {
                         });
                     }
                     Err(e) => {
-                        let message = if e.to_string().contains("admin") {
-                            "Admin only: pin messages"
-                        } else {
-                            "Could not update pinned message."
-                        };
                         let _ = service.evt_tx.send(ChatEvent::MessagePinFailed {
                             user_id,
-                            message: message.to_string(),
+                            message: "Could not update pinned message.".to_string(),
                         });
                         late_core::error_span!(
                             "chat_pin_failed",

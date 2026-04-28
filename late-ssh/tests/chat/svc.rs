@@ -385,7 +385,7 @@ async fn non_admin_cannot_toggle_message_pin() {
     match event {
         ChatEvent::MessagePinFailed { user_id, message } => {
             assert_eq!(user_id, user.id);
-            assert_eq!(message, "Admin only: pin messages");
+            assert_eq!(message, "Could not update pinned message.");
         }
         other => panic!("expected message pin failed event, got {other:?}"),
     }

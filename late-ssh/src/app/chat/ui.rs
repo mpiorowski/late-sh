@@ -42,7 +42,6 @@ pub struct DashboardChatView<'a> {
     pub pinned_messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
     pub rows_cache: &'a mut ChatRowsCache,
-    pub pinned_rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
@@ -268,7 +267,7 @@ fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
     }
 }
 
-pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, mut view: DashboardChatView<'_>) {
+pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
         .max(composer_placeholder_lines(&ComposerBlockView {
@@ -293,36 +292,17 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, mut view: Dashboa
     let messages_area = layout[0];
     let composer_area = Some(layout[2]);
 
-    let (pinned_area, messages_area) = if !view.pinned_messages.is_empty()
-        && messages_area.height >= 5
-    {
-        let pinned_height = dashboard_pinned_height(
-            view.pinned_rows_cache,
-            view.pinned_messages,
-            messages_area.width.max(1) as usize,
-            ChatRowsContext {
-                current_user_id: view.current_user_id,
-                usernames: view.usernames,
-                countries: view.countries,
-                badges: view.badges,
-                bonsai_glyphs: view.bonsai_glyphs,
-                message_reactions: view.message_reactions,
-            },
-            messages_area.height,
-        );
-        if pinned_height > 0 {
-            let split = Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)])
-                .split(messages_area);
-            (Some(split[0]), split[1])
-        } else {
-            (None, messages_area)
-        }
+    let pinned_height = dashboard_pinned_height(view.pinned_messages, messages_area.height);
+    let (pinned_area, messages_area) = if pinned_height > 0 {
+        let split = Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)])
+            .split(messages_area);
+        (Some(split[0]), split[1])
     } else {
         (None, messages_area)
     };
 
     if let Some(area) = pinned_area {
-        draw_dashboard_pinned_messages(frame, area, &mut view);
+        draw_dashboard_pinned_messages(frame, area, view.pinned_messages);
     }
 
     let mut lines = Vec::new();
@@ -374,58 +354,67 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, mut view: Dashboa
     }
 }
 
-fn dashboard_pinned_height(
-    cache: &mut ChatRowsCache,
-    messages: &[ChatMessage],
-    width: usize,
-    ctx: ChatRowsContext<'_>,
-    available_height: u16,
-) -> u16 {
-    ensure_chat_rows_cache(cache, messages.iter().collect(), width, ctx);
-    let rows = cache.all_rows.len() as u16;
-    if rows == 0 {
+fn dashboard_pinned_height(messages: &[ChatMessage], available_height: u16) -> u16 {
+    if messages.is_empty() {
         return 0;
     }
-
-    let max_height = available_height.saturating_sub(3);
-    if max_height == 0 {
-        return 0;
-    }
-    rows.saturating_add(1).min(max_height)
+    // One row per pinned message + one bottom-border row separating it from chat.
+    let desired = (messages.len() as u16).saturating_add(1);
+    // Always leave at least 4 rows for the chat itself; otherwise hide the strip.
+    desired.min(available_height.saturating_sub(4))
 }
 
-fn draw_dashboard_pinned_messages(frame: &mut Frame, area: Rect, view: &mut DashboardChatView<'_>) {
-    if area.height == 0 {
+fn draw_dashboard_pinned_messages(frame: &mut Frame, area: Rect, messages: &[ChatMessage]) {
+    if area.height == 0 || messages.is_empty() {
         return;
     }
 
-    let title = Line::from(vec![
-        Span::styled(" pinned ", Style::default().fg(theme::AMBER())),
-        Span::styled(
-            format!("{}", view.pinned_messages.len()),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(title), Rect { height: 1, ..area });
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(theme::AMBER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    if area.height <= 1 {
+    if inner.height == 0 || inner.width == 0 {
         return;
     }
 
-    let rows_area = Rect {
-        y: area.y + 1,
-        height: area.height - 1,
-        ..area
-    };
-    let lines = visible_chat_rows(
-        view.pinned_rows_cache,
-        view.selected_message_id,
-        None,
-        rows_area.height as usize,
-    );
-    frame.render_widget(Paragraph::new(lines), rows_area);
+    let amber = Style::default().fg(theme::AMBER());
+    let body_style = Style::default().fg(theme::CHAT_BODY());
+    let body_width = (inner.width as usize).saturating_sub(2);
+
+    let lines: Vec<Line<'static>> = messages
+        .iter()
+        .take(inner.height as usize)
+        .map(|msg| {
+            let body = pinned_body_oneline(&msg.body, body_width);
+            Line::from(vec![
+                Span::styled("▌ ", amber),
+                Span::styled(body, body_style),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn pinned_body_oneline(body: &str, max_chars: usize) -> String {
+    let collapsed = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if max_chars == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = collapsed.chars().collect();
+    if chars.len() <= max_chars {
+        return collapsed;
+    }
+    let cut = max_chars.saturating_sub(3);
+    let mut out: String = chars.into_iter().take(cut).collect();
+    out.push_str("...");
+    out
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────

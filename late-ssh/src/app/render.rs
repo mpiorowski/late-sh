@@ -234,7 +234,6 @@ impl App {
                 pinned_messages: self.chat.pinned_messages(),
                 overlay: self.chat.overlay(),
                 rows_cache: &mut self.dashboard_chat_rows_cache,
-                pinned_rows_cache: &mut self.dashboard_pinned_rows_cache,
                 usernames: chat_usernames,
                 countries: chat_countries,
                 badges: &chat_badges,
