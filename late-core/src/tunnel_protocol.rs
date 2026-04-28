@@ -10,6 +10,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// HTTP headers sent by the bastion on the WS upgrade. Defined here so
+/// the backend (`late-ssh`) and client (`late-bastion`) reference the
+/// same constants — drift between the two would silently cause
+/// rejected handshakes that look like "bad header" on the server side.
+pub const HEADER_SECRET: &str = "x-late-secret";
+pub const HEADER_FINGERPRINT: &str = "x-late-fingerprint";
+pub const HEADER_USERNAME: &str = "x-late-username";
+pub const HEADER_PEER_IP: &str = "x-late-peer-ip";
+pub const HEADER_TERM: &str = "x-late-term";
+pub const HEADER_COLS: &str = "x-late-cols";
+pub const HEADER_ROWS: &str = "x-late-rows";
+pub const HEADER_RECONNECT: &str = "x-late-reconnect";
+pub const HEADER_SESSION_ID: &str = "x-late-session-id";
+
 /// Text-frame control message. Tagged on `t` so adding new variants is
 /// non-breaking as long as both ends are tolerant of unknown tags.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

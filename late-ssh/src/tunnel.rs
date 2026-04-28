@@ -49,17 +49,13 @@ use crate::state::{ActiveUser, ActivityEvent, State};
 /// repaint), matching the russh path's per-frame send timeout.
 const WS_OUT_BUFFER: usize = 8;
 
-/// Required client headers on the `/tunnel` upgrade. Captured here so the
-/// handler and tests stay in lockstep.
-pub const HEADER_SECRET: &str = "x-late-secret";
-pub const HEADER_FINGERPRINT: &str = "x-late-fingerprint";
-pub const HEADER_USERNAME: &str = "x-late-username";
-pub const HEADER_PEER_IP: &str = "x-late-peer-ip";
-pub const HEADER_TERM: &str = "x-late-term";
-pub const HEADER_COLS: &str = "x-late-cols";
-pub const HEADER_ROWS: &str = "x-late-rows";
-pub const HEADER_RECONNECT: &str = "x-late-reconnect";
-pub const HEADER_SESSION_ID: &str = "x-late-session-id";
+// Header names live in `late_core::tunnel_protocol` so the bastion and
+// backend reference the same constants. Re-exported here so existing
+// imports (`late_ssh::tunnel::HEADER_*`) keep working.
+pub use late_core::tunnel_protocol::{
+    HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT, HEADER_ROWS, HEADER_SECRET,
+    HEADER_SESSION_ID, HEADER_TERM, HEADER_USERNAME,
+};
 
 /// Validated handshake. Phase 2c will hand this to the session bootstrap.
 #[derive(Debug, Clone, PartialEq, Eq)]

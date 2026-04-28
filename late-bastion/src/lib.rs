@@ -8,4 +8,5 @@
 //! for the full design.
 
 pub mod config;
+pub mod handshake;
 pub mod ssh;
