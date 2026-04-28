@@ -5,7 +5,7 @@
 //! split once and reused across multiple WS sessions; on a retryable
 //! WS close (1000/1001/1006) or a transient dial error (TCP I/O,
 //! HTTP 5xx), we redial with exponential backoff and a 30-second
-//! total budget. Terminal close codes (4001/4002/4003) and HTTP 4xx
+//! total budget. Terminal close codes (4000–4003) and HTTP 4xx
 //! responses end the session.
 //!
 //! See `PERSISTENT-CONNECTION-GATEWAY.md` §4–§5.
@@ -131,9 +131,16 @@ enum PumpOutcome {
 
 fn classify_close_code(code: u16) -> PumpOutcome {
     // Per PERSISTENT-CONNECTION-GATEWAY.md §4 close-codes table.
+    //   1000 — graceful drain (SIGTERM); reconnect.
+    //   1001/1006 — going-away / abnormal; reconnect.
+    //   4000 — backend ended the session (user quit, render error).
+    //   4001/4002/4003 — kicked / banned / protocol error.
+    // Anything in the 4xxx range is a deliberate signal from the
+    // backend to stop; reconnecting would either loop on the same
+    // condition or surprise the user who just quit.
     match code {
         1000 | 1001 | 1006 => PumpOutcome::Retryable,
-        4001..=4003 => PumpOutcome::Terminal,
+        4000..=4003 => PumpOutcome::Terminal,
         // Conservative default: an unknown code is more likely a
         // misbehaving backend than a transient blip. End the session
         // so we don't retry into a loop on a code we don't understand.
@@ -506,6 +513,7 @@ mod tests {
         assert_eq!(classify_close_code(1006), PumpOutcome::Retryable);
 
         // Terminal: backend told us to give up.
+        assert_eq!(classify_close_code(4000), PumpOutcome::Terminal);
         assert_eq!(classify_close_code(4001), PumpOutcome::Terminal);
         assert_eq!(classify_close_code(4002), PumpOutcome::Terminal);
         assert_eq!(classify_close_code(4003), PumpOutcome::Terminal);

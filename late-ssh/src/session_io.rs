@@ -10,7 +10,7 @@
 //! counter and `force_full_repaint` logic) lives at the render-loop layer
 //! — the sink only reports whether each individual write completed.
 
-use axum::extract::ws::{CloseFrame, Message, close_code};
+use axum::extract::ws::{CloseFrame, Message};
 use russh::ChannelId;
 use russh::server::Handle;
 use std::future::Future;
@@ -21,6 +21,13 @@ use tokio::time::timeout;
 /// Per-frame send timeout. Matches the value `render_once` and
 /// `clean_disconnect` used inline before the seam refactor.
 const FRAME_SEND_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// WS close code emitted when the backend ends a session itself —
+/// user-initiated quit (`q,q`) or a render-loop error. The bastion
+/// classifies this as terminal and stops reconnecting. Distinct from
+/// 1000 (used by `/tunnel`'s drain path), which IS retryable. See
+/// `PERSISTENT-CONNECTION-GATEWAY.md` §4 close-codes table.
+const CLOSE_SESSION_ENDED: u16 = 4000;
 
 /// Transport surface used by `run_session`'s render loop.
 ///
@@ -103,7 +110,7 @@ impl FrameSink for WsFrameSink {
 
     async fn eof_close(&self) {
         let frame = CloseFrame {
-            code: close_code::NORMAL,
+            code: CLOSE_SESSION_ENDED,
             reason: "session ended".into(),
         };
         let _ = self.tx.send(Message::Close(Some(frame))).await;
@@ -148,14 +155,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ws_sink_eof_close_sends_normal_close() {
+    async fn ws_sink_eof_close_sends_terminal_session_ended() {
         let (tx, mut rx) = mpsc::channel(2);
         let sink = WsFrameSink::new(tx);
 
         sink.eof_close().await;
 
         match rx.recv().await {
-            Some(Message::Close(Some(frame))) => assert_eq!(frame.code, close_code::NORMAL),
+            Some(Message::Close(Some(frame))) => assert_eq!(frame.code, CLOSE_SESSION_ENDED),
             other => panic!("expected Close, got {other:?}"),
         }
     }
