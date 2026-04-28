@@ -8,6 +8,7 @@ services:
     ports:
       - "${LATE_SSH_PORT}:${LATE_SSH_PORT}"
       - "${LATE_API_PORT}:${LATE_API_PORT}"
+      - "${LATE_TUNNEL_PORT}:${LATE_TUNNEL_PORT}"
     env_file: .env
     volumes:
       - .:/app
