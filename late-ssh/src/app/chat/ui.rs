@@ -710,6 +710,7 @@ pub struct ChatRenderInput<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub selected_room_id: Option<Uuid>,
+    pub selected_room_tail_loading: bool,
     pub room_jump_active: bool,
     pub selected_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
@@ -1212,8 +1213,13 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 );
 
                 if lines.is_empty() {
+                    let empty_text = if view.selected_room_tail_loading {
+                        "Loading messages..."
+                    } else {
+                        "No messages yet"
+                    };
                     lines = vec![Line::from(Span::styled(
-                        "No messages yet",
+                        empty_text,
                         Style::default().fg(theme::TEXT_DIM()),
                     ))];
                 }
@@ -1406,6 +1412,7 @@ mod tests {
             message_reactions,
             unread_counts,
             selected_room_id,
+            selected_room_tail_loading: false,
             room_jump_active: false,
             selected_message_id: None,
             reaction_picker_active: false,

@@ -283,6 +283,10 @@ impl ChatState {
         self.visible_room_id
     }
 
+    pub fn is_room_tail_loading(&self, room_id: Uuid) -> bool {
+        self.loading_tail_rooms.contains(&room_id)
+    }
+
     pub fn set_visible_room_id(&mut self, room_id: Option<Uuid>) {
         self.visible_room_id = room_id;
     }

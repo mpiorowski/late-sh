@@ -288,6 +288,10 @@ impl App {
             message_reactions,
             unread_counts: &self.chat.unread_counts,
             selected_room_id: self.chat.selected_room_id,
+            selected_room_tail_loading: self
+                .chat
+                .selected_room_id
+                .is_some_and(|room_id| self.chat.is_room_tail_loading(room_id)),
             room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
