@@ -21,6 +21,7 @@ use tokio::time::{MissedTickBehavior, timeout};
 
 use crate::app::state::{App, SessionConfig};
 use crate::metrics;
+use crate::session_io::{FrameSink, RusshFrameSink};
 use crate::state::{ActivityEvent, State};
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -828,8 +829,7 @@ impl russh::server::Handler for ClientHandler {
             tokio::spawn(run_session(
                 app,
                 input_rx,
-                handle,
-                channel_id,
+                RusshFrameSink::new(handle, channel_id),
                 frame_drop_log_every,
                 signal,
             ));
@@ -932,15 +932,13 @@ impl russh::server::Handler for ClientHandler {
     }
 }
 
-/// Per-session render driver. Spawned from `shell_request`; owns the
-/// render loop until the app quits, the client EOFs, or the SSH handle
-/// errors. Pure extraction of what used to live inline inside
-/// `shell_request`'s `tokio::spawn` block.
-async fn run_session(
+/// Per-session render driver. Spawned from `shell_request` (russh path)
+/// and from the `/tunnel` handler in Phase 2c (WS path). Generic over
+/// `FrameSink` so both paths share this loop unchanged.
+async fn run_session<S: FrameSink>(
     app: Arc<TokioMutex<crate::app::state::App>>,
     mut input_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    handle: russh::server::Handle,
-    channel_id: ChannelId,
+    sink: S,
     frame_drop_log_every: u64,
     signal: Arc<RenderSignal>,
 ) {
@@ -964,8 +962,7 @@ async fn run_session(
         match render_once(
             &app,
             &mut input_rx,
-            &handle,
-            channel_id,
+            &sink,
             frame_drop_log_every,
             advance_world,
             &signal,
@@ -976,16 +973,14 @@ async fn run_session(
                 previous_render = Some(Instant::now());
                 if should_quit {
                     tracing::debug!("app requested quit, closing connection");
-                    clean_disconnect(&handle, channel_id).await;
+                    clean_disconnect(&sink).await;
                     break;
                 }
             }
             Err(err) => {
                 tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
-                let exit = App::leave_alt_screen();
-                let _ = timeout(Duration::from_millis(50), handle.data(channel_id, exit)).await;
-                let _ = handle.eof(channel_id).await;
-                let _ = handle.close(channel_id).await;
+                let _ = sink.send_frame(App::leave_alt_screen()).await;
+                sink.eof_close().await;
                 break;
             }
         }
@@ -1046,11 +1041,10 @@ async fn next_render_action(
     }
 }
 
-async fn render_once(
+async fn render_once<S: FrameSink>(
     app: &Arc<TokioMutex<crate::app::state::App>>,
     input_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
-    handle: &russh::server::Handle,
-    channel_id: ChannelId,
+    sink: &S,
     frame_drop_log_every: u64,
     advance_world: bool,
     signal: &RenderSignal,
@@ -1078,16 +1072,9 @@ async fn render_once(
         (frame, terminal_commands)
     };
 
-    let frame_sent = match timeout(Duration::from_millis(50), handle.data(channel_id, frame)).await
-    {
-        Ok(Ok(())) => true,
-        Ok(Err(err)) => {
-            return Err(anyhow::anyhow!(
-                "render_once: handle send failed: {:?}",
-                err
-            ));
-        }
-        Err(_) => {
+    let frame_sent = match sink.send_frame(frame).await {
+        Ok(true) => true,
+        Ok(false) => {
             let drops = FRAME_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             metrics::record_render_frame_drop();
             if drops.is_multiple_of(frame_drop_log_every) {
@@ -1095,6 +1082,7 @@ async fn render_once(
             }
             false
         }
+        Err(err) => return Err(err.context("render_once: frame send failed")),
     };
 
     if !frame_sent {
@@ -1109,37 +1097,26 @@ async fn render_once(
     }
 
     for command in terminal_commands {
-        match timeout(Duration::from_millis(50), handle.data(channel_id, command)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                return Err(anyhow::anyhow!(
-                    "render_once: terminal command send failed: {:?}",
-                    err
-                ));
-            }
-            Err(_) => {
+        match sink.send_frame(command).await {
+            Ok(true) => {}
+            Ok(false) => {
                 let drops = FRAME_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                 metrics::record_render_frame_drop();
                 if drops.is_multiple_of(frame_drop_log_every) {
                     tracing::debug!(drops, "frame drops (handle busy)");
                 }
             }
+            Err(err) => return Err(err.context("render_once: terminal command send failed")),
         }
     }
 
     Ok(false)
 }
 
-async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId) {
-    let exit = App::leave_alt_screen();
-    let _ = timeout(Duration::from_millis(50), handle.data(channel_id, exit)).await;
-    let _ = timeout(
-        Duration::from_millis(50),
-        handle.data(channel_id, EXIT_MESSAGE.as_bytes().to_vec()),
-    )
-    .await;
-    let _ = handle.eof(channel_id).await;
-    let _ = handle.close(channel_id).await;
+async fn clean_disconnect<S: FrameSink>(sink: &S) {
+    let _ = sink.send_frame(App::leave_alt_screen()).await;
+    let _ = sink.send_frame(EXIT_MESSAGE.as_bytes().to_vec()).await;
+    sink.eof_close().await;
 }
 
 // Updated helper to take State
