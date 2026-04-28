@@ -712,8 +712,10 @@ fn draw_mention_autocomplete(
         return;
     }
 
-    let visible = matches.len().min(8) as u16;
-    let width = 26u16.min(anchor.width);
+    let visible_count = matches.len().min(8);
+    let visible = visible_count as u16;
+    let is_commands = matches.first().is_some_and(|m| m.prefix == "/");
+    let width = if is_commands { 52 } else { 26 }.min(anchor.width);
     let height = visible + 2; // borders
     let x = anchor.x + 1;
     let y = anchor.y.saturating_sub(height);
@@ -721,14 +723,20 @@ fn draw_mention_autocomplete(
 
     frame.render_widget(Clear, popup);
 
+    let title = if is_commands {
+        " /commands "
+    } else {
+        " @mentions "
+    };
     let block = Block::default()
-        .title(" @mentions ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
     let items: Vec<Line> = matches
         .iter()
         .enumerate()
+        .skip(selected.saturating_sub(visible_count.saturating_sub(1)))
         .take(8)
         .map(|(i, m)| {
             let is_selected = i == selected;
@@ -740,7 +748,20 @@ fn draw_mention_autocomplete(
                 (false, false) => Style::default().fg(theme::TEXT_FAINT()),
             };
             let prefix = if is_selected { " > " } else { "   " };
-            Line::from(Span::styled(format!("{prefix}@{}", m.name), style))
+            let mut spans = vec![Span::styled(
+                format!("{prefix}{}{}", m.prefix, m.name),
+                style,
+            )];
+            if let Some(description) = m.description {
+                let name_width = m.prefix.len() + m.name.len();
+                let pad = " ".repeat(16usize.saturating_sub(name_width).max(2));
+                spans.push(Span::styled(pad, Style::default().fg(theme::TEXT_DIM())));
+                spans.push(Span::styled(
+                    description,
+                    Style::default().fg(theme::TEXT_DIM()),
+                ));
+            }
+            Line::from(spans)
         })
         .collect();
 

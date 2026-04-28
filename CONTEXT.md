@@ -1000,11 +1000,11 @@ Currently the SSH app assumes a single process. These in-memory structures would
 4. Keybinds (dashboard only): `[` / `]` cycle, `,` jumps to previously-active pin (Vim `C-^` style), `g<digit>` jumps to slot 1..9. The `g` prefix is session-local state on `App`; `handle_global_key` short-circuits digits 1-9 on dashboard while armed so the global screen switcher (`1`=Dashboard, `3`=Games, …) doesn't steal them.
 5. Membership churn: `SettingsModalState::open_from_profile` drops favorites whose room isn't in the current `available_rooms` catalog, so ghosts never linger in the UI. The resolver also falls back to general if a stored pin is no longer joined. Index is session-local (not persisted) and clamped on every read.
 
-**Chat @mention autocomplete:**
-1. Trigger: User types `@` in composer (at start or after space)
-2. Processing: `ChatState::update_autocomplete()` filters `all_usernames` (loaded from `users` via `ChatSnapshot`) case-insensitively by the query after `@`
-3. Interaction: Arrow keys navigate matches, Tab/Enter confirms (inserts `@username `), Esc dismisses popup without leaving compose mode
-4. Rendering: `draw_mention_autocomplete()` renders a popup above the composer with up to 8 filtered matches; confirm must also move `composer_cursor` to the end of the inserted mention including the trailing space
+**Chat composer autocomplete:**
+1. Trigger: User types `@` or `/` in the composer (at start or after space). Pressing `/` while not composing on Dashboard/Chat starts the chat composer for the active room and immediately opens the command list.
+2. Processing: `ChatState::update_autocomplete()` filters the shared username directory after `@`, or the static non-admin chat command catalog after `/`.
+3. Interaction: Arrow keys navigate matches, Tab/Enter confirms (inserts `@username ` or `/command `), Esc dismisses popup without leaving compose mode.
+4. Rendering: `draw_mention_autocomplete()` renders the shared popup above the composer with up to 8 filtered matches and scrolls that visible window with the selected row. Command matches are alphabetical and include a short description next to the command name. Confirm must also move `composer_cursor` to the end of the inserted token including the trailing space.
 
 **Vote round switch:**
 1. Trigger: VoteService background tick (5s) detects switch interval (default 60 min) elapsed since last switch

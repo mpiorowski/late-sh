@@ -38,6 +38,8 @@ const REACTION_OWNER_COLUMNS: usize = 3;
 pub struct MentionMatch {
     pub name: String,
     pub online: bool,
+    pub prefix: &'static str,
+    pub description: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -240,6 +242,14 @@ impl ChatState {
         self.reply_target = None;
         self.edited_message_id = None;
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
+    }
+
+    pub fn start_command_composer_in_room(&mut self, room_id: Uuid) {
+        self.start_composing_in_room(room_id);
+        self.composer = new_chat_textarea();
+        self.composer.insert_char('/');
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
+        self.update_autocomplete();
     }
 
     pub fn request_list(&mut self) {
@@ -1226,15 +1236,15 @@ impl ChatState {
     }
 
     pub fn update_autocomplete(&mut self) {
-        // Scan backward from end of composer to find a trigger `@`
+        // Scan backward from end of composer to find a trigger in the current token.
         let text = self.composer.lines().join("\n");
         let bytes = text.as_bytes();
-        let mut at_offset = None;
+        let mut trigger = None;
         for i in (0..bytes.len()).rev() {
-            if bytes[i] == b'@' {
+            if matches!(bytes[i], b'@' | b'/') {
                 // Valid if at start or preceded by whitespace (space or newline)
                 if i == 0 || bytes[i - 1].is_ascii_whitespace() {
-                    at_offset = Some(i);
+                    trigger = Some((i, bytes[i]));
                 }
                 break;
             }
@@ -1244,17 +1254,21 @@ impl ChatState {
             }
         }
 
-        let Some(offset) = at_offset else {
+        let Some((offset, trigger_byte)) = trigger else {
             self.mention_ac.active = false;
             return;
         };
 
         let query = &text[offset + 1..];
         let query_lower = query.to_ascii_lowercase();
-        let active_users = self.active_users.as_ref();
-        let matches = rank_mention_matches(self.all_usernames.as_ref(), &query_lower, || {
-            online_username_set(active_users)
-        });
+        let matches = if trigger_byte == b'@' {
+            let active_users = self.active_users.as_ref();
+            rank_mention_matches(self.all_usernames.as_ref(), &query_lower, || {
+                online_username_set(active_users)
+            })
+        } else {
+            rank_command_matches(&query_lower)
+        };
 
         if matches.is_empty() {
             self.mention_ac.active = false;
@@ -1284,11 +1298,14 @@ impl ChatState {
         if !self.mention_ac.active || self.mention_ac.matches.is_empty() {
             return;
         }
-        let username = self.mention_ac.matches[self.mention_ac.selected]
-            .name
-            .clone();
+        let selected = &self.mention_ac.matches[self.mention_ac.selected];
         let text = self.composer.lines().join("\n");
-        let next = format!("{}@{} ", &text[..self.mention_ac.trigger_offset], username);
+        let next = format!(
+            "{}{}{} ",
+            &text[..self.mention_ac.trigger_offset],
+            selected.prefix,
+            selected.name
+        );
         let composing = self.composing;
         self.composer = new_chat_textarea();
         self.composer.insert_str(next);
@@ -2087,6 +2104,8 @@ pub(crate) fn rank_mention_matches(
                 MentionMatch {
                     name,
                     online: is_online,
+                    prefix: "@",
+                    description: None,
                 },
             )
         })
@@ -2095,6 +2114,36 @@ pub(crate) fn rank_mention_matches(
         b.online.cmp(&a.online).then_with(|| a_lower.cmp(b_lower))
     });
     matches.into_iter().map(|(_, m)| m).collect()
+}
+
+const CHAT_COMMANDS: &[(&str, &str)] = &[
+    ("active", "active users"),
+    ("binds", "chat guide"),
+    ("dm", "open DM"),
+    ("exit", "quit confirm"),
+    ("ignore", "mute user"),
+    ("invite", "add user"),
+    ("leave", "leave room"),
+    ("list", "public rooms"),
+    ("members", "room members"),
+    ("music", "music help"),
+    ("private", "new private room"),
+    ("public", "open public room"),
+    ("settings", "open settings"),
+    ("unignore", "unmute user"),
+];
+
+fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {
+    CHAT_COMMANDS
+        .iter()
+        .filter(|(name, _)| name.starts_with(query_lower))
+        .map(|(name, description)| MentionMatch {
+            name: (*name).to_string(),
+            online: true,
+            prefix: "/",
+            description: Some(*description),
+        })
+        .collect()
 }
 
 fn format_active_user_lines(active_users: Option<&ActiveUsers>) -> Vec<String> {
@@ -2388,6 +2437,31 @@ mod tests {
             panic!("online_set should not be built when prefix filter is empty")
         });
         assert!(ranked.is_empty());
+    }
+
+    #[test]
+    fn rank_command_matches_lists_user_commands_for_empty_query() {
+        let ranked = rank_command_matches("");
+        let ranked_names = names(&ranked);
+        assert_eq!(
+            ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
+            vec!["active", "binds", "dm", "exit"]
+        );
+        let mut sorted = ranked_names.clone();
+        sorted.sort_unstable();
+        assert_eq!(ranked_names, sorted);
+        assert!(ranked.iter().all(|m| m.prefix == "/"));
+        assert!(ranked.iter().all(|m| m.description.is_some()));
+        assert!(!ranked_names.contains(&"create-room"));
+        assert!(!ranked_names.contains(&"delete-room"));
+        assert!(!ranked_names.contains(&"fill-room"));
+    }
+
+    #[test]
+    fn rank_command_matches_excludes_admin_commands() {
+        assert!(rank_command_matches("c").is_empty());
+        assert!(rank_command_matches("delete").is_empty());
+        assert!(rank_command_matches("fill").is_empty());
     }
 
     #[test]

@@ -924,6 +924,10 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
         return;
     }
 
+    if byte == b'/' && start_slash_command_composer(app, ctx.screen) {
+        return;
+    }
+
     if handle_global_key(app, ctx, byte) {
         app.chat.clear_message_selection();
         return;
@@ -1299,6 +1303,24 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
 
 fn compose_room_switch_allowed(screen: Screen) -> bool {
     screen == Screen::Chat
+}
+
+fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
+    let room_id = match screen {
+        Screen::Dashboard => app.dashboard_active_room_id(),
+        Screen::Chat => app.chat.selected_room_id,
+        _ => None,
+    };
+    let Some(room_id) = room_id else {
+        return false;
+    };
+
+    if screen == Screen::Chat {
+        app.chat
+            .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
+    }
+    app.chat.start_command_composer_in_room(room_id);
+    true
 }
 
 fn reset_composers_for_page_change(app: &mut App) {
