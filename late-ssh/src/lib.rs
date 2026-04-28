@@ -6,4 +6,5 @@ pub mod metrics;
 pub mod session;
 pub mod ssh;
 pub mod state;
+pub mod tunnel;
 pub mod web;

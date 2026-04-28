@@ -25,6 +25,7 @@ use late_ssh::{
     session::SessionRegistry,
     ssh,
     state::{ActivityEvent, State},
+    tunnel,
 };
 use tokio::{
     sync::{Semaphore, broadcast, watch},
@@ -257,6 +258,18 @@ async fn main() -> anyhow::Result<()> {
         api::run_api_server(api_state.config.api_port, api_state, Some(api_shutdown))
             .await
             .context("api server failed")
+    });
+
+    let tunnel_state = state.clone();
+    let tunnel_shutdown = session_shutdown.clone();
+    tasks.spawn(async move {
+        tunnel::run_tunnel_server(
+            tunnel_state.config.tunnel_port,
+            tunnel_state,
+            Some(tunnel_shutdown),
+        )
+        .await
+        .context("tunnel server failed")
     });
 
     tasks.spawn(async move {

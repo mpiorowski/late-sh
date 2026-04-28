@@ -33,6 +33,9 @@ pub struct Config {
     pub ssh_proxy_trusted_cidrs: Vec<IpNet>,
     pub ws_pair_max_attempts_per_ip: usize,
     pub ws_pair_rate_limit_window_secs: u64,
+    pub tunnel_port: u16,
+    pub tunnel_shared_secret: String,
+    pub tunnel_trusted_cidrs: Vec<IpNet>,
     pub ai: AiConfig,
 }
 
@@ -94,6 +97,12 @@ impl Config {
             proxy_protocol = self.ssh_proxy_protocol,
             trusted_cidrs = ?self.ssh_proxy_trusted_cidrs,
             "proxy: PROXY protocol for real client IP behind load balancer"
+        );
+        tracing::info!(
+            tunnel_port = self.tunnel_port,
+            trusted_cidrs = ?self.tunnel_trusted_cidrs,
+            secret_len = self.tunnel_shared_secret.len(),
+            "tunnel: bastion-only /tunnel WS listener (ClusterIP)"
         );
         tracing::info!(
             vote_switch_secs = self.vote_switch_interval_secs,
@@ -159,6 +168,18 @@ impl Config {
                 .collect::<anyhow::Result<Vec<_>>>()?,
             ws_pair_max_attempts_per_ip: required_parse("LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP")?,
             ws_pair_rate_limit_window_secs: required_parse("LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS")?,
+            tunnel_port: required_parse("LATE_TUNNEL_PORT")?,
+            tunnel_shared_secret: required("LATE_TUNNEL_SHARED_SECRET")?,
+            tunnel_trusted_cidrs: required("LATE_TUNNEL_TRUSTED_CIDRS")?
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    s.parse::<IpNet>().map_err(|e| {
+                        anyhow::anyhow!("LATE_TUNNEL_TRUSTED_CIDRS invalid entry '{s}': {e}")
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?,
             ai: AiConfig {
                 enabled: required_bool("LATE_AI_ENABLED")?,
                 api_key: ai_api_key,

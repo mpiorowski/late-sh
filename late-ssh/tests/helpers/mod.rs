@@ -73,6 +73,9 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ssh_proxy_trusted_cidrs: vec![],
         ws_pair_max_attempts_per_ip: 30,
         ws_pair_rate_limit_window_secs: 60,
+        tunnel_port: 0,
+        tunnel_shared_secret: "test-secret".to_string(),
+        tunnel_trusted_cidrs: vec![],
         ai: AiConfig {
             enabled: false,
             api_key: None,
