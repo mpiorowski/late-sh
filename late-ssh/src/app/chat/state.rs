@@ -11,10 +11,7 @@ use late_core::{
     },
 };
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
-use tokio::sync::{
-    broadcast::error::TryRecvError,
-    mpsc, watch,
-};
+use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
