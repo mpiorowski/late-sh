@@ -2754,6 +2754,7 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-postgres",
+ "tokio-tungstenite 0.28.0",
  "tower-http",
  "tracing",
  "tracing-opentelemetry",

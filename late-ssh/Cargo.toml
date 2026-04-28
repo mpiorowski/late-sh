@@ -63,3 +63,4 @@ opentelemetry-http = { workspace = true, optional = true }
 [dev-dependencies]
 late-core = { workspace = true, features = ["testing"] }
 rstest.workspace = true
+tokio-tungstenite = { workspace = true }
