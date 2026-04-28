@@ -349,19 +349,12 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     }
 }
 
-pub(crate) fn dashboard_pinned_height(
-    messages: &[ChatMessage],
-    available_height: u16,
-    width: u16,
-) -> u16 {
-    if messages.is_empty() || width <= 2 {
+pub(crate) fn dashboard_pinned_height(message_count: usize, available_height: u16) -> u16 {
+    if message_count == 0 {
         return 0;
     }
-    // +1 for the bottom border that closes the strip.
-    let desired = pinned_body_lines(messages, width as usize)
-        .len()
-        .saturating_add(1) as u16;
-    // Always leave at least 4 rows for the chat itself; otherwise hide the strip.
+    // +1 for the bottom border. Always leave 4 rows for chat below.
+    let desired = message_count.saturating_add(1) as u16;
     desired.min(available_height.saturating_sub(4))
 }
 
@@ -384,42 +377,24 @@ pub(crate) fn draw_dashboard_pinned_messages(
         return;
     }
 
-    let lines = pinned_body_lines(messages, inner.width as usize);
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-/// Render the pinned-strip body for `messages`: each message contributes one
-/// or more rows, splitting on `\n` (no stripping) and soft-wrapping each line
-/// to `width`. The first row of every message is prefixed with an amber
-/// `▌ `; continuation rows use a 2-space indent so message boundaries stay
-/// visually scannable without a separator gap.
-fn pinned_body_lines(messages: &[ChatMessage], width: usize) -> Vec<Line<'static>> {
     let amber = Style::default().fg(theme::AMBER());
     let body_style = Style::default().fg(theme::CHAT_BODY());
-    let body_width = width.saturating_sub(2).max(1);
-    let mut lines = Vec::new();
-
-    for msg in messages {
-        let mut first_row_of_msg = true;
-        for raw_line in msg.body.split('\n') {
-            let chunks = if raw_line.trim().is_empty() {
-                vec![String::new()]
-            } else {
-                wrap_plain_line(raw_line, body_width)
-            };
-            for chunk in chunks {
-                let prefix = if first_row_of_msg {
-                    Span::styled("▌ ", amber)
-                } else {
-                    Span::raw("  ")
-                };
-                lines.push(Line::from(vec![prefix, Span::styled(chunk, body_style)]));
-                first_row_of_msg = false;
-            }
-        }
-    }
-
-    lines
+    let body_width = inner.width.saturating_sub(2).max(1) as usize;
+    let lines: Vec<Line<'static>> = messages
+        .iter()
+        .map(|msg| {
+            let first_line = msg.body.split('\n').next().unwrap_or("");
+            let body_text = wrap_plain_line(first_line, body_width)
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            Line::from(vec![
+                Span::styled("▌ ", amber),
+                Span::styled(body_text, body_style),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────

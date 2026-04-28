@@ -1573,7 +1573,6 @@ impl ChatState {
                     message_id,
                 } => {
                     self.remove_message(room_id, message_id);
-                    self.remove_pinned_message(message_id);
                     if self.user_id == user_id {
                         banner = Some(Banner::success("Message deleted"));
                     }
@@ -1595,8 +1594,7 @@ impl ChatState {
                     if let Some(glyph) = author_bonsai_glyph {
                         self.bonsai_glyphs.insert(message.user_id, glyph);
                     }
-                    self.replace_message(message.clone());
-                    self.apply_pinned_message(message);
+                    self.replace_message(message);
                 }
                 ChatEvent::DiscoverRoomsLoaded { user_id, rooms } if self.user_id == user_id => {
                     self.discover.set_items(rooms);
@@ -1767,10 +1765,6 @@ impl ChatState {
         self.message_reactions.remove(&message_id);
     }
 
-    fn remove_pinned_message(&mut self, message_id: Uuid) {
-        self.pinned_messages.retain(|m| m.id != message_id);
-    }
-
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
         let Some((room, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id)
         else {
@@ -1806,15 +1800,6 @@ impl ChatState {
             && let Some(existing) = messages.iter_mut().find(|m| m.id == message.id)
         {
             *existing = message;
-        }
-    }
-
-    fn apply_pinned_message(&mut self, message: ChatMessage) {
-        self.remove_pinned_message(message.id);
-        if message.pinned {
-            self.pinned_messages.push(message);
-            self.pinned_messages
-                .sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
         }
     }
 
@@ -1871,7 +1856,6 @@ impl ChatState {
             .rooms
             .iter()
             .flat_map(|(_, messages)| messages.iter().map(|message| message.id))
-            .chain(self.pinned_messages.iter().map(|message| message.id))
             .collect();
         let mut merged: HashMap<Uuid, Vec<ChatMessageReactionSummary>> = self
             .message_reactions

@@ -112,11 +112,11 @@ pub(crate) fn favorites_strip_hit_test(
     area: Rect,
     show_header: bool,
     pins: &[(uuid::Uuid, String, bool, i64)],
-    pinned_messages: &[ChatMessage],
+    pinned_count: usize,
     x: u16,
     y: u16,
 ) -> Option<uuid::Uuid> {
-    let strip_area = favorites_strip_area(area, show_header, pins, pinned_messages)?;
+    let strip_area = favorites_strip_area(area, show_header, pins, pinned_count)?;
     if y != strip_area.y || x < strip_area.x || x >= strip_area.right() {
         return None;
     }
@@ -159,7 +159,7 @@ fn draw_chat_section(
 ) {
     let mut remaining = area;
 
-    let pinned_height = dashboard_pinned_height(pinned_messages, remaining.height, remaining.width);
+    let pinned_height = dashboard_pinned_height(pinned_messages.len(), remaining.height);
     if pinned_height > 0 {
         let split = Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)])
             .split(remaining);
@@ -183,7 +183,7 @@ fn favorites_strip_area(
     area: Rect,
     show_header: bool,
     pins: &[(uuid::Uuid, String, bool, i64)],
-    pinned_messages: &[ChatMessage],
+    pinned_count: usize,
 ) -> Option<Rect> {
     if pins.len() < 2 {
         return None;
@@ -199,7 +199,7 @@ fn favorites_strip_area(
         area
     };
 
-    let pinned_height = dashboard_pinned_height(pinned_messages, chat_area.height, chat_area.width);
+    let pinned_height = dashboard_pinned_height(pinned_count, chat_area.height);
     let after_pinned = if pinned_height > 0 {
         Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)]).split(chat_area)
             [1]
@@ -599,15 +599,15 @@ mod tests {
         let area = Rect::new(1, 1, 74, 30);
 
         assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, &[], 10, 6),
+            favorites_strip_hit_test(area, true, &pins, 0, 10, 6),
             Some(rust_room)
         );
         assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, &[], 18, 6),
+            favorites_strip_hit_test(area, true, &pins, 0, 18, 6),
             Some(go_room)
         );
         assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, &[], 40, 6),
+            favorites_strip_hit_test(area, true, &pins, 0, 40, 6),
             None
         );
     }
@@ -618,7 +618,7 @@ mod tests {
         let pins = vec![(room, "#rust".to_string(), true, 0)];
 
         assert_eq!(
-            favorites_strip_hit_test(Rect::new(1, 1, 74, 30), true, &pins, &[], 5, 7),
+            favorites_strip_hit_test(Rect::new(1, 1, 74, 30), true, &pins, 0, 5, 7),
             None
         );
         assert_eq!(
@@ -629,7 +629,7 @@ mod tests {
                     (room, "#rust".to_string(), true, 0),
                     (Uuid::now_v7(), "#go".to_string(), false, 0)
                 ],
-                &[],
+                0,
                 5,
                 1
             ),
