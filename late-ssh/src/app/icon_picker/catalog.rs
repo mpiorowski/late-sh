@@ -158,6 +158,10 @@ impl IconCatalogData {
                 let sections = filter_sections(&self.emoji_sections, query);
                 f(&sections)
             }
+            IconPickerTab::Kaomoji => {
+                let sections = filter_sections(&self.kaomoji_sections, query);
+                f(&sections)
+            }
             IconPickerTab::Unicode => {
                 let query = query.trim();
                 if query.is_empty() {

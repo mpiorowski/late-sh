@@ -367,7 +367,7 @@ fn entry_line(entry: &IconEntry, is_selected: bool, width: u16) -> Line<'static>
                 format!(" {icon} "),
                 Style::default()
                     .fg(theme::TEXT_BRIGHT())
-                    .bg(theme::BG_HIGHLIGHT()),
+                    .bg(theme::BG_HIGHLIGHT()), 
             ),
             Span::styled(
                 name.clone(),
@@ -521,6 +521,8 @@ mod tests {
     #[test]
     fn tab_navigation_cycles_forward_and_back() {
         let mut state = IconPickerState::default();
+        state.next_tab();
+        assert_eq!(state.tab, IconPickerTab::Kaomoji);
         state.next_tab();
         assert_eq!(state.tab, IconPickerTab::Unicode);
         state.next_tab();

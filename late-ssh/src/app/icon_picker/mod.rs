@@ -20,13 +20,15 @@ pub const DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IconPickerTab {
     Emoji,
+    Kaomoji,
     Unicode,
     NerdFont,
 }
 
 impl IconPickerTab {
-    pub const ALL: [IconPickerTab; 3] = [
+    pub const ALL: [IconPickerTab; 4] = [
         IconPickerTab::Emoji,
+        IconPickerTab::Kaomoji,
         IconPickerTab::Unicode,
         IconPickerTab::NerdFont,
     ];
@@ -34,6 +36,7 @@ impl IconPickerTab {
     pub fn label(self) -> &'static str {
         match self {
             Self::Emoji => "emoji",
+            Self::Kaomoji => "kaomoji",
             Self::Unicode => "unicode",
             Self::NerdFont => "nerd font",
         }
