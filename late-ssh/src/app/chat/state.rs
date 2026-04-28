@@ -1599,21 +1599,6 @@ impl ChatState {
                     self.replace_message(message.clone());
                     self.apply_pinned_message(message);
                 }
-                ChatEvent::MessagePinUpdated { user_id, message } => {
-                    self.replace_message(message.clone());
-                    self.apply_pinned_message(message.clone());
-                    if self.user_id == user_id {
-                        let label = if message.pinned {
-                            "Message pinned"
-                        } else {
-                            "Message unpinned"
-                        };
-                        banner = Some(Banner::success(label));
-                    }
-                }
-                ChatEvent::MessagePinFailed { user_id, message } if self.user_id == user_id => {
-                    banner = Some(Banner::error(&message));
-                }
                 ChatEvent::DiscoverRoomsLoaded { user_id, rooms } if self.user_id == user_id => {
                     self.discover.set_items(rooms);
                 }

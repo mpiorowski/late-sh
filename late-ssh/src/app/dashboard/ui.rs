@@ -159,12 +159,10 @@ fn draw_chat_section(
 ) {
     let mut remaining = area;
 
-    let pinned_height =
-        dashboard_pinned_height(pinned_messages, remaining.height, remaining.width);
+    let pinned_height = dashboard_pinned_height(pinned_messages, remaining.height, remaining.width);
     if pinned_height > 0 {
-        let split =
-            Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)])
-                .split(remaining);
+        let split = Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)])
+            .split(remaining);
         draw_dashboard_pinned_messages(frame, split[0], pinned_messages);
         remaining = split[1];
     }
@@ -201,11 +199,10 @@ fn favorites_strip_area(
         area
     };
 
-    let pinned_height =
-        dashboard_pinned_height(pinned_messages, chat_area.height, chat_area.width);
+    let pinned_height = dashboard_pinned_height(pinned_messages, chat_area.height, chat_area.width);
     let after_pinned = if pinned_height > 0 {
-        Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)])
-            .split(chat_area)[1]
+        Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)]).split(chat_area)
+            [1]
     } else {
         chat_area
     };

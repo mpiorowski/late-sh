@@ -310,7 +310,6 @@ async fn admin_can_toggle_message_pin() {
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut events = service.subscribe_events();
     let client = test_db.db.get().await.expect("db client");
 
     let admin = create_test_user(&test_db.db, "pin_admin").await;
@@ -333,20 +332,20 @@ async fn admin_can_toggle_message_pin() {
 
     service.toggle_message_pin_task(admin.id, message.id, true);
 
-    let event = timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("event timeout")
-        .expect("event");
-    match event {
-        ChatEvent::MessagePinUpdated {
-            user_id, message, ..
-        } => {
-            assert_eq!(user_id, admin.id);
-            assert_eq!(message.body, "pin me");
-            assert!(message.pinned);
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let updated = ChatMessage::get(&client, message.id)
+                .await
+                .expect("load message")
+                .expect("message exists");
+            if updated.pinned {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        other => panic!("expected message pin updated event, got {other:?}"),
-    }
+    })
+    .await
+    .expect("pin timeout");
 }
 
 #[tokio::test]
@@ -356,7 +355,6 @@ async fn non_admin_cannot_toggle_message_pin() {
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut events = service.subscribe_events();
     let client = test_db.db.get().await.expect("db client");
 
     let user = create_test_user(&test_db.db, "pin_non_admin").await;
@@ -379,17 +377,12 @@ async fn non_admin_cannot_toggle_message_pin() {
 
     service.toggle_message_pin_task(user.id, message.id, false);
 
-    let event = timeout(Duration::from_secs(2), events.recv())
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let updated = ChatMessage::get(&client, message.id)
         .await
-        .expect("event timeout")
-        .expect("event");
-    match event {
-        ChatEvent::MessagePinFailed { user_id, message } => {
-            assert_eq!(user_id, user.id);
-            assert_eq!(message, "Could not update pinned message.");
-        }
-        other => panic!("expected message pin failed event, got {other:?}"),
-    }
+        .expect("load message")
+        .expect("message exists");
+    assert!(!updated.pinned);
 }
 
 #[tokio::test]

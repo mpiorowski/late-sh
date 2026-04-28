@@ -123,14 +123,6 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
-    MessagePinUpdated {
-        user_id: Uuid,
-        message: ChatMessage,
-    },
-    MessagePinFailed {
-        user_id: Uuid,
-        message: String,
-    },
     MessageReactionsUpdated {
         room_id: Uuid,
         message_id: Uuid,
@@ -1050,26 +1042,15 @@ impl ChatService {
         let service = self.clone();
         tokio::spawn(
             async move {
-                match service
+                if let Err(e) = service
                     .toggle_message_pin(user_id, message_id, is_admin)
                     .await
                 {
-                    Ok(message) => {
-                        let _ = service
-                            .evt_tx
-                            .send(ChatEvent::MessagePinUpdated { user_id, message });
-                    }
-                    Err(e) => {
-                        let _ = service.evt_tx.send(ChatEvent::MessagePinFailed {
-                            user_id,
-                            message: "Could not update pinned message.".to_string(),
-                        });
-                        late_core::error_span!(
-                            "chat_pin_failed",
-                            error = ?e,
-                            "failed to toggle message pin"
-                        );
-                    }
+                    late_core::error_span!(
+                        "chat_pin_failed",
+                        error = ?e,
+                        "failed to toggle message pin"
+                    );
                 }
             }
             .instrument(info_span!(
@@ -1086,7 +1067,7 @@ impl ChatService {
         user_id: Uuid,
         message_id: Uuid,
         is_admin: bool,
-    ) -> Result<ChatMessage> {
+    ) -> Result<()> {
         if !is_admin {
             anyhow::bail!("admin-only");
         }
@@ -1100,8 +1081,8 @@ impl ChatService {
             anyhow::bail!("user is not a member of room");
         }
 
-        let updated = ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
-        Ok(updated)
+        ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
+        Ok(())
     }
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, kind = kind))]
