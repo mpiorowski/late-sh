@@ -16,15 +16,9 @@ pub struct DiscoverListView<'a> {
 const ITEM_HEIGHT: u16 = 5;
 
 pub fn draw_discover_list(frame: &mut Frame, area: Rect, view: &DiscoverListView<'_>) {
-    let selected = if view.items.is_empty() {
-        0
-    } else {
-        view.selected_index.min(view.items.len() - 1) + 1
-    };
-    let title = format!(" Discover ({selected}/{}) ", view.items.len());
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(title)
+        .title(" Discover ")
         .border_style(Style::default().fg(theme::BORDER()));
 
     let inner_area = block.inner(area);

@@ -970,11 +970,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         } else {
             Style::default().fg(theme::TEXT())
         };
-        let label = if !view.discover_view.items.is_empty() {
-            format!("{prefix}discover ({})", view.discover_view.items.len())
-        } else {
-            format!("{prefix}discover")
-        };
+        let label = format!("{prefix}discover");
         Line::from(Span::styled(label, style))
     };
     push_row(
