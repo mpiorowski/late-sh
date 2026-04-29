@@ -1,3 +1,4 @@
+use late_core::models::bonsai::Tree;
 use late_core::models::profile::Profile;
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -13,6 +14,7 @@ pub struct ProfileModalState {
     viewed_user_id: Option<Uuid>,
     fallback_name: String,
     profile: Option<Profile>,
+    bonsai: Option<Tree>,
     snapshot_rx: Option<watch::Receiver<ProfileSnapshot>>,
     scroll_offset: u16,
 }
@@ -35,6 +37,7 @@ impl ProfileModalState {
             viewed_user_id: None,
             fallback_name: String::new(),
             profile: None,
+            bonsai: None,
             snapshot_rx: None,
             scroll_offset: 0,
         }
@@ -46,7 +49,9 @@ impl ProfileModalState {
         self.fallback_name = fallback_name.into();
         self.scroll_offset = 0;
         let mut snapshot_rx = self.profile_service.subscribe_snapshot(user_id);
-        self.profile = profile_from_snapshot(snapshot_rx.borrow().clone(), Some(user_id));
+        let snapshot = snapshot_rx.borrow().clone();
+        self.profile = profile_from_snapshot(snapshot.clone(), Some(user_id));
+        self.bonsai = bonsai_from_snapshot(snapshot, Some(user_id));
         snapshot_rx.mark_changed();
         self.snapshot_rx = Some(snapshot_rx);
         self.profile_service.find_profile(user_id);
@@ -58,6 +63,7 @@ impl ProfileModalState {
         self.viewed_user_id = None;
         self.fallback_name.clear();
         self.profile = None;
+        self.bonsai = None;
         self.scroll_offset = 0;
         self.snapshot_rx = None;
     }
@@ -75,6 +81,7 @@ impl ProfileModalState {
             Ok(true) => {
                 let snapshot = rx.borrow_and_update();
                 self.profile = profile_from_snapshot(snapshot.clone(), self.viewed_user_id);
+                self.bonsai = bonsai_from_snapshot(snapshot.clone(), self.viewed_user_id);
             }
             Ok(false) => {}
             Err(e) => {
@@ -93,17 +100,8 @@ impl ProfileModalState {
             .collect()
     }
 
-    pub fn title(&self) -> String {
-        if let Some(profile) = &self.profile
-            && !profile.username.trim().is_empty()
-        {
-            return format!("Profile · {}", profile.username.trim());
-        }
-        if self.fallback_name.trim().is_empty() {
-            "Profile".to_string()
-        } else {
-            format!("Profile · {}", self.fallback_name.trim())
-        }
+    pub fn bonsai(&self) -> Option<&Tree> {
+        self.bonsai.as_ref()
     }
 
     pub fn profile(&self) -> Option<&Profile> {
@@ -136,6 +134,14 @@ fn profile_from_snapshot(
 ) -> Option<Profile> {
     if snapshot.user_id == viewed_user_id {
         snapshot.profile
+    } else {
+        None
+    }
+}
+
+fn bonsai_from_snapshot(snapshot: ProfileSnapshot, viewed_user_id: Option<Uuid>) -> Option<Tree> {
+    if snapshot.user_id == viewed_user_id {
+        snapshot.bonsai
     } else {
         None
     }

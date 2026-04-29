@@ -1,4 +1,5 @@
 use anyhow::Result;
+use late_core::models::bonsai::Tree;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::user::{User, sanitize_username_input};
 use tokio_postgres::error::SqlState;
@@ -25,6 +26,7 @@ pub struct ProfileService {
 pub struct ProfileSnapshot {
     pub user_id: Option<Uuid>,
     pub profile: Option<Profile>,
+    pub bonsai: Option<Tree>,
 }
 
 #[derive(Clone, Debug)]
@@ -107,11 +109,13 @@ impl ProfileService {
     async fn do_find_profile(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         let profile = Profile::load(&client, user_id).await?;
+        let bonsai = Tree::find_by_user_id(&client, user_id).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
                 user_id: Some(user_id),
                 profile: Some(profile),
+                bonsai,
             },
         )?;
         Ok(())
@@ -214,6 +218,7 @@ mod tests {
         let snapshot = ProfileSnapshot::default();
         assert_eq!(snapshot.user_id, None);
         assert!(snapshot.profile.is_none());
+        assert!(snapshot.bonsai.is_none());
     }
 
     #[test]
