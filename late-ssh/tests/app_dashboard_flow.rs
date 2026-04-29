@@ -30,7 +30,7 @@ async fn uppercase_b_on_dashboard_opens_cli_install_modal() {
 
     app.handle_input(b"b");
     assert!(
-        !render_plain(&mut app).contains("BUILD SOURCE"),
+        !render_plain(&mut app).contains("build from source"),
         "lowercase b should not open the CLI install modal"
     );
 
