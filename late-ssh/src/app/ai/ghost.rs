@@ -216,7 +216,7 @@ impl GhostService {
                 }
                 recv_result = events.recv() => {
                     match recv_result {
-                        Ok(ChatEvent::MessageCreated { message, target_user_ids }) => {
+                        Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
                             if message.user_id == bot.id {
                                 continue;
                             }
@@ -500,7 +500,7 @@ impl GhostService {
                 }
                 recv_result = events.recv() => {
                     match recv_result {
-                        Ok(ChatEvent::MessageCreated { message, target_user_ids }) => {
+                        Ok(ChatEvent::MessageCreated { message, target_user_ids, .. }) => {
                             if let Some(targets) = target_user_ids
                                 && !targets.contains(&gb.id)
                             {
@@ -792,6 +792,7 @@ impl GhostService {
                 show_dashboard_header: profile.show_dashboard_header,
                 show_right_sidebar: profile.show_right_sidebar,
                 show_games_sidebar: profile.show_games_sidebar,
+                show_settings_on_connect: profile.show_settings_on_connect,
                 favorite_room_ids: profile.favorite_room_ids,
             },
         )

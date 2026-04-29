@@ -1,14 +1,19 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 
 use late_core::{
     MutexRecover,
     models::{
-        article::NEWS_MARKER, chat_message::ChatMessage,
-        chat_message_reaction::ChatMessageReactionSummary, chat_room::ChatRoom,
+        article::NEWS_MARKER,
+        chat_message::ChatMessage,
+        chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
+        chat_room::ChatRoom,
     },
 };
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
-use tokio::sync::watch;
+use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
@@ -23,9 +28,12 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
+    ui_text::reaction_label,
 };
 
 pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
+const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
+const REACTION_OWNER_COLUMNS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionMatch {
@@ -73,15 +81,23 @@ pub struct ChatState {
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pinned_messages: Vec<ChatMessage>,
     general_room_id: Option<Uuid>,
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
+    username_rx: watch::Receiver<Arc<Vec<String>>>,
+    pinned_rx: watch::Receiver<Vec<ChatMessage>>,
+    pinned_tx: watch::Sender<Vec<ChatMessage>>,
     overlay: Option<Overlay>,
+    pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
     visible_room_id: Option<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
+    refresh_tx: mpsc::UnboundedSender<()>,
+    refresh_room_id: Option<Uuid>,
+    loading_tail_rooms: HashSet<Uuid>,
     pub(crate) selected_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
@@ -90,7 +106,7 @@ pub struct ChatState {
     pending_send_notices: VecDeque<Uuid>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
-    pub(crate) all_usernames: Vec<String>,
+    pub(crate) all_usernames: Arc<Vec<String>>,
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub(crate) selected_message_id: Option<Uuid>,
@@ -144,10 +160,11 @@ impl ChatState {
         article_service: news::svc::ArticleService,
         showcase_service: showcase::svc::ShowcaseService,
     ) -> Self {
-        let snapshot_rx = service.subscribe_state();
         let event_rx = service.subscribe_events();
+        let username_rx = service.subscribe_usernames();
+        let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
         let (room_tx, room_rx) = watch::channel(None);
-        let bg_task = service.start_user_refresh_task(user_id, room_rx);
+        let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
         Self {
             service,
@@ -158,15 +175,23 @@ impl ChatState {
             snapshot_rx,
             event_rx,
             rooms: Vec::new(),
+            pinned_messages: Vec::new(),
             general_room_id: None,
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
+            username_rx,
+            pinned_rx,
+            pinned_tx,
             overlay: None,
+            pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             visible_room_id: None,
             room_tx,
+            refresh_tx,
+            refresh_room_id: None,
+            loading_tail_rooms: HashSet::new(),
             selected_room_id: None,
             room_jump_active: false,
             composer: new_chat_textarea(),
@@ -175,7 +200,7 @@ impl ChatState {
             pending_send_notices: VecDeque::new(),
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
-            all_usernames: Vec::new(),
+            all_usernames: Arc::new(Vec::new()),
             bonsai_glyphs: HashMap::new(),
             message_reactions: HashMap::new(),
             selected_message_id: None,
@@ -235,9 +260,30 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
     }
 
-    pub fn request_list(&self) {
+    pub fn request_list(&mut self) {
+        self.sync_refresh_room_id();
+        let _ = self.refresh_tx.send(());
+        if let Some(room_id) = self.selected_room_id {
+            self.request_room_tail(room_id);
+        }
+    }
+
+    pub fn request_pinned_messages(&self) {
         self.service
-            .list_chats_task(self.user_id, self.selected_room_id);
+            .load_pinned_messages_task(self.pinned_tx.clone());
+    }
+
+    pub fn request_room_tail(&mut self, room_id: Uuid) {
+        if self.loading_tail_rooms.insert(room_id) {
+            self.service.load_room_tail_task(self.user_id, room_id);
+        }
+    }
+
+    fn sync_refresh_room_id(&mut self) {
+        if self.refresh_room_id != self.selected_room_id {
+            self.refresh_room_id = self.selected_room_id;
+            let _ = self.room_tx.send(self.selected_room_id);
+        }
     }
 
     pub fn sync_selection(&mut self) {
@@ -297,6 +343,7 @@ impl ChatState {
 
     pub fn close_overlay(&mut self) {
         self.overlay = None;
+        self.pending_reaction_owners_message_id = None;
     }
 
     pub fn scroll_overlay(&mut self, delta: i16) {
@@ -401,6 +448,22 @@ impl ChatState {
 
     pub fn is_reaction_leader_active(&self) -> bool {
         self.reaction_leader_active
+    }
+
+    pub fn open_selected_message_reactions_in_room(&mut self, room_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some(message_id) = self.selected_message_in_room(room_id).map(|m| m.id) else {
+            return false;
+        };
+
+        self.overlay = Some(Overlay::dismissible(
+            "Reactions",
+            vec!["Loading reactions…".to_string()],
+        ));
+        self.pending_reaction_owners_message_id = Some(message_id);
+        self.service
+            .list_reaction_owners_task(self.user_id, message_id);
+        true
     }
 
     pub fn begin_reply_to_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
@@ -521,6 +584,21 @@ impl ChatState {
         None
     }
 
+    pub fn toggle_pin_selected_message_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+        let message = self.selected_message_in_room(room_id)?;
+        if !self.is_admin {
+            return Some(Banner::error("Admin only: pin messages"));
+        }
+        self.service
+            .toggle_message_pin_task(message.id, self.is_admin);
+        let label = if message.pinned {
+            "Unpinning message..."
+        } else {
+            "Pinning message..."
+        };
+        Some(Banner::success(label))
+    }
+
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {
         self.rooms
             .iter()
@@ -581,72 +659,10 @@ impl ChatState {
     }
 
     /// Build the flat visual navigation order.
-    /// Order: core (general, announcements) → news → mentions → public rooms
-    /// (alpha) → private rooms (alpha) → DMs
+    /// Order: core (general, announcements) → news → showcases → mentions
+    /// → discover → public rooms (alpha) → private rooms (alpha) → DMs
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        let mut order = Vec::new();
-
-        // Core: permanent rooms, hardcoded order
-        let core_order = ["general", "announcements", "suggestions", "bugs"];
-        for slug in &core_order {
-            if let Some((room, _)) = self
-                .rooms
-                .iter()
-                .find(|(r, _)| r.permanent && r.slug.as_deref() == Some(slug))
-            {
-                order.push(RoomSlot::Room(room.id));
-            }
-        }
-        // Any other permanent rooms not in the hardcoded list
-        for (room, _) in &self.rooms {
-            if room.kind != "dm"
-                && room.permanent
-                && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
-            {
-                order.push(RoomSlot::Room(room.id));
-            }
-        }
-
-        // News
-        order.push(RoomSlot::News);
-
-        // Mentions / notifications
-        order.push(RoomSlot::Notifications);
-
-        // Showcase
-        order.push(RoomSlot::Showcase);
-
-        // Discover
-        order.push(RoomSlot::Discover);
-
-        // Public rooms (non-DM, non-permanent, alpha by slug)
-        let mut public: Vec<_> = self
-            .rooms
-            .iter()
-            .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
-            .collect();
-        public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-        order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-        // Private rooms (visibility=private, alpha by slug)
-        let mut private: Vec<_> = self
-            .rooms
-            .iter()
-            .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
-            .collect();
-        private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-        order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-        // DMs (sorted by display name to match nav rendering)
-        let mut dms: Vec<_> = self.rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
-        dms.sort_by(|(a, _), (b, _)| {
-            let name_a = self.dm_display_name(a);
-            let name_b = self.dm_display_name(b);
-            name_a.cmp(&name_b)
-        });
-        order.extend(dms.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-        order
+        visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames)
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -828,6 +844,56 @@ impl ChatState {
             return;
         }
         self.overlay = Some(Overlay::new(title, lines));
+    }
+
+    fn reaction_owner_lines(&self, owners: &[ChatMessageReactionOwners]) -> Vec<String> {
+        if owners.is_empty() {
+            return vec!["No reactions yet".to_string()];
+        }
+
+        let mut lines = Vec::new();
+        for reaction in owners {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            let count = reaction.user_ids.len();
+            let noun = if count == 1 { "reaction" } else { "reactions" };
+            lines.push(format!(
+                "{} {} {}",
+                reaction_label(reaction.kind),
+                count,
+                noun
+            ));
+
+            if reaction.user_ids.is_empty() {
+                lines.push("  unknown".to_string());
+                continue;
+            }
+            let mut labels: Vec<String> = reaction
+                .user_ids
+                .iter()
+                .take(REACTION_OWNER_DISPLAY_LIMIT)
+                .map(|user_id| {
+                    self.usernames
+                        .get(user_id)
+                        .map(|name| name.trim())
+                        .filter(|name| !name.is_empty())
+                        .map(|name| format!("@{name}"))
+                        .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(*user_id)))
+                })
+                .collect();
+            let hidden_count = reaction
+                .user_ids
+                .len()
+                .saturating_sub(REACTION_OWNER_DISPLAY_LIMIT);
+            if hidden_count > 0 {
+                labels.push(format!("[+{hidden_count} more]"));
+            }
+            for row in labels.chunks(REACTION_OWNER_COLUMNS) {
+                lines.push(format!("  {}", row.join(" ")));
+            }
+        }
+        lines
     }
 
     fn ignore_list_lines(&self) -> Vec<String> {
@@ -1145,8 +1211,10 @@ impl ChatState {
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
-        let _ = self.room_tx.send(self.selected_room_id);
+        self.sync_refresh_room_id();
+        self.drain_username_directory();
         self.drain_snapshot();
+        self.drain_pinned_messages();
         let banner = self.drain_events();
         let news_banner = self.news.tick();
         let notif_banner = self.notifications.tick();
@@ -1190,6 +1258,7 @@ impl ChatState {
         self.showcase_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
+        self.service.list_discover_rooms_task(self.user_id);
     }
 
     pub fn select_showcase(&mut self) {
@@ -1246,7 +1315,7 @@ impl ChatState {
         let query = &text[offset + 1..];
         let query_lower = query.to_ascii_lowercase();
         let active_users = self.active_users.as_ref();
-        let matches = rank_mention_matches(&self.all_usernames, &query_lower, || {
+        let matches = rank_mention_matches(self.all_usernames.as_ref(), &query_lower, || {
             online_username_set(active_users)
         });
 
@@ -1311,6 +1380,10 @@ impl ChatState {
             .unwrap_or(&[])
     }
 
+    pub fn pinned_messages(&self) -> &[ChatMessage] {
+        &self.pinned_messages
+    }
+
     pub fn usernames(&self) -> &HashMap<Uuid, String> {
         &self.usernames
     }
@@ -1337,26 +1410,50 @@ impl ChatState {
             return;
         }
 
-        self.usernames = snapshot.usernames;
+        self.usernames.extend(snapshot.usernames);
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
-        self.discover.set_items(snapshot.discover_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
-        self.all_usernames = snapshot.all_usernames;
-        self.bonsai_glyphs = snapshot.bonsai_glyphs;
+        self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
         self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
         self.sync_selection();
     }
 
+    fn drain_username_directory(&mut self) {
+        if !self.username_rx.has_changed().unwrap_or(false) {
+            return;
+        }
+        self.all_usernames = self.username_rx.borrow_and_update().clone();
+    }
+
+    fn drain_pinned_messages(&mut self) {
+        if !self.pinned_rx.has_changed().unwrap_or(false) {
+            return;
+        }
+        self.pinned_messages = self.pinned_rx.borrow_and_update().clone();
+    }
+
     fn drain_events(&mut self) -> Option<Banner> {
         let mut banner = None;
-        while let Ok(event) = self.event_rx.try_recv() {
+        loop {
+            let event = match self.event_rx.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Lagged(_)) => {
+                    if let Some(room_id) = self.visible_room_id {
+                        self.request_room_tail(room_id);
+                    }
+                    continue;
+                }
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
             match event {
                 ChatEvent::MessageCreated {
                     message,
                     target_user_ids,
+                    author_username,
+                    author_bonsai_glyph,
                 } => {
                     let is_targeted = target_user_ids.is_some();
                     if let Some(targets) = target_user_ids
@@ -1404,6 +1501,12 @@ impl ChatState {
                             }
                         }
                     }
+                    if let Some(username) = author_username {
+                        self.usernames.insert(message.user_id, username);
+                    }
+                    if let Some(glyph) = author_bonsai_glyph {
+                        self.bonsai_glyphs.insert(message.user_id, glyph);
+                    }
                     self.push_message(message);
                 }
                 ChatEvent::SendSucceeded {
@@ -1423,6 +1526,25 @@ impl ChatState {
                             self.push_message(message);
                         }
                     }
+                }
+                ChatEvent::RoomTailLoaded {
+                    user_id,
+                    room_id,
+                    messages,
+                    message_reactions,
+                    usernames,
+                    bonsai_glyphs,
+                } if self.user_id == user_id => {
+                    self.loading_tail_rooms.remove(&room_id);
+                    self.usernames.extend(usernames);
+                    self.bonsai_glyphs.extend(bonsai_glyphs);
+                    self.merge_room_tail(room_id, messages);
+                    for (message_id, reactions) in message_reactions {
+                        self.message_reactions.insert(message_id, reactions);
+                    }
+                }
+                ChatEvent::RoomTailLoadFailed { user_id, room_id } if self.user_id == user_id => {
+                    self.loading_tail_rooms.remove(&room_id);
                 }
                 ChatEvent::SendFailed {
                     user_id,
@@ -1521,13 +1643,27 @@ impl ChatState {
                 ChatEvent::MessageEdited {
                     message,
                     target_user_ids,
+                    author_username,
+                    author_bonsai_glyph,
                 } => {
                     if let Some(targets) = target_user_ids
                         && !targets.contains(&self.user_id)
                     {
                         continue;
                     }
+                    if let Some(username) = author_username {
+                        self.usernames.insert(message.user_id, username);
+                    }
+                    if let Some(glyph) = author_bonsai_glyph {
+                        self.bonsai_glyphs.insert(message.user_id, glyph);
+                    }
                     self.replace_message(message);
+                }
+                ChatEvent::DiscoverRoomsLoaded { user_id, rooms } if self.user_id == user_id => {
+                    self.discover.set_items(rooms);
+                }
+                ChatEvent::DiscoverRoomsFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
                 }
                 ChatEvent::MessageReactionsUpdated {
                     room_id: _,
@@ -1604,6 +1740,27 @@ impl ChatState {
                 {
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::ReactionOwnersListed {
+                    user_id,
+                    message_id,
+                    owners,
+                    usernames,
+                } if self.user_id == user_id
+                    && self.pending_reaction_owners_message_id == Some(message_id) =>
+                {
+                    self.pending_reaction_owners_message_id = None;
+                    self.usernames.extend(usernames);
+                    let lines = self.reaction_owner_lines(&owners);
+                    self.overlay = Some(Overlay::dismissible("Reactions", lines));
+                }
+                ChatEvent::ReactionOwnersListFailed { user_id, message }
+                    if self.user_id == user_id
+                        && self.pending_reaction_owners_message_id.is_some() =>
+                {
+                    self.pending_reaction_owners_message_id = None;
+                    self.overlay = None;
+                    banner = Some(Banner::error(&message));
+                }
                 ChatEvent::PublicRoomsListFailed { user_id, message }
                     if self.user_id == user_id =>
                 {
@@ -1657,13 +1814,13 @@ impl ChatState {
         // Service snapshots are newest-first; keep same order for cheap appends at the front.
         let room_id = message.room_id;
         messages.insert(0, message);
-        if messages.len() > 1000 {
+        if messages.len() > 500 {
             let removed_ids: Vec<Uuid> = messages
                 .iter()
-                .skip(1000)
+                .skip(500)
                 .map(|message| message.id)
                 .collect();
-            messages.truncate(1000);
+            messages.truncate(500);
             for message_id in removed_ids {
                 self.message_reactions.remove(&message_id);
             }
@@ -1696,6 +1853,33 @@ impl ChatState {
             self.clear_composer_after_submit();
         }
         self.sync_selection();
+    }
+
+    fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
+        let Some((room, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id)
+        else {
+            return;
+        };
+
+        let mut merged = Vec::with_capacity(stored.len() + messages.len());
+        let mut seen = HashSet::new();
+        for message in messages.into_iter().chain(stored.iter().cloned()) {
+            if seen.insert(message.id) {
+                merged.push(message);
+            }
+        }
+        merged.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
+        merged.truncate(500);
+
+        *stored = if room.kind == "dm" {
+            merged
+        } else {
+            let ignored = &self.ignored_user_ids;
+            merged
+                .into_iter()
+                .filter(|message| !ignored.contains(&message.user_id))
+                .collect()
+        };
     }
 
     fn replace_message(&mut self, message: ChatMessage) {
@@ -1798,6 +1982,66 @@ impl ChatState {
         }
         self.sync_selection();
     }
+}
+
+fn visual_order_for_rooms(
+    rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    user_id: Uuid,
+    usernames: &HashMap<Uuid, String>,
+) -> Vec<RoomSlot> {
+    let mut order = Vec::new();
+
+    // Core: permanent rooms, hardcoded order
+    let core_order = ["general", "announcements", "suggestions", "bugs"];
+    for slug in &core_order {
+        if let Some((room, _)) = rooms
+            .iter()
+            .find(|(r, _)| r.permanent && r.slug.as_deref() == Some(slug))
+        {
+            order.push(RoomSlot::Room(room.id));
+        }
+    }
+    // Any other permanent rooms not in the hardcoded list
+    for (room, _) in rooms {
+        if room.kind != "dm"
+            && room.permanent
+            && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+        {
+            order.push(RoomSlot::Room(room.id));
+        }
+    }
+
+    order.push(RoomSlot::News);
+    order.push(RoomSlot::Showcase);
+    order.push(RoomSlot::Notifications);
+    order.push(RoomSlot::Discover);
+
+    // Public rooms (non-DM, non-permanent, alpha by slug)
+    let mut public: Vec<_> = rooms
+        .iter()
+        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
+        .collect();
+    public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
+    order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+
+    // Private rooms (visibility=private, alpha by slug)
+    let mut private: Vec<_> = rooms
+        .iter()
+        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
+        .collect();
+    private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
+    order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+
+    // DMs (sorted by display name to match nav rendering)
+    let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
+    dms.sort_by(|(a, _), (b, _)| {
+        let name_a = dm_sort_key(a, user_id, usernames);
+        let name_b = dm_sort_key(b, user_id, usernames);
+        name_a.cmp(&name_b)
+    });
+    order.extend(dms.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+
+    order
 }
 
 /// Sort key for DMs: resolves the other participant's username.
@@ -2471,6 +2715,82 @@ mod tests {
         assert_eq!(wrapped_index(1, -5, 3), 2);
     }
 
+    fn make_room(
+        id: Uuid,
+        kind: &str,
+        visibility: &str,
+        permanent: bool,
+        slug: Option<&str>,
+    ) -> (ChatRoom, Vec<ChatMessage>) {
+        (
+            ChatRoom {
+                id,
+                created: chrono::Utc::now(),
+                updated: chrono::Utc::now(),
+                kind: kind.to_string(),
+                visibility: visibility.to_string(),
+                auto_join: permanent,
+                permanent,
+                slug: slug.map(str::to_string),
+                language_code: None,
+                dm_user_a: None,
+                dm_user_b: None,
+            },
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn visual_order_places_showcases_before_mentions_and_discover() {
+        let me = Uuid::from_u128(1);
+        let alice = Uuid::from_u128(2);
+        let bob = Uuid::from_u128(3);
+        let general = Uuid::from_u128(10);
+        let announcements = Uuid::from_u128(11);
+        let public_alpha = Uuid::from_u128(20);
+        let public_zeta = Uuid::from_u128(21);
+        let private_beta = Uuid::from_u128(30);
+        let dm_bob = make_dm(bob, me);
+        let dm_alice = make_dm(me, alice);
+
+        let mut usernames = HashMap::new();
+        usernames.insert(alice, "alice".to_string());
+        usernames.insert(bob, "bob".to_string());
+
+        let rooms = vec![
+            make_room(public_zeta, "topic", "public", false, Some("zeta")),
+            make_room(general, "general", "public", true, Some("general")),
+            (dm_bob.clone(), Vec::new()),
+            make_room(private_beta, "topic", "private", false, Some("beta")),
+            make_room(
+                announcements,
+                "topic",
+                "public",
+                true,
+                Some("announcements"),
+            ),
+            (dm_alice.clone(), Vec::new()),
+            make_room(public_alpha, "topic", "public", false, Some("alpha")),
+        ];
+
+        assert_eq!(
+            visual_order_for_rooms(&rooms, me, &usernames),
+            vec![
+                RoomSlot::Room(general),
+                RoomSlot::Room(announcements),
+                RoomSlot::News,
+                RoomSlot::Showcase,
+                RoomSlot::Notifications,
+                RoomSlot::Discover,
+                RoomSlot::Room(public_alpha),
+                RoomSlot::Room(public_zeta),
+                RoomSlot::Room(private_beta),
+                RoomSlot::Room(dm_alice.id),
+                RoomSlot::Room(dm_bob.id),
+            ]
+        );
+    }
+
     #[test]
     fn adjacent_composer_room_skips_virtual_slots() {
         let room_a = Uuid::from_u128(1);
@@ -2479,8 +2799,8 @@ mod tests {
         let order = vec![
             RoomSlot::Room(room_a),
             RoomSlot::News,
-            RoomSlot::Notifications,
             RoomSlot::Showcase,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
             RoomSlot::Room(room_b),
             RoomSlot::Room(room_c),
@@ -2504,8 +2824,8 @@ mod tests {
     fn adjacent_composer_room_returns_none_without_real_rooms() {
         let order = vec![
             RoomSlot::News,
-            RoomSlot::Notifications,
             RoomSlot::Showcase,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
         ];
         assert_eq!(adjacent_composer_room(&order, None, 1), None);
@@ -2566,8 +2886,8 @@ mod tests {
         let targets = [
             (b'a', RoomSlot::Room(room_id)),
             (b's', RoomSlot::News),
-            (b'd', RoomSlot::Notifications),
-            (b'f', RoomSlot::Showcase),
+            (b'd', RoomSlot::Showcase),
+            (b'f', RoomSlot::Notifications),
             (b'g', RoomSlot::Discover),
         ];
 
@@ -2581,11 +2901,11 @@ mod tests {
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b'D'),
-            Some(RoomSlot::Notifications)
+            Some(RoomSlot::Showcase)
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b'f'),
-            Some(RoomSlot::Showcase)
+            Some(RoomSlot::Notifications)
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b'G'),
@@ -2848,6 +3168,7 @@ mod tests {
             id,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
+            pinned: false,
             room_id: Uuid::from_u128(999),
             user_id: Uuid::from_u128(999),
             body: String::new(),

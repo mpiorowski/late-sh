@@ -17,19 +17,40 @@ use crate::app::{
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
     let snapshot = state.snapshot();
-    draw_game_snapshot(frame, area, &snapshot, show_sidebar);
+    draw_game_snapshot(
+        frame,
+        area,
+        &snapshot,
+        state.seat_index(),
+        state.can_act(),
+        show_sidebar,
+    );
 }
 
 fn draw_game_snapshot(
     frame: &mut Frame,
     area: Rect,
     snapshot: &BlackjackSnapshot,
+    user_seat_index: Option<usize>,
+    user_is_active: bool,
     show_sidebar: bool,
 ) {
+    let is_seated = user_seat_index.is_some();
     let info_lines = vec![
-        info_tagline("Single-player blackjack. Bet, draw, settle, repeat."),
+        info_tagline("Blackjack table. Sit, bet, draw, settle, repeat."),
         Line::from(""),
         info_label_value("Balance", snapshot.balance.to_string(), theme::SUCCESS()),
+        info_label_value(
+            "Seat",
+            user_seat_index
+                .map(|index| (index + 1).to_string())
+                .unwrap_or_else(|| "viewer".to_string()),
+            if is_seated {
+                theme::SUCCESS()
+            } else {
+                theme::TEXT_DIM()
+            },
+        ),
         info_label_value(
             "Bet",
             snapshot
@@ -49,29 +70,42 @@ fn draw_game_snapshot(
             snapshot.phase.label().to_string(),
             theme::TEXT_BRIGHT(),
         ),
+        info_label_value(
+            "Deal",
+            snapshot
+                .betting_countdown_secs
+                .map(|secs| format!("{secs}s"))
+                .unwrap_or_else(|| "auto".to_string()),
+            theme::AMBER(),
+        ),
         Line::from(""),
-        key_line(snapshot.phase),
+        key_line(snapshot.phase, is_seated, user_is_active),
     ];
 
     let inner = draw_game_frame(frame, area, "Blackjack", info_lines, show_sidebar);
     let rows = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(2),
         Constraint::Length(1),
         Constraint::Length(3),
+        Constraint::Length(1),
+        Constraint::Min(5),
         Constraint::Length(1),
         Constraint::Length(2),
-        Constraint::Min(0),
     ])
     .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(render_seats(snapshot, user_seat_index)).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(theme::BORDER_DIM())),
+        ),
+        rows[0],
+    );
 
     let dealer_cards = render_cards(&snapshot.dealer_hand, snapshot.dealer_revealed);
     let dealer_total = snapshot
         .dealer_score
-        .map(|score| score.total.to_string())
-        .unwrap_or_else(|| "—".to_string());
-    let player_cards = render_cards(&snapshot.player_hand, true);
-    let player_total = snapshot
-        .player_score
         .map(|score| score.total.to_string())
         .unwrap_or_else(|| "—".to_string());
 
@@ -81,15 +115,11 @@ fn draw_game_snapshot(
             Span::styled(dealer_cards, Style::default().fg(theme::TEXT_BRIGHT())),
             Span::raw(format!("   ({dealer_total})")),
         ])]),
-        rows[0],
+        rows[2],
     );
     frame.render_widget(
-        Paragraph::new(vec![Line::from(vec![
-            Span::styled("You:    ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(player_cards, Style::default().fg(theme::TEXT_BRIGHT())),
-            Span::raw(format!("   ({player_total})")),
-        ])]),
-        rows[2],
+        Paragraph::new(render_seat_hands(snapshot, user_seat_index)),
+        rows[4],
     );
     frame.render_widget(
         Paragraph::new(snapshot.status_message.as_str()).block(
@@ -97,7 +127,7 @@ fn draw_game_snapshot(
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(theme::BORDER_DIM())),
         ),
-        rows[4],
+        rows[6],
     );
 
     if let Some((title, subtitle)) = &snapshot.outcome_banner {
@@ -109,14 +139,112 @@ fn draw_game_snapshot(
     }
 }
 
-fn key_line(phase: Phase) -> Line<'static> {
-    match phase {
-        Phase::Betting => key_hint("0-9 Enter Esc", "bet / deal / leave"),
-        Phase::BetPending => key_hint("wait", "bet in flight"),
-        Phase::PlayerTurn => key_hint("h Space / s / Esc", "hit / stand / auto-stand+leave"),
-        Phase::DealerTurn => key_hint("wait", "dealer resolving"),
-        Phase::Settling => key_hint("any key / Esc", "next hand / leave"),
+fn key_line(phase: Phase, is_seated: bool, is_active: bool) -> Line<'static> {
+    if !is_seated {
+        return key_hint("s Enter / Esc", "sit / leave");
     }
+    match phase {
+        Phase::Betting => key_hint("0-9 Enter / l / Esc", "bet / leave seat / leave"),
+        Phase::BetPending => key_hint("wait", "bet in flight"),
+        Phase::PlayerTurn if is_active => key_hint(
+            "h Space / s / l / Esc",
+            "hit / stand / leave seat / auto-stand+leave",
+        ),
+        Phase::PlayerTurn => key_hint("wait / l / Esc", "watch hand / leave seat / leave"),
+        Phase::DealerTurn => key_hint("wait", "dealer resolving"),
+        Phase::Settling => key_hint("n Enter / l / Esc", "next hand / leave seat / leave"),
+    }
+}
+
+fn render_seats(snapshot: &BlackjackSnapshot, user_seat_index: Option<usize>) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        "Seats: ",
+        Style::default().fg(theme::TEXT_DIM()),
+    )];
+    for seat in &snapshot.seats {
+        if seat.index > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let label = match seat.user_id {
+            Some(_) if Some(seat.index) == user_seat_index => {
+                format!("[{} You]", seat.index + 1)
+            }
+            Some(_) if seat.phase == crate::app::rooms::blackjack::state::SeatPhase::Playing => {
+                format!("[{} Play]", seat.index + 1)
+            }
+            Some(_) => format!("[{} Taken]", seat.index + 1),
+            None => format!("[{} Open]", seat.index + 1),
+        };
+        let style = match seat.user_id {
+            Some(_) if Some(seat.index) == user_seat_index => Style::default().fg(theme::SUCCESS()),
+            Some(_) if seat.phase == crate::app::rooms::blackjack::state::SeatPhase::Playing => {
+                Style::default().fg(theme::AMBER())
+            }
+            Some(_) => Style::default().fg(theme::TEXT()),
+            None => Style::default().fg(theme::TEXT_DIM()),
+        };
+        spans.push(Span::styled(label, style));
+    }
+    Line::from(spans)
+}
+
+fn render_seat_hands(
+    snapshot: &BlackjackSnapshot,
+    user_seat_index: Option<usize>,
+) -> Vec<Line<'static>> {
+    snapshot
+        .seats
+        .iter()
+        .map(|seat| {
+            let label = if Some(seat.index) == user_seat_index {
+                format!("Seat {} You", seat.index + 1)
+            } else if seat.phase == crate::app::rooms::blackjack::state::SeatPhase::Playing {
+                format!("Seat {} Play", seat.index + 1)
+            } else {
+                format!("Seat {}", seat.index + 1)
+            };
+            let label_style = if Some(seat.index) == user_seat_index {
+                Style::default().fg(theme::SUCCESS())
+            } else if seat.phase == crate::app::rooms::blackjack::state::SeatPhase::Playing {
+                Style::default().fg(theme::AMBER())
+            } else {
+                Style::default().fg(theme::TEXT_DIM())
+            };
+            let hand = if seat.hand.is_empty() {
+                "—".to_string()
+            } else {
+                render_cards(&seat.hand, true)
+            };
+            let total = seat
+                .score
+                .map(|score| score.total.to_string())
+                .unwrap_or_else(|| "—".to_string());
+            let bet = seat
+                .bet_amount
+                .map(|bet| bet.to_string())
+                .unwrap_or_else(|| "—".to_string());
+            let result = match seat.last_outcome {
+                Some(Outcome::PlayerBlackjack) => " blackjack",
+                Some(Outcome::PlayerWin) => " win",
+                Some(Outcome::Push) => " push",
+                Some(Outcome::DealerWin) => " loss",
+                None => "",
+            };
+            Line::from(vec![
+                Span::styled(format!("{label:<13}"), label_style),
+                Span::styled(
+                    format!("{} ", seat.phase.label()),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+                Span::styled(
+                    format!("bet {bet:<3} "),
+                    Style::default().fg(theme::AMBER()),
+                ),
+                Span::styled(hand, Style::default().fg(theme::TEXT_BRIGHT())),
+                Span::raw(format!(" ({total}){result}")),
+            ])
+        })
+        .collect()
 }
 
 fn render_cards(cards: &[crate::app::games::cards::PlayingCard], reveal_all: bool) -> String {

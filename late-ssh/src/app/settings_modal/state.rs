@@ -10,6 +10,7 @@ use crate::app::common::theme;
 use crate::app::profile::svc::ProfileService;
 
 use super::data::{CountryOption, filter_countries, filter_timezones};
+use super::gem::GemState;
 
 const USERNAME_MAX_LEN: usize = 12;
 pub const BIO_MAX_LEN: usize = 500;
@@ -69,27 +70,52 @@ impl Row {
     ];
 }
 
-/// Top-level tab in the settings modal. `Settings` holds every compact
-/// row (identity/appearance/location/notifications); `Bio` is a separate
-/// full-width pane with the markdown editor + preview; `Favorites` manages
-/// the dashboard quick-switch room list.
+/// Top-level tab in the settings modal. `Settings` holds every compact row
+/// (identity/appearance/location/notifications); `Themes` is a fast browser
+/// for the expanded theme catalog; `Bio` is a separate full-width pane with
+/// the markdown editor + preview; `Favorites` manages the dashboard
+/// quick-switch room list.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
     Bio,
+    Themes,
     Favorites,
+    /// Hidden until the user has filled out at least one of bio, country,
+    /// or timezone. Currently houses the "Show settings on connect" toggle.
+    Special,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 3] = [Tab::Settings, Tab::Bio, Tab::Favorites];
+    pub const ALL: [Tab; 5] = [
+        Tab::Settings,
+        Tab::Bio,
+        Tab::Themes,
+        Tab::Favorites,
+        Tab::Special,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
             Tab::Bio => "Bio",
+            Tab::Themes => "Themes",
             Tab::Favorites => "Favorites",
+            Tab::Special => "Special",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThemeTreeRow {
+    Group {
+        group: theme::ThemeGroup,
+        collapsed: bool,
+    },
+    Theme {
+        option_index: usize,
+        last_in_group: bool,
+    },
 }
 
 #[derive(Default)]
@@ -107,6 +133,11 @@ pub struct SettingsModalState {
     draft: Profile,
     selected_tab: Tab,
     row_index: usize,
+    theme_index: usize,
+    theme_selected_row: usize,
+    theme_scroll_offset: usize,
+    theme_visible_height: Cell<usize>,
+    theme_collapsed_groups: u8,
     editing_username: bool,
     username_input: TextArea<'static>,
     editing_bio: bool,
@@ -118,6 +149,9 @@ pub struct SettingsModalState {
     /// Cursor in the Favorites tab: 0..favorites.len() selects a favorite,
     /// the final slot (favorites.len()) selects the "Add favorite…" row.
     favorites_index: usize,
+    /// Per-session gem easter egg on the Special tab. Persists across modal
+    /// open/close cycles for the lifetime of the SSH session.
+    gem: GemState,
 }
 
 impl SettingsModalState {
@@ -128,6 +162,11 @@ impl SettingsModalState {
             draft: Profile::default(),
             selected_tab: Tab::Settings,
             row_index: 0,
+            theme_index: 0,
+            theme_selected_row: 0,
+            theme_scroll_offset: 0,
+            theme_visible_height: Cell::new(1),
+            theme_collapsed_groups: 0,
             editing_username: false,
             username_input: new_username_textarea(false),
             editing_bio: false,
@@ -135,7 +174,16 @@ impl SettingsModalState {
             picker: PickerState::default(),
             available_rooms: Vec::new(),
             favorites_index: 0,
+            gem: GemState::new(),
         }
+    }
+
+    pub fn gem(&self) -> &GemState {
+        &self.gem
+    }
+
+    pub fn gem_mut(&mut self) -> &mut GemState {
+        &mut self.gem
     }
 
     pub fn open_from_profile(
@@ -145,16 +193,11 @@ impl SettingsModalState {
         _modal_width: u16,
     ) {
         self.draft = profile.clone();
-        // Drop favorites the user is no longer a member of so the modal never
-        // shows ghost entries. Preserve order of the survivors.
-        let member_ids: std::collections::HashSet<Uuid> =
-            available_rooms.iter().map(|room| room.id).collect();
-        self.draft
-            .favorite_room_ids
-            .retain(|id| member_ids.contains(id));
+        prune_favorites_against_loaded_rooms(&mut self.draft.favorite_room_ids, &available_rooms);
         self.available_rooms = available_rooms;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
+        self.sync_theme_index_to_draft();
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
         self.editing_bio = false;
@@ -169,17 +212,19 @@ impl SettingsModalState {
 
     /// Switch to the neighboring tab. Auto-saves + ends any in-flight bio
     /// edit when leaving the Bio tab so the preview reflects the draft.
+    /// Skips the Special tab while it's hidden (no bio/country/timezone).
     pub fn cycle_tab(&mut self, forward: bool) {
-        let idx = Tab::ALL
+        let visible = self.visible_tabs();
+        let idx = visible
             .iter()
             .position(|t| *t == self.selected_tab)
             .unwrap_or(0);
         let next_idx = if forward {
-            (idx + 1) % Tab::ALL.len()
+            (idx + 1) % visible.len()
         } else {
-            (idx + Tab::ALL.len() - 1) % Tab::ALL.len()
+            (idx + visible.len() - 1) % visible.len()
         };
-        let next = Tab::ALL[next_idx];
+        let next = visible[next_idx];
         if self.selected_tab == Tab::Bio && next != Tab::Bio && self.editing_bio {
             self.stop_bio_edit();
             self.save();
@@ -189,7 +234,45 @@ impl SettingsModalState {
             self.submit_username();
             self.save();
         }
+        if next == Tab::Themes {
+            self.sync_theme_index_to_draft();
+        }
         self.selected_tab = next;
+    }
+
+    /// Tabs to show in the tab strip in display order. The Special tab is
+    /// hidden until the user has filled out at least one of bio, country,
+    /// or timezone.
+    pub fn visible_tabs(&self) -> Vec<Tab> {
+        Tab::ALL
+            .iter()
+            .copied()
+            .filter(|tab| *tab != Tab::Special || self.special_tab_unlocked())
+            .collect()
+    }
+
+    pub fn special_tab_unlocked(&self) -> bool {
+        let bio_filled = !self.draft.bio.trim().is_empty();
+        let country_filled = self
+            .draft
+            .country
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        let timezone_filled = self
+            .draft
+            .timezone
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        bio_filled || country_filled || timezone_filled
+    }
+
+    /// Flip the "show settings on connect" toggle (the sole control on the
+    /// Special tab) and persist.
+    pub fn toggle_show_settings_on_connect(&mut self) {
+        self.draft.show_settings_on_connect ^= true;
+        self.save();
     }
 
     pub fn set_modal_width(&mut self, _modal_width: u16) {
@@ -207,6 +290,207 @@ impl SettingsModalState {
     pub fn move_row(&mut self, delta: isize) {
         let last = Row::ALL.len().saturating_sub(1) as isize;
         self.row_index = (self.row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn theme_selected_row(&self) -> usize {
+        self.theme_selected_row
+    }
+
+    pub fn theme_scroll_offset(&self) -> usize {
+        self.theme_scroll_offset
+    }
+
+    pub fn set_theme_visible_height(&self, height: usize) {
+        self.theme_visible_height.set(height.max(1));
+    }
+
+    pub fn move_theme_cursor(&mut self, delta: isize) {
+        let rows = self.theme_tree_rows();
+        let last = rows.len().saturating_sub(1) as isize;
+        self.theme_selected_row =
+            (self.theme_selected_row as isize + delta).clamp(0, last) as usize;
+        if let Some(ThemeTreeRow::Theme { option_index, .. }) =
+            rows.get(self.theme_selected_row).copied()
+        {
+            self.apply_theme_index(option_index);
+        }
+        self.keep_theme_cursor_visible();
+    }
+
+    pub fn theme_cursor_left(&mut self) {
+        let rows = self.theme_tree_rows();
+        match rows.get(self.theme_selected_row).copied() {
+            Some(ThemeTreeRow::Group {
+                group,
+                collapsed: false,
+            }) => self.collapse_theme_group(group),
+            Some(ThemeTreeRow::Theme { option_index, .. }) => {
+                self.collapse_theme_group(theme::OPTIONS[option_index].group);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn theme_cursor_right(&mut self) {
+        let rows = self.theme_tree_rows();
+        match rows.get(self.theme_selected_row).copied() {
+            Some(ThemeTreeRow::Group {
+                group,
+                collapsed: true,
+            }) => self.expand_theme_group(group),
+            Some(ThemeTreeRow::Group {
+                group,
+                collapsed: false,
+            }) => {
+                if let Some(row) = self.first_theme_row_for_group(group) {
+                    self.theme_selected_row = row;
+                    if let Some(ThemeTreeRow::Theme { option_index, .. }) =
+                        self.theme_tree_rows().get(row).copied()
+                    {
+                        self.apply_theme_index(option_index);
+                    }
+                    self.keep_theme_cursor_visible();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn toggle_theme_tree_row(&mut self) {
+        let rows = self.theme_tree_rows();
+        if let Some(row) = rows.get(self.theme_selected_row).copied() {
+            match row {
+                ThemeTreeRow::Group { group, collapsed } => {
+                    if collapsed {
+                        self.expand_theme_group(group);
+                    } else {
+                        self.collapse_theme_group(group);
+                    }
+                }
+                ThemeTreeRow::Theme { option_index, .. } => self.select_theme_index(option_index),
+            }
+        }
+    }
+
+    pub fn select_theme_index(&mut self, index: usize) {
+        let clamped = index.min(theme::OPTIONS.len().saturating_sub(1));
+        self.expand_theme_group(theme::OPTIONS[clamped].group);
+        self.theme_index = clamped;
+        self.theme_selected_row = self
+            .theme_row_for_option(clamped)
+            .unwrap_or(self.theme_selected_row);
+        self.apply_theme_index(clamped);
+        self.keep_theme_cursor_visible();
+    }
+
+    fn apply_theme_index(&mut self, index: usize) {
+        if let Some(option) = theme::OPTIONS.get(index) {
+            self.theme_index = index;
+            let current = self
+                .draft
+                .theme_id
+                .as_deref()
+                .map(theme::normalize_id)
+                .unwrap_or("late");
+            let changed = current != option.id;
+            self.draft.theme_id = Some(option.id.to_string());
+            self.keep_theme_cursor_visible();
+            if changed {
+                self.save();
+            }
+        }
+    }
+
+    pub fn theme_tree_rows(&self) -> Vec<ThemeTreeRow> {
+        let mut rows = Vec::new();
+        for group in theme::ThemeGroup::ALL {
+            let collapsed = self.theme_group_collapsed(group);
+            rows.push(ThemeTreeRow::Group { group, collapsed });
+            if collapsed {
+                continue;
+            }
+
+            let option_indices: Vec<usize> = theme::OPTIONS
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, option)| (option.group == group).then_some(idx))
+                .collect();
+            let last_option_idx = option_indices.len().saturating_sub(1);
+            for (idx, option_index) in option_indices.into_iter().enumerate() {
+                rows.push(ThemeTreeRow::Theme {
+                    option_index,
+                    last_in_group: idx == last_option_idx,
+                });
+            }
+        }
+        rows
+    }
+
+    fn sync_theme_index_to_draft(&mut self) {
+        let current = self
+            .draft
+            .theme_id
+            .as_deref()
+            .unwrap_or_else(|| theme::normalize_id(""));
+        let normalized = theme::normalize_id(current);
+        self.theme_index = theme::OPTIONS
+            .iter()
+            .position(|option| option.id == normalized)
+            .unwrap_or(0);
+        self.expand_theme_group(theme::OPTIONS[self.theme_index].group);
+        self.theme_selected_row = self.theme_row_for_option(self.theme_index).unwrap_or(0);
+        self.keep_theme_cursor_visible();
+    }
+
+    fn keep_theme_cursor_visible(&mut self) {
+        let visible = self.theme_visible_height.get().max(1);
+        let max_scroll = self.theme_tree_rows().len().saturating_sub(visible);
+        if self.theme_selected_row < self.theme_scroll_offset {
+            self.theme_scroll_offset = self.theme_selected_row;
+        } else if self.theme_selected_row >= self.theme_scroll_offset + visible {
+            self.theme_scroll_offset = self.theme_selected_row.saturating_sub(visible - 1);
+        }
+        self.theme_scroll_offset = self.theme_scroll_offset.min(max_scroll);
+    }
+
+    fn theme_group_collapsed(&self, group: theme::ThemeGroup) -> bool {
+        self.theme_collapsed_groups & group.bit() != 0
+    }
+
+    fn expand_theme_group(&mut self, group: theme::ThemeGroup) {
+        self.theme_collapsed_groups &= !group.bit();
+        self.keep_theme_cursor_visible();
+    }
+
+    fn collapse_theme_group(&mut self, group: theme::ThemeGroup) {
+        self.theme_collapsed_groups |= group.bit();
+        self.theme_selected_row = self.theme_group_row(group).unwrap_or_else(|| {
+            self.theme_selected_row
+                .min(self.theme_tree_rows().len().saturating_sub(1))
+        });
+        self.keep_theme_cursor_visible();
+    }
+
+    fn theme_group_row(&self, group: theme::ThemeGroup) -> Option<usize> {
+        self.theme_tree_rows()
+            .iter()
+            .position(|row| matches!(row, ThemeTreeRow::Group { group: row_group, .. } if *row_group == group))
+    }
+
+    fn theme_row_for_option(&self, option_index: usize) -> Option<usize> {
+        self.theme_tree_rows().iter().position(
+            |row| matches!(row, ThemeTreeRow::Theme { option_index: row_index, .. } if *row_index == option_index),
+        )
+    }
+
+    fn first_theme_row_for_group(&self, group: theme::ThemeGroup) -> Option<usize> {
+        self.theme_tree_rows().iter().position(|row| {
+            matches!(
+                row,
+                ThemeTreeRow::Theme { option_index, .. }
+                    if theme::OPTIONS[*option_index].group == group
+            )
+        })
     }
 
     pub fn editing_username(&self) -> bool {
@@ -602,6 +886,7 @@ impl SettingsModalState {
                     .as_deref()
                     .unwrap_or_else(|| theme::normalize_id(""));
                 self.draft.theme_id = Some(theme::cycle_id(current, forward).to_string());
+                self.sync_theme_index_to_draft();
                 true
             }
             Row::BackgroundColor => {
@@ -676,6 +961,7 @@ impl SettingsModalState {
                 show_dashboard_header: self.draft.show_dashboard_header,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 show_games_sidebar: self.draft.show_games_sidebar,
+                show_settings_on_connect: self.draft.show_settings_on_connect,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
             },
         );
@@ -694,6 +980,19 @@ fn cycle_notify_format(current: Option<&str>, forward: bool) -> &'static str {
         (idx + OPTIONS.len() - 1) % OPTIONS.len()
     };
     OPTIONS[next]
+}
+
+fn prune_favorites_against_loaded_rooms(favorite_room_ids: &mut Vec<Uuid>, rooms: &[RoomOption]) {
+    if rooms.is_empty() {
+        return;
+    }
+
+    // Drop favorites the user is no longer a member of so the modal never
+    // shows ghost entries. Preserve order of the survivors. An empty room
+    // catalog means chat membership has not loaded yet, not that every room
+    // was left.
+    let member_ids: std::collections::HashSet<Uuid> = rooms.iter().map(|room| room.id).collect();
+    favorite_room_ids.retain(|id| member_ids.contains(id));
 }
 
 fn toggle_kind(kinds: &mut Vec<String>, kind: &str) {
@@ -847,5 +1146,38 @@ mod tests {
         move_bio_cursor_to_end(&mut input);
 
         assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
+    }
+
+    #[test]
+    fn empty_room_catalog_preserves_favorites() {
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let mut favorites = vec![first, second];
+
+        prune_favorites_against_loaded_rooms(&mut favorites, &[]);
+
+        assert_eq!(favorites, vec![first, second]);
+    }
+
+    #[test]
+    fn loaded_room_catalog_prunes_unjoined_favorites() {
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let third = Uuid::from_u128(3);
+        let mut favorites = vec![first, second, third];
+        let rooms = vec![
+            RoomOption {
+                id: third,
+                label: "#third".to_string(),
+            },
+            RoomOption {
+                id: first,
+                label: "#first".to_string(),
+            },
+        ];
+
+        prune_favorites_against_loaded_rooms(&mut favorites, &rooms);
+
+        assert_eq!(favorites, vec![first, third]);
     }
 }

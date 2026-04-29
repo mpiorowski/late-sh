@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
+    markdown::wrap_plain_line,
     overlay::{Overlay, draw_overlay},
     theme,
 };
@@ -180,6 +181,14 @@ fn reaction_picker_placeholder_lines(dim: Style) -> Vec<Line<'static>> {
         reaction_spans.push(Span::styled(" ", dim));
         reaction_spans.push(Span::styled(reaction_label(key), dim));
     }
+    reaction_spans.push(Span::styled("  ", dim));
+    reaction_spans.push(Span::styled(
+        "f",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    reaction_spans.push(Span::styled(" list", dim));
 
     vec![Line::from(reaction_spans)]
 }
@@ -338,6 +347,54 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
             },
         );
     }
+}
+
+pub(crate) fn dashboard_pinned_height(message_count: usize, available_height: u16) -> u16 {
+    if message_count == 0 {
+        return 0;
+    }
+    // +1 for the bottom border. Always leave 4 rows for chat below.
+    let desired = message_count.saturating_add(1) as u16;
+    desired.min(available_height.saturating_sub(4))
+}
+
+pub(crate) fn draw_dashboard_pinned_messages(
+    frame: &mut Frame,
+    area: Rect,
+    messages: &[ChatMessage],
+) {
+    if area.height == 0 || messages.is_empty() {
+        return;
+    }
+
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(theme::AMBER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let amber = Style::default().fg(theme::AMBER());
+    let body_style = Style::default().fg(theme::CHAT_BODY());
+    let body_width = inner.width.saturating_sub(2).max(1) as usize;
+    let lines: Vec<Line<'static>> = messages
+        .iter()
+        .map(|msg| {
+            let first_line = msg.body.split('\n').next().unwrap_or("");
+            let body_text = wrap_plain_line(first_line, body_width)
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            Line::from(vec![
+                Span::styled("▌ ", amber),
+                Span::styled(body_text, body_style),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────
@@ -905,32 +962,6 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
     };
     push_row(news_line, Some(RoomSlot::News), view.news_selected);
 
-    let notifications_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.notifications_selected,
-        );
-        let style = if view.notifications_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = if view.notifications_unread_count > 0 {
-            format!("{prefix}mentions ({})", view.notifications_unread_count)
-        } else {
-            format!("{prefix}mentions")
-        };
-        Line::from(Span::styled(label, style))
-    };
-    push_row(
-        notifications_line,
-        Some(RoomSlot::Notifications),
-        view.notifications_selected,
-    );
-
     let showcase_line = {
         let prefix = room_jump_prefix(
             view.room_jump_active.then(|| jump_keys.next()).flatten(),
@@ -957,6 +988,32 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         view.showcase_selected,
     );
 
+    let notifications_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.notifications_selected,
+        );
+        let style = if view.notifications_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.notifications_unread_count > 0 {
+            format!("{prefix}mentions ({})", view.notifications_unread_count)
+        } else {
+            format!("{prefix}mentions")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(
+        notifications_line,
+        Some(RoomSlot::Notifications),
+        view.notifications_selected,
+    );
+
     let discover_line = {
         let prefix = room_jump_prefix(
             view.room_jump_active.then(|| jump_keys.next()).flatten(),
@@ -970,11 +1027,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         } else {
             Style::default().fg(theme::TEXT())
         };
-        let label = if !view.discover_view.items.is_empty() {
-            format!("{prefix}discover ({})", view.discover_view.items.len())
-        } else {
-            format!("{prefix}discover")
-        };
+        let label = format!("{prefix}discover");
         Line::from(Span::styled(label, style))
     };
     push_row(
@@ -1303,7 +1356,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter copy · i paste URL",
+                " j/k navigate · Enter copy URL · i paste URL",
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
@@ -1586,6 +1639,10 @@ mod tests {
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
         );
+        assert!(
+            row_1.contains("f list"),
+            "reaction owner hint missing from {row_1:?}",
+        );
     }
 
     #[test]
@@ -1664,6 +1721,46 @@ mod tests {
     fn room_jump_prefix_shows_selected_marker_when_inactive() {
         assert_eq!(room_jump_prefix(None, false, true), "> ");
         assert_eq!(room_jump_prefix(None, false, false), "  ");
+    }
+
+    #[test]
+    fn room_list_rows_place_showcases_before_mentions_and_discover() {
+        let rooms = Vec::new();
+        let mut rows_cache = ChatRowsCache::default();
+        let usernames = HashMap::new();
+        let countries = HashMap::new();
+        let badges = HashMap::new();
+        let message_reactions = HashMap::new();
+        let unread_counts = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let composer = TextArea::default();
+        let news_composer = TextArea::default();
+        let view = chat_view(
+            &mut rows_cache,
+            &rooms,
+            None,
+            &usernames,
+            &countries,
+            &badges,
+            &message_reactions,
+            &unread_counts,
+            &bonsai_glyphs,
+            &composer,
+            &news_composer,
+        );
+
+        let room_rows = build_room_list_rows(&view, Rect::new(0, 0, 40, 20));
+        let hit_slots: Vec<_> = room_rows.hit_slots.into_iter().flatten().collect();
+
+        assert_eq!(
+            hit_slots,
+            vec![
+                RoomSlot::News,
+                RoomSlot::Showcase,
+                RoomSlot::Notifications,
+                RoomSlot::Discover,
+            ]
+        );
     }
 
     #[test]

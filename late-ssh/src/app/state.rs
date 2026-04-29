@@ -152,6 +152,7 @@ pub struct SessionConfig {
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
     pub permissions: Permissions,
+    pub is_mod: bool,
     pub artboard_banned: bool,
     pub artboard_ban_expires_at: Option<DateTime<Utc>>,
 
@@ -218,6 +219,7 @@ pub struct App {
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
+    pub(crate) is_mod: bool,
     pub(crate) artboard_banned: bool,
     pub(crate) artboard_ban_expires_at: Option<DateTime<Utc>>,
 
@@ -363,6 +365,7 @@ impl App {
         self.chat.set_visible_room_id(visible_room_id);
         if changed && let Some(room_id) = visible_room_id {
             self.chat.mark_room_read(room_id);
+            self.chat.request_room_tail(room_id);
         }
     }
 
@@ -684,6 +687,7 @@ impl App {
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
+            is_mod: config.is_mod,
             artboard_banned: config.artboard_banned,
             artboard_ban_expires_at: config.artboard_ban_expires_at,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
@@ -751,6 +755,9 @@ impl App {
         };
         if app.screen == Screen::Artboard {
             app.enter_dartboard();
+        }
+        if app.screen == Screen::Dashboard {
+            app.chat.request_pinned_messages();
         }
         app.sync_visible_chat_room();
         Ok(app)
@@ -892,6 +899,10 @@ impl App {
         if self.screen == Screen::Chat {
             self.chat.request_list();
             self.chat.sync_selection();
+        }
+
+        if self.screen == Screen::Dashboard {
+            self.chat.request_pinned_messages();
         }
 
         if self.screen == Screen::Artboard {

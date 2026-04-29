@@ -36,6 +36,7 @@ const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
+const INPUT_QUEUE_CAP: usize = 256;
 
 /// World tick advances animations, game clocks, splash timer, visualizer
 /// decay, etc. Keeps the rate users see animations at before this commit.
@@ -94,8 +95,8 @@ struct ClientHandler {
     /// Signaled by input/resize paths to request an immediate (world-stateless)
     /// render, so typed characters echo without waiting for the next world tick.
     render_signal: Option<Arc<RenderSignal>>,
-    input_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
-    input_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>>,
+    input_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
+    input_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     cli_mode: bool,
     session_token: Option<String>,
     session_rx: Option<tokio::sync::mpsc::Receiver<crate::session::SessionMessage>>,
@@ -761,7 +762,7 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
         let app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
             cols: col_width as u16,
@@ -819,6 +820,7 @@ impl russh::server::Handler for ClientHandler {
                 user.is_admin || self.state.config.force_admin,
                 user.is_moderator,
             ),
+            is_mod: user.is_mod,
             artboard_banned: artboard_ban.is_some(),
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
@@ -1025,9 +1027,21 @@ impl russh::server::Handler for ClientHandler {
         let Some(input_tx) = self.input_tx.as_ref() else {
             return Ok(());
         };
-        if input_tx.send(data.to_vec()).is_err() {
-            tracing::debug!("session input queue closed; dropping inbound ssh input");
-            return Ok(());
+        match input_tx.try_reserve() {
+            Ok(permit) => {
+                permit.send(data.to_vec());
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!(
+                    queue_cap = INPUT_QUEUE_CAP,
+                    "session input queue full; dropping inbound ssh input"
+                );
+                return Ok(());
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                tracing::debug!("session input queue closed; dropping inbound ssh input");
+                return Ok(());
+            }
         }
         if let Some(signal) = self.render_signal.as_ref() {
             signal.dirty.store(true, Ordering::Release);
@@ -1150,7 +1164,7 @@ async fn next_render_action(
 
 async fn render_once(
     app: &Arc<TokioMutex<crate::app::state::App>>,
-    input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    input_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
     handle: &russh::server::Handle,
     channel_id: ChannelId,
     frame_drop_log_every: u64,

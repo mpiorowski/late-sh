@@ -24,6 +24,9 @@ ipnet.workspace = true
 # Async Runtime
 tokio = { workspace = true }
 
+# Memory allocator
+tikv-jemallocator = "0.6"
+
 # Database
 tokio-postgres = { workspace = true }
 deadpool-postgres.workspace = true
@@ -47,6 +50,7 @@ russh.workspace = true
 # Web / HTTP
 axum = { workspace = true, features = ["ws"] }
 reqwest = { workspace = true, features = ["json"] }
+image.workspace = true
 tower-http = { workspace = true, features = ["cors", "trace"] }
 qrcodegen.workspace = true
 rumenx-sudoku.workspace = true

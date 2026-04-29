@@ -53,11 +53,15 @@ impl App {
             && self.settings_modal_state.draft().username.is_empty()
             && !self.profile_state.profile().username.is_empty()
         {
-            self.settings_modal_state.open_from_profile(
-                self.profile_state.profile(),
-                self.chat.favorite_room_options(),
-                crate::app::settings_modal::ui::MODAL_WIDTH,
-            );
+            if self.profile_state.profile().show_settings_on_connect {
+                self.settings_modal_state.open_from_profile(
+                    self.profile_state.profile(),
+                    self.chat.favorite_room_options(),
+                    crate::app::settings_modal::ui::MODAL_WIDTH,
+                );
+            } else {
+                self.show_settings = false;
+            }
         }
 
         let mut updated = false;

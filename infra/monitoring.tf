@@ -20,6 +20,22 @@ resource "kubernetes_namespace_v1" "monitoring" {
   }
 }
 
+data "http" "grafana_dashboard_k8s" {
+  url = "https://grafana.com/api/dashboards/15661/revisions/latest/download"
+
+  request_headers = {
+    Accept = "application/json"
+  }
+}
+
+locals {
+  grafana_k8s_dashboard = replace(
+    data.http.grafana_dashboard_k8s.response_body,
+    "$${DS__VICTORIAMETRICS-PROD-ALL}",
+    "victoriametrics"
+  )
+}
+
 resource "kubernetes_config_map_v1" "otel_collector_config" {
   metadata {
     name      = "otel-collector-config"
@@ -61,7 +77,104 @@ resource "kubernetes_config_map_v1" "grafana_dashboards" {
 
   data = {
     "observability.json" = file("${path.module}/../monitoring/dashboards/observability.json")
+    "k8s-dashboard.json" = local.grafana_k8s_dashboard
   }
+}
+
+resource "helm_release" "vmagent" {
+  name       = "vmagent"
+  repository = "https://victoriametrics.github.io/helm-charts/"
+  chart      = "victoria-metrics-agent"
+  version    = "0.36.0"
+  namespace  = kubernetes_namespace_v1.monitoring.metadata[0].name
+
+  values = [
+    yamlencode({
+      fullnameOverride = "vmagent"
+
+      remoteWrite = [
+        {
+          url = "http://victoriametrics.monitoring.svc.cluster.local:8428/api/v1/write"
+        }
+      ]
+
+      extraArgs = {
+        "remoteWrite.label" = "origin_prometheus=rke2"
+      }
+
+      extraScrapeConfigs = [
+        {
+          job_name        = "kube-state-metrics"
+          honor_labels    = true
+          scrape_interval = "30s"
+
+          kubernetes_sd_configs = [
+            {
+              role = "endpoints"
+              namespaces = {
+                names = ["monitoring"]
+              }
+            }
+          ]
+
+          relabel_configs = [
+            {
+              source_labels = ["__meta_kubernetes_service_name"]
+              regex         = "kube-state-metrics"
+              action        = "keep"
+            },
+            {
+              source_labels = ["__meta_kubernetes_endpoint_port_name"]
+              regex         = "http"
+              action        = "keep"
+            }
+          ]
+        }
+      ]
+
+      resources = {
+        limits = {
+          cpu    = "250m"
+          memory = "256Mi"
+        }
+        requests = {
+          cpu    = "50m"
+          memory = "128Mi"
+        }
+      }
+    })
+  ]
+
+  depends_on = [
+    kubernetes_deployment_v1.victoriametrics
+  ]
+}
+
+resource "helm_release" "kube_state_metrics" {
+  name       = "kube-state-metrics"
+  repository = "https://prometheus-community.github.io/helm-charts"
+  chart      = "kube-state-metrics"
+  version    = "7.3.0"
+  namespace  = kubernetes_namespace_v1.monitoring.metadata[0].name
+
+  values = [
+    yamlencode({
+      fullnameOverride = "kube-state-metrics"
+
+      prometheusScrape = false
+
+      resources = {
+        limits = {
+          cpu    = "100m"
+          memory = "128Mi"
+        }
+        requests = {
+          cpu    = "10m"
+          memory = "32Mi"
+        }
+      }
+    })
+  ]
 }
 
 resource "kubernetes_persistent_volume_claim_v1" "victoriametrics_data" {
