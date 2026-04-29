@@ -35,7 +35,7 @@ async fn uppercase_b_on_dashboard_opens_cli_install_modal() {
     );
 
     app.handle_input(b"B");
-    wait_for_render_contains(&mut app, "BUILD SOURCE").await;
+    wait_for_render_contains(&mut app, "build from source").await;
     wait_for_render_contains(&mut app, "curl -fsSL https://cli.late.sh/install.sh | bash").await;
 }
 
@@ -44,13 +44,13 @@ async fn mouse_move_does_not_close_cli_install_modal() {
     let (_test_db, mut app) = make_app_harness().await;
 
     app.handle_input(b"B");
-    wait_for_render_contains(&mut app, "BUILD SOURCE").await;
+    wait_for_render_contains(&mut app, "build from source").await;
 
     app.handle_input(b"\x1b[<35;20;5M");
-    wait_for_render_contains(&mut app, "BUILD SOURCE").await;
+    wait_for_render_contains(&mut app, "build from source").await;
 
     app.handle_input(b"x");
-    assert!(!render_plain(&mut app).contains("BUILD SOURCE"));
+    assert!(!render_plain(&mut app).contains("build from source"));
 }
 
 #[tokio::test]
