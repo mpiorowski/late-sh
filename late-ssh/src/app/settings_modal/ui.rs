@@ -174,7 +174,11 @@ fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[0],
     );
 
-    let active_id = state.draft().theme_id.as_deref().unwrap_or("late");
+    let active_id = state
+        .draft()
+        .theme_id
+        .as_deref()
+        .unwrap_or(theme::DEFAULT_ID);
     let active_preview = theme::preview_for_id(active_id);
     let summary = Line::from(vec![
         Span::raw("  "),
@@ -447,8 +451,14 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             width,
             "Theme",
             value_span(
-                theme::label_for_id(state.draft().theme_id.as_deref().unwrap_or("late"))
-                    .to_string(),
+                theme::label_for_id(
+                    state
+                        .draft()
+                        .theme_id
+                        .as_deref()
+                        .unwrap_or(theme::DEFAULT_ID),
+                )
+                .to_string(),
                 theme::TEXT_BRIGHT(),
             ),
         )),

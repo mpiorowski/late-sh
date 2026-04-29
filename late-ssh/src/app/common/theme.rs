@@ -132,16 +132,16 @@ struct Palette {
 
 pub const OPTIONS: &[ThemeOption] = &[
     ThemeOption {
-        kind: ThemeKind::Late,
-        group: ThemeGroup::Core,
-        id: "late",
-        label: "Late",
-    },
-    ThemeOption {
         kind: ThemeKind::Contrast,
         group: ThemeGroup::Core,
         id: "contrast",
         label: "High Contrast",
+    },
+    ThemeOption {
+        kind: ThemeKind::Late,
+        group: ThemeGroup::Core,
+        id: "late",
+        label: "Late",
     },
     ThemeOption {
         kind: ThemeKind::Purple,
@@ -312,6 +312,8 @@ pub const OPTIONS: &[ThemeOption] = &[
         label: "Kirii",
     },
 ];
+
+pub const DEFAULT_ID: &str = "contrast";
 
 const PALETTE_LATE: Palette = Palette {
     bg_canvas: Color::Rgb(0, 0, 0),
@@ -1214,7 +1216,7 @@ const PALETTE_KIRII: Palette = Palette {
 };
 
 thread_local! {
-    static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Late) };
+    static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Contrast) };
 }
 
 pub fn normalize_id(id: &str) -> &'static str {
@@ -1256,7 +1258,13 @@ fn option_by_id(id: &str) -> ThemeOption {
         .iter()
         .copied()
         .find(|option| option.id.eq_ignore_ascii_case(id))
-        .unwrap_or(OPTIONS[0])
+        .unwrap_or_else(|| {
+            OPTIONS
+                .iter()
+                .copied()
+                .find(|option| option.id == DEFAULT_ID)
+                .unwrap_or(OPTIONS[0])
+        })
 }
 
 fn current_palette() -> &'static Palette {
@@ -1470,12 +1478,12 @@ mod tests {
 
     #[test]
     fn normalize_unknown_theme_to_default() {
-        assert_eq!(normalize_id("wat"), "late");
+        assert_eq!(normalize_id("wat"), "contrast");
     }
 
     #[test]
     fn cycle_theme_wraps() {
-        assert_eq!(cycle_id("kirii", true), "late");
-        assert_eq!(cycle_id("late", false), "kirii");
+        assert_eq!(cycle_id("kirii", true), "contrast");
+        assert_eq!(cycle_id("contrast", false), "kirii");
     }
 }

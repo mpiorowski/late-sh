@@ -20,7 +20,10 @@ use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
-use crate::app::state::{App, SessionConfig};
+use crate::app::{
+    common::theme,
+    state::{App, SessionConfig},
+};
 use crate::metrics;
 use crate::state::{ActivityEvent, State};
 
@@ -1229,7 +1232,7 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
 }
 
 fn late_ssh_theme_id(settings: &Value) -> String {
-    extract_theme_id(settings).unwrap_or_else(|| "late".to_string())
+    extract_theme_id(settings).unwrap_or_else(|| theme::DEFAULT_ID.to_string())
 }
 
 fn reject_publickey_only() -> Auth {

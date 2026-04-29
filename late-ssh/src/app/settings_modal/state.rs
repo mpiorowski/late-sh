@@ -450,7 +450,7 @@ impl SettingsModalState {
                 .theme_id
                 .as_deref()
                 .map(theme::normalize_id)
-                .unwrap_or("late");
+                .unwrap_or(theme::DEFAULT_ID);
             let changed = current != option.id;
             self.draft.theme_id = Some(option.id.to_string());
             self.keep_theme_cursor_visible();
@@ -1127,7 +1127,7 @@ impl SettingsModalState {
                     self.draft
                         .theme_id
                         .clone()
-                        .unwrap_or_else(|| "late".to_string()),
+                        .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
                 ),
                 enable_background_color: self.draft.enable_background_color,
                 show_dashboard_header: self.draft.show_dashboard_header,

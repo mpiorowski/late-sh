@@ -163,7 +163,7 @@ fn draw_late_fetch_strip(frame: &mut Frame, area: Rect, state: &ProfileModalStat
     let label = Style::default().fg(theme::AMBER_DIM());
     let value = Style::default().fg(theme::TEXT());
 
-    let theme_id = profile.theme_id.as_deref().unwrap_or("late");
+    let theme_id = profile.theme_id.as_deref().unwrap_or(theme::DEFAULT_ID);
     let created = profile
         .created_at
         .as_ref()

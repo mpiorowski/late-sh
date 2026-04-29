@@ -141,7 +141,7 @@ impl Profile {
             .filter(|value| !value.is_empty())
             .map(ToString::to_string)
             .or_else(|| extract_theme_id(&current_user.settings))
-            .unwrap_or_else(|| "late".to_string());
+            .unwrap_or_else(|| "contrast".to_string());
         let notify_format = params
             .notify_format
             .as_deref()
