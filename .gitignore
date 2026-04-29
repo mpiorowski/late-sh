@@ -2,6 +2,7 @@ target/
 tmp/
 node_modules
 .env
+.env.local
 .claude
 .codex
 result
