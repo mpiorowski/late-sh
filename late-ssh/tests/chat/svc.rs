@@ -171,6 +171,7 @@ async fn dm_message_rejoins_recipient_who_left() {
             ChatEvent::MessageCreated {
                 message,
                 target_user_ids,
+                ..
             } => {
                 saw_created = true;
                 assert_eq!(message.room_id, room.id);
@@ -303,13 +304,144 @@ async fn emits_send_failed_event_when_non_admin_posts_to_announcements() {
 }
 
 #[tokio::test]
-async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() {
+async fn admin_can_toggle_message_pin() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut state_rx = service.subscribe_state();
+    let client = test_db.db.get().await.expect("db client");
+
+    let admin = create_test_user(&test_db.db, "pin_admin").await;
+    let room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("general room");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: admin.id,
+            body: "pin me".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    service.toggle_message_pin_task(message.id, true);
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let updated = ChatMessage::get(&client, message.id)
+                .await
+                .expect("load message")
+                .expect("message exists");
+            if updated.pinned {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("pin timeout");
+}
+
+#[tokio::test]
+async fn non_admin_cannot_toggle_message_pin() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let user = create_test_user(&test_db.db, "pin_non_admin").await;
+    let room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("general room");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: user.id,
+            body: "do not pin me".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    service.toggle_message_pin_task(message.id, false);
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let updated = ChatMessage::get(&client, message.id)
+        .await
+        .expect("load message")
+        .expect("message exists");
+    assert!(!updated.pinned);
+}
+
+#[tokio::test]
+async fn pinned_messages_task_loads_global_pins() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let (pinned_tx, mut pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    let client = test_db.db.get().await.expect("db client");
+
+    let author = create_test_user(&test_db.db, "pin_author").await;
+    let visible_room = ChatRoom::get_or_create_public_room(&client, "pin-visible")
+        .await
+        .expect("visible room");
+    let hidden_room = ChatRoom::get_or_create_public_room(&client, "pin-hidden")
+        .await
+        .expect("hidden room");
+
+    let visible_message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: visible_room.id,
+            user_id: author.id,
+            body: "visible pin".to_string(),
+        },
+    )
+    .await
+    .expect("visible message");
+    let hidden_message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: hidden_room.id,
+            user_id: author.id,
+            body: "hidden pin".to_string(),
+        },
+    )
+    .await
+    .expect("hidden message");
+    ChatMessage::set_pinned(&client, visible_message.id, true)
+        .await
+        .expect("pin visible");
+    ChatMessage::set_pinned(&client, hidden_message.id, true)
+        .await
+        .expect("pin hidden");
+
+    service.load_pinned_messages_task(pinned_tx);
+
+    timeout(Duration::from_secs(2), pinned_rx.changed())
+        .await
+        .expect("pinned timeout")
+        .expect("pinned changed");
+    let messages = pinned_rx.borrow_and_update().clone();
+    assert!(messages.iter().any(|message| message.body == "visible pin"));
+    assert!(messages.iter().any(|message| message.body == "hidden pin"));
+}
+
+#[tokio::test]
+async fn publishes_summary_with_rooms_and_unread_counts() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
     let client = test_db.db.get().await.expect("db client");
 
     let target_user = create_test_user(&test_db.db, "target").await;
@@ -368,7 +500,9 @@ async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() 
     .await
     .expect("language message");
 
-    service.list_chats_task(target_user.id, Some(lang_room.id));
+    let (_room_tx, room_rx) = tokio::sync::watch::channel(Some(lang_room.id));
+    let (mut state_rx, _refresh_tx, refresh_task) =
+        service.start_user_refresh_task(target_user.id, room_rx);
 
     timeout(Duration::from_secs(2), state_rx.changed())
         .await
@@ -378,10 +512,6 @@ async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() 
 
     assert_eq!(snapshot.user_id, Some(target_user.id));
     assert_eq!(snapshot.general_room_id, Some(general_room.id));
-    assert_eq!(
-        snapshot.usernames.get(&author_user.id).map(String::as_str),
-        Some("author")
-    );
     assert_eq!(snapshot.unread_counts.get(&general_room.id), Some(&1));
     assert_eq!(snapshot.unread_counts.get(&lang_room.id), Some(&1));
     assert!(snapshot.ignored_user_ids.is_empty());
@@ -391,21 +521,22 @@ async fn publishes_snapshot_with_selected_general_usernames_and_unread_counts() 
         .iter()
         .find(|(room, _)| room.id == lang_room.id)
         .expect("selected room present");
-    assert!(selected_room.1.iter().any(|m| m.id == lang_message.id));
+    assert!(
+        selected_room.1.is_empty(),
+        "summary refresh should not preload selected room history"
+    );
 
-    // General always ships with its tail populated, even when another room is
-    // selected — the dashboard card depends on this to stay warm.
     let general_in_snapshot = snapshot
         .chat_rooms
         .iter()
         .find(|(room, _)| room.id == general_room.id)
         .expect("general room present");
     assert!(
-        general_in_snapshot
-            .1
-            .iter()
-            .any(|m| m.id == general_message.id)
+        general_in_snapshot.1.is_empty(),
+        "summary refresh should not preload general room history"
     );
+    assert_ne!(general_message.id, lang_message.id);
+    refresh_task.abort();
 }
 
 #[tokio::test]
@@ -415,7 +546,6 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut state_rx = service.subscribe_state();
     let client = test_db.db.get().await.expect("db client");
 
     let target_user = create_test_user(&test_db.db, "target2").await;
@@ -461,7 +591,9 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
     .await
     .expect("general message");
 
-    service.list_chats_task(target_user.id, None);
+    let (_room_tx, room_rx) = tokio::sync::watch::channel(None);
+    let (mut state_rx, _refresh_tx, refresh_task) =
+        service.start_user_refresh_task(target_user.id, room_rx);
 
     timeout(Duration::from_secs(2), state_rx.changed())
         .await
@@ -475,8 +607,8 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
         .find(|(room, _)| room.id == general_room.id)
         .expect("general room present");
     assert!(
-        general_entry.1.iter().any(|m| m.id == general_message.id),
-        "expected fallback to first room (general) with messages"
+        general_entry.1.is_empty(),
+        "summary refresh should not preload fallback room history"
     );
     let other_entry = snapshot
         .chat_rooms
@@ -485,18 +617,20 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
         .expect("lang room present");
     assert!(
         other_entry.1.is_empty(),
-        "non-selected room should not include messages in snapshot"
+        "non-selected room should not include messages in summary"
     );
+    assert_eq!(general_message.room_id, general_room.id);
+    refresh_task.abort();
 }
 
 #[tokio::test]
-async fn publishes_snapshot_with_favorite_room_history() {
+async fn room_tail_task_loads_favorite_room_history() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut state_rx = service.subscribe_state();
+    let mut events = service.subscribe_events();
     let client = test_db.db.get().await.expect("db client");
 
     let target_user = create_test_user(&test_db.db, "favorite_target").await;
@@ -550,32 +684,41 @@ async fn publishes_snapshot_with_favorite_room_history() {
             show_dashboard_header: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            show_settings_on_connect: true,
             favorite_room_ids: vec![favorite_room.id],
         },
     )
     .await
     .expect("update favorites");
 
-    service.list_chats_task(target_user.id, Some(general_room.id));
+    service.load_room_tail_task(target_user.id, favorite_room.id);
 
-    timeout(Duration::from_secs(2), state_rx.changed())
+    let event = timeout(Duration::from_secs(2), events.recv())
         .await
-        .expect("state timeout")
-        .expect("watch changed");
-    let snapshot = state_rx.borrow_and_update().clone();
-
-    let favorite_in_snapshot = snapshot
-        .chat_rooms
-        .iter()
-        .find(|(room, _)| room.id == favorite_room.id)
-        .expect("favorite room present");
-    assert!(
-        favorite_in_snapshot
-            .1
-            .iter()
-            .any(|message| message.body == "favorite backlog"),
-        "favorite room should preload its history in the snapshot"
-    );
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::RoomTailLoaded {
+            user_id,
+            room_id,
+            messages,
+            usernames,
+            ..
+        } => {
+            assert_eq!(user_id, target_user.id);
+            assert_eq!(room_id, favorite_room.id);
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message.body == "favorite backlog")
+            );
+            assert_eq!(
+                usernames.get(&author_user.id).map(String::as_str),
+                Some("favorite_author")
+            );
+        }
+        other => panic!("expected RoomTailLoaded, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -585,7 +728,6 @@ async fn publishes_snapshot_with_persisted_ignored_user_ids() {
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut state_rx = service.subscribe_state();
     let client = test_db.db.get().await.expect("db client");
 
     let target_user = create_test_user(&test_db.db, "target_ignore_snapshot").await;
@@ -605,7 +747,9 @@ async fn publishes_snapshot_with_persisted_ignored_user_ids() {
         .await
         .expect("persist ignored user id");
 
-    service.list_chats_task(target_user.id, Some(general_room.id));
+    let (_room_tx, room_rx) = tokio::sync::watch::channel(Some(general_room.id));
+    let (mut state_rx, _refresh_tx, refresh_task) =
+        service.start_user_refresh_task(target_user.id, room_rx);
 
     timeout(Duration::from_secs(2), state_rx.changed())
         .await
@@ -614,16 +758,16 @@ async fn publishes_snapshot_with_persisted_ignored_user_ids() {
     let snapshot = state_rx.borrow_and_update().clone();
 
     assert_eq!(snapshot.ignored_user_ids, vec![ignored_user.id]);
+    refresh_task.abort();
 }
 
 #[tokio::test]
-async fn publishes_snapshot_with_discover_rooms_for_public_rooms_user_has_not_joined() {
+async fn discover_task_lists_public_rooms_user_has_not_joined() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let mut state_rx = service.subscribe_state();
     let client = test_db.db.get().await.expect("db client");
 
     let target_user = create_test_user(&test_db.db, "discover_target").await;
@@ -676,19 +820,24 @@ async fn publishes_snapshot_with_discover_rooms_for_public_rooms_user_has_not_jo
     .await
     .expect("joined message");
 
-    service.list_chats_task(target_user.id, Some(general_room.id));
+    let mut events = service.subscribe_events();
+    service.list_discover_rooms_task(target_user.id);
 
-    timeout(Duration::from_secs(2), state_rx.changed())
+    let event = timeout(Duration::from_secs(2), events.recv())
         .await
-        .expect("state timeout")
-        .expect("watch changed");
-    let snapshot = state_rx.borrow_and_update().clone();
-
-    assert_eq!(snapshot.discover_rooms.len(), 1);
-    assert_eq!(snapshot.discover_rooms[0].room_id, discover_room.id);
-    assert_eq!(snapshot.discover_rooms[0].slug, "rust");
-    assert_eq!(snapshot.discover_rooms[0].member_count, 1);
-    assert_eq!(snapshot.discover_rooms[0].message_count, 1);
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::DiscoverRoomsLoaded { user_id, rooms } => {
+            assert_eq!(user_id, target_user.id);
+            assert_eq!(rooms.len(), 1);
+            assert_eq!(rooms[0].room_id, discover_room.id);
+            assert_eq!(rooms[0].slug, "rust");
+            assert_eq!(rooms[0].member_count, 1);
+            assert_eq!(rooms[0].message_count, 1);
+        }
+        other => panic!("expected DiscoverRoomsLoaded, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -766,18 +915,18 @@ async fn shared_service_refresh_tasks_publish_per_session_snapshots() {
 
     assert_eq!(snapshot_a.user_id, Some(user_a.id));
     assert_eq!(snapshot_b.user_id, Some(user_b.id));
-    assert!(snapshot_a.chat_rooms.iter().any(|(room, messages)| {
-        room.id == room_a.id
-            && messages
-                .iter()
-                .any(|message| message.body == "only user a sees this")
-    }));
-    assert!(snapshot_b.chat_rooms.iter().any(|(room, messages)| {
-        room.id == room_b.id
-            && messages
-                .iter()
-                .any(|message| message.body == "only user b sees this")
-    }));
+    assert!(
+        snapshot_a
+            .chat_rooms
+            .iter()
+            .any(|(room, messages)| { room.id == room_a.id && messages.is_empty() })
+    );
+    assert!(
+        snapshot_b
+            .chat_rooms
+            .iter()
+            .any(|(room, messages)| { room.id == room_b.id && messages.is_empty() })
+    );
 
     room_a_tx
         .send(Some(room_a.id))

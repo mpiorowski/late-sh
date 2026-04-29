@@ -4,7 +4,7 @@ services:
     build:
       context: .
       target: dev-ssh
-    container_name: late-ssh
+    container_name: ${INSTANCE}-ssh
     ports:
       - "${LATE_SSH_PORT}:${LATE_SSH_PORT}"
       - "${LATE_API_PORT}:${LATE_API_PORT}"
@@ -50,7 +50,7 @@ services:
     build:
       context: .
       target: dev-web
-    container_name: late-web
+    container_name: ${INSTANCE}-web
     ports:
       - "${LATE_WEB_PORT}:${LATE_WEB_PORT}"
     env_file: .env
@@ -69,10 +69,10 @@ services:
       retries: 3
 
   postgres:
-    container_name: late-postgres
+    container_name: ${INSTANCE}-postgres
     image: postgres:18
     ports:
-      - 5433:5432
+      - "${LATE_PG_HOST_PORT}:5432"
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
@@ -85,19 +85,19 @@ services:
 
   icecast:
     image: libretime/icecast:2.4.4
-    container_name: late-icecast
+    container_name: ${INSTANCE}-icecast
     networks:
       default:
         aliases:
           - icecast-sv
     ports:
-      - "8000:8000"
+      - "${LATE_ICECAST_HOST_PORT}:8000"
     volumes:
       - ./infra/icecast/icecast.xml:/etc/icecast2/icecast.xml:ro
 
   liquidsoap:
     image: savonet/liquidsoap:v2.4.0
-    container_name: late-liquidsoap
+    container_name: ${INSTANCE}-liquidsoap
     depends_on:
       - icecast
     volumes:
@@ -109,7 +109,7 @@ services:
       - ./music:/music:ro
     command: ["liquidsoap", "/etc/liquidsoap/radio.liq"]
     ports:
-      - "1234:1234"
+      - "${LATE_LIQUIDSOAP_HOST_PORT}:1234"
 
 volumes:
   cargo-registry-ssh:

@@ -33,6 +33,7 @@ const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const SHOW_GAMES_SIDEBAR_KEY: &str = "show_games_sidebar";
+const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
@@ -362,6 +363,13 @@ pub fn extract_show_right_sidebar(settings: &Value) -> bool {
 pub fn extract_show_games_sidebar(settings: &Value) -> bool {
     settings
         .get(SHOW_GAMES_SIDEBAR_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+pub fn extract_show_settings_on_connect(settings: &Value) -> bool {
+    settings
+        .get(SHOW_SETTINGS_ON_CONNECT_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }

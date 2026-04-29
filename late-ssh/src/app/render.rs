@@ -229,6 +229,7 @@ impl App {
             my_vote: vote_my_vote,
             show_header: show_dashboard_header,
             favorites_strip: dashboard_strip_pins.as_deref(),
+            pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),

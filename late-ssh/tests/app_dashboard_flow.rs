@@ -222,6 +222,7 @@ async fn dashboard_lazy_primes_favorite_histories_without_opening_chat() {
             show_dashboard_header: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            show_settings_on_connect: true,
             favorite_room_ids: vec![alpha.id, beta.id],
         },
     )
@@ -289,6 +290,7 @@ async fn dashboard_switching_to_favorite_clears_strip_unread_count() {
             show_dashboard_header: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            show_settings_on_connect: true,
             favorite_room_ids: vec![alpha.id, beta.id],
         },
     )
@@ -389,6 +391,7 @@ async fn dashboard_favorites_strip_is_mouse_clickable() {
             show_dashboard_header: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            show_settings_on_connect: true,
             favorite_room_ids: vec![alpha.id, beta.id],
         },
     )

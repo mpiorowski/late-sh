@@ -42,16 +42,20 @@ pub enum ThemeGroup {
     Coffee,
     Ports,
     Copper,
+    MARATHON,
+    JoelG,
     Experimental,
 }
 
 impl ThemeGroup {
-    pub const ALL: [ThemeGroup; 6] = [
+    pub const ALL: [ThemeGroup; 8] = [
         ThemeGroup::Core,
         ThemeGroup::Catppuccin,
         ThemeGroup::Coffee,
         ThemeGroup::Ports,
         ThemeGroup::Copper,
+        ThemeGroup::MARATHON,
+        ThemeGroup::JoelG,
         ThemeGroup::Experimental,
     ];
 
@@ -62,6 +66,8 @@ impl ThemeGroup {
             ThemeGroup::Coffee => "Coffee",
             ThemeGroup::Ports => "Ports",
             ThemeGroup::Copper => "Copper",
+            ThemeGroup::MARATHON => "MARATHON",
+            ThemeGroup::JoelG => "Joel G",
             ThemeGroup::Experimental => "Experimental",
         }
     }
@@ -253,49 +259,49 @@ pub const OPTIONS: &[ThemeOption] = &[
     },
     ThemeOption {
         kind: ThemeKind::Arachne,
-        group: ThemeGroup::Experimental,
+        group: ThemeGroup::MARATHON,
         id: "arachne",
         label: "Arachne",
     },
     ThemeOption {
         kind: ThemeKind::CyberAcme,
-        group: ThemeGroup::Experimental,
+        group: ThemeGroup::MARATHON,
         id: "cyberacme",
         label: "CyberAcme",
     },
     ThemeOption {
         kind: ThemeKind::NuCaloric,
-        group: ThemeGroup::Experimental,
+        group: ThemeGroup::MARATHON,
         id: "nucaloric",
         label: "NuCaloric",
     },
     ThemeOption {
         kind: ThemeKind::Sekiguchi,
-        group: ThemeGroup::Experimental,
+        group: ThemeGroup::MARATHON,
         id: "sekiguchi",
         label: "Sekiguchi",
     },
     ThemeOption {
         kind: ThemeKind::Traxus,
-        group: ThemeGroup::Experimental,
+        group: ThemeGroup::MARATHON,
         id: "traxus",
         label: "Traxus",
     },
     ThemeOption {
         kind: ThemeKind::Mida,
-        group: ThemeGroup::Experimental,
+        group: ThemeGroup::MARATHON,
         id: "mida",
         label: "Mida",
     },
     ThemeOption {
         kind: ThemeKind::ENA,
-        group: ThemeGroup::Experimental,
+        group: ThemeGroup::JoelG,
         id: "ena",
         label: "ENA",
     },
     ThemeOption {
         kind: ThemeKind::ENADreamBbq,
-        group: ThemeGroup::Experimental,
+        group: ThemeGroup::JoelG,
         id: "enadreambbq",
         label: "ENA Dream BBQ",
     },
