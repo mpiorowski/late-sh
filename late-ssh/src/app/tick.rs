@@ -76,6 +76,22 @@ impl App {
                     self.set_artboard_banned(banned, expires_at);
                     updated = true;
                 }
+                SessionMessage::PermissionsChanged { permissions } => {
+                    self.set_permissions(permissions);
+                    updated = true;
+                }
+                SessionMessage::RoomRemoved {
+                    room_id,
+                    slug,
+                    message,
+                } => {
+                    self.chat.remove_room_for_moderation(room_id);
+                    self.chat.request_list();
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&format!(
+                        "{message}: #{slug}"
+                    )));
+                    updated = true;
+                }
             }
         }
         self.expire_artboard_ban_if_needed();

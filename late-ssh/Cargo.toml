@@ -26,6 +26,7 @@ tokio = { workspace = true }
 
 # Database
 tokio-postgres = { workspace = true }
+deadpool-postgres.workspace = true
 crossterm.workspace = true
 dartboard-core.workspace = true
 dartboard-editor.workspace = true

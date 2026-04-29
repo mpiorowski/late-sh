@@ -321,6 +321,13 @@ impl ChatState {
         std::mem::take(&mut self.requested_quit)
     }
 
+    pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
+        self.permissions = permissions;
+        self.is_admin = permissions.is_admin();
+        self.news.set_is_admin(self.is_admin);
+        self.showcase.set_is_admin(self.is_admin);
+    }
+
     pub(crate) fn submit_mod_command(&mut self, command: String) -> Uuid {
         let request_id = Uuid::now_v7();
         if let Some((success, lines)) =
@@ -1674,6 +1681,21 @@ impl ChatState {
             messages.retain(|m| m.id != message_id);
         }
         self.message_reactions.remove(&message_id);
+    }
+
+    pub(crate) fn remove_room_for_moderation(&mut self, room_id: Uuid) {
+        self.rooms.retain(|(room, _)| room.id != room_id);
+        self.unread_counts.remove(&room_id);
+        if self.selected_room_id == Some(room_id) {
+            self.selected_room_id = None;
+        }
+        if self.visible_room_id == Some(room_id) {
+            self.visible_room_id = None;
+        }
+        if self.composer_room_id == Some(room_id) {
+            self.clear_composer_after_submit();
+        }
+        self.sync_selection();
     }
 
     fn replace_message(&mut self, message: ChatMessage) {

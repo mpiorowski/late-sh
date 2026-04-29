@@ -834,6 +834,26 @@ impl App {
         }
     }
 
+    pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
+        if self.permissions == permissions {
+            return;
+        }
+        let was_admin = self.permissions.is_admin();
+        let was_moderator = self.permissions.is_moderator();
+        self.permissions = permissions;
+        self.is_admin = permissions.is_admin();
+        self.chat.set_permissions(permissions);
+        self.bonsai_state.is_admin = permissions.is_admin();
+        self.banner = Some(Banner::success(&format!(
+            "Permissions updated: admin={} moderator={}",
+            permissions.is_admin(),
+            permissions.is_moderator()
+        )));
+        if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
+            self.show_mod_modal = false;
+        }
+    }
+
     pub fn set_artboard_banned_for_tests(&mut self, banned: bool) {
         self.set_artboard_banned(banned, None);
     }

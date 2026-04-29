@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
 
+use deadpool_postgres::GenericClient;
 use late_core::{
     MutexRecover,
     db::Db,
@@ -14,7 +15,6 @@ use late_core::{
         chat_message_reaction::{ChatMessageReaction, ChatMessageReactionSummary},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
-        moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         server_ban::ServerBan,
         user::User,
@@ -42,6 +42,7 @@ pub struct ChatService {
     notification_svc: super::notifications::svc::NotificationService,
     active_users: Option<ActiveUsers>,
     session_registry: Option<SessionRegistry>,
+    force_admin: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -243,6 +244,7 @@ impl ChatService {
             notification_svc,
             active_users: None,
             session_registry: None,
+            force_admin: false,
         }
     }
 
@@ -258,6 +260,11 @@ impl ChatService {
 
     pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
         self.session_registry = Some(session_registry);
+        self
+    }
+
+    pub fn with_force_admin(mut self, force_admin: bool) -> Self {
+        self.force_admin = force_admin;
         self
     }
 
@@ -871,7 +878,7 @@ impl ChatService {
             anyhow::bail!("edited body is empty");
         }
 
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let existing = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("message not found"))?;
@@ -885,14 +892,19 @@ impl ChatService {
         };
         ensure_decision(permissions, Action::EditMessage, target_tier)?;
 
-        let params = ChatMessageParams {
-            room_id: existing.room_id,
-            user_id: existing.user_id,
-            body: new_body.to_string(),
-        };
-        let updated = ChatMessage::update(&client, message_id, params).await?;
+        let tx = client.transaction().await?;
+        let row = tx
+            .query_one(
+                "UPDATE chat_messages
+                 SET body = $1, updated = current_timestamp
+                 WHERE id = $2
+                 RETURNING *",
+                &[&new_body, &message_id],
+            )
+            .await?;
+        let updated = ChatMessage::from(row);
         record_mod_audit(
-            &client,
+            &tx,
             user_id,
             ModAuditRecord {
                 permissions,
@@ -905,6 +917,7 @@ impl ChatService {
             },
         )
         .await?;
+        tx.commit().await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, existing.room_id).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageEdited {
             message: updated,
@@ -1595,7 +1608,7 @@ impl ChatService {
         message_id: Uuid,
         permissions: Permissions,
     ) -> Result<Uuid> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         // Look up the message to get room_id
         let msg = ChatMessage::get(&client, message_id)
             .await?
@@ -1609,16 +1622,22 @@ impl ChatService {
             TargetTier::from_user_flags(author.is_admin, author.is_moderator)
         };
         ensure_decision(permissions, Action::DeleteMessage, target_tier)?;
+        let tx = client.transaction().await?;
         let count = if target_tier == TargetTier::Own {
-            ChatMessage::delete_by_author(&client, message_id, user_id).await?
+            tx.execute(
+                "DELETE FROM chat_messages WHERE id = $1 AND user_id = $2",
+                &[&message_id, &user_id],
+            )
+            .await?
         } else {
-            ChatMessage::delete_by_admin(&client, message_id).await?
+            tx.execute("DELETE FROM chat_messages WHERE id = $1", &[&message_id])
+                .await?
         };
         if count == 0 {
             anyhow::bail!("Cannot delete this message");
         }
         record_mod_audit(
-            &client,
+            &tx,
             user_id,
             ModAuditRecord {
                 permissions,
@@ -1631,6 +1650,7 @@ impl ChatService {
             },
         )
         .await?;
+        tx.commit().await?;
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
     }
@@ -1822,7 +1842,7 @@ impl ChatService {
         permissions: Permissions,
         request: RoomModRequest,
     ) -> Result<Vec<String>> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, &request.slug).await?;
         let target = find_user_by_mod_name(&client, &request.username).await?;
         ensure_not_self(actor_user_id, target.id)?;
@@ -1833,25 +1853,48 @@ impl ChatService {
             RoomModAction::Unban => Action::UnbanFromRoom,
         };
         ensure_decision(permissions, matrix_action, target_tier)?;
+        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let tx = client.transaction().await?;
         match request.action {
             RoomModAction::Kick => {
-                ChatRoomMember::leave(&client, room.id, target.id).await?;
+                tx.execute(
+                    "DELETE FROM chat_room_members WHERE room_id = $1 AND user_id = $2",
+                    &[&room.id, &target.id],
+                )
+                .await?;
             }
             RoomModAction::Ban => {
                 let expires_at = request.duration.map(|d| Utc::now() + d);
-                RoomBan::activate(
-                    &client,
-                    room.id,
-                    target.id,
-                    actor_user_id,
-                    request.reason.clone(),
-                    expires_at,
+                tx.execute(
+                    "INSERT INTO room_bans
+                     (room_id, target_user_id, actor_user_id, reason, expires_at)
+                     VALUES ($1, $2, $3, $4, $5)
+                     ON CONFLICT (room_id, target_user_id)
+                     DO UPDATE SET actor_user_id = EXCLUDED.actor_user_id,
+                                   reason = EXCLUDED.reason,
+                                   expires_at = EXCLUDED.expires_at,
+                                   updated = current_timestamp",
+                    &[
+                        &room.id,
+                        &target.id,
+                        &actor_user_id,
+                        &request.reason,
+                        &expires_at,
+                    ],
                 )
                 .await?;
-                ChatRoomMember::leave(&client, room.id, target.id).await?;
+                tx.execute(
+                    "DELETE FROM chat_room_members WHERE room_id = $1 AND user_id = $2",
+                    &[&room.id, &target.id],
+                )
+                .await?;
             }
             RoomModAction::Unban => {
-                RoomBan::delete_for_room_and_user(&client, room.id, target.id).await?;
+                tx.execute(
+                    "DELETE FROM room_bans WHERE room_id = $1 AND target_user_id = $2",
+                    &[&room.id, &target.id],
+                )
+                .await?;
             }
         }
         let audit_action = match request.action {
@@ -1860,7 +1903,7 @@ impl ChatService {
             RoomModAction::Unban => "room_unban",
         };
         record_mod_audit(
-            &client,
+            &tx,
             actor_user_id,
             ModAuditRecord {
                 permissions,
@@ -1873,12 +1916,64 @@ impl ChatService {
             },
         )
         .await?;
+        tx.commit().await?;
+        if matches!(request.action, RoomModAction::Kick | RoomModAction::Ban) {
+            let notified = self
+                .notify_room_removed(
+                    target.id,
+                    room.id,
+                    room_slug.clone(),
+                    match request.action {
+                        RoomModAction::Kick => "Removed from room".to_string(),
+                        RoomModAction::Ban => "Banned from room".to_string(),
+                        RoomModAction::Unban => unreachable!(),
+                    },
+                )
+                .await;
+            if notified > 0 {
+                tracing::info!(
+                    target_user_id = %target.id,
+                    room_id = %room.id,
+                    notified,
+                    "room moderation command updated active sessions"
+                );
+            }
+        }
         Ok(vec![format!(
             "{} @{} in #{}",
             request.action.past_tense(),
             target.username,
-            room.slug.unwrap_or(room.kind)
+            room_slug
         )])
+    }
+
+    async fn notify_room_removed(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        slug: String,
+        message: String,
+    ) -> usize {
+        let Some(registry) = self.session_registry.as_ref() else {
+            return 0;
+        };
+        let mut notified = 0;
+        for token in self.session_tokens_for_user_id(user_id) {
+            if registry
+                .send_message(
+                    &token,
+                    SessionMessage::RoomRemoved {
+                        room_id,
+                        slug: slug.clone(),
+                        message: message.clone(),
+                    },
+                )
+                .await
+            {
+                notified += 1;
+            }
+        }
+        notified
     }
 
     async fn mod_room_admin(
@@ -1889,7 +1984,7 @@ impl ChatService {
         slug: &str,
         value: Option<String>,
     ) -> Result<Vec<String>> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, slug).await?;
         let is_system = matches!(room.slug.as_deref(), Some("general" | "announcements"));
         let target_tier = if is_system {
@@ -1910,14 +2005,14 @@ impl ChatService {
                     anyhow::bail!("usage: room rename #old #new");
                 };
                 let normalized = normalize_mod_slug(&new_slug)?;
-                client
-                    .execute(
-                        "UPDATE chat_rooms SET slug = $1, updated = current_timestamp WHERE id = $2",
-                        &[&normalized, &room.id],
-                    )
-                    .await?;
+                let tx = client.transaction().await?;
+                tx.execute(
+                    "UPDATE chat_rooms SET slug = $1, updated = current_timestamp WHERE id = $2",
+                    &[&normalized, &room.id],
+                )
+                .await?;
                 record_mod_audit(
-                    &client,
+                    &tx,
                     actor_user_id,
                     ModAuditRecord {
                         permissions,
@@ -1930,6 +2025,7 @@ impl ChatService {
                     },
                 )
                 .await?;
+                tx.commit().await?;
                 Ok(vec![format!("renamed #{label} to #{normalized}")])
             }
             RoomAdminAction::Public | RoomAdminAction::Private => {
@@ -1938,14 +2034,15 @@ impl ChatService {
                     RoomAdminAction::Private => "private",
                     RoomAdminAction::Rename | RoomAdminAction::Delete => unreachable!(),
                 };
-                client
+                let tx = client.transaction().await?;
+                tx
                     .execute(
                         "UPDATE chat_rooms SET visibility = $1, updated = current_timestamp WHERE id = $2",
                         &[&visibility, &room.id],
                     )
                     .await?;
                 record_mod_audit(
-                    &client,
+                    &tx,
                     actor_user_id,
                     ModAuditRecord {
                         permissions,
@@ -1958,14 +2055,15 @@ impl ChatService {
                     },
                 )
                 .await?;
+                tx.commit().await?;
                 Ok(vec![format!("set #{label} {visibility}")])
             }
             RoomAdminAction::Delete => {
-                client
-                    .execute("DELETE FROM chat_rooms WHERE id = $1", &[&room.id])
+                let tx = client.transaction().await?;
+                tx.execute("DELETE FROM chat_rooms WHERE id = $1", &[&room.id])
                     .await?;
                 record_mod_audit(
-                    &client,
+                    &tx,
                     actor_user_id,
                     ModAuditRecord {
                         permissions,
@@ -1978,6 +2076,7 @@ impl ChatService {
                     },
                 )
                 .await?;
+                tx.commit().await?;
                 Ok(vec![format!("deleted #{label}")])
             }
         }
@@ -1992,7 +2091,7 @@ impl ChatService {
         duration: Option<chrono::Duration>,
         reason: String,
     ) -> Result<Vec<String>> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let target = find_user_by_mod_name(&client, username).await?;
         ensure_not_self(actor_user_id, target.id)?;
         let target_tier = TargetTier::from_user_flags(target.is_admin, target.is_moderator);
@@ -2003,22 +2102,37 @@ impl ChatService {
             ServerUserAction::Unban => Action::UnbanUser,
         };
         ensure_decision(permissions, matrix_action, target_tier)?;
+        let tx = client.transaction().await?;
         match action {
             ServerUserAction::Kick => {}
             ServerUserAction::Ban => {
                 let expires_at = duration.map(|d| Utc::now() + d);
-                ServerBan::activate(
-                    &client,
-                    target.id,
-                    &target.fingerprint,
-                    actor_user_id,
-                    &reason,
-                    expires_at,
+                tx.execute(
+                    "INSERT INTO server_bans
+                     (ban_type, target_user_id, fingerprint, ip_address, snapshot_username,
+                      actor_user_id, reason, expires_at)
+                     VALUES ('user', $1, $2, NULL, NULL, $3, $4, $5)",
+                    &[
+                        &target.id,
+                        &target.fingerprint,
+                        &actor_user_id,
+                        &reason,
+                        &expires_at,
+                    ],
                 )
                 .await?;
             }
             ServerUserAction::Unban => {
-                ServerBan::delete_active_for_user(&client, target.id, &target.fingerprint).await?;
+                tx.execute(
+                    "DELETE FROM server_bans
+                     WHERE (
+                           (ban_type = 'user' AND target_user_id = $1)
+                           OR (ban_type = 'fingerprint' AND fingerprint = $2)
+                       )
+                       AND (expires_at IS NULL OR expires_at > current_timestamp)",
+                    &[&target.id, &target.fingerprint],
+                )
+                .await?;
             }
         }
         let audit_action = match action {
@@ -2027,7 +2141,7 @@ impl ChatService {
             ServerUserAction::Unban => "server_unban",
         };
         record_mod_audit(
-            &client,
+            &tx,
             actor_user_id,
             ModAuditRecord {
                 permissions,
@@ -2040,6 +2154,7 @@ impl ChatService {
             },
         )
         .await?;
+        tx.commit().await?;
         if matches!(action, ServerUserAction::Kick | ServerUserAction::Ban) {
             let tokens = self.session_tokens_for_user_id(target.id);
             let terminated = self
@@ -2068,7 +2183,7 @@ impl ChatService {
         duration: Option<chrono::Duration>,
         reason: String,
     ) -> Result<Vec<String>> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let target_tier = TargetTier::Regular;
         let matrix_action = match action {
             ServerIpAction::Ban if duration.is_some() => Action::TempBanUser,
@@ -2079,28 +2194,44 @@ impl ChatService {
         let snapshot = matches!(action, ServerIpAction::Ban)
             .then(|| self.snapshot_for_ip_ban(ip_address))
             .flatten();
+        let tx = client.transaction().await?;
         match action {
             ServerIpAction::Ban => {
                 let expires_at = duration.map(|d| Utc::now() + d);
-                ServerBan::activate_ip(
-                    &client,
-                    ip_address,
-                    snapshot.as_ref().map(|snapshot| snapshot.username.as_str()),
-                    snapshot
-                        .as_ref()
-                        .and_then(|snapshot| snapshot.fingerprint.as_deref()),
-                    actor_user_id,
-                    &reason,
-                    expires_at,
+                let snapshot_username =
+                    snapshot.as_ref().map(|snapshot| snapshot.username.as_str());
+                let snapshot_fingerprint = snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.fingerprint.as_deref());
+                tx.execute(
+                    "INSERT INTO server_bans
+                     (ban_type, target_user_id, fingerprint, ip_address, snapshot_username,
+                      actor_user_id, reason, expires_at)
+                     VALUES ('ip', NULL, $1, $2, $3, $4, $5, $6)",
+                    &[
+                        &snapshot_fingerprint,
+                        &ip_address,
+                        &snapshot_username,
+                        &actor_user_id,
+                        &reason,
+                        &expires_at,
+                    ],
                 )
                 .await?;
             }
             ServerIpAction::Unban => {
-                ServerBan::delete_active_for_ip_address(&client, ip_address).await?;
+                tx.execute(
+                    "DELETE FROM server_bans
+                     WHERE ip_address = $1
+                       AND ban_type = 'ip'
+                       AND (expires_at IS NULL OR expires_at > current_timestamp)",
+                    &[&ip_address],
+                )
+                .await?;
             }
         }
         record_mod_audit(
-            &client,
+            &tx,
             actor_user_id,
             ModAuditRecord {
                 permissions,
@@ -2118,6 +2249,7 @@ impl ChatService {
             },
         )
         .await?;
+        tx.commit().await?;
         if matches!(action, ServerIpAction::Ban) {
             let tokens = self.session_tokens_for_ip(ip_address);
             let terminated = self.terminate_session_tokens(tokens, "server IP ban").await;
@@ -2167,6 +2299,22 @@ impl ChatService {
                     &token,
                     SessionMessage::ArtboardBanChanged { banned, expires_at },
                 )
+                .await
+            {
+                notified += 1;
+            }
+        }
+        notified
+    }
+
+    async fn notify_permissions_changed(&self, user_id: Uuid, permissions: Permissions) -> usize {
+        let Some(registry) = self.session_registry.as_ref() else {
+            return 0;
+        };
+        let mut notified = 0;
+        for token in self.session_tokens_for_user_id(user_id) {
+            if registry
+                .send_message(&token, SessionMessage::PermissionsChanged { permissions })
                 .await
             {
                 notified += 1;
@@ -2231,7 +2379,7 @@ impl ChatService {
         duration: Option<chrono::Duration>,
         reason: String,
     ) -> Result<Vec<String>> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let target = find_user_by_mod_name(&client, username).await?;
         ensure_not_self(actor_user_id, target.id)?;
         let target_tier = TargetTier::from_user_flags(target.is_admin, target.is_moderator);
@@ -2243,23 +2391,32 @@ impl ChatService {
         let expires_at = matches!(action, ArtboardAction::Ban)
             .then(|| duration.map(|d| Utc::now() + d))
             .flatten();
+        let tx = client.transaction().await?;
         match action {
             ArtboardAction::Ban => {
-                ArtboardBan::activate(
-                    &client,
-                    target.id,
-                    actor_user_id,
-                    reason.clone(),
-                    expires_at,
+                tx.execute(
+                    "INSERT INTO artboard_bans
+                     (target_user_id, actor_user_id, reason, expires_at)
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT (target_user_id)
+                     DO UPDATE SET actor_user_id = EXCLUDED.actor_user_id,
+                                   reason = EXCLUDED.reason,
+                                   expires_at = EXCLUDED.expires_at,
+                                   updated = current_timestamp",
+                    &[&target.id, &actor_user_id, &reason, &expires_at],
                 )
                 .await?;
             }
             ArtboardAction::Unban => {
-                ArtboardBan::delete_for_user(&client, target.id).await?;
+                tx.execute(
+                    "DELETE FROM artboard_bans WHERE target_user_id = $1",
+                    &[&target.id],
+                )
+                .await?;
             }
         }
         record_mod_audit(
-            &client,
+            &tx,
             actor_user_id,
             ModAuditRecord {
                 permissions,
@@ -2272,6 +2429,7 @@ impl ChatService {
             },
         )
         .await?;
+        tx.commit().await?;
         let notified = self
             .notify_artboard_ban_status(
                 target.id,
@@ -2301,7 +2459,7 @@ impl ChatService {
         action: RoleAction,
         username: &str,
     ) -> Result<Vec<String>> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let target = find_user_by_mod_name(&client, username).await?;
         ensure_not_self(actor_user_id, target.id)?;
         let matrix_action = match action {
@@ -2315,11 +2473,22 @@ impl ChatService {
             RoleAction::RevokeMod => ("is_moderator", false, "revoked moderator from"),
             RoleAction::GrantAdmin => ("is_admin", true, "granted admin to"),
         };
+        let new_is_admin = if matches!(action, RoleAction::GrantAdmin) {
+            true
+        } else {
+            target.is_admin
+        };
+        let new_is_moderator = match action {
+            RoleAction::GrantMod => true,
+            RoleAction::RevokeMod => false,
+            RoleAction::GrantAdmin => target.is_moderator,
+        };
+        let tx = client.transaction().await?;
         let query =
             format!("UPDATE users SET {column} = $1, updated = current_timestamp WHERE id = $2");
-        client.execute(&query, &[&value, &target.id]).await?;
+        tx.execute(&query, &[&value, &target.id]).await?;
         record_mod_audit(
-            &client,
+            &tx,
             actor_user_id,
             ModAuditRecord {
                 permissions,
@@ -2332,6 +2501,20 @@ impl ChatService {
             },
         )
         .await?;
+        tx.commit().await?;
+        let notified = self
+            .notify_permissions_changed(
+                target.id,
+                Permissions::new(new_is_admin || self.force_admin, new_is_moderator),
+            )
+            .await;
+        if notified > 0 {
+            tracing::info!(
+                target_user_id = %target.id,
+                notified,
+                "role moderation command updated active session permissions"
+            );
+        }
         Ok(vec![format!("{label} @{}", target.username)])
     }
 }
@@ -2882,7 +3065,7 @@ fn ensure_not_self(actor_user_id: Uuid, target_user_id: Uuid) -> Result<()> {
 }
 
 async fn record_mod_audit(
-    client: &tokio_postgres::Client,
+    client: &impl GenericClient,
     actor_user_id: Uuid,
     record: ModAuditRecord,
 ) -> Result<()> {
@@ -2890,15 +3073,20 @@ async fn record_mod_audit(
         .permissions
         .should_audit(record.matrix_action, record.target_tier)
     {
-        ModerationAuditLog::record(
-            client,
-            actor_user_id,
-            record.audit_action,
-            record.target_kind,
-            record.target_id,
-            record.metadata,
-        )
-        .await?;
+        client
+            .execute(
+                "INSERT INTO moderation_audit_log
+                 (actor_user_id, action, target_kind, target_id, metadata)
+                 VALUES ($1, $2, $3, $4, $5)",
+                &[
+                    &actor_user_id,
+                    &record.audit_action,
+                    &record.target_kind,
+                    &record.target_id,
+                    &record.metadata,
+                ],
+            )
+            .await?;
     }
     Ok(())
 }

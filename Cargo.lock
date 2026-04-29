@@ -2708,6 +2708,7 @@ dependencies = [
  "dartboard-editor",
  "dartboard-local",
  "dartboard-tui",
+ "deadpool-postgres",
  "emojis",
  "getrandom 0.4.2",
  "ipnet",

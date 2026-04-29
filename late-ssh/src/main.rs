@@ -119,7 +119,8 @@ async fn main() -> anyhow::Result<()> {
         notification_service.clone(),
         active_users.clone(),
     )
-    .with_session_registry(session_registry.clone());
+    .with_session_registry(session_registry.clone())
+    .with_force_admin(config.force_admin);
     let ai_service = AiService::new(
         config.ai.enabled,
         config.ai.api_key.clone(),

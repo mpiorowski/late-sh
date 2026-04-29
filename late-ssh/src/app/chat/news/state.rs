@@ -52,6 +52,10 @@ impl State {
         &self.articles
     }
 
+    pub fn set_is_admin(&mut self, is_admin: bool) {
+        self.is_admin = is_admin;
+    }
+
     pub fn list_articles(&self) {
         self.article_service.list_articles_task();
         self.article_service.refresh_unread_count_task(self.user_id);
