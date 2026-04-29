@@ -13,6 +13,7 @@
 
 use anyhow::Result;
 use getrandom::SysRng;
+use late_core::tunnel_protocol::SshInputEvent;
 use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::{Channel, ChannelId};
@@ -30,7 +31,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::handshake::HandshakeContext;
-use crate::proxy::{RESIZE_QUEUE_CAP, run_session};
+use crate::proxy::{INPUT_QUEUE_CAP, run_session};
 
 /// How long to wait for an upstream proxy to finish writing its PROXY v1
 /// header. Mirrors the late-ssh `:2222` listener's value (250ms).
@@ -72,9 +73,13 @@ pub struct ClientHandler {
     over_limit: bool,
     _permit: Option<OwnedSemaphorePermit>,
     channel: Option<Channel<Msg>>,
-    /// Sender feeding `proxy::run_session`'s resize-event mpsc. Stays
-    /// `None` until `shell_request` spawns the proxy task.
-    resize_tx: Option<mpsc::Sender<(u16, u16)>>,
+    /// Sender feeding `proxy::run_session`'s ordered input-event
+    /// mpsc. Both `Handler::data` (Bytes) and
+    /// `Handler::window_change_request` (Resize) push here so the
+    /// proxy sees them in russh's dispatch order — not muxed by a
+    /// `tokio::select!` between two queues. Stays `None` until
+    /// `shell_request` spawns the proxy task.
+    input_tx: Option<mpsc::Sender<SshInputEvent>>,
 }
 
 impl Server {
@@ -109,7 +114,7 @@ impl Server {
             over_limit,
             _permit: permit,
             channel: None,
-            resize_tx: None,
+            input_tx: None,
         }
     }
 }
@@ -244,8 +249,8 @@ impl russh::server::Handler for ClientHandler {
             session_id: Uuid::now_v7().to_string(),
         };
 
-        let (resize_tx, resize_rx) = mpsc::channel::<(u16, u16)>(RESIZE_QUEUE_CAP);
-        self.resize_tx = Some(resize_tx);
+        let (input_tx, input_rx) = mpsc::channel::<SshInputEvent>(INPUT_QUEUE_CAP);
+        self.input_tx = Some(input_tx);
 
         let ws_url = self.config.backend_tunnel_url.clone();
         let secret = self.config.backend_shared_secret.clone();
@@ -264,7 +269,7 @@ impl russh::server::Handler for ClientHandler {
         );
 
         tokio::spawn(async move {
-            if let Err(e) = run_session(channel, ws_url, secret, ctx, resize_rx).await {
+            if let Err(e) = run_session(channel, ws_url, secret, ctx, input_rx).await {
                 tracing::warn!(error = ?e, session_id = %session_id, "tunnel proxy session failed");
             }
             // Either path (Ok or Err): drop the SSH channel by closing
@@ -293,12 +298,12 @@ impl russh::server::Handler for ClientHandler {
         self.cols = cols;
         self.rows = rows;
 
-        if let Some(tx) = &self.resize_tx {
+        if let Some(tx) = &self.input_tx {
             // try_send: russh awaits this callback and we don't want
-            // to backpressure the russh task on a slow consumer. Cap=4
-            // is plenty for human-driven resize events; on overflow we
-            // drop the stale event and let the next one win.
-            if let Err(e) = tx.try_send((cols, rows)) {
+            // to backpressure the russh task on a slow consumer.
+            // Resize traffic is sparse (a human dragging a window
+            // corner); contention is pathological, not steady-state.
+            if let Err(e) = tx.try_send(SshInputEvent::Resize { cols, rows }) {
                 tracing::debug!(error = ?e, cols, rows, "resize event dropped");
             }
         } else {
@@ -314,13 +319,42 @@ impl russh::server::Handler for ClientHandler {
     async fn data(
         &mut self,
         _channel: ChannelId,
-        _data: &[u8],
+        data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // Intentional no-op. russh delivers each ChannelMsg::Data to
-        // both the handler callback AND the per-channel queue read by
-        // `Channel::into_stream` — the proxy task consumes bytes via
-        // the latter, so handling them here would double-process.
+        // Push inbound PTY bytes onto the same FIFO that
+        // window_change_request feeds, so the proxy task emits WS
+        // Binary and Text frames in russh's dispatch order. Bypassing
+        // `Channel::into_stream`'s read half (which we drop in
+        // run_session) is what makes the ordering durable: that
+        // queue and resize_tx used to be muxed by `tokio::select!`,
+        // which has no fairness guarantee.
+        let Some(tx) = &self.input_tx else {
+            return Ok(());
+        };
+        if let Err(e) = tx.try_send(SshInputEvent::Bytes(data.to_vec())) {
+            tracing::warn!(error = ?e, len = data.len(), "input event dropped");
+        }
+        Ok(())
+    }
+
+    async fn channel_eof(
+        &mut self,
+        _channel: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // Drop the input sender so the proxy's input_rx.recv()
+        // returns None and the session loop ends as SshClosed.
+        self.input_tx = None;
+        Ok(())
+    }
+
+    async fn channel_close(
+        &mut self,
+        _channel: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.input_tx = None;
         Ok(())
     }
 }

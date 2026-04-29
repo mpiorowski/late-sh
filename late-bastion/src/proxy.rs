@@ -1,39 +1,46 @@
 //! Per-shell-channel proxy task: dial late-ssh `/tunnel` and pump
 //! bytes between the user's SSH channel and the WebSocket.
 //!
-//! Phase 4 (this commit): outer reconnect loop. The SSH stream is
-//! split once and reused across multiple WS sessions; on a retryable
-//! WS close (1000/1001/1006) or a transient dial error (TCP I/O,
-//! HTTP 5xx), we redial with exponential backoff and a 30-second
-//! total budget. Terminal close codes (4000–4003) and HTTP 4xx
-//! responses end the session.
+//! Inbound side (SSH → WS) goes through a single `SshInputEvent`
+//! mpsc fed by the russh handler callbacks (`Handler::data` for
+//! Bytes, `Handler::window_change_request` for Resize). Russh
+//! dispatches both serially in its per-connection task, so the
+//! queue carries them in SSH-wire order; the proxy emits WS Binary
+//! and Text frames in that order, and WebSocket preserves frame
+//! ordering on the wire (RFC 6455). This is what makes coordinate-
+//! sensitive features (mouse SGR reports, paste runs, block
+//! selections) safe across resizes.
+//!
+//! Outbound side (WS → SSH) writes binary payloads through a
+//! `ChannelTx` writer; we drop the channel's read half entirely so
+//! russh's internal data queue stays empty and never stalls.
+//!
+//! Reconnect: on a retryable WS close (1000/1001/1006) or a
+//! transient dial error (TCP I/O, HTTP 5xx), we redial with
+//! exponential backoff and a 30-second total budget. Terminal close
+//! codes (4000–4003) and HTTP 4xx responses end the session.
 //!
 //! See `PERSISTENT-CONNECTION-GATEWAY.md` §4–§5.
 
 use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
-use late_core::tunnel_protocol::ControlFrame;
+use late_core::tunnel_protocol::{ControlFrame, SshInputEvent};
 use russh::Channel;
 use russh::server::Msg;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 
 use crate::handshake::{HandshakeContext, build_request};
 
-/// Bound on the resize-event mpsc. Resizes are sparse (a human
-/// dragging a terminal corner), so a tiny buffer is plenty; if it
-/// ever fills up we'd rather drop one stale resize than backpressure
-/// russh's handler task.
-pub const RESIZE_QUEUE_CAP: usize = 4;
-
-/// Per-iteration buffer size for SSH→WS reads. PTY input is dominated
-/// by single keystrokes; even pasted content arrives in modest chunks.
-/// Output direction (WS→SSH) doesn't go through this buffer — full
-/// frames are written via `write_all`.
-const SSH_READ_BUF: usize = 8 * 1024;
+/// Bound on the input-event mpsc that carries Bytes + Resize from the
+/// russh handler callbacks to the proxy task. Sized for a brief stall
+/// in the proxy's WS write path under typical keystroke rates;
+/// resize events are sparse and just ride along.
+pub const INPUT_QUEUE_CAP: usize = 256;
 
 /// Initial wait before the first reconnect attempt.
 const BACKOFF_INITIAL: Duration = Duration::from_millis(100);
@@ -197,17 +204,31 @@ pub async fn run_session(
     ws_url: String,
     secret: String,
     mut ctx: HandshakeContext,
-    mut resize_rx: mpsc::Receiver<(u16, u16)>,
+    mut input_rx: mpsc::Receiver<SshInputEvent>,
 ) -> anyhow::Result<()> {
     let session_id = ctx.session_id.clone();
 
-    // Take the SSH channel as a single AsyncRead+AsyncWrite stream
-    // ONCE for the lifetime of the user's SSH connection. The byte
-    // halves outlive any single WS session so a backend redeploy
-    // doesn't tear down the SSH channel.
-    let stream = channel.into_stream();
-    let (mut ssh_reader, mut ssh_writer) = tokio::io::split(stream);
-    let mut ssh_buf = vec![0u8; SSH_READ_BUF];
+    // Split the channel into halves; we only keep the writer.
+    //
+    // Inbound bytes come through `input_rx`, which is fed by
+    // `Handler::data` in russh's per-connection task — the same task
+    // that fires `Handler::window_change_request` (which also feeds
+    // `input_rx`). russh dispatches both callbacks serially, so the
+    // queue carries data and resize in their original SSH wire order.
+    //
+    // Dropping the read half is safe: russh's internal `chan.send`
+    // for ChannelMsg::Data does `unwrap_or(())` on a closed receiver,
+    // so the channel queue stays empty and there's no flow-control
+    // stall. We were only using that path to read bytes, and
+    // `Handler::data` gives us the same bytes in better-defined order.
+    let (read_half, write_half) = channel.split();
+    drop(read_half);
+    // `make_writer()` returns `impl AsyncWrite + 'static`, but its
+    // poll_write keeps an in-flight permit future across yields, so
+    // it's not Unpin. Box::pin to satisfy the Unpin bound on
+    // AsyncWriteExt's helper methods.
+    let mut ssh_writer: Pin<Box<dyn AsyncWrite + Send + 'static>> =
+        Box::pin(write_half.make_writer());
 
     // Becomes true after the first successful pump ends with a
     // retryable close. Gates the plain-text reconnect message: a long
@@ -300,25 +321,43 @@ pub async fn run_session(
 
         let outcome = loop {
             tokio::select! {
-                // SSH (user) → WS (backend) — opaque binary frames.
-                n = ssh_reader.read(&mut ssh_buf) => {
-                    match n {
-                        Ok(0) => {
-                            tracing::debug!(session_id = %session_id, "ssh reader EOF");
-                            break PumpOutcome::SshClosed;
-                        }
-                        Ok(n) => {
+                // SSH (user) → WS (backend). Single FIFO carrying
+                // both Bytes and Resize in russh's dispatch order;
+                // emitted as WS Binary or WS Text accordingly. WS
+                // frames preserve order on the wire (RFC 6455), so
+                // the backend reads them back in the same order.
+                event = input_rx.recv() => {
+                    let Some(event) = event else {
+                        tracing::debug!(session_id = %session_id, "ssh input channel closed");
+                        break PumpOutcome::SshClosed;
+                    };
+                    match event {
+                        SshInputEvent::Bytes(bytes) => {
                             if let Err(e) = ws_sink
-                                .send(WsMessage::Binary(ssh_buf[..n].to_vec().into()))
+                                .send(WsMessage::Binary(bytes.into()))
                                 .await
                             {
                                 tracing::debug!(error = ?e, session_id = %session_id, "ws send (binary) failed; treating as retryable");
                                 break PumpOutcome::Retryable;
                             }
                         }
-                        Err(e) => {
-                            tracing::debug!(error = ?e, session_id = %session_id, "ssh read failed");
-                            break PumpOutcome::SshClosed;
+                        SshInputEvent::Resize { cols, rows } => {
+                            // Stash the latest dimensions on the
+                            // handshake context so the next reconnect
+                            // upgrades with the current PTY size.
+                            ctx.cols = cols;
+                            ctx.rows = rows;
+                            let frame = match (ControlFrame::Resize { cols, rows }).to_json() {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    tracing::warn!(error = ?e, "encode resize");
+                                    continue;
+                                }
+                            };
+                            if let Err(e) = ws_sink.send(WsMessage::Text(frame.into())).await {
+                                tracing::debug!(error = ?e, session_id = %session_id, "ws send (resize) failed; treating as retryable");
+                                break PumpOutcome::Retryable;
+                            }
                         }
                     }
                 }
@@ -370,34 +409,6 @@ pub async fn run_session(
                         Some(Err(e)) => {
                             tracing::debug!(error = ?e, session_id = %session_id, "ws recv error; treating as retryable");
                             break PumpOutcome::Retryable;
-                        }
-                    }
-                }
-
-                // Local resize events (from window_change_request) → WS text.
-                // Also tracked in `ctx` so the next reconnect's handshake
-                // headers carry the latest PTY size.
-                resize = resize_rx.recv() => {
-                    match resize {
-                        Some((cols, rows)) => {
-                            ctx.cols = cols;
-                            ctx.rows = rows;
-                            let frame = match (ControlFrame::Resize { cols, rows }).to_json() {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::warn!(error = ?e, "encode resize");
-                                    continue;
-                                }
-                            };
-                            if let Err(e) = ws_sink.send(WsMessage::Text(frame.into())).await {
-                                tracing::debug!(error = ?e, session_id = %session_id, "ws send (resize) failed; treating as retryable");
-                                break PumpOutcome::Retryable;
-                            }
-                        }
-                        None => {
-                            // Sender dropped (handler torn down). The SSH side
-                            // is going away too — finish the loop on the next
-                            // ssh_reader poll.
                         }
                     }
                 }

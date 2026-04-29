@@ -81,6 +81,7 @@ Env-driven. See `src/config.rs` for the canonical list. Required vars:
   - ✅ **4/3** — plain-text "reconnecting to late.sh…" written into the SSH stream after a 500ms gap (escalates to "still reconnecting…" at 5s). Preceded by a terminal-reset prefix (`\x1b[?1049l\x1b[0m\x1b[2J\x1b[H`) so the previous TUI's alt-screen / styling is cleared. Suppressed on the *first* dial — only fires when reopening a previously-good session.
   - ✅ **4/4** — bastion sends a WS Ping every 2s; backend's tungstenite layer auto-pongs. >5s of silence (no inbound frame of any kind) is treated as a wedged backend and breaks the pump into the reconnect loop. In-cluster RTT is sub-ms, so the threshold has plenty of slack.
   - ⏳ **4/5** — live integration test against a real `service-ssh` restart.
+- ✅ **Ordering refactor** — both inbound paths (bastion handler, backend `/tunnel` receive loop) collapsed onto a single `mpsc<SshInputEvent>` (`Bytes` | `Resize`). Closes the prior `tokio::select!`-mux + eager-resize race that could surface `[A, R, B]` as `[R, AB]` to the app. Critical for coordinate-sensitive features (mouse SGR, paste, artboard).
 - ⏳ **Phase 5** — production cutover (`:22` swing).
 
 ## Running locally (Phase 1, smoke only)

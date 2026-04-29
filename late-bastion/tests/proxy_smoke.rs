@@ -499,6 +499,86 @@ async fn bastion_forwards_window_change_as_resize_text_frame() {
     bastion.shutdown();
 }
 
+/// SSH wire order: data, window-change, data. The proxy MUST emit
+/// the corresponding WS frames in that exact order — Binary, Text,
+/// Binary — so coordinate-sensitive backends (mouse SGR, paste, the
+/// artboard) see the resize at the right moment in the byte stream.
+///
+/// This test guards against regression of the bastion's prior
+/// design, which routed inbound bytes through `channel.into_stream`
+/// (a separate queue) and resizes through `resize_tx` (another
+/// queue), then `tokio::select!`'d between them — `select!` has no
+/// fairness or arrival-order guarantee, so a [A, R, B] wire sequence
+/// could surface as [R, AB] or [AB, R].
+#[tokio::test]
+async fn bastion_preserves_data_resize_data_order() {
+    let mut backend = MockBackend::spawn().await.expect("backend");
+    let bastion = TestBastion::spawn(backend.ws_url()).await.expect("bastion");
+
+    let (_session, channel) = open_user_session(bastion.addr).await;
+    let _headers = backend.wait_for_handshake().await;
+
+    // Issue the three operations serially from one task. russh's
+    // per-connection task dispatches the resulting SSH messages in
+    // call order, so this models a real client doing data-resize-data.
+    channel.data(&b"A"[..]).await.expect("data A");
+    channel
+        .window_change(132, 50, 0, 0)
+        .await
+        .expect("window_change");
+    channel.data(&b"B"[..]).await.expect("data B");
+
+    // Collect the three meaningful frames the bastion emits, skipping
+    // any pings/pongs that ride along.
+    let mut meaningful: Vec<WsMessage> = Vec::with_capacity(3);
+    while meaningful.len() < 3 {
+        let Some(frame) = backend.next_frame().await else {
+            panic!("backend stream ended early; got {meaningful:?}");
+        };
+        match &frame {
+            WsMessage::Binary(_) | WsMessage::Text(_) => meaningful.push(frame),
+            _ => {}
+        }
+    }
+
+    match &meaningful[0] {
+        WsMessage::Binary(bytes) => assert_eq!(
+            bytes.as_ref(),
+            b"A",
+            "first frame should be the 'A' Binary; got {:?}",
+            bytes.as_ref()
+        ),
+        other => panic!("first frame should be Binary('A'); got {other:?}"),
+    }
+
+    match &meaningful[1] {
+        WsMessage::Text(text) => {
+            let parsed = ControlFrame::from_json(text.as_str()).expect("parse resize");
+            assert_eq!(
+                parsed,
+                ControlFrame::Resize {
+                    cols: 132,
+                    rows: 50
+                },
+                "second frame should be the resize Text"
+            );
+        }
+        other => panic!("second frame should be Text(resize); got {other:?}"),
+    }
+
+    match &meaningful[2] {
+        WsMessage::Binary(bytes) => assert_eq!(
+            bytes.as_ref(),
+            b"B",
+            "third frame should be the 'B' Binary; got {:?}",
+            bytes.as_ref()
+        ),
+        other => panic!("third frame should be Binary('B'); got {other:?}"),
+    }
+
+    bastion.shutdown();
+}
+
 /// One accepted-or-rejected connection's behavior, used by ScriptedBackend
 /// to drive multi-attempt reconnect tests.
 #[derive(Clone, Debug)]
