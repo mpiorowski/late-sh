@@ -299,7 +299,15 @@ impl ChatRoom {
         let count = client
             .execute(
                 "INSERT INTO chat_room_members (room_id, user_id)
-                 SELECT $1, id FROM users
+                 SELECT $1, id
+                 FROM users
+                 WHERE NOT EXISTS (
+                     SELECT 1
+                     FROM room_bans
+                     WHERE room_bans.room_id = $1
+                       AND room_bans.target_user_id = users.id
+                       AND (room_bans.expires_at IS NULL OR room_bans.expires_at > current_timestamp)
+                 )
                  ON CONFLICT (room_id, user_id) DO NOTHING",
                 &[&room_id],
             )

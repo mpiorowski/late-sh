@@ -185,6 +185,9 @@ impl GhostService {
             bot.id,
             ActiveUser {
                 username: bot.username.clone(),
+                fingerprint: None,
+                peer_ip: None,
+                sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),
             },
@@ -347,7 +350,7 @@ impl GhostService {
             None,
             body,
             Uuid::now_v7(),
-            false,
+            crate::authz::Permissions::default(),
         );
 
         Ok(())
@@ -452,7 +455,7 @@ impl GhostService {
             Some("general".to_string()),
             safe_reply,
             Uuid::now_v7(),
-            false,
+            crate::authz::Permissions::default(),
         );
 
         Ok(())
@@ -608,7 +611,7 @@ impl GhostService {
             Some("general".to_string()),
             safe_reply,
             Uuid::now_v7(),
-            false,
+            crate::authz::Permissions::default(),
         );
 
         Ok(())
@@ -680,7 +683,7 @@ impl GhostService {
             None,
             safe_reply,
             Uuid::now_v7(),
-            false,
+            crate::authz::Permissions::default(),
         );
 
         Ok(())

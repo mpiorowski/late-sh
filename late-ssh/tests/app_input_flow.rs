@@ -751,6 +751,29 @@ async fn exit_command_opens_quit_confirm_and_stays_client_side() {
 }
 
 #[tokio::test]
+async fn bare_mod_command_opens_moderation_modal() {
+    let (_test_db, mut app) = chat_compose_app("mod-command-open").await;
+
+    app.handle_input(b"/mod\r");
+
+    wait_for_render_contains(&mut app, " Moderation ").await;
+    wait_for_render_contains(&mut app, "access denied: moderator or admin only").await;
+}
+
+#[tokio::test]
+async fn prefixed_mod_command_in_chat_points_to_modal() {
+    let (_test_db, mut app) = chat_compose_app("mod-command-chat-reject").await;
+
+    app.handle_input(b"/mod help\r");
+
+    wait_for_render_contains(
+        &mut app,
+        "open /mod first; moderation commands only run in the modal",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn ignore_command_hides_messages_and_persists_across_refresh() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "ignore-flow-viewer").await;
@@ -798,7 +821,7 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
         Some("general".to_string()),
         post_ignore_body.to_string(),
         Uuid::now_v7(),
-        false,
+        late_ssh::authz::Permissions::default(),
     );
     wait_until(
         || async {

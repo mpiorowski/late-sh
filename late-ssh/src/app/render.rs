@@ -20,7 +20,7 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
     },
-    dashboard, help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
+    dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, settings_modal,
     state::{App, NotificationMode},
     visualizer::Visualizer,
 };
@@ -123,6 +123,8 @@ struct DrawContext<'a> {
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
+    show_mod_modal: bool,
+    mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_bonsai_modal: bool,
@@ -363,6 +365,8 @@ impl App {
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
+                        show_mod_modal: self.show_mod_modal,
+                        mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
@@ -633,6 +637,10 @@ impl App {
 
         if ctx.show_settings {
             settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
+        }
+
+        if ctx.show_mod_modal {
+            mod_modal::ui::draw(frame, inner, ctx.mod_modal_state);
         }
 
         if ctx.show_profile_modal {

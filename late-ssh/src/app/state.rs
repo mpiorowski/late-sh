@@ -24,13 +24,14 @@ use crate::{
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
         common::primitives::{Banner, Screen},
-        help_modal, profile,
+        help_modal, mod_modal, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal,
         visualizer::Visualizer,
         vote,
         vote::svc::{Genre, VoteService},
     },
+    authz::Permissions,
     session::{
         ClientAudioState, PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry,
     },
@@ -149,7 +150,7 @@ pub struct SessionConfig {
     pub active_users: Option<ActiveUsers>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
-    pub is_admin: bool,
+    pub permissions: Permissions,
 
     /// Voting
     pub my_vote: Option<Genre>,
@@ -182,9 +183,11 @@ pub struct App {
     pub(crate) splash_hint: String,
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
+    pub(crate) show_mod_modal: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
+    pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
     pub(crate) vt_input: crate::app::input::VtInputParser,
@@ -210,6 +213,7 @@ pub struct App {
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) activity: VecDeque<ActivityEvent>,
     pub(crate) user_id: Uuid,
+    pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
 
     /// Voting
@@ -584,7 +588,7 @@ impl App {
                 config.user_id,
                 config.bonsai_service.clone(),
                 tree,
-                config.is_admin,
+                config.permissions.is_admin(),
             )
         } else {
             // Fallback: create a default dead-ish state (should not happen in practice)
@@ -601,7 +605,7 @@ impl App {
                     seed: config.user_id.as_u128() as i64,
                     is_alive: true,
                 },
-                config.is_admin,
+                config.permissions.is_admin(),
             )
         };
         let bonsai_care_state = config
@@ -647,9 +651,11 @@ impl App {
             splash_hint,
             show_quit_confirm: false,
             show_help: false,
+            show_mod_modal: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
+            mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
             vt_input: crate::app::input::VtInputParser::default(),
@@ -671,13 +677,14 @@ impl App {
             activity_feed_rx: config.activity_feed_rx,
             activity: VecDeque::new(),
             user_id: config.user_id,
-            is_admin: config.is_admin,
+            permissions: config.permissions,
+            is_admin: config.permissions.is_admin(),
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
                 config.chat_service,
                 config.notification_service,
                 config.user_id,
-                config.is_admin,
+                config.permissions,
                 active_users.clone(),
                 config.article_service.clone(),
                 config.showcase_service.clone(),

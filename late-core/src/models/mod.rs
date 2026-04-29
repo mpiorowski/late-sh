@@ -1,4 +1,5 @@
 pub mod artboard;
+pub mod artboard_ban;
 pub mod article;
 pub mod article_feed_read;
 pub mod bonsai;
@@ -11,9 +12,12 @@ pub mod game_room;
 pub mod leaderboard;
 pub mod mention_feed_read;
 pub mod minesweeper;
+pub mod moderation_audit_log;
 pub mod nonogram;
 pub mod notification;
 pub mod profile;
+pub mod room_ban;
+pub mod server_ban;
 pub mod showcase;
 pub mod showcase_feed_read;
 pub mod solitaire;

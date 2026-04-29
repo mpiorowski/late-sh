@@ -30,6 +30,10 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        for output in self.chat.take_mod_outputs() {
+            self.mod_modal_state
+                .append_result(output.success, output.lines);
+        }
         self.sync_visible_chat_room();
         if self.chat.pending_chat_screen_switch {
             self.chat.pending_chat_screen_switch = false;
@@ -63,6 +67,10 @@ impl App {
                 SessionMessage::Viz(viz) => {
                     self.push_browser_frame(viz);
                     updated = true;
+                }
+                SessionMessage::Terminate { reason } => {
+                    tracing::info!(reason, "session terminated by control message");
+                    self.running = false;
                 }
             }
         }

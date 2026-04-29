@@ -27,6 +27,7 @@ use late_ssh::app::rooms::blackjack::svc::BlackjackService;
 use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
+use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config};
 use late_ssh::session::{PairControlMessage, PairedClientRegistry, SessionRegistry};
 use late_ssh::state::ActivityEvent;
@@ -84,6 +85,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
+    let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
         db.clone(),
         "127.0.0.1:0".to_string(),
@@ -92,7 +94,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         activity_tx.clone(),
     );
     let notification_service = NotificationService::new(db.clone());
-    let chat_service = ChatService::new(db.clone(), notification_service.clone());
+    let chat_service = ChatService::new_with_active_users(
+        db.clone(),
+        notification_service.clone(),
+        active_users.clone(),
+    )
+    .with_session_registry(session_registry.clone());
     let ai_service = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let showcase_service = late_ssh::app::chat::showcase::svc::ShowcaseService::new(db.clone());
@@ -153,7 +160,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         leaderboard_service,
         now_playing_rx,
         activity_feed: activity_tx,
-        session_registry: SessionRegistry::new(),
+        session_registry,
         paired_client_registry: PairedClientRegistry::new(),
         web_chat_registry: late_ssh::web::WebChatRegistry::new(),
         ssh_attempt_limiter,
@@ -247,7 +254,7 @@ pub fn make_app_with_chat_service(
         session_rx: None,
         now_playing_rx: None,
         user_id,
-        is_admin: false,
+        permissions: Permissions::default(),
         my_vote: None,
         active_users: None,
         activity_feed_rx: None,
@@ -347,7 +354,7 @@ pub fn make_app_with_paired_client(
         session_rx: None,
         now_playing_rx: None,
         user_id,
-        is_admin: false,
+        permissions: Permissions::default(),
         my_vote: None,
         active_users: None,
         activity_feed_rx: None,

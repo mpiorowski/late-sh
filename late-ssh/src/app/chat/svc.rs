@@ -1,24 +1,34 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use uuid::Uuid;
 
 use late_core::{
+    MutexRecover,
     db::Db,
     models::{
+        artboard_ban::ArtboardBan,
         bonsai::Tree,
         chat_message::{ChatMessage, ChatMessageParams},
         chat_message_reaction::{ChatMessageReaction, ChatMessageReactionSummary},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
+        moderation_audit_log::ModerationAuditLog,
+        room_ban::RoomBan,
+        server_ban::ServerBan,
         user::User,
     },
 };
+use serde_json::{Value, json};
 use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, info_span};
 
 use crate::app::bonsai::state::stage_for;
+use crate::authz::{Action, Permissions, TargetTier};
 use crate::metrics;
+use crate::session::{SessionMessage, SessionRegistry};
+use crate::state::ActiveUsers;
 
 const HISTORY_LIMIT: i64 = 1000;
 const DELTA_LIMIT: i64 = 256;
@@ -30,6 +40,8 @@ pub struct ChatService {
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     evt_tx: broadcast::Sender<ChatEvent>,
     notification_svc: super::notifications::svc::NotificationService,
+    active_users: Option<ActiveUsers>,
+    session_registry: Option<SessionRegistry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +66,24 @@ pub struct ChatSnapshot {
     pub all_usernames: Vec<String>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
+}
+
+struct RoomModRequest {
+    action: RoomModAction,
+    slug: String,
+    username: String,
+    duration: Option<chrono::Duration>,
+    reason: String,
+}
+
+struct ModAuditRecord {
+    permissions: Permissions,
+    matrix_action: Action,
+    target_tier: TargetTier,
+    audit_action: &'static str,
+    target_kind: &'static str,
+    target_id: Option<Uuid>,
+    metadata: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -192,6 +222,12 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    ModCommandOutput {
+        user_id: Uuid,
+        request_id: Uuid,
+        lines: Vec<String>,
+        success: bool,
+    },
 }
 
 impl ChatService {
@@ -205,13 +241,183 @@ impl ChatService {
             snapshot_rx,
             evt_tx,
             notification_svc,
+            active_users: None,
+            session_registry: None,
         }
     }
+
+    pub fn new_with_active_users(
+        db: Db,
+        notification_svc: super::notifications::svc::NotificationService,
+        active_users: ActiveUsers,
+    ) -> Self {
+        let mut service = Self::new(db, notification_svc);
+        service.active_users = Some(active_users);
+        service
+    }
+
+    pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
+        self.session_registry = Some(session_registry);
+        self
+    }
+
     pub fn subscribe_state(&self) -> watch::Receiver<ChatSnapshot> {
         self.snapshot_rx.clone()
     }
     pub fn subscribe_events(&self) -> broadcast::Receiver<ChatEvent> {
         self.evt_tx.subscribe()
+    }
+
+    pub fn run_mod_command_task(
+        &self,
+        user_id: Uuid,
+        permissions: Permissions,
+        request_id: Uuid,
+        command: String,
+    ) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.run_mod_command_task",
+            user_id = %user_id,
+            request_id = %request_id
+        );
+        tokio::spawn(
+            async move {
+                let (success, lines) = match service
+                    .run_mod_command(user_id, permissions, &command)
+                    .await
+                {
+                    Ok(lines) => (true, lines),
+                    Err(e) => (false, vec![format!("error: {e}")]),
+                };
+                let _ = service.evt_tx.send(ChatEvent::ModCommandOutput {
+                    user_id,
+                    request_id,
+                    lines,
+                    success,
+                });
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn run_mod_command(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        input: &str,
+    ) -> Result<Vec<String>> {
+        let command = parse_mod_command(input)?;
+        match command {
+            ModCommand::Help => Ok(mod_help_lines()),
+            ModCommand::Status => Ok(vec![format!(
+                "status: tier={} mod_surface={}",
+                tier_label(permissions),
+                permissions.can_access_mod_surface()
+            )]),
+            ModCommand::Whoami => {
+                let client = self.db.get().await?;
+                let actor = User::get(&client, actor_user_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("actor user not found"))?;
+                Ok(vec![format!(
+                    "@{} admin={} mod={}",
+                    actor.username,
+                    actor.is_admin || permissions.is_admin(),
+                    actor.is_moderator || permissions.is_moderator()
+                )])
+            }
+            ModCommand::Users { filter } => self.mod_list_users(permissions, filter).await,
+            ModCommand::User { username } => self.mod_user_detail(permissions, &username).await,
+            ModCommand::Rooms { filter } => self.mod_list_rooms(permissions, filter).await,
+            ModCommand::Room { slug } => self.mod_room_detail(permissions, &slug).await,
+            ModCommand::Audit { filter } => self.mod_audit(permissions, filter).await,
+            ModCommand::RoomAction {
+                action,
+                slug,
+                username,
+                duration,
+                reason,
+            } => {
+                self.mod_room_action(
+                    actor_user_id,
+                    permissions,
+                    RoomModRequest {
+                        action,
+                        slug,
+                        username,
+                        duration,
+                        reason,
+                    },
+                )
+                .await
+            }
+            ModCommand::RoomAdmin {
+                action,
+                slug,
+                value,
+            } => {
+                self.mod_room_admin(actor_user_id, permissions, action, &slug, value)
+                    .await
+            }
+            ModCommand::ServerUser {
+                action,
+                username,
+                duration,
+                reason,
+            } => {
+                self.mod_server_user(
+                    actor_user_id,
+                    permissions,
+                    action,
+                    &username,
+                    duration,
+                    reason,
+                )
+                .await
+            }
+            ModCommand::ServerIp {
+                action,
+                ip_address,
+                duration,
+                reason,
+            } => {
+                self.mod_server_ip(
+                    actor_user_id,
+                    permissions,
+                    action,
+                    &ip_address,
+                    duration,
+                    reason,
+                )
+                .await
+            }
+            ModCommand::Artboard {
+                action,
+                username,
+                duration,
+                reason,
+            } => {
+                self.mod_artboard(
+                    actor_user_id,
+                    permissions,
+                    action,
+                    &username,
+                    duration,
+                    reason,
+                )
+                .await
+            }
+            ModCommand::Role { action, username } => {
+                self.mod_role(actor_user_id, permissions, action, &username)
+                    .await
+            }
+            ModCommand::Sessions { .. } => Ok(vec![
+                "sessions: not wired in this PR slice yet".to_string(),
+                "live session details will use SessionRegistry from the modal/app layer"
+                    .to_string(),
+            ]),
+        }
     }
 
     pub fn publish_snapshot(&self, snapshot: ChatSnapshot) -> Result<()> {
@@ -499,18 +705,20 @@ impl ChatService {
         room_slug: Option<String>,
         body: String,
         request_id: Uuid,
-        is_admin: bool,
+        permissions: Permissions,
     ) {
         let service = self.clone();
         tokio::spawn(
             async move {
                 match service
-                    .send_message(user_id, room_id, room_slug, body, is_admin)
+                    .send_message(user_id, room_id, room_slug, body, permissions)
                     .await
                 {
                     Err(e) => {
                         let message = if e.to_string().contains("not a member") {
                             "You are not a member of this room."
+                        } else if e.to_string().contains("banned from this room") {
+                            "You are banned from this room."
                         } else if e.to_string().contains("admin-only") {
                             "Only admins can post in #announcements."
                         } else {
@@ -551,14 +759,14 @@ impl ChatService {
         room_id: Uuid,
         room_slug: Option<String>,
         body: String,
-        is_admin: bool,
+        permissions: Permissions,
     ) -> Result<()> {
         let body = body.trim_start_matches('\n').trim_end();
         if body.is_empty() {
             return Ok(());
         }
 
-        if room_slug.as_deref() == Some("announcements") && !is_admin {
+        if room_slug.as_deref() == Some("announcements") && !permissions.can_post_announcements() {
             anyhow::bail!("announcements is admin-only");
         }
 
@@ -566,6 +774,9 @@ impl ChatService {
         let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("user is not a member of room");
+        }
+        if RoomBan::is_active_for_room_and_user(&client, room_id, user_id).await? {
+            anyhow::bail!("user is banned from this room");
         }
         let room = ChatRoom::get(&client, room_id)
             .await?
@@ -607,13 +818,13 @@ impl ChatService {
         message_id: Uuid,
         new_body: String,
         request_id: Uuid,
-        is_admin: bool,
+        permissions: Permissions,
     ) {
         let service = self.clone();
         tokio::spawn(
             async move {
                 match service
-                    .edit_message(user_id, message_id, new_body, is_admin)
+                    .edit_message(user_id, message_id, new_body, permissions)
                     .await
                 {
                     Err(e) => {
@@ -653,7 +864,7 @@ impl ChatService {
         user_id: Uuid,
         message_id: Uuid,
         new_body: String,
-        is_admin: bool,
+        permissions: Permissions,
     ) -> Result<()> {
         let new_body = new_body.trim_start_matches('\n').trim_end();
         if new_body.is_empty() {
@@ -664,9 +875,15 @@ impl ChatService {
         let existing = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("message not found"))?;
-        if existing.user_id != user_id && !is_admin {
-            anyhow::bail!("cannot edit this message");
-        }
+        let target_tier = if existing.user_id == user_id {
+            TargetTier::Own
+        } else {
+            let author = User::get(&client, existing.user_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("message author not found"))?;
+            TargetTier::from_user_flags(author.is_admin, author.is_moderator)
+        };
+        ensure_decision(permissions, Action::EditMessage, target_tier)?;
 
         let params = ChatMessageParams {
             room_id: existing.room_id,
@@ -674,6 +891,20 @@ impl ChatService {
             body: new_body.to_string(),
         };
         let updated = ChatMessage::update(&client, message_id, params).await?;
+        record_mod_audit(
+            &client,
+            user_id,
+            ModAuditRecord {
+                permissions,
+                matrix_action: Action::EditMessage,
+                target_tier,
+                audit_action: "message_edit",
+                target_kind: "message",
+                target_id: Some(message_id),
+                metadata: json!({ "room_id": existing.room_id }),
+            },
+        )
+        .await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, existing.room_id).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageEdited {
             message: updated,
@@ -1330,12 +1561,15 @@ impl ChatService {
         Ok(())
     }
 
-    pub fn delete_message_task(&self, user_id: Uuid, message_id: Uuid, is_admin: bool) {
+    pub fn delete_message_task(&self, user_id: Uuid, message_id: Uuid, permissions: Permissions) {
         let service = self.clone();
         let span = info_span!("chat.delete_message", user_id = %user_id, message_id = %message_id);
         tokio::spawn(
             async move {
-                match service.delete_message(user_id, message_id, is_admin).await {
+                match service
+                    .delete_message(user_id, message_id, permissions)
+                    .await
+                {
                     Ok(room_id) => {
                         let _ = service.evt_tx.send(ChatEvent::MessageDeleted {
                             user_id,
@@ -1359,27 +1593,1398 @@ impl ChatService {
         &self,
         user_id: Uuid,
         message_id: Uuid,
-        is_admin: bool,
+        permissions: Permissions,
     ) -> Result<Uuid> {
         let client = self.db.get().await?;
         // Look up the message to get room_id
         let msg = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Message not found"))?;
-        let count = if is_admin {
-            ChatMessage::delete_by_admin(&client, message_id).await?
+        let target_tier = if msg.user_id == user_id {
+            TargetTier::Own
         } else {
+            let author = User::get(&client, msg.user_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("message author not found"))?;
+            TargetTier::from_user_flags(author.is_admin, author.is_moderator)
+        };
+        ensure_decision(permissions, Action::DeleteMessage, target_tier)?;
+        let count = if target_tier == TargetTier::Own {
             ChatMessage::delete_by_author(&client, message_id, user_id).await?
+        } else {
+            ChatMessage::delete_by_admin(&client, message_id).await?
         };
         if count == 0 {
             anyhow::bail!("Cannot delete this message");
         }
+        record_mod_audit(
+            &client,
+            user_id,
+            ModAuditRecord {
+                permissions,
+                matrix_action: Action::DeleteMessage,
+                target_tier,
+                audit_action: "message_delete",
+                target_kind: "message",
+                target_id: Some(message_id),
+                metadata: json!({ "room_id": msg.room_id }),
+            },
+        )
+        .await?;
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
+    }
+
+    async fn mod_list_users(
+        &self,
+        permissions: Permissions,
+        filter: Option<String>,
+    ) -> Result<Vec<String>> {
+        ensure_mod_surface(permissions)?;
+        let client = self.db.get().await?;
+        let needle = filter.unwrap_or_default().to_ascii_lowercase();
+        let users = User::all(&client).await?;
+        let mut lines: Vec<String> = users
+            .into_iter()
+            .filter(|user| {
+                needle.is_empty() || user.username.to_ascii_lowercase().contains(&needle)
+            })
+            .map(|user| {
+                let mut tags = Vec::new();
+                if user.is_admin {
+                    tags.push("admin");
+                }
+                if user.is_moderator {
+                    tags.push("mod");
+                }
+                if tags.is_empty() {
+                    format!("@{}", user.username)
+                } else {
+                    format!("@{} [{}]", user.username, tags.join(","))
+                }
+            })
+            .collect();
+        lines.sort();
+        if lines.is_empty() {
+            lines.push("no matching users".to_string());
+        }
+        Ok(lines)
+    }
+
+    async fn mod_user_detail(
+        &self,
+        permissions: Permissions,
+        username: &str,
+    ) -> Result<Vec<String>> {
+        ensure_mod_surface(permissions)?;
+        let client = self.db.get().await?;
+        let user = find_user_by_mod_name(&client, username).await?;
+        let server_ban = ServerBan::find_active_for_user_id(&client, user.id).await?;
+        let artboard_ban = ArtboardBan::find_active_for_user(&client, user.id).await?;
+        Ok(vec![
+            format!("@{}", user.username),
+            format!("id: {}", user.id),
+            format!("admin: {}", user.is_admin),
+            format!("moderator: {}", user.is_moderator),
+            format!("created: {}", user.created.format("%Y-%m-%d %H:%M UTC")),
+            format!("last_seen: {}", user.last_seen.format("%Y-%m-%d %H:%M UTC")),
+            format!("server_banned: {}", server_ban.is_some()),
+            format!("artboard_banned: {}", artboard_ban.is_some()),
+        ])
+    }
+
+    async fn mod_list_rooms(
+        &self,
+        permissions: Permissions,
+        filter: Option<String>,
+    ) -> Result<Vec<String>> {
+        ensure_mod_surface(permissions)?;
+        let client = self.db.get().await?;
+        let needle = filter.unwrap_or_default().to_ascii_lowercase();
+        let rows = client
+            .query(
+                "SELECT r.id, r.kind, r.visibility, r.permanent, r.slug, r.language_code,
+                        COUNT(DISTINCT m.user_id)::bigint AS member_count,
+                        COUNT(DISTINCT b.id)::bigint AS active_ban_count
+                 FROM chat_rooms r
+                 LEFT JOIN chat_room_members m ON m.room_id = r.id
+                 LEFT JOIN room_bans b
+                   ON b.room_id = r.id
+                  AND (b.expires_at IS NULL OR b.expires_at > current_timestamp)
+                 GROUP BY r.id
+                 ORDER BY COALESCE(r.slug, COALESCE(r.language_code, r.kind)), r.created",
+                &[],
+            )
+            .await?;
+        let mut lines = Vec::new();
+        for row in rows {
+            let kind: String = row.get("kind");
+            let visibility: String = row.get("visibility");
+            let permanent: bool = row.get("permanent");
+            let slug: Option<String> = row.get("slug");
+            let language_code: Option<String> = row.get("language_code");
+            let member_count: i64 = row.get("member_count");
+            let active_ban_count: i64 = row.get("active_ban_count");
+            let label = slug
+                .map(|slug| format!("#{slug}"))
+                .or_else(|| language_code.map(|code| format!("language:{code}")))
+                .unwrap_or(kind);
+            if !needle.is_empty() && !label.to_ascii_lowercase().contains(&needle) {
+                continue;
+            }
+            lines.push(format!(
+                "{label} visibility={visibility} permanent={permanent} members={member_count} bans={active_ban_count}"
+            ));
+        }
+        if lines.is_empty() {
+            lines.push("no matching rooms".to_string());
+        }
+        Ok(lines)
+    }
+
+    async fn mod_room_detail(&self, permissions: Permissions, slug: &str) -> Result<Vec<String>> {
+        ensure_mod_surface(permissions)?;
+        let client = self.db.get().await?;
+        let room = find_room_by_mod_slug(&client, slug).await?;
+        let members = ChatRoomMember::list_user_ids(&client, room.id).await?;
+        Ok(vec![
+            format!(
+                "#{}",
+                room.slug.clone().unwrap_or_else(|| room.kind.clone())
+            ),
+            format!("id: {}", room.id),
+            format!("kind: {}", room.kind),
+            format!("visibility: {}", room.visibility),
+            format!("permanent: {}", room.permanent),
+            format!("auto_join: {}", room.auto_join),
+            format!("members: {}", members.len()),
+        ])
+    }
+
+    async fn mod_audit(
+        &self,
+        permissions: Permissions,
+        filter: Option<String>,
+    ) -> Result<Vec<String>> {
+        ensure_decision(
+            permissions,
+            Action::ViewAuditLogOther,
+            TargetTier::NotApplicable,
+        )?;
+        let client = self.db.get().await?;
+        let rows = client
+            .query(
+                "SELECT log.created, log.action, log.target_kind, log.target_id,
+                        actor.username AS actor_username,
+                        target.username AS target_username
+                 FROM moderation_audit_log log
+                 LEFT JOIN users actor ON actor.id = log.actor_user_id
+                 LEFT JOIN users target ON target.id = log.target_id
+                 ORDER BY log.created DESC
+                 LIMIT 50",
+                &[],
+            )
+            .await?;
+        let needle = filter.unwrap_or_default().to_ascii_lowercase();
+        let mut lines = Vec::new();
+        for row in rows {
+            let action: String = row.get("action");
+            let target_kind: String = row.get("target_kind");
+            let target_id: Option<Uuid> = row.get("target_id");
+            let actor_username: Option<String> = row.get("actor_username");
+            let target_username: Option<String> = row.get("target_username");
+            let created: DateTime<Utc> = row.get("created");
+            let target = target_username
+                .map(|name| format!("@{name}"))
+                .or_else(|| target_id.map(|id| id.to_string()))
+                .unwrap_or_else(|| "-".to_string());
+            let line = format!(
+                "{} {} actor=@{} target={}:{}",
+                created.format("%Y-%m-%d %H:%M"),
+                action,
+                actor_username.unwrap_or_else(|| "unknown".to_string()),
+                target_kind,
+                target
+            );
+            if needle.is_empty() || line.to_ascii_lowercase().contains(&needle) {
+                lines.push(line);
+            }
+        }
+        if lines.is_empty() {
+            lines.push("no audit entries".to_string());
+        }
+        Ok(lines)
+    }
+
+    async fn mod_room_action(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        request: RoomModRequest,
+    ) -> Result<Vec<String>> {
+        let client = self.db.get().await?;
+        let room = find_room_by_mod_slug(&client, &request.slug).await?;
+        let target = find_user_by_mod_name(&client, &request.username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        let target_tier = TargetTier::from_user_flags(target.is_admin, target.is_moderator);
+        let matrix_action = match request.action {
+            RoomModAction::Kick => Action::KickFromRoom,
+            RoomModAction::Ban => Action::BanFromRoom,
+            RoomModAction::Unban => Action::UnbanFromRoom,
+        };
+        ensure_decision(permissions, matrix_action, target_tier)?;
+        match request.action {
+            RoomModAction::Kick => {
+                ChatRoomMember::leave(&client, room.id, target.id).await?;
+            }
+            RoomModAction::Ban => {
+                let expires_at = request.duration.map(|d| Utc::now() + d);
+                RoomBan::activate(
+                    &client,
+                    room.id,
+                    target.id,
+                    actor_user_id,
+                    request.reason.clone(),
+                    expires_at,
+                )
+                .await?;
+                ChatRoomMember::leave(&client, room.id, target.id).await?;
+            }
+            RoomModAction::Unban => {
+                RoomBan::delete_for_room_and_user(&client, room.id, target.id).await?;
+            }
+        }
+        let audit_action = match request.action {
+            RoomModAction::Kick => "room_kick",
+            RoomModAction::Ban => "room_ban",
+            RoomModAction::Unban => "room_unban",
+        };
+        record_mod_audit(
+            &client,
+            actor_user_id,
+            ModAuditRecord {
+                permissions,
+                matrix_action,
+                target_tier,
+                audit_action,
+                target_kind: "user",
+                target_id: Some(target.id),
+                metadata: json!({ "room_id": room.id, "room_slug": room.slug, "reason": request.reason }),
+            },
+        )
+        .await?;
+        Ok(vec![format!(
+            "{} @{} in #{}",
+            request.action.past_tense(),
+            target.username,
+            room.slug.unwrap_or(room.kind)
+        )])
+    }
+
+    async fn mod_room_admin(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: RoomAdminAction,
+        slug: &str,
+        value: Option<String>,
+    ) -> Result<Vec<String>> {
+        let client = self.db.get().await?;
+        let room = find_room_by_mod_slug(&client, slug).await?;
+        let is_system = matches!(room.slug.as_deref(), Some("general" | "announcements"));
+        let target_tier = if is_system {
+            TargetTier::System
+        } else {
+            TargetTier::NotApplicable
+        };
+        let matrix_action = match action {
+            RoomAdminAction::Rename => Action::RenameRoom,
+            RoomAdminAction::Public | RoomAdminAction::Private => Action::SetRoomVisibility,
+            RoomAdminAction::Delete => Action::DeleteRoom,
+        };
+        ensure_decision(permissions, matrix_action, target_tier)?;
+        let label = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        match action {
+            RoomAdminAction::Rename => {
+                let Some(new_slug) = value else {
+                    anyhow::bail!("usage: room rename #old #new");
+                };
+                let normalized = normalize_mod_slug(&new_slug)?;
+                client
+                    .execute(
+                        "UPDATE chat_rooms SET slug = $1, updated = current_timestamp WHERE id = $2",
+                        &[&normalized, &room.id],
+                    )
+                    .await?;
+                record_mod_audit(
+                    &client,
+                    actor_user_id,
+                    ModAuditRecord {
+                        permissions,
+                        matrix_action,
+                        target_tier,
+                        audit_action: "room_rename",
+                        target_kind: "room",
+                        target_id: Some(room.id),
+                        metadata: json!({ "old_slug": label, "new_slug": normalized }),
+                    },
+                )
+                .await?;
+                Ok(vec![format!("renamed #{label} to #{normalized}")])
+            }
+            RoomAdminAction::Public | RoomAdminAction::Private => {
+                let visibility = match action {
+                    RoomAdminAction::Public => "public",
+                    RoomAdminAction::Private => "private",
+                    RoomAdminAction::Rename | RoomAdminAction::Delete => unreachable!(),
+                };
+                client
+                    .execute(
+                        "UPDATE chat_rooms SET visibility = $1, updated = current_timestamp WHERE id = $2",
+                        &[&visibility, &room.id],
+                    )
+                    .await?;
+                record_mod_audit(
+                    &client,
+                    actor_user_id,
+                    ModAuditRecord {
+                        permissions,
+                        matrix_action,
+                        target_tier,
+                        audit_action: "room_visibility",
+                        target_kind: "room",
+                        target_id: Some(room.id),
+                        metadata: json!({ "room_slug": label, "visibility": visibility }),
+                    },
+                )
+                .await?;
+                Ok(vec![format!("set #{label} {visibility}")])
+            }
+            RoomAdminAction::Delete => {
+                client
+                    .execute("DELETE FROM chat_rooms WHERE id = $1", &[&room.id])
+                    .await?;
+                record_mod_audit(
+                    &client,
+                    actor_user_id,
+                    ModAuditRecord {
+                        permissions,
+                        matrix_action,
+                        target_tier,
+                        audit_action: "room_delete",
+                        target_kind: "room",
+                        target_id: Some(room.id),
+                        metadata: json!({ "room_slug": label }),
+                    },
+                )
+                .await?;
+                Ok(vec![format!("deleted #{label}")])
+            }
+        }
+    }
+
+    async fn mod_server_user(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: ServerUserAction,
+        username: &str,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        let client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        let target_tier = TargetTier::from_user_flags(target.is_admin, target.is_moderator);
+        let matrix_action = match action {
+            ServerUserAction::Kick => Action::KickUserSessions,
+            ServerUserAction::Ban if duration.is_some() => Action::TempBanUser,
+            ServerUserAction::Ban => Action::PermaBanUser,
+            ServerUserAction::Unban => Action::UnbanUser,
+        };
+        ensure_decision(permissions, matrix_action, target_tier)?;
+        match action {
+            ServerUserAction::Kick => {}
+            ServerUserAction::Ban => {
+                let expires_at = duration.map(|d| Utc::now() + d);
+                ServerBan::activate(
+                    &client,
+                    target.id,
+                    &target.fingerprint,
+                    actor_user_id,
+                    &reason,
+                    expires_at,
+                )
+                .await?;
+            }
+            ServerUserAction::Unban => {
+                ServerBan::delete_active_for_user(&client, target.id, &target.fingerprint).await?;
+            }
+        }
+        let audit_action = match action {
+            ServerUserAction::Kick => "server_kick",
+            ServerUserAction::Ban => "server_ban",
+            ServerUserAction::Unban => "server_unban",
+        };
+        record_mod_audit(
+            &client,
+            actor_user_id,
+            ModAuditRecord {
+                permissions,
+                matrix_action,
+                target_tier,
+                audit_action,
+                target_kind: "user",
+                target_id: Some(target.id),
+                metadata: json!({ "reason": reason }),
+            },
+        )
+        .await?;
+        if matches!(action, ServerUserAction::Kick | ServerUserAction::Ban) {
+            let tokens = self.session_tokens_for_user_id(target.id);
+            let terminated = self
+                .terminate_session_tokens(tokens, action.termination_reason())
+                .await;
+            tracing::info!(
+                target_user_id = %target.id,
+                action = action.audit_name(),
+                terminated,
+                "server moderation command terminated active sessions"
+            );
+        }
+        Ok(vec![format!(
+            "{} @{}",
+            action.past_tense(),
+            target.username
+        )])
+    }
+
+    async fn mod_server_ip(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: ServerIpAction,
+        ip_address: &str,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        let client = self.db.get().await?;
+        let target_tier = TargetTier::Regular;
+        let matrix_action = match action {
+            ServerIpAction::Ban if duration.is_some() => Action::TempBanUser,
+            ServerIpAction::Ban => Action::PermaBanUser,
+            ServerIpAction::Unban => Action::UnbanUser,
+        };
+        ensure_decision(permissions, matrix_action, target_tier)?;
+        let snapshot = matches!(action, ServerIpAction::Ban)
+            .then(|| self.snapshot_for_ip_ban(ip_address))
+            .flatten();
+        match action {
+            ServerIpAction::Ban => {
+                let expires_at = duration.map(|d| Utc::now() + d);
+                ServerBan::activate_ip(
+                    &client,
+                    ip_address,
+                    snapshot.as_ref().map(|snapshot| snapshot.username.as_str()),
+                    snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.fingerprint.as_deref()),
+                    actor_user_id,
+                    &reason,
+                    expires_at,
+                )
+                .await?;
+            }
+            ServerIpAction::Unban => {
+                ServerBan::delete_active_for_ip_address(&client, ip_address).await?;
+            }
+        }
+        record_mod_audit(
+            &client,
+            actor_user_id,
+            ModAuditRecord {
+                permissions,
+                matrix_action,
+                target_tier,
+                audit_action: action.audit_name(),
+                target_kind: "ip",
+                target_id: None,
+                metadata: json!({
+                    "ip_address": ip_address,
+                    "reason": reason,
+                    "snapshot_username": snapshot.as_ref().map(|snapshot| snapshot.username.as_str()),
+                    "snapshot_fingerprint": snapshot.as_ref().and_then(|snapshot| snapshot.fingerprint.as_deref()),
+                }),
+            },
+        )
+        .await?;
+        if matches!(action, ServerIpAction::Ban) {
+            let tokens = self.session_tokens_for_ip(ip_address);
+            let terminated = self.terminate_session_tokens(tokens, "server IP ban").await;
+            tracing::info!(
+                ip_address,
+                terminated,
+                "server IP ban terminated active sessions"
+            );
+        }
+        Ok(vec![format!("{} ip {}", action.past_tense(), ip_address)])
+    }
+
+    async fn terminate_session_tokens(&self, tokens: Vec<String>, reason: &str) -> usize {
+        let Some(registry) = self.session_registry.as_ref() else {
+            return 0;
+        };
+        let mut terminated = 0;
+        for token in tokens {
+            if registry
+                .send_message(
+                    &token,
+                    SessionMessage::Terminate {
+                        reason: reason.to_string(),
+                    },
+                )
+                .await
+            {
+                terminated += 1;
+            }
+        }
+        terminated
+    }
+
+    fn session_tokens_for_user_id(&self, user_id: Uuid) -> Vec<String> {
+        let Some(active_users) = self.active_users.as_ref() else {
+            return Vec::new();
+        };
+        let guard = active_users.lock_recover();
+        guard
+            .get(&user_id)
+            .map(|user| unique_session_tokens(user.sessions.iter().map(|session| &session.token)))
+            .unwrap_or_default()
+    }
+
+    fn session_tokens_for_ip(&self, ip_address: &str) -> Vec<String> {
+        let Some(active_users) = self.active_users.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(ip_address) = ip_address.parse::<IpAddr>() else {
+            return Vec::new();
+        };
+        let guard = active_users.lock_recover();
+        unique_session_tokens(guard.values().flat_map(|user| {
+            user.sessions
+                .iter()
+                .filter(move |session| session.peer_ip == Some(ip_address))
+                .map(|session| &session.token)
+        }))
+    }
+
+    fn snapshot_for_ip_ban(&self, ip_address: &str) -> Option<ServerIpBanSnapshot> {
+        let active_users = self.active_users.as_ref()?;
+        let guard = active_users.lock_recover();
+        let ip_address = ip_address.parse::<IpAddr>().ok()?;
+        let mut matches = guard
+            .values()
+            .flat_map(|user| {
+                user.sessions
+                    .iter()
+                    .filter(move |session| session.peer_ip == Some(ip_address))
+                    .map(|session| ServerIpBanSnapshot {
+                        username: user.username.clone(),
+                        fingerprint: session.fingerprint.clone(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|snapshot| snapshot.username.to_ascii_lowercase());
+        matches.into_iter().next()
+    }
+
+    async fn mod_artboard(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: ArtboardAction,
+        username: &str,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        let client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        let target_tier = TargetTier::from_user_flags(target.is_admin, target.is_moderator);
+        let matrix_action = match action {
+            ArtboardAction::Ban => Action::BanFromArtboard,
+            ArtboardAction::Unban => Action::UnbanFromArtboard,
+        };
+        ensure_decision(permissions, matrix_action, target_tier)?;
+        match action {
+            ArtboardAction::Ban => {
+                let expires_at = duration.map(|d| Utc::now() + d);
+                ArtboardBan::activate(
+                    &client,
+                    target.id,
+                    actor_user_id,
+                    reason.clone(),
+                    expires_at,
+                )
+                .await?;
+            }
+            ArtboardAction::Unban => {
+                ArtboardBan::delete_for_user(&client, target.id).await?;
+            }
+        }
+        record_mod_audit(
+            &client,
+            actor_user_id,
+            ModAuditRecord {
+                permissions,
+                matrix_action,
+                target_tier,
+                audit_action: action.audit_name(),
+                target_kind: "user",
+                target_id: Some(target.id),
+                metadata: json!({ "reason": reason }),
+            },
+        )
+        .await?;
+        Ok(vec![format!(
+            "{} @{}",
+            action.past_tense(),
+            target.username
+        )])
+    }
+
+    async fn mod_role(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: RoleAction,
+        username: &str,
+    ) -> Result<Vec<String>> {
+        let client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        let matrix_action = match action {
+            RoleAction::GrantMod => Action::GrantModerator,
+            RoleAction::RevokeMod => Action::RevokeModerator,
+            RoleAction::GrantAdmin => Action::GrantAdmin,
+        };
+        ensure_decision(permissions, matrix_action, TargetTier::NotApplicable)?;
+        let (column, value, label) = match action {
+            RoleAction::GrantMod => ("is_moderator", true, "granted moderator to"),
+            RoleAction::RevokeMod => ("is_moderator", false, "revoked moderator from"),
+            RoleAction::GrantAdmin => ("is_admin", true, "granted admin to"),
+        };
+        let query =
+            format!("UPDATE users SET {column} = $1, updated = current_timestamp WHERE id = $2");
+        client.execute(&query, &[&value, &target.id]).await?;
+        record_mod_audit(
+            &client,
+            actor_user_id,
+            ModAuditRecord {
+                permissions,
+                matrix_action,
+                target_tier: TargetTier::NotApplicable,
+                audit_action: action.audit_name(),
+                target_kind: "user",
+                target_id: Some(target.id),
+                metadata: json!({}),
+            },
+        )
+        .await?;
+        Ok(vec![format!("{label} @{}", target.username)])
     }
 }
 
 fn short_user_id(user_id: Uuid) -> String {
     let id = user_id.to_string();
     id[..id.len().min(8)].to_string()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ModCommand {
+    Help,
+    Status,
+    Whoami,
+    Users {
+        filter: Option<String>,
+    },
+    User {
+        username: String,
+    },
+    Sessions {
+        username: Option<String>,
+    },
+    Audit {
+        filter: Option<String>,
+    },
+    Rooms {
+        filter: Option<String>,
+    },
+    Room {
+        slug: String,
+    },
+    RoomAction {
+        action: RoomModAction,
+        slug: String,
+        username: String,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    },
+    RoomAdmin {
+        action: RoomAdminAction,
+        slug: String,
+        value: Option<String>,
+    },
+    ServerUser {
+        action: ServerUserAction,
+        username: String,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    },
+    ServerIp {
+        action: ServerIpAction,
+        ip_address: String,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    },
+    Artboard {
+        action: ArtboardAction,
+        username: String,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    },
+    Role {
+        action: RoleAction,
+        username: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoomModAction {
+    Kick,
+    Ban,
+    Unban,
+}
+
+impl RoomModAction {
+    const fn past_tense(self) -> &'static str {
+        match self {
+            Self::Kick => "kicked",
+            Self::Ban => "banned",
+            Self::Unban => "unbanned",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoomAdminAction {
+    Rename,
+    Public,
+    Private,
+    Delete,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ServerUserAction {
+    Kick,
+    Ban,
+    Unban,
+}
+
+impl ServerUserAction {
+    const fn past_tense(self) -> &'static str {
+        match self {
+            Self::Kick => "kicked",
+            Self::Ban => "banned",
+            Self::Unban => "unbanned",
+        }
+    }
+
+    const fn audit_name(self) -> &'static str {
+        match self {
+            Self::Kick => "server_kick",
+            Self::Ban => "server_ban",
+            Self::Unban => "server_unban",
+        }
+    }
+
+    const fn termination_reason(self) -> &'static str {
+        match self {
+            Self::Kick => "server kick",
+            Self::Ban => "server ban",
+            Self::Unban => "server unban",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ServerIpAction {
+    Ban,
+    Unban,
+}
+
+impl ServerIpAction {
+    const fn past_tense(self) -> &'static str {
+        match self {
+            Self::Ban => "banned",
+            Self::Unban => "unbanned",
+        }
+    }
+
+    const fn audit_name(self) -> &'static str {
+        match self {
+            Self::Ban => "server_ip_ban",
+            Self::Unban => "server_ip_unban",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ServerIpBanSnapshot {
+    username: String,
+    fingerprint: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArtboardAction {
+    Ban,
+    Unban,
+}
+
+impl ArtboardAction {
+    const fn past_tense(self) -> &'static str {
+        match self {
+            Self::Ban => "artboard-banned",
+            Self::Unban => "removed artboard ban for",
+        }
+    }
+
+    const fn audit_name(self) -> &'static str {
+        match self {
+            Self::Ban => "artboard_ban",
+            Self::Unban => "artboard_unban",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoleAction {
+    GrantMod,
+    RevokeMod,
+    GrantAdmin,
+}
+
+impl RoleAction {
+    const fn audit_name(self) -> &'static str {
+        match self {
+            Self::GrantMod => "grant_moderator",
+            Self::RevokeMod => "revoke_moderator",
+            Self::GrantAdmin => "grant_admin",
+        }
+    }
+}
+
+fn parse_mod_command(input: &str) -> Result<ModCommand> {
+    let input = input.trim();
+    let input = if input == "/mod" {
+        ""
+    } else {
+        input.strip_prefix("/mod ").map(str::trim).unwrap_or(input)
+    };
+    if input.is_empty() || input == "help" {
+        return Ok(ModCommand::Help);
+    }
+
+    let mut parts = input.split_whitespace();
+    let Some(head) = parts.next() else {
+        return Ok(ModCommand::Help);
+    };
+    let rest = parts.collect::<Vec<_>>();
+
+    match head {
+        "status" => Ok(ModCommand::Status),
+        "whoami" => Ok(ModCommand::Whoami),
+        "users" => Ok(ModCommand::Users {
+            filter: nonempty(rest.join(" ")),
+        }),
+        "user" => Ok(ModCommand::User {
+            username: required_username(rest.first().copied(), "usage: user @name")?,
+        }),
+        "sessions" => Ok(ModCommand::Sessions {
+            username: rest.first().map(|value| strip_user_prefix(value)),
+        }),
+        "audit" => Ok(ModCommand::Audit {
+            filter: nonempty(rest.join(" ")),
+        }),
+        "rooms" => Ok(ModCommand::Rooms {
+            filter: nonempty(rest.join(" ")),
+        }),
+        "room" => parse_room_mod_command(&rest),
+        "server" => parse_server_mod_command(&rest),
+        "artboard" => parse_artboard_mod_command(&rest),
+        "grant" => parse_role_mod_command(RoleAction::GrantMod, RoleAction::GrantAdmin, &rest),
+        "revoke" => parse_role_mod_command(RoleAction::RevokeMod, RoleAction::RevokeMod, &rest),
+        _ => anyhow::bail!("unknown mod command: {head}"),
+    }
+}
+
+fn parse_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    let Some(first) = parts.first().copied() else {
+        anyhow::bail!("usage: room #slug | room <action> ...");
+    };
+    match first {
+        "kick" | "ban" | "unban" => {
+            let action = match first {
+                "kick" => RoomModAction::Kick,
+                "ban" => RoomModAction::Ban,
+                "unban" => RoomModAction::Unban,
+                _ => unreachable!(),
+            };
+            let slug = required_slug(parts.get(1).copied(), "usage: room kick #slug @name")?;
+            let username =
+                required_username(parts.get(2).copied(), "usage: room kick #slug @name")?;
+            let (duration, reason_start) = if matches!(action, RoomModAction::Ban) {
+                parse_optional_duration(parts.get(3).copied(), 3)?
+            } else {
+                (None, 3)
+            };
+            Ok(ModCommand::RoomAction {
+                action,
+                slug,
+                username,
+                duration,
+                reason: parts.get(reason_start..).unwrap_or_default().join(" "),
+            })
+        }
+        "rename" => Ok(ModCommand::RoomAdmin {
+            action: RoomAdminAction::Rename,
+            slug: required_slug(parts.get(1).copied(), "usage: room rename #old #new")?,
+            value: Some(required_slug(
+                parts.get(2).copied(),
+                "usage: room rename #old #new",
+            )?),
+        }),
+        "public" => Ok(ModCommand::RoomAdmin {
+            action: RoomAdminAction::Public,
+            slug: required_slug(parts.get(1).copied(), "usage: room public #slug")?,
+            value: None,
+        }),
+        "private" => Ok(ModCommand::RoomAdmin {
+            action: RoomAdminAction::Private,
+            slug: required_slug(parts.get(1).copied(), "usage: room private #slug")?,
+            value: None,
+        }),
+        "delete" => Ok(ModCommand::RoomAdmin {
+            action: RoomAdminAction::Delete,
+            slug: required_slug(parts.get(1).copied(), "usage: room delete #slug")?,
+            value: None,
+        }),
+        _ => Ok(ModCommand::Room {
+            slug: strip_slug_prefix(first),
+        }),
+    }
+}
+
+fn parse_server_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    let Some(first) = parts.first().copied() else {
+        anyhow::bail!("usage: server <kick|ban|unban> @name | server <ban-ip|unban-ip> <ip>");
+    };
+    if matches!(first, "ban-ip" | "unban-ip") {
+        let ip_address = required_ip_address(
+            parts.get(1).copied(),
+            "usage: server <ban-ip|unban-ip> <ip>",
+        )?;
+        let action = match first {
+            "ban-ip" => ServerIpAction::Ban,
+            "unban-ip" => ServerIpAction::Unban,
+            _ => unreachable!(),
+        };
+        let (duration, reason_start) = if matches!(action, ServerIpAction::Ban) {
+            parse_optional_duration(parts.get(2).copied(), 2)?
+        } else {
+            (None, 2)
+        };
+        return Ok(ModCommand::ServerIp {
+            action,
+            ip_address,
+            duration,
+            reason: parts.get(reason_start..).unwrap_or_default().join(" "),
+        });
+    }
+    let action = match first {
+        "kick" => ServerUserAction::Kick,
+        "ban" => ServerUserAction::Ban,
+        "unban" => ServerUserAction::Unban,
+        _ => anyhow::bail!("unknown server action: {first}"),
+    };
+    let username = required_username(parts.get(1).copied(), "usage: server <action> @name")?;
+    let (duration, reason_start) = if matches!(action, ServerUserAction::Ban) {
+        parse_optional_duration(parts.get(2).copied(), 2)?
+    } else {
+        (None, 2)
+    };
+    Ok(ModCommand::ServerUser {
+        action,
+        username,
+        duration,
+        reason: parts.get(reason_start..).unwrap_or_default().join(" "),
+    })
+}
+
+fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    let Some(first) = parts.first().copied() else {
+        anyhow::bail!("usage: artboard <ban|unban> @name");
+    };
+    let action = match first {
+        "ban" => ArtboardAction::Ban,
+        "unban" => ArtboardAction::Unban,
+        _ => anyhow::bail!("unknown artboard action: {first}"),
+    };
+    let username = required_username(parts.get(1).copied(), "usage: artboard <action> @name")?;
+    let (duration, reason_start) = if matches!(action, ArtboardAction::Ban) {
+        parse_optional_duration(parts.get(2).copied(), 2)?
+    } else {
+        (None, 2)
+    };
+    Ok(ModCommand::Artboard {
+        action,
+        username,
+        duration,
+        reason: parts.get(reason_start..).unwrap_or_default().join(" "),
+    })
+}
+
+fn parse_role_mod_command(
+    mod_action: RoleAction,
+    admin_action: RoleAction,
+    parts: &[&str],
+) -> Result<ModCommand> {
+    let Some(role) = parts.first().copied() else {
+        anyhow::bail!("usage: grant mod @name | grant admin @name | revoke mod @name");
+    };
+    let action = match role {
+        "mod" | "moderator" => mod_action,
+        "admin" if matches!(admin_action, RoleAction::GrantAdmin) => admin_action,
+        "admin" => anyhow::bail!("revoke admin is not implemented"),
+        _ => anyhow::bail!("unknown role: {role}"),
+    };
+    Ok(ModCommand::Role {
+        action,
+        username: required_username(parts.get(1).copied(), "usage: grant mod @name")?,
+    })
+}
+
+fn parse_optional_duration(
+    value: Option<&str>,
+    duration_index: usize,
+) -> Result<(Option<chrono::Duration>, usize)> {
+    let Some(value) = value else {
+        return Ok((None, duration_index));
+    };
+    if let Some(duration) = parse_mod_duration(value)? {
+        Ok((Some(duration), duration_index + 1))
+    } else {
+        Ok((None, duration_index))
+    }
+}
+
+fn parse_mod_duration(value: &str) -> Result<Option<chrono::Duration>> {
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let Some(unit) = value.chars().last() else {
+        return Ok(None);
+    };
+    if !matches!(unit, 's' | 'm' | 'h' | 'd' | 'S' | 'M' | 'H' | 'D') {
+        return Ok(None);
+    }
+    let amount_text = &value[..value.len() - unit.len_utf8()];
+    let amount: i64 = amount_text
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid duration: {value}"))?;
+    if amount <= 0 {
+        anyhow::bail!("duration must be positive");
+    }
+    let duration = match unit.to_ascii_lowercase() {
+        's' => chrono::Duration::seconds(amount),
+        'm' => chrono::Duration::minutes(amount),
+        'h' => chrono::Duration::hours(amount),
+        'd' => chrono::Duration::days(amount),
+        _ => unreachable!(),
+    };
+    Ok(Some(duration))
+}
+
+fn nonempty(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn required_username(value: Option<&str>, usage: &str) -> Result<String> {
+    let Some(value) = value else {
+        anyhow::bail!("{usage}");
+    };
+    let username = strip_user_prefix(value);
+    if username.is_empty() {
+        anyhow::bail!("{usage}");
+    }
+    Ok(username)
+}
+
+fn required_slug(value: Option<&str>, usage: &str) -> Result<String> {
+    let Some(value) = value else {
+        anyhow::bail!("{usage}");
+    };
+    let slug = strip_slug_prefix(value);
+    if slug.is_empty() {
+        anyhow::bail!("{usage}");
+    }
+    Ok(slug)
+}
+
+fn required_ip_address(value: Option<&str>, usage: &str) -> Result<String> {
+    let Some(value) = value else {
+        anyhow::bail!("{usage}");
+    };
+    let ip_address: IpAddr = value
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid IP address: {value}"))?;
+    Ok(ip_address.to_string())
+}
+
+fn unique_session_tokens<'a>(tokens: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    tokens
+        .filter(|token| seen.insert((*token).clone()))
+        .cloned()
+        .collect()
+}
+
+fn strip_user_prefix(value: &str) -> String {
+    value.trim().trim_start_matches('@').to_string()
+}
+
+fn strip_slug_prefix(value: &str) -> String {
+    value.trim().trim_start_matches('#').to_string()
+}
+
+fn normalize_mod_slug(slug: &str) -> Result<String> {
+    let slug = strip_slug_prefix(slug).to_ascii_lowercase();
+    let slug = slug.trim();
+    if slug.is_empty() {
+        anyhow::bail!("room slug cannot be empty");
+    }
+
+    let mut normalized = String::with_capacity(slug.len());
+    let mut last_was_dash = false;
+    for ch in slug.chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            normalized.push(ch);
+            last_was_dash = false;
+        } else if ch.is_whitespace() || matches!(ch, '-' | '_' | '.' | '/' | '\\') {
+            if !normalized.is_empty() && !last_was_dash {
+                normalized.push('-');
+                last_was_dash = true;
+            }
+        } else if !normalized.is_empty() && !last_was_dash {
+            normalized.push('-');
+            last_was_dash = true;
+        }
+    }
+
+    let normalized = normalized.trim_matches('-').to_string();
+    if normalized.is_empty() {
+        anyhow::bail!("room slug cannot be empty");
+    }
+    Ok(normalized)
+}
+
+async fn find_user_by_mod_name(client: &tokio_postgres::Client, username: &str) -> Result<User> {
+    User::find_by_username(client, &strip_user_prefix(username))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user not found: @{username}"))
+}
+
+async fn find_room_by_mod_slug(client: &tokio_postgres::Client, slug: &str) -> Result<ChatRoom> {
+    let slug = normalize_mod_slug(slug)?;
+    let row = client
+        .query_opt(
+            "SELECT * FROM chat_rooms WHERE slug = $1 AND kind <> 'dm' LIMIT 1",
+            &[&slug],
+        )
+        .await?;
+    row.map(ChatRoom::from)
+        .ok_or_else(|| anyhow::anyhow!("room not found: #{slug}"))
+}
+
+fn ensure_mod_surface(permissions: Permissions) -> Result<()> {
+    ensure_decision(
+        permissions,
+        Action::OpenControlCenter,
+        TargetTier::NotApplicable,
+    )
+}
+
+fn ensure_decision(permissions: Permissions, action: Action, target: TargetTier) -> Result<()> {
+    if permissions.decide(action, target).is_allowed() {
+        Ok(())
+    } else {
+        anyhow::bail!("Moderator or admin only")
+    }
+}
+
+fn ensure_not_self(actor_user_id: Uuid, target_user_id: Uuid) -> Result<()> {
+    if actor_user_id == target_user_id {
+        anyhow::bail!("cannot target yourself");
+    }
+    Ok(())
+}
+
+async fn record_mod_audit(
+    client: &tokio_postgres::Client,
+    actor_user_id: Uuid,
+    record: ModAuditRecord,
+) -> Result<()> {
+    if record
+        .permissions
+        .should_audit(record.matrix_action, record.target_tier)
+    {
+        ModerationAuditLog::record(
+            client,
+            actor_user_id,
+            record.audit_action,
+            record.target_kind,
+            record.target_id,
+            record.metadata,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn tier_label(permissions: Permissions) -> &'static str {
+    if permissions.is_admin() {
+        "admin"
+    } else if permissions.is_moderator() {
+        "moderator"
+    } else {
+        "regular"
+    }
+}
+
+fn mod_help_lines() -> Vec<String> {
+    [
+        "help",
+        "status",
+        "whoami",
+        "users [filter]",
+        "user @name",
+        "sessions [@name]",
+        "audit [filter]",
+        "rooms [filter]",
+        "room #slug",
+        "room kick #slug @name [reason...]",
+        "room ban #slug @name [duration] [reason...]",
+        "room unban #slug @name",
+        "room rename #old #new",
+        "room public #slug",
+        "room private #slug",
+        "room delete #slug",
+        "server kick @name [reason...]",
+        "server ban @name [duration] [reason...]",
+        "server unban @name",
+        "server ban-ip <ip> [duration] [reason...]",
+        "server unban-ip <ip>",
+        "artboard ban @name [duration] [reason...]",
+        "artboard unban @name",
+        "grant mod @name",
+        "revoke mod @name",
+        "grant admin @name",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+#[cfg(test)]
+mod mod_command_tests {
+    use super::*;
+
+    #[test]
+    fn parses_optional_mod_prefix() {
+        assert_eq!(parse_mod_command("/mod help").unwrap(), ModCommand::Help);
+        assert_eq!(parse_mod_command("help").unwrap(), ModCommand::Help);
+        assert!(parse_mod_command("/moderator help").is_err());
+    }
+
+    #[test]
+    fn normalizes_room_slugs_like_chat_rooms() {
+        assert_eq!(normalize_mod_slug("#Rust_Nerds").unwrap(), "rust-nerds");
+        assert_eq!(normalize_mod_slug("vps/d9d0").unwrap(), "vps-d9d0");
+        assert!(normalize_mod_slug("!!!").is_err());
+    }
+
+    #[test]
+    fn parses_room_ban_with_duration_and_reason() {
+        assert_eq!(
+            parse_mod_command("room ban #lobby @alice 7d cleanup").unwrap(),
+            ModCommand::RoomAction {
+                action: RoomModAction::Ban,
+                slug: "lobby".to_string(),
+                username: "alice".to_string(),
+                duration: Some(chrono::Duration::days(7)),
+                reason: "cleanup".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_server_permanent_ban_without_duration() {
+        assert_eq!(
+            parse_mod_command("server ban @alice policy").unwrap(),
+            ModCommand::ServerUser {
+                action: ServerUserAction::Ban,
+                username: "alice".to_string(),
+                duration: None,
+                reason: "policy".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_server_kick() {
+        assert_eq!(
+            parse_mod_command("server kick @alice go outside").unwrap(),
+            ModCommand::ServerUser {
+                action: ServerUserAction::Kick,
+                username: "alice".to_string(),
+                duration: None,
+                reason: "go outside".to_string(),
+            }
+        );
+        assert!(parse_mod_command("server disconnect @alice").is_err());
+    }
+
+    #[test]
+    fn parses_server_ip_ban_with_duration_and_reason() {
+        assert_eq!(
+            parse_mod_command("server ban-ip 203.0.113.10 2h subnet abuse").unwrap(),
+            ModCommand::ServerIp {
+                action: ServerIpAction::Ban,
+                ip_address: "203.0.113.10".to_string(),
+                duration: Some(chrono::Duration::hours(2)),
+                reason: "subnet abuse".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("server unban-ip 2001:db8::1").unwrap(),
+            ModCommand::ServerIp {
+                action: ServerIpAction::Unban,
+                ip_address: "2001:db8::1".to_string(),
+                duration: None,
+                reason: String::new(),
+            }
+        );
+        assert!(parse_mod_command("server ban-ip nope").is_err());
+    }
 }
