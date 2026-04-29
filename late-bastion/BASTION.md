@@ -75,13 +75,13 @@ Env-driven. See `src/config.rs` for the canonical list. Required vars:
 - ✅ **Phase 2b** — I/O seam refactor in `late-ssh` so `App::new(SessionConfig)` runs on either a russh `Channel` or a WS pair (`FrameSink` trait).
 - ✅ **Phase 2c** — `/tunnel` constructs `SessionConfig` and runs the render loop over the WS streams; hand-written WS smoke client; full caller-side parity with `shell_request` (conn limits, active_users, activity feed, metrics).
 - ✅ **Phase 3** — bastion proxy logic: dial `/tunnel`, pump bytes, forward `resize`, close SSH on WS close. Includes PROXY v1 parsing on the listener (CIDR-trusted) so `X-Late-Peer-IP` reflects the real client IP behind NGINX.
-- 🚧 **Phase 4** — reconnect loop + plain-text "reconnecting…" messages.
+- ✅ **Phase 4** — reconnect loop + plain-text "reconnecting…" messages.
   - ✅ **4/1** — backend emits WS close 1000 on graceful drain (token-driven).
-  - ✅ **4/2** — bastion reconnect loop: retryable closes (1000/1001/1006) and HTTP 5xx → exponential backoff (100ms→5s, 30s budget) with `X-Late-Reconnect: 1` and stable `X-Late-Session-Id`. Terminal closes (4001/4002/4003) and HTTP 4xx end the session.
+  - ✅ **4/2** — bastion reconnect loop: retryable closes (1000/1001/1006) and HTTP 5xx → exponential backoff (100ms→5s, 30s budget) with `X-Late-Reconnect: 1` and stable `X-Late-Session-Id`. Terminal closes (4000/4001/4002/4003) and HTTP 4xx end the session.
   - ✅ **4/3** — plain-text "reconnecting to late.sh…" written into the SSH stream after a 500ms gap (escalates to "still reconnecting…" at 5s). Preceded by a terminal-reset prefix (`\x1b[?1049l\x1b[0m\x1b[2J\x1b[H`) so the previous TUI's alt-screen / styling is cleared. Suppressed on the *first* dial — only fires when reopening a previously-good session.
   - ✅ **4/4** — bastion sends a WS Ping every 2s; backend's tungstenite layer auto-pongs. >5s of silence (no inbound frame of any kind) is treated as a wedged backend and breaks the pump into the reconnect loop. In-cluster RTT is sub-ms, so the threshold has plenty of slack.
-  - ⏳ **4/5** — live integration test against a real `service-ssh` restart.
-- ✅ **Ordering refactor** — both inbound paths (bastion handler, backend `/tunnel` receive loop) collapsed onto a single `mpsc<SshInputEvent>` (`Bytes` | `Resize`). Closes the prior `tokio::select!`-mux + eager-resize race that could surface `[A, R, B]` as `[R, AB]` to the app. Critical for coordinate-sensitive features (mouse SGR, paste, artboard).
+  - ✅ **4/5** — live integration validated manually: bouncing the `late-ssh` container shows the reconnect message on the SSH client; restarting it replays the welcome sequence and lands the user back in the UI.
+- ✅ **Ordering refactor** — both inbound paths (bastion handler, backend `/tunnel` receive loop) collapsed onto a single `mpsc<SshInputEvent>` (`Bytes` | `Resize`). Closes the prior `tokio::select!`-mux + eager-resize race that could surface `[A, R, B]` as `[R, AB]` to the app. Critical for coordinate-sensitive features (mouse SGR, paste, artboard). Validated manually against the artboard.
 - ⏳ **Phase 5** — production cutover (`:22` swing).
 
 ## Running locally (Phase 1, smoke only)
