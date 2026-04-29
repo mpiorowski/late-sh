@@ -30,7 +30,7 @@ use late_core::MutexRecover;
 use late_core::models::user::User;
 use late_core::shutdown::CancellationToken;
 use late_core::telemetry::http_telemetry_middleware;
-use late_core::tunnel_protocol::ControlFrame;
+use late_core::tunnel_protocol::{ControlFrame, SshInputEvent};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -423,7 +423,7 @@ async fn handle_session(
     let activity_feed_rx = Some(state.activity_feed.subscribe());
     let session_token = uuid::Uuid::now_v7().to_string();
 
-    let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(INPUT_QUEUE_CAP);
+    let (input_tx, input_rx) = mpsc::channel::<SshInputEvent>(INPUT_QUEUE_CAP);
 
     let session_config = build_session_config(
         &state,
@@ -544,7 +544,7 @@ async fn handle_session(
                 match msg {
                     Message::Binary(bytes) => match input_tx.try_reserve() {
                         Ok(permit) => {
-                            permit.send(bytes.into());
+                            permit.send(SshInputEvent::Bytes(bytes.into()));
                             signal.dirty.store(true, Ordering::Release);
                             signal.notify.notify_one();
                         }
@@ -559,15 +559,29 @@ async fn handle_session(
                             break;
                         }
                     },
+                    // Resize is queued on the same FIFO as Bytes so the
+                    // render loop applies them in WS-arrival order, not
+                    // in app-lock-acquisition order.
                     Message::Text(text) => match ControlFrame::from_json(text.as_str()) {
-                        Ok(ControlFrame::Resize { cols, rows }) => {
-                            let mut app_guard = app.lock().await;
-                            if let Err(err) = app_guard.resize(cols, rows) {
-                                tracing::warn!(error = ?err, cols, rows, "tunnel app.resize failed");
+                        Ok(ControlFrame::Resize { cols, rows }) => match input_tx.try_reserve() {
+                            Ok(permit) => {
+                                permit.send(SshInputEvent::Resize { cols, rows });
+                                signal.dirty.store(true, Ordering::Release);
+                                signal.notify.notify_one();
                             }
-                            signal.dirty.store(true, Ordering::Release);
-                            signal.notify.notify_one();
-                        }
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                tracing::warn!(
+                                    queue_cap = INPUT_QUEUE_CAP,
+                                    cols,
+                                    rows,
+                                    "tunnel input queue full; dropping resize event"
+                                );
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                tracing::debug!("tunnel input queue closed; render loop ended");
+                                break;
+                            }
+                        },
                         Err(err) => {
                             tracing::warn!(error = ?err, payload = %text.as_str(), "tunnel: bad control frame");
                         }

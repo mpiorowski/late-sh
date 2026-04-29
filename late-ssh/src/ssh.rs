@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::user::{User, UserParams, extract_theme_id};
+use late_core::tunnel_protocol::SshInputEvent;
 use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::*;
@@ -90,8 +91,8 @@ struct ClientHandler {
     /// Signaled by input/resize paths to request an immediate (world-stateless)
     /// render, so typed characters echo without waiting for the next world tick.
     render_signal: Option<Arc<RenderSignal>>,
-    input_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
-    input_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    input_tx: Option<tokio::sync::mpsc::Sender<SshInputEvent>>,
+    input_rx: Option<tokio::sync::mpsc::Receiver<SshInputEvent>>,
     cli_mode: bool,
     session_token: Option<String>,
     session_rx: Option<tokio::sync::mpsc::Receiver<crate::session::SessionMessage>>,
@@ -689,7 +690,7 @@ impl russh::server::Handler for ClientHandler {
         };
         match input_tx.try_reserve() {
             Ok(permit) => {
-                permit.send(data.to_vec());
+                permit.send(SshInputEvent::Bytes(data.to_vec()));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
@@ -749,19 +750,37 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(col_width, row_height, "window resize");
-        let Some(app) = self.app.as_ref() else {
+        // Resize is queued on the same input mpsc as data so the
+        // render loop applies it in the SSH wire order, not in
+        // app-lock-acquisition order. Dropping resize on a full queue
+        // would leave the TUI on a stale viewport, but the queue cap
+        // is 256 and resize events are sparse, so contention is
+        // pathological — log and move on.
+        let Some(input_tx) = self.input_tx.as_ref() else {
             return Ok(());
         };
-        {
-            let mut app = app.lock().await;
-            if let Err(e) = app.resize(col_width as u16, row_height as u16) {
-                tracing::error!(error = ?e, "error resizing app");
+        let event = SshInputEvent::Resize {
+            cols: col_width.try_into().unwrap_or(u16::MAX),
+            rows: row_height.try_into().unwrap_or(u16::MAX),
+        };
+        match input_tx.try_reserve() {
+            Ok(permit) => permit.send(event),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!(
+                    queue_cap = INPUT_QUEUE_CAP,
+                    col_width,
+                    row_height,
+                    "session input queue full; dropping resize event"
+                );
+                return Ok(());
             }
-            if let Some(signal) = self.render_signal.as_ref() {
-                signal.dirty.store(true, Ordering::Release);
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                tracing::debug!("session input queue closed; dropping resize event");
+                return Ok(());
             }
         }
         if let Some(signal) = self.render_signal.as_ref() {
+            signal.dirty.store(true, Ordering::Release);
             signal.notify.notify_one();
         }
         Ok(())
@@ -773,7 +792,7 @@ impl russh::server::Handler for ClientHandler {
 /// `FrameSink` so both paths share this loop unchanged.
 pub(crate) async fn run_session<S: FrameSink>(
     app: Arc<TokioMutex<crate::app::state::App>>,
-    mut input_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    mut input_rx: tokio::sync::mpsc::Receiver<SshInputEvent>,
     sink: S,
     frame_drop_log_every: u64,
     signal: Arc<RenderSignal>,
@@ -879,7 +898,7 @@ async fn next_render_action(
 
 async fn render_once<S: FrameSink>(
     app: &Arc<TokioMutex<crate::app::state::App>>,
-    input_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
+    input_rx: &mut tokio::sync::mpsc::Receiver<SshInputEvent>,
     sink: &S,
     frame_drop_log_every: u64,
     advance_world: bool,
@@ -893,9 +912,21 @@ async fn render_once<S: FrameSink>(
         // Clear `dirty` before draining the queued input so any input arriving
         // during this render flips it back to `true` and schedules another
         // pass instead of being erased by this batch.
+        //
+        // Bytes and Resize are drained from the same FIFO under one
+        // lock-hold so the app sees them in SSH-wire order — the
+        // whole point of routing resize through input_tx instead of
+        // taking the app lock from the handler callback.
         signal.dirty.store(false, Ordering::Release);
-        while let Ok(data) = input_rx.try_recv() {
-            app.handle_input(&data);
+        while let Ok(event) = input_rx.try_recv() {
+            match event {
+                SshInputEvent::Bytes(data) => app.handle_input(&data),
+                SshInputEvent::Resize { cols, rows } => {
+                    if let Err(e) = app.resize(cols, rows) {
+                        tracing::error!(error = ?e, cols, rows, "error resizing app");
+                    }
+                }
+            }
             if !app.running {
                 return Ok(true);
             }
