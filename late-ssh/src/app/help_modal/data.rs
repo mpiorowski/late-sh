@@ -229,7 +229,10 @@ fn overview_lines() -> Vec<String> {
         "  q                 open quit confirm (press q again to leave)",
         "  m                 mute paired client",
         "  + / -             paired client volume",
+        "",
+        "Dashboard",
         "  P                 show browser pairing QR",
+        "  B                 open CLI install / BUILD SOURCE modal",
         "",
         "Dashboard favorites",
         "  Pin rooms in Settings → Favorites so the dashboard's chat card",
@@ -528,7 +531,7 @@ Don't trust the install script? Build from source:
 
 Option 2: Browser pairing
 
-Press `P` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
+On the Dashboard, press `P` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
 
 Both options give you:
   m = mute | +/- = volume | visualizer in the sidebar

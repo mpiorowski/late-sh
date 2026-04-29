@@ -464,6 +464,11 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
+    if app.show_cli_install_modal && !data.is_empty() {
+        app.show_cli_install_modal = false;
+        return;
+    }
+
     // Web chat QR overlay: any key dismisses
     if app.show_web_chat_qr && !data.is_empty() {
         app.show_web_chat_qr = false;
@@ -961,6 +966,10 @@ fn dispatch_escape(app: &mut App) {
         app.icon_picker_open = false;
         return;
     }
+    if app.show_cli_install_modal {
+        app.show_cli_install_modal = false;
+        return;
+    }
     let ctx = InputContext::from_app(app);
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.room_jump_active
     {
@@ -1112,6 +1121,25 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
 
     match screen {
         Screen::Dashboard => {
+            if crate::app::dashboard::ui::cli_install_button_hit_test(
+                content_area,
+                app.profile_state.profile().show_dashboard_header,
+                x,
+                y,
+            ) {
+                crate::app::dashboard::input::open_cli_install_modal(app);
+                return true;
+            }
+            if crate::app::dashboard::ui::browser_pair_button_hit_test(
+                content_area,
+                app.profile_state.profile().show_dashboard_header,
+                x,
+                y,
+            ) {
+                crate::app::dashboard::input::open_browser_pairing_qr(app);
+                return true;
+            }
+
             let Some(pins) = app.dashboard_strip_pins() else {
                 return false;
             };
@@ -1338,6 +1366,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_web_chat_qr = false;
+    app.show_cli_install_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
@@ -1508,12 +1537,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         b'\t' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(ctx.screen.next());
-            true
-        }
-        b'P' => {
-            app.pending_clipboard = Some(app.connect_url.clone());
-            app.web_chat_qr_url = Some(app.connect_url.clone());
-            app.show_web_chat_qr = true;
             true
         }
         _ => false,

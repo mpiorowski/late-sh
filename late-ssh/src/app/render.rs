@@ -135,6 +135,7 @@ struct DrawContext<'a> {
     splash_hint: &'a str,
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
+    show_cli_install_modal: bool,
     is_draining: bool,
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
@@ -377,6 +378,7 @@ impl App {
                         splash_hint: &self.splash_hint,
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
+                        show_cli_install_modal: self.show_cli_install_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
@@ -670,6 +672,10 @@ impl App {
                 ("Pair", "Scan to pair audio")
             };
             super::common::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
+        }
+
+        if ctx.show_cli_install_modal {
+            super::common::cli_install::draw(frame, inner);
         }
 
         if ctx.icon_picker_open

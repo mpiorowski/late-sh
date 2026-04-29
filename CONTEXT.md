@@ -1342,6 +1342,8 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
+| `P` | Dashboard | Show browser-pairing QR (copies pairing URL) |
+| `B` | Dashboard | Open CLI install/build-source modal |
 | `j` / `k` / arrows | Dashboard | Scroll chat |
 | `p` | Dashboard chat selection | Open selected user's read-only profile modal |
 | `r` | Dashboard chat selection | Reply to selected general chat message |
@@ -1388,13 +1390,12 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `Tab` / `Shift+Tab` | Chat (`showcase` composing) | Cycle composer fields |
 | `Enter` | Chat (`showcase` composing) | Submit (in description, also submits — there is no Alt+Enter newline yet, use raw `\n`) |
 | `Esc` | Chat (`showcase` composing) | Cancel compose |
-| `i` / `Enter` | Dashboard | Start composing chat |
+| `i` | Dashboard | Start composing chat |
 | `j` / `k` | Chat | Move message selection newer/older |
 | `Enter` | Dashboard / Chat message selection | If the selected message is a reply with a loaded `reply_to_message_id`, jump to the original |
 | `f` then `1`..`8` | Dashboard / Chat message selection | React to selected message |
 | `p` | Chat | Open selected user's read-only profile modal |
 | `r` | Chat | Reply to selected message |
-| `P` | Global | Show browser-pairing QR (copies pairing URL) |
 | `/help` | Chat composer | Open scrollable chat help overlay (commands + all chat keys) |
 | `/active` | Chat composer | List active SSH users from the in-memory session registry |
 | `/list` | Chat composer | List users in the selected non-auto-join ("private") room |
