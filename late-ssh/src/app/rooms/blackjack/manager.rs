@@ -9,7 +9,10 @@ use uuid::Uuid;
 
 use crate::app::{
     games::chips::svc::ChipService,
-    rooms::blackjack::svc::{BlackjackEvent, BlackjackService},
+    rooms::blackjack::{
+        settings::BlackjackTableSettings,
+        svc::{BlackjackEvent, BlackjackService},
+    },
 };
 
 #[derive(Clone)]
@@ -25,13 +28,17 @@ impl BlackjackTableManager {
             tables: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    pub fn get_or_create(&self, room_id: Uuid) -> BlackjackService {
+    pub fn get_or_create(
+        &self,
+        room_id: Uuid,
+        settings: BlackjackTableSettings,
+    ) -> BlackjackService {
         let mut tables = self.tables.lock_recover();
         tables
             .entry(room_id)
             .or_insert_with(|| {
                 let (event_tx, _) = broadcast::channel::<BlackjackEvent>(64);
-                BlackjackService::new(self.chip_svc.clone(), event_tx)
+                BlackjackService::new_with_settings(self.chip_svc.clone(), event_tx, settings)
             })
             .clone()
     }

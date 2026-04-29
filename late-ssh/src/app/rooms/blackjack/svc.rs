@@ -8,14 +8,15 @@ use uuid::Uuid;
 
 use crate::app::{
     games::{cards::PlayingCard, chips::svc::ChipService},
-    rooms::blackjack::state::{
-        Bet, BetError, BlackjackSeat, BlackjackSnapshot, MAX_BET, MAX_SEATS, MIN_BET, Outcome,
-        Phase, SeatPhase, Shoe, dealer_must_hit, is_bust, is_natural_blackjack, payout_credit,
-        score, seat_outcome_banner, settle,
+    rooms::blackjack::{
+        settings::BlackjackTableSettings,
+        state::{
+            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase, SeatPhase, Shoe,
+            dealer_must_hit, is_bust, is_natural_blackjack, payout_credit, score,
+            seat_outcome_banner, settle,
+        },
     },
 };
-
-const BETTING_WINDOW: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct BlackjackService {
@@ -56,8 +57,8 @@ pub enum BlackjackEvent {
 
 #[derive(Debug)]
 enum BetFailure {
-    BelowMin,
-    AboveMax,
+    BelowMin(i64),
+    AboveMax(i64),
     NotSeated,
     AlreadyBet,
     TableBusy,
@@ -68,8 +69,8 @@ enum BetFailure {
 impl BetFailure {
     fn user_message(&self) -> String {
         match self {
-            BetFailure::BelowMin => format!("bet below minimum ({MIN_BET})"),
-            BetFailure::AboveMax => format!("bet above maximum ({MAX_BET})"),
+            BetFailure::BelowMin(min) => format!("bet below minimum ({min})"),
+            BetFailure::AboveMax(max) => format!("bet above maximum ({max})"),
             BetFailure::NotSeated => "sit before betting".to_string(),
             BetFailure::AlreadyBet => "bet already placed".to_string(),
             BetFailure::TableBusy => "table is busy".to_string(),
@@ -119,14 +120,23 @@ impl SeatFailure {
 
 impl BlackjackService {
     pub fn new(chip_svc: ChipService, event_tx: broadcast::Sender<BlackjackEvent>) -> Self {
-        let initial_snapshot = SharedTableState::new().snapshot();
+        Self::new_with_settings(chip_svc, event_tx, BlackjackTableSettings::default())
+    }
+
+    pub fn new_with_settings(
+        chip_svc: ChipService,
+        event_tx: broadcast::Sender<BlackjackEvent>,
+        settings: BlackjackTableSettings,
+    ) -> Self {
+        let table = SharedTableState::new(settings);
+        let initial_snapshot = table.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
         Self {
             chip_svc,
             snapshot_tx,
             snapshot_rx,
             event_tx,
-            table: Arc::new(Mutex::new(SharedTableState::new())),
+            table: Arc::new(Mutex::new(table)),
         }
     }
 
@@ -158,6 +168,15 @@ impl BlackjackService {
         });
     }
 
+    async fn sit(&self, user_id: Uuid) -> Result<usize, SeatFailure> {
+        let mut table = self.table.lock().await;
+        let seat_index = table.sit(user_id)?;
+        table.status_message =
+            format!("Seat {} joined. {}", seat_index + 1, table.betting_prompt());
+        self.publish_snapshot_locked(&table);
+        Ok(seat_index)
+    }
+
     pub fn leave_seat_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -176,6 +195,13 @@ impl BlackjackService {
                 }
             }
         });
+    }
+
+    async fn leave_seat(&self, user_id: Uuid) -> Result<usize, SeatFailure> {
+        let mut table = self.table.lock().await;
+        let seat_index = table.leave_seat(user_id)?;
+        self.publish_snapshot_locked(&table);
+        Ok(seat_index)
     }
 
     pub fn place_bet_task(&self, user_id: Uuid, request_id: Uuid, amount: i64) {
@@ -198,6 +224,70 @@ impl BlackjackService {
         });
     }
 
+    async fn place_bet(&self, user_id: Uuid, amount: i64) -> Result<i64, BetFailure> {
+        {
+            let mut table = self.table.lock().await;
+            let Some(seat_index) = table.user_seat_index(user_id) else {
+                return Err(BetFailure::NotSeated);
+            };
+            if table.phase != Phase::Betting {
+                return Err(BetFailure::TableBusy);
+            }
+            if table.seats[seat_index].bet.is_some()
+                || table.seats[seat_index].pending_bet.is_some()
+            {
+                return Err(BetFailure::AlreadyBet);
+            }
+            let bet = table.bet_for_amount(amount)?;
+            table.seats[seat_index].pending_bet = Some(bet);
+            table.status_message = format!("Seat {} is placing {amount} chips...", seat_index + 1);
+            self.publish_snapshot_locked(&table);
+        }
+
+        let new_balance = match self.chip_svc.debit_bet(user_id, amount).await {
+            Ok(Some(new_balance)) => new_balance,
+            Ok(None) => {
+                let mut table = self.table.lock().await;
+                if let Some(seat_index) = table.user_seat_index(user_id) {
+                    table.seats[seat_index].pending_bet = None;
+                }
+                table.status_message = "insufficient chips".to_string();
+                self.publish_snapshot_locked(&table);
+                return Err(BetFailure::InsufficientChips);
+            }
+            Err(e) => {
+                let mut table = self.table.lock().await;
+                if let Some(seat_index) = table.user_seat_index(user_id) {
+                    table.seats[seat_index].pending_bet = None;
+                }
+                table.status_message = "internal error".to_string();
+                self.publish_snapshot_locked(&table);
+                return Err(BetFailure::Internal(e));
+            }
+        };
+
+        {
+            let mut table = self.table.lock().await;
+            if let Some(seat_index) = table.user_seat_index(user_id) {
+                let bet = if let Some(bet) = table.seats[seat_index].pending_bet.take() {
+                    bet
+                } else {
+                    table.bet_for_amount(amount)?
+                };
+                table.seats[seat_index].bet = Some(bet);
+                let countdown_id = table.restart_betting_countdown();
+                table.status_message = table.betting_countdown_status();
+                self.publish_snapshot_locked(&table);
+                drop(table);
+                self.schedule_auto_deal(countdown_id);
+                return Ok(new_balance);
+            }
+            self.publish_snapshot_locked(&table);
+        }
+
+        Ok(new_balance)
+    }
+
     pub fn hit_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -213,6 +303,29 @@ impl BlackjackService {
         });
     }
 
+    async fn hit(&self, user_id: Uuid) -> Result<(), ActionFailure> {
+        let settlements = {
+            let mut table = self.table.lock().await;
+            let Some(seat_index) = table.user_seat_index(user_id) else {
+                return Err(ActionFailure::NotSeated);
+            };
+            if table.phase != Phase::PlayerTurn {
+                return Err(ActionFailure::InvalidPhase("you cannot hit right now"));
+            }
+            let settlements = table.hit_seat(seat_index)?;
+            self.publish_snapshot_locked(&table);
+            settlements
+        };
+
+        if !settlements.is_empty() {
+            self.persist_settlements(settlements)
+                .await
+                .map_err(ActionFailure::Internal)?;
+        }
+
+        Ok(())
+    }
+
     pub fn stand_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -226,6 +339,29 @@ impl BlackjackService {
                 });
             }
         });
+    }
+
+    async fn stand(&self, user_id: Uuid) -> Result<(), ActionFailure> {
+        let settlements = {
+            let mut table = self.table.lock().await;
+            let Some(seat_index) = table.user_seat_index(user_id) else {
+                return Err(ActionFailure::NotSeated);
+            };
+            if table.phase != Phase::PlayerTurn {
+                return Err(ActionFailure::InvalidPhase("you cannot stand right now"));
+            }
+            let settlements = table.stand_seat(seat_index)?;
+            self.publish_snapshot_locked(&table);
+            settlements
+        };
+
+        if !settlements.is_empty() {
+            self.persist_settlements(settlements)
+                .await
+                .map_err(ActionFailure::Internal)?;
+        }
+
+        Ok(())
     }
 
     pub fn deal_task(&self, user_id: Uuid) {
@@ -252,6 +388,48 @@ impl BlackjackService {
                 }
             }
         });
+    }
+
+    async fn deal(&self, user_id: Uuid) -> Result<Vec<Settlement>, ActionFailure> {
+        let mut table = self.table.lock().await;
+        if table.user_seat_index(user_id).is_none() {
+            return Err(ActionFailure::NotSeated);
+        }
+        if table.phase != Phase::Betting {
+            return Err(ActionFailure::InvalidPhase("hand is already in progress"));
+        }
+        let settlements = table.start_round()?;
+        self.publish_snapshot_locked(&table);
+        Ok(settlements)
+    }
+
+    pub fn next_hand_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(failure) = svc.next_hand(user_id).await {
+                if let ActionFailure::Internal(ref e) = failure {
+                    tracing::error!(error = ?e, %user_id, "blackjack next_hand failed");
+                }
+                let _ = svc.event_tx.send(BlackjackEvent::ActionError {
+                    user_id,
+                    message: failure.user_message(),
+                });
+            }
+        });
+    }
+
+    async fn next_hand(&self, user_id: Uuid) -> Result<(), ActionFailure> {
+        let mut table = self.table.lock().await;
+        if table.user_seat_index(user_id).is_none() {
+            return Err(ActionFailure::NotSeated);
+        }
+        if table.phase != Phase::Settling {
+            return Err(ActionFailure::InvalidPhase("hand is still in progress"));
+        }
+        let status = table.betting_prompt_with_timer();
+        table.reset_to_betting(&status);
+        self.publish_snapshot_locked(&table);
+        Ok(())
     }
 
     fn schedule_auto_deal(&self, countdown_id: u64) {
@@ -301,181 +479,6 @@ impl BlackjackService {
         });
     }
 
-    pub fn next_hand_task(&self, user_id: Uuid) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(failure) = svc.next_hand(user_id).await {
-                if let ActionFailure::Internal(ref e) = failure {
-                    tracing::error!(error = ?e, %user_id, "blackjack next_hand failed");
-                }
-                let _ = svc.event_tx.send(BlackjackEvent::ActionError {
-                    user_id,
-                    message: failure.user_message(),
-                });
-            }
-        });
-    }
-
-    async fn sit(&self, user_id: Uuid) -> Result<usize, SeatFailure> {
-        let mut table = self.table.lock().await;
-        let seat_index = table.sit(user_id)?;
-        table.status_message = format!(
-            "Seat {} joined. Place a bet ({MIN_BET}-{MAX_BET} chips).",
-            seat_index + 1
-        );
-        self.publish_snapshot_locked(&table);
-        Ok(seat_index)
-    }
-
-    async fn leave_seat(&self, user_id: Uuid) -> Result<usize, SeatFailure> {
-        let mut table = self.table.lock().await;
-        let seat_index = table.leave_seat(user_id)?;
-        self.publish_snapshot_locked(&table);
-        Ok(seat_index)
-    }
-
-    async fn place_bet(&self, user_id: Uuid, amount: i64) -> Result<i64, BetFailure> {
-        Bet::new(amount).map_err(|e| match e {
-            BetError::BelowMin => BetFailure::BelowMin,
-            BetError::AboveMax => BetFailure::AboveMax,
-        })?;
-
-        {
-            let mut table = self.table.lock().await;
-            let Some(seat_index) = table.user_seat_index(user_id) else {
-                return Err(BetFailure::NotSeated);
-            };
-            if table.phase != Phase::Betting {
-                return Err(BetFailure::TableBusy);
-            }
-            if table.seats[seat_index].bet.is_some()
-                || table.seats[seat_index].pending_bet.is_some()
-            {
-                return Err(BetFailure::AlreadyBet);
-            }
-            let bet = Bet::new(amount).expect("validated bet");
-            table.seats[seat_index].pending_bet = Some(bet);
-            table.status_message = format!("Seat {} is placing {amount} chips...", seat_index + 1);
-            self.publish_snapshot_locked(&table);
-        }
-
-        let new_balance = match self.chip_svc.debit_bet(user_id, amount).await {
-            Ok(Some(new_balance)) => new_balance,
-            Ok(None) => {
-                let mut table = self.table.lock().await;
-                if let Some(seat_index) = table.user_seat_index(user_id) {
-                    table.seats[seat_index].pending_bet = None;
-                }
-                table.status_message = "insufficient chips".to_string();
-                self.publish_snapshot_locked(&table);
-                return Err(BetFailure::InsufficientChips);
-            }
-            Err(e) => {
-                let mut table = self.table.lock().await;
-                if let Some(seat_index) = table.user_seat_index(user_id) {
-                    table.seats[seat_index].pending_bet = None;
-                }
-                table.status_message = "internal error".to_string();
-                self.publish_snapshot_locked(&table);
-                return Err(BetFailure::Internal(e));
-            }
-        };
-
-        {
-            let mut table = self.table.lock().await;
-            if let Some(seat_index) = table.user_seat_index(user_id) {
-                let bet = table.seats[seat_index]
-                    .pending_bet
-                    .take()
-                    .unwrap_or_else(|| Bet::new(amount).expect("validated bet"));
-                table.seats[seat_index].bet = Some(bet);
-                let countdown_id = table.restart_betting_countdown();
-                table.status_message = table.betting_countdown_status();
-                self.publish_snapshot_locked(&table);
-                drop(table);
-                self.schedule_auto_deal(countdown_id);
-                return Ok(new_balance);
-            }
-            self.publish_snapshot_locked(&table);
-        }
-
-        Ok(new_balance)
-    }
-
-    async fn deal(&self, user_id: Uuid) -> Result<Vec<Settlement>, ActionFailure> {
-        let mut table = self.table.lock().await;
-        if table.user_seat_index(user_id).is_none() {
-            return Err(ActionFailure::NotSeated);
-        }
-        if table.phase != Phase::Betting {
-            return Err(ActionFailure::InvalidPhase("hand is already in progress"));
-        }
-        let settlements = table.start_round()?;
-        self.publish_snapshot_locked(&table);
-        Ok(settlements)
-    }
-
-    async fn hit(&self, user_id: Uuid) -> Result<(), ActionFailure> {
-        let settlements = {
-            let mut table = self.table.lock().await;
-            let Some(seat_index) = table.user_seat_index(user_id) else {
-                return Err(ActionFailure::NotSeated);
-            };
-            if table.phase != Phase::PlayerTurn {
-                return Err(ActionFailure::InvalidPhase("you cannot hit right now"));
-            }
-            let settlements = table.hit_seat(seat_index)?;
-            self.publish_snapshot_locked(&table);
-            settlements
-        };
-
-        if !settlements.is_empty() {
-            self.persist_settlements(settlements)
-                .await
-                .map_err(ActionFailure::Internal)?;
-        }
-
-        Ok(())
-    }
-
-    async fn stand(&self, user_id: Uuid) -> Result<(), ActionFailure> {
-        let settlements = {
-            let mut table = self.table.lock().await;
-            let Some(seat_index) = table.user_seat_index(user_id) else {
-                return Err(ActionFailure::NotSeated);
-            };
-            if table.phase != Phase::PlayerTurn {
-                return Err(ActionFailure::InvalidPhase("you cannot stand right now"));
-            }
-            let settlements = table.stand_seat(seat_index)?;
-            self.publish_snapshot_locked(&table);
-            settlements
-        };
-
-        if !settlements.is_empty() {
-            self.persist_settlements(settlements)
-                .await
-                .map_err(ActionFailure::Internal)?;
-        }
-
-        Ok(())
-    }
-
-    async fn next_hand(&self, user_id: Uuid) -> Result<(), ActionFailure> {
-        let mut table = self.table.lock().await;
-        if table.user_seat_index(user_id).is_none() {
-            return Err(ActionFailure::NotSeated);
-        }
-        if table.phase != Phase::Settling {
-            return Err(ActionFailure::InvalidPhase("hand is still in progress"));
-        }
-        table.reset_to_betting(&format!(
-            "Place bets ({MIN_BET}-{MAX_BET} chips). Each bet restarts the 5s deal timer."
-        ));
-        self.publish_snapshot_locked(&table);
-        Ok(())
-    }
-
     async fn persist_settlements(&self, settlements: Vec<Settlement>) -> anyhow::Result<()> {
         for settlement in settlements {
             let new_balance = if settlement.credit == 0 {
@@ -506,6 +509,7 @@ impl BlackjackService {
 }
 
 struct SharedTableState {
+    settings: BlackjackTableSettings,
     shoe: Shoe,
     seats: Vec<SeatState>,
     dealer_hand: Vec<PlayingCard>,
@@ -601,8 +605,9 @@ impl SeatState {
 }
 
 impl SharedTableState {
-    fn new() -> Self {
+    fn new(settings: BlackjackTableSettings) -> Self {
         Self {
+            settings: settings.normalized(),
             shoe: Shoe::new(),
             seats: vec![SeatState::empty(); MAX_SEATS],
             dealer_hand: Vec::new(),
@@ -631,10 +636,14 @@ impl SharedTableState {
                 .reference_seat()
                 .and_then(|seat| seat.bet)
                 .map(Bet::amount),
+            min_bet: self.settings.min_bet(),
+            max_bet: self.settings.max_bet(),
+            chip_denominations: self.settings.chip_denominations(),
             phase: self.phase,
             last_outcome: self.reference_seat().and_then(|seat| seat.last_outcome),
             last_net_change: self.reference_seat().map_or(0, |seat| seat.last_net_change),
-            bet_input: String::new(),
+            stake_chips: Vec::new(),
+            selected_chip_index: 0,
             status_message: self.status_message.clone(),
             dealer_revealed: matches!(self.phase, Phase::DealerTurn | Phase::Settling),
             dealer_score: if matches!(self.phase, Phase::DealerTurn | Phase::Settling) {
@@ -665,7 +674,8 @@ impl SharedTableState {
 
     fn restart_betting_countdown(&mut self) -> u64 {
         self.betting_countdown_id = self.betting_countdown_id.wrapping_add(1);
-        self.betting_deadline = Some(Instant::now() + BETTING_WINDOW);
+        self.betting_deadline =
+            Some(Instant::now() + Duration::from_secs(self.settings.betting_window_secs()));
         self.betting_countdown_id
     }
 
@@ -690,8 +700,37 @@ impl SharedTableState {
         match self.betting_countdown_secs() {
             Some(0) => "Dealing now.".to_string(),
             Some(secs) => format!("Dealing in {secs}s. More seats can still bet."),
-            None => format!("Place bets ({MIN_BET}-{MAX_BET} chips)."),
+            None => self.betting_prompt(),
         }
+    }
+
+    fn betting_prompt(&self) -> String {
+        format!(
+            "Place bets ({}-{} chips).",
+            self.settings.min_bet(),
+            self.settings.max_bet()
+        )
+    }
+
+    fn betting_prompt_with_timer(&self) -> String {
+        format!(
+            "{} Each bet restarts the {}s deal timer.",
+            self.betting_prompt(),
+            self.settings.betting_window_secs()
+        )
+    }
+
+    fn bet_for_amount(&self, amount: i64) -> Result<Bet, BetFailure> {
+        Bet::new_for_table(amount, self.settings.min_bet(), self.settings.max_bet()).map_err(|e| {
+            match e {
+                crate::app::rooms::blackjack::state::BetError::BelowMin => {
+                    BetFailure::BelowMin(self.settings.min_bet())
+                }
+                crate::app::rooms::blackjack::state::BetError::AboveMax => {
+                    BetFailure::AboveMax(self.settings.max_bet())
+                }
+            }
+        })
     }
 
     fn has_pending_bets(&self) -> bool {
@@ -887,6 +926,7 @@ impl SharedTableState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::rooms::blackjack::state::MIN_BET;
 
     fn user_id() -> Uuid {
         Uuid::now_v7()
@@ -894,7 +934,7 @@ mod tests {
 
     #[test]
     fn seats_allow_four_players() {
-        let mut table = SharedTableState::new();
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
         let users = (0..=MAX_SEATS).map(|_| user_id()).collect::<Vec<_>>();
 
         for (index, user_id) in users.iter().take(MAX_SEATS).enumerate() {
@@ -909,7 +949,7 @@ mod tests {
 
     #[test]
     fn same_user_cannot_take_two_seats() {
-        let mut table = SharedTableState::new();
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
         let user_id = user_id();
 
         assert_eq!(table.sit(user_id).expect("seat should be open"), 0);
@@ -921,7 +961,7 @@ mod tests {
 
     #[test]
     fn betting_seat_cannot_leave_mid_hand() {
-        let mut table = SharedTableState::new();
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
         let user_id = user_id();
         let seat_index = table.sit(user_id).expect("seat should be open");
         table.seats[seat_index].bet = Some(Bet::new(MIN_BET).unwrap());
@@ -936,7 +976,7 @@ mod tests {
 
     #[test]
     fn betting_seat_can_leave_after_settlement() {
-        let mut table = SharedTableState::new();
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
         let user_id = user_id();
         let seat_index = table.sit(user_id).expect("seat should be open");
         table.seats[seat_index].bet = Some(Bet::new(MIN_BET).unwrap());
@@ -950,7 +990,7 @@ mod tests {
 
     #[test]
     fn deal_requires_at_least_one_bet() {
-        let mut table = SharedTableState::new();
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
         table.sit(user_id()).expect("seat should be open");
 
         assert!(matches!(
@@ -961,7 +1001,7 @@ mod tests {
 
     #[test]
     fn round_deals_each_betting_seat() {
-        let mut table = SharedTableState::new();
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
         let user_a = user_id();
         let user_b = user_id();
         let seat_a = table.sit(user_a).expect("seat should be open");
@@ -979,7 +1019,7 @@ mod tests {
 
     #[test]
     fn stand_waits_for_other_unresolved_seats() {
-        let mut table = SharedTableState::new();
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
         let user_a = user_id();
         let user_b = user_id();
         let seat_a = table.sit(user_a).expect("seat should be open");
@@ -998,7 +1038,7 @@ mod tests {
 
     #[test]
     fn each_confirmed_bet_restarts_betting_countdown() {
-        let mut table = SharedTableState::new();
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
 
         let first_id = table.restart_betting_countdown();
         let first_deadline = table.betting_deadline.expect("deadline should be set");

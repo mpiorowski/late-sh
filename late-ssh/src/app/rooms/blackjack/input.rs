@@ -25,16 +25,28 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
 
     match state.snapshot.phase {
         Phase::Betting => match byte {
-            b'0'..=b'9' => {
-                state.append_bet_digit(byte as char);
+            b'[' | b'a' | b'A' => {
+                state.move_chip_selection(-1);
+                InputAction::Handled
+            }
+            b']' | b'd' | b'D' => {
+                state.move_chip_selection(1);
+                InputAction::Handled
+            }
+            b' ' => {
+                state.throw_selected_chip();
                 InputAction::Handled
             }
             0x08 | 0x7F => {
-                state.pop_bet_digit();
+                state.pull_last_chip();
+                InputAction::Handled
+            }
+            0x17 | b'c' | b'C' => {
+                state.clear_stake();
                 InputAction::Handled
             }
             b'\r' | b'\n' => {
-                state.submit_bet_from_buffer();
+                state.submit_stake();
                 InputAction::Handled
             }
             0x1B => InputAction::Leave,

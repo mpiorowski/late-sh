@@ -2,6 +2,8 @@ use late_core::{db::Db, models::game_room::GameRoom};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
+use super::blackjack::settings::BlackjackTableSettings;
+
 pub use late_core::models::game_room::GameKind;
 
 #[derive(Clone)]
@@ -25,6 +27,7 @@ pub struct RoomListItem {
     pub slug: String,
     pub display_name: String,
     pub status: String,
+    pub blackjack_settings: BlackjackTableSettings,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +68,7 @@ impl TryFrom<GameRoom> for RoomListItem {
             slug: room.slug,
             display_name: room.display_name,
             status: room.status,
+            blackjack_settings: BlackjackTableSettings::from_json(&room.settings),
         })
     }
 }
@@ -113,11 +117,17 @@ impl RoomsService {
         Ok(())
     }
 
-    pub fn create_game_room_task(&self, user_id: Uuid, game_kind: GameKind, display_name: String) {
+    pub fn create_game_room_task(
+        &self,
+        user_id: Uuid,
+        game_kind: GameKind,
+        display_name: String,
+        settings: BlackjackTableSettings,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc
-                .create_game_room(user_id, game_kind, &display_name)
+                .create_game_room(user_id, game_kind, &display_name, settings)
                 .await
             {
                 Ok(room) => {
@@ -151,6 +161,7 @@ impl RoomsService {
         user_id: Uuid,
         game_kind: GameKind,
         display_name: &str,
+        settings: BlackjackTableSettings,
     ) -> anyhow::Result<GameRoom> {
         let client = self.db.get().await?;
         let slug = generate_room_slug(game_kind);
@@ -159,7 +170,7 @@ impl RoomsService {
             game_kind,
             &slug,
             display_name,
-            serde_json::json!({}),
+            settings.to_json(),
             Some(user_id),
         )
         .await?;
