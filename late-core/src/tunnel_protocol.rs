@@ -35,6 +35,29 @@ pub enum ControlFrame {
     Resize { cols: u16, rows: u16 },
 }
 
+/// In-process event flowing from "russh handler dispatched a message"
+/// to "render loop applied it." Carries either a chunk of PTY input
+/// bytes or a window-resize directive, in a single FIFO so a sequence
+/// like `[Bytes(A), Resize, Bytes(B)]` reaches the app in that order.
+///
+/// Used end-to-end on both backend paths:
+/// - Legacy russh path: `Handler::data` → `mpsc<SshInputEvent>` ←
+///   `Handler::window_change_request`. Render loop drains.
+/// - `/tunnel` path: bastion encodes WS Binary/Text from this enum,
+///   backend's WS receive loop decodes back into the enum and forwards
+///   to the same render-loop queue.
+///
+/// Keeping data and resize on one ordered channel avoids the eager-
+/// resize race where window-change took the app lock ahead of bytes
+/// that were already queued from earlier on the SSH wire — a hazard
+/// for any TUI whose handlers translate coordinates against the
+/// current viewport (mouse reports, paste, block selection).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SshInputEvent {
+    Bytes(Vec<u8>),
+    Resize { cols: u16, rows: u16 },
+}
+
 impl ControlFrame {
     pub fn to_json(&self) -> serde_json::Result<String> {
         serde_json::to_string(self)
