@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-28 (Profile system fields + profile side panels)
+- Last updated: 2026-04-29 (reply target ids + selected reply jump)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -728,7 +728,7 @@ late-sh/
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
-| ChatMessage | `chat_messages` | `body` 1-2000 chars |
+| ChatMessage | `chat_messages` | `body` 1-2000 chars, nullable `reply_to_message_id` self-FK for reply jumps |
 | Article | `articles` | `url` UNIQUE, `user_id` FK |
 | ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
@@ -989,9 +989,10 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 **Chat reply flow:**
 1. Trigger: User selects a message (`j`/`k`) and presses `r`
-2. Processing: `ChatState::begin_reply_to_selected_in_room(room_id)` captures the target author plus a short preview, enters compose mode, and shows a reply-specific composer title. Callers resolve the target room themselves (chat screen passes `selected_room_id`, dashboard passes `App::dashboard_active_room_id()` — which honors pinned favorites, see below); there is no implicit-room wrapper.
-3. Side effects: Submit prepends a quoted first line (`> @user: preview`) to the stored message body; rendering peels that first line back out and draws it as faint reply context above the new body
-4. Failure: No selected message → `r` is a no-op
+2. Processing: `ChatState::begin_reply_to_selected_in_room(room_id)` captures the target message id, author, and short preview, enters compose mode, and shows a reply-specific composer title. Callers resolve the target room themselves (chat screen passes `selected_room_id`, dashboard passes `App::dashboard_active_room_id()` — which honors pinned favorites, see below); there is no implicit-room wrapper.
+3. Side effects: Submit stores `reply_to_message_id` on the new `chat_messages` row and still prepends a quoted first line (`> @user: preview`) to the stored message body for display/backward compatibility; rendering peels that first line back out and draws it as faint reply context above the new body.
+4. Navigation: With a reply selected via `j`/`k`, Enter tries to jump to `reply_to_message_id` if that original message is already loaded in the current room tail (normally the latest 500). If the target is older/not loaded, Enter is consumed and selection stays put.
+5. Failure: No selected message → `r` is a no-op
 
 **Dashboard favorites quick-switch:**
 1. Trigger: User pins rooms via Settings → Favorites tab, stored in `users.settings.favorite_room_ids` (ordered JSONB UUID array). `Profile.favorite_room_ids` reads/writes it through `ProfileParams`.
@@ -1033,7 +1034,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Composer render cost is cache-sensitive:** The chat composer caches wrapped `ComposerRow`s in `ChatState`; any change to composer text or width must invalidate that cache before render/cursor-up/down.
 - **Icon picker is chat-composer-only:** `Ctrl+]` (byte `0x1D`) opens `app::icon_picker` as a modal overlay, lazy-loads the catalog on first open (two sections each for Emoji and Nerd Font — no Unicode tab, no `unicode_names2` dep), and auto-starts `ChatState::start_composing` if the user isn't already composing. Selected icons are only ever pushed into `app.chat.composer`; Profile and news composers are intentionally not targets. The picker intercepts all input via an early return in `handle_parsed_input`, so while it is open nothing else on screen receives keys.
 - **@mention detection:** Uses simple `@username` substring match in message body. The `all_usernames` field on `ChatSnapshot` is loaded from `users` every refresh (10s) via `User::list_all_usernames` — includes all users, not just online ones.
-- **Reply persistence is currently body-encoded:** There is no reply DB column yet. Replies are stored as a quoted first line in `body` and rendered back out in the TUI. If/when true threaded metadata is added, both send and render paths need coordinated migration.
+- **Reply persistence has structured targets for new replies:** New replies store nullable `chat_messages.reply_to_message_id` plus the existing quoted first line in `body`. Older body-only replies have no target id and cannot be jumped to reliably. Enter on a selected reply only jumps when the target is already present in the loaded room tail; it does not fetch older history yet.
 - **All services are singletons** shared across SSH sessions. `ProfileService` snapshots are per-user channels keyed by `user_id`; events still require `user_id` filtering in UI state. Profile snapshots include the `Profile` projection plus a read-only `bonsai_trees` row when one exists, so viewing a profile can render bonsai without creating/mutating another user's tree. Per-user background refresh tasks are spawned on session init and aborted on `Drop`, and profile snapshot channels are pruned when receivers go away.
 - **Chat room `updated` timestamp:** Intentionally NOT used for room ordering to keep stable sort - rooms ordered by type (general → language → private → dm)
 - **Web Audio `createMediaElementSource` is one-shot:** Can only be called once per `<audio>` element. AudioContext + source node must be created once and reused across play/pause cycles. Disconnect suspends the context (`audioCtx.suspend()`), replay resumes it — never close and recreate.
@@ -1389,6 +1390,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `Esc` | Chat (`showcase` composing) | Cancel compose |
 | `i` / `Enter` | Dashboard | Start composing chat |
 | `j` / `k` | Chat | Move message selection newer/older |
+| `Enter` | Dashboard / Chat message selection | If the selected message is a reply with a loaded `reply_to_message_id`, jump to the original |
 | `f` then `1`..`8` | Dashboard / Chat message selection | React to selected message |
 | `p` | Chat | Open selected user's read-only profile modal |
 | `r` | Chat | Reply to selected message |

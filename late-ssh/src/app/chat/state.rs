@@ -53,6 +53,7 @@ pub(crate) struct MentionAutocomplete {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReplyTarget {
+    pub message_id: Uuid,
     pub author: String,
     pub preview: String,
 }
@@ -394,6 +395,18 @@ impl ChatState {
         self.selected_message_id = None;
     }
 
+    pub fn focus_message_in_room(&mut self, room_id: Uuid, message_id: Uuid) {
+        self.reaction_leader_active = false;
+        self.room_jump_active = false;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.selected_room_id = Some(room_id);
+        self.selected_message_id = Some(message_id);
+        self.highlighted_message_id = Some(message_id);
+    }
+
     pub fn begin_reaction_leader(&mut self) -> bool {
         if self.selected_message_id.is_none() {
             return false;
@@ -439,6 +452,7 @@ impl ChatState {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| short_user_id(message_user_id));
         self.reply_target = Some(ReplyTarget {
+            message_id: message.id,
             author,
             preview: reply_preview_text(&message_body),
         });
@@ -447,6 +461,30 @@ impl ChatState {
         self.edited_message_id = None;
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
         None
+    }
+
+    /// Try to jump from a selected reply message to the original message in
+    /// the currently-loaded room tail. Returns true when the selected message
+    /// carries a reply target, even if the target is not loaded locally.
+    pub fn try_jump_to_selected_reply_target_in_room(&mut self, room_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some(selected_id) = self.selected_message_id else {
+            return false;
+        };
+
+        let Some(reply_to_message_id) = self
+            .rooms
+            .iter()
+            .find(|(room, _)| room.id == room_id)
+            .and_then(|(_, messages)| loaded_reply_target_id(messages, selected_id))
+        else {
+            return false;
+        };
+
+        if let Some(reply_to_message_id) = reply_to_message_id {
+            self.focus_message_in_room(room_id, reply_to_message_id);
+        }
+        true
     }
 
     pub fn begin_edit_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
@@ -1053,6 +1091,7 @@ impl ChatState {
             && !body.is_empty()
         {
             let request_id = Uuid::now_v7();
+            let reply_to_message_id = self.reply_target.as_ref().map(|reply| reply.message_id);
             let body = if let Some(reply) = &self.reply_target {
                 format!("> @{}: {}\n{}", reply.author, reply.preview, body)
             } else {
@@ -1067,11 +1106,12 @@ impl ChatState {
                     self.is_admin,
                 );
             } else {
-                self.service.send_message_task(
+                self.service.send_message_with_reply_task(
                     self.user_id,
                     room_id,
                     self.room_slug(room_id),
                     body,
+                    reply_to_message_id,
                     request_id,
                     self.is_admin,
                 );
@@ -2244,6 +2284,16 @@ fn adjacent_message_id(msgs: &[ChatMessage], current: Uuid) -> Option<Uuid> {
         .or_else(|| idx.checked_sub(1).and_then(|i| msgs.get(i).map(|m| m.id)))
 }
 
+fn loaded_reply_target_id(msgs: &[ChatMessage], selected_id: Uuid) -> Option<Option<Uuid>> {
+    let selected = msgs.iter().find(|m| m.id == selected_id)?;
+    let reply_to_message_id = selected.reply_to_message_id?;
+    Some(
+        msgs.iter()
+            .any(|m| m.id == reply_to_message_id)
+            .then_some(reply_to_message_id),
+    )
+}
+
 fn reply_preview_text(body: &str) -> String {
     if let Some(title) = news_reply_preview_text(body) {
         return title;
@@ -3019,9 +3069,17 @@ mod tests {
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
             pinned: false,
+            reply_to_message_id: None,
             room_id: Uuid::from_u128(999),
             user_id: Uuid::from_u128(999),
             body: String::new(),
+        }
+    }
+
+    fn make_reply_msg(id: Uuid, reply_to_message_id: Uuid) -> ChatMessage {
+        ChatMessage {
+            reply_to_message_id: Some(reply_to_message_id),
+            ..make_msg(id)
         }
     }
 
@@ -3063,6 +3121,32 @@ mod tests {
         let a = Uuid::from_u128(1);
         let msgs = vec![make_msg(a)];
         assert_eq!(adjacent_message_id(&msgs, a), None);
+    }
+
+    #[test]
+    fn loaded_reply_target_id_returns_loaded_target() {
+        let reply = Uuid::from_u128(1);
+        let original = Uuid::from_u128(2);
+        let msgs = vec![make_reply_msg(reply, original), make_msg(original)];
+
+        assert_eq!(loaded_reply_target_id(&msgs, reply), Some(Some(original)));
+    }
+
+    #[test]
+    fn loaded_reply_target_id_returns_none_inner_when_target_not_loaded() {
+        let reply = Uuid::from_u128(1);
+        let original = Uuid::from_u128(2);
+        let msgs = vec![make_reply_msg(reply, original)];
+
+        assert_eq!(loaded_reply_target_id(&msgs, reply), Some(None));
+    }
+
+    #[test]
+    fn loaded_reply_target_id_rejects_non_reply_messages() {
+        let message = Uuid::from_u128(1);
+        let msgs = vec![make_msg(message)];
+
+        assert_eq!(loaded_reply_target_id(&msgs, message), None);
     }
 
     // --- dm_sort_key (regression: nav order must match UI order) ---

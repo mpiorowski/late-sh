@@ -131,6 +131,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  p                  open selected user's profile",
         "  f then 1 / 2 / 3 / 4 / 5",
         "                     react to selected message on any layout",
+        "  Enter              jump to loaded original for selected reply",
         "  r                  reply to selected message",
         "  e                  edit selected message",
         "  d                  delete selected message",

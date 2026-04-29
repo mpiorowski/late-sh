@@ -212,7 +212,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static
         reaction_picker_placeholder_lines(dim)
     } else if view.selected_message {
         vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · i compose",
+            "f react · r reply · e edit · d delete · p profile · c copy · Enter jump to reply",
             dim,
         ))]
     } else {

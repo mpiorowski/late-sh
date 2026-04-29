@@ -67,8 +67,15 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    // Enter is dashboard-specific: copy the CLI install command. Must be
-    // checked before delegating because chat compose also binds Enter.
+    if matches!(byte, b'\r' | b'\n')
+        && let Some(room_id) = active_room_id
+        && app.chat.try_jump_to_selected_reply_target_in_room(room_id)
+    {
+        return true;
+    }
+
+    // Enter is dashboard-specific: copy the CLI install command when it is
+    // not being used to follow a selected reply.
     if matches!(byte, b'\r' | b'\n') {
         app.pending_clipboard =
             Some("curl -fsSL https://cli.late.sh/install.sh | bash".to_string());
