@@ -1,4 +1,4 @@
-use crate::app::ai::ghost::{GRAYBEARD_CHAT_INTERVAL, GRAYBEARD_MENTION_COOLDOWN};
+use crate::app::ai::ghost::GRAYBEARD_MENTION_COOLDOWN;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HelpTopic {
@@ -418,7 +418,6 @@ fn artboard_help_lines() -> Vec<String> {
 }
 
 fn settings_help_lines() -> Vec<String> {
-    let graybeard_interval_min = GRAYBEARD_CHAT_INTERVAL.as_secs() / 60;
     let graybeard_mention_cooldown_sec = GRAYBEARD_MENTION_COOLDOWN.as_secs();
 
     vec![
@@ -467,8 +466,8 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "@graybeard".to_string(),
         "".to_string(),
-        format!("Lurks in #general every ~{graybeard_interval_min}min."),
         "Burned-out senior who still shows up to heckle modern software.".to_string(),
+        "Only replies when mentioned.".to_string(),
         format!("Replies on mention with a {graybeard_mention_cooldown_sec}s cooldown."),
     ]
 }

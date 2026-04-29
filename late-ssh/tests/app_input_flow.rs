@@ -494,6 +494,11 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
         "f leader reaction to persist",
     )
     .await;
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("Type a message · j/k select"),
+        "message selection should clear after reacting: {plain:?}"
+    );
 }
 
 #[tokio::test]

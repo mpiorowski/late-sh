@@ -48,6 +48,7 @@ pub struct DashboardChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
+    pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
@@ -322,7 +323,12 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 message_reactions: view.message_reactions,
             },
         );
-        lines = visible_chat_rows(view.rows_cache, view.selected_message_id, None, height);
+        lines = visible_chat_rows(
+            view.rows_cache,
+            view.selected_message_id,
+            view.highlighted_message_id,
+            height,
+        );
     }
 
     frame.render_widget(Paragraph::new(lines), messages_area);
@@ -1568,6 +1574,26 @@ mod tests {
 
         assert_eq!(composer_title(&view, need(esc)), esc);
         assert_eq!(composer_title(&view, need(esc) - 1), "");
+    }
+
+    #[test]
+    fn visible_rows_paint_background_for_selected_highlighted_message() {
+        let message_id = Uuid::now_v7();
+        let mut cache = ChatRowsCache::default();
+        cache.all_rows = vec![
+            Line::from(Span::raw("alice")),
+            Line::from(Span::raw("hello")),
+        ];
+        cache.selected_ranges.insert(message_id, (1, 2));
+        cache.highlighted_ranges.insert(message_id, (0, 2));
+
+        let rows = visible_chat_rows(&cache, Some(message_id), Some(message_id), 4);
+        assert!(
+            rows.iter()
+                .flat_map(|row| row.spans.iter())
+                .any(|span| span.style.bg == Some(theme::BG_SELECTION())),
+            "expected selected highlighted message to receive background"
+        );
     }
 
     #[test]

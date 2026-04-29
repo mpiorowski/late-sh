@@ -464,18 +464,6 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-    if app.show_cli_install_modal && !data.is_empty() {
-        app.show_cli_install_modal = false;
-        return;
-    }
-
-    // Web chat QR overlay: any key dismisses
-    if app.show_web_chat_qr && !data.is_empty() {
-        app.show_web_chat_qr = false;
-        app.web_chat_qr_url = None;
-        return;
-    }
-
     // Split-across-reads `ESC` chords: previous read ended with a lone ESC
     // and this one begins with a control byte that should be treated as an
     // Alt chord instead of feeding a wedged parser.
@@ -539,9 +527,7 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
     match overlay_input_action(event) {
         Some(OverlayInputAction::Close) => app.chat.close_overlay(),
         Some(OverlayInputAction::Scroll(delta)) => app.chat.scroll_overlay(delta),
-        None if close_on_any_key
-            && !matches!(event, ParsedInput::FocusGained | ParsedInput::FocusLost) =>
-        {
+        None if close_on_any_key && input_dismisses_key_modal(event) => {
             app.chat.close_overlay();
         }
         None => {}
@@ -574,6 +560,21 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_cli_install_modal {
+        if input_dismisses_key_modal(&event) {
+            app.show_cli_install_modal = false;
+        }
+        return;
+    }
+
+    if app.show_web_chat_qr {
+        if input_dismisses_key_modal(&event) {
+            app.show_web_chat_qr = false;
+            app.web_chat_qr_url = None;
+        }
         return;
     }
 
@@ -941,6 +942,13 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
     dispatch_screen_key(app, ctx.screen, byte);
 }
 
+fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
+    !matches!(
+        event,
+        ParsedInput::Mouse(_) | ParsedInput::FocusGained | ParsedInput::FocusLost
+    )
+}
+
 fn dispatch_escape(app: &mut App) {
     if app.show_quit_confirm {
         quit_confirm::input::handle_escape(app);
@@ -968,6 +976,11 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_cli_install_modal {
         app.show_cli_install_modal = false;
+        return;
+    }
+    if app.show_web_chat_qr {
+        app.show_web_chat_qr = false;
+        app.web_chat_qr_url = None;
         return;
     }
     let ctx = InputContext::from_app(app);

@@ -40,6 +40,20 @@ async fn uppercase_b_on_dashboard_opens_cli_install_modal() {
 }
 
 #[tokio::test]
+async fn mouse_move_does_not_close_cli_install_modal() {
+    let (_test_db, mut app) = make_app_harness().await;
+
+    app.handle_input(b"B");
+    wait_for_render_contains(&mut app, "BUILD SOURCE").await;
+
+    app.handle_input(b"\x1b[<35;20;5M");
+    wait_for_render_contains(&mut app, "BUILD SOURCE").await;
+
+    app.handle_input(b"x");
+    assert!(!render_plain(&mut app).contains("BUILD SOURCE"));
+}
+
+#[tokio::test]
 async fn uppercase_p_only_opens_pairing_qr_on_dashboard() {
     let (_test_db, mut app) = make_app_harness().await;
 
@@ -55,6 +69,20 @@ async fn uppercase_p_only_opens_pairing_qr_on_dashboard() {
     wait_for_render_contains(&mut app, " Dashboard ").await;
     app.handle_input(b"P");
     wait_for_render_contains(&mut app, "Scan to pair audio").await;
+}
+
+#[tokio::test]
+async fn mouse_move_does_not_close_pairing_qr() {
+    let (_test_db, mut app) = make_app_harness().await;
+
+    app.handle_input(b"P");
+    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+
+    app.handle_input(b"\x1b[<35;20;5M");
+    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+
+    app.handle_input(b"x");
+    assert!(!render_plain(&mut app).contains("Scan to pair audio"));
 }
 
 #[tokio::test]

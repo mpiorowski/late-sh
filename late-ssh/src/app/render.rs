@@ -241,6 +241,7 @@ impl App {
                 message_reactions,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
+                highlighted_message_id: self.chat.highlighted_message_id,
                 reaction_picker_active: self.chat.is_reaction_leader_active(),
                 composer: self.chat.composer(),
                 composing: self.chat.composing,

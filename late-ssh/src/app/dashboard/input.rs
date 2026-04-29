@@ -1,4 +1,4 @@
-use crate::app::{chat, state::App, vote};
+use crate::app::{chat, common::cli_install, state::App, vote};
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     let Some(room_id) = app.dashboard_active_room_id() else {
@@ -89,6 +89,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
 }
 
 pub(crate) fn open_cli_install_modal(app: &mut App) {
+    app.pending_clipboard = Some(cli_install::INSTALL_COMMAND.to_string());
     app.show_web_chat_qr = false;
     app.web_chat_qr_url = None;
     app.show_cli_install_modal = true;

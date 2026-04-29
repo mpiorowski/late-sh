@@ -579,6 +579,7 @@ impl ChatState {
         let message = self.selected_message_in_room(room_id)?;
         self.service
             .toggle_message_reaction_task(self.user_id, message.id, kind);
+        self.selected_message_id = None;
         None
     }
 

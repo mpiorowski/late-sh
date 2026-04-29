@@ -98,8 +98,9 @@ impl Visualizer {
                     Span::styled(" in chat", dim),
                 ]),
                 Line::from(""),
+                Line::from(Span::styled("On dashboard:", dim)),
                 Line::from(vec![
-                    Span::styled("Enter", key),
+                    Span::styled("B", key),
                     Span::styled(" cli  ", dim),
                     Span::styled("P", key),
                     Span::styled(" web", dim),

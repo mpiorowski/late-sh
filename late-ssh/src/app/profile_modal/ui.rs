@@ -149,7 +149,10 @@ fn draw_late_fetch_strip(frame: &mut Frame, area: Rect, state: &ProfileModalStat
         )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
+    let inner = block.inner(area).inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     frame.render_widget(block, area);
 
     let Some(profile) = state.profile() else {
