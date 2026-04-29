@@ -50,14 +50,14 @@ pub fn mouse_scroll_delta(mouse: MouseEvent) -> Option<i16> {
 }
 
 fn draw_log(frame: &mut Frame, area: Rect, state: &ModModalState) {
-    let height = area.height as usize;
-    let log = state.log();
-    let start = state.viewport_start(height);
-    let lines: Vec<Line<'static>> = log.iter().skip(start).take(height).map(log_line).collect();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
+    let height = inner.height as usize;
+    let log = state.log();
+    let start = state.viewport_start(height);
+    let lines: Vec<Line<'static>> = log.iter().skip(start).take(height).map(log_line).collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 
@@ -132,4 +132,38 @@ fn centered_percent_rect(width_percent: u16, height_percent: u16, area: Rect) ->
 
 fn percent_of(value: u16, percent: u16) -> u16 {
     ((value as u32 * percent as u32) / 100) as u16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn draw_log_keeps_latest_line_above_command_input() {
+        let backend = TestBackend::new(100, 32);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut state = ModModalState::new();
+        for idx in 0..40 {
+            state.append_info(format!("line {idx:02}"));
+        }
+
+        terminal
+            .draw(|frame| draw(frame, frame.area(), &state))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+
+        assert!(
+            text.contains("line 39"),
+            "latest log line should render above the command box:\n{text}"
+        );
+    }
 }

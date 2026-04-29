@@ -391,7 +391,7 @@ impl ChatService {
     ) -> Result<Vec<String>> {
         let command = parse_mod_command(input)?;
         match command {
-            ModCommand::Help => Ok(mod_help_lines()),
+            ModCommand::Help { topic } => Ok(mod_help_lines(topic.as_deref())),
             ModCommand::Status => Ok(vec![format!(
                 "status: tier={} mod_surface={}",
                 tier_label(permissions),
@@ -413,6 +413,7 @@ impl ChatService {
             ModCommand::User { username } => self.mod_user_detail(permissions, &username).await,
             ModCommand::Rooms { filter } => self.mod_list_rooms(permissions, filter).await,
             ModCommand::Room { slug } => self.mod_room_detail(permissions, &slug).await,
+            ModCommand::RoomBans { slug } => self.mod_room_bans(permissions, &slug).await,
             ModCommand::Audit { filter } => self.mod_audit(permissions, filter).await,
             ModCommand::RoomAction {
                 action,
@@ -474,6 +475,7 @@ impl ChatService {
                 )
                 .await
             }
+            ModCommand::ServerBans => self.mod_server_bans(permissions).await,
             ModCommand::Artboard {
                 action,
                 username,
@@ -490,6 +492,7 @@ impl ChatService {
                 )
                 .await
             }
+            ModCommand::ArtboardBans => self.mod_artboard_bans(permissions).await,
             ModCommand::Role { action, username } => {
                 self.mod_role(actor_user_id, permissions, action, &username)
                     .await
@@ -2191,6 +2194,158 @@ impl ChatService {
         ])
     }
 
+    async fn mod_room_bans(&self, permissions: Permissions, slug: &str) -> Result<Vec<String>> {
+        ensure_decision(
+            permissions,
+            Action::ViewUserSanctionHistory,
+            TargetTier::NotApplicable,
+        )?;
+        let client = self.db.get().await?;
+        let room = find_room_by_mod_slug(&client, slug).await?;
+        let rows = client
+            .query(
+                "SELECT b.target_user_id, b.reason, b.expires_at,
+                        target.username AS target_username,
+                        actor.username AS actor_username
+                 FROM room_bans b
+                 LEFT JOIN users target ON target.id = b.target_user_id
+                 LEFT JOIN users actor ON actor.id = b.actor_user_id
+                 WHERE b.room_id = $1
+                   AND (b.expires_at IS NULL OR b.expires_at > current_timestamp)
+                 ORDER BY b.created DESC
+                 LIMIT 50",
+                &[&room.id],
+            )
+            .await?;
+        let mut lines = Vec::new();
+        for row in rows {
+            let target_user_id: Uuid = row.get("target_user_id");
+            let target_username: Option<String> = row.get("target_username");
+            let actor_username: Option<String> = row.get("actor_username");
+            let reason: String = row.get("reason");
+            let expires_at: Option<DateTime<Utc>> = row.get("expires_at");
+            lines.push(format!(
+                "@{} actor=@{} expires={} reason={}",
+                target_username.unwrap_or_else(|| short_user_id(target_user_id)),
+                actor_username.unwrap_or_else(|| "unknown".to_string()),
+                format_ban_expiry(expires_at),
+                format_ban_reason(&reason)
+            ));
+        }
+        if lines.is_empty() {
+            lines.push(format!("no active bans for #{}", room_label(&room)));
+        }
+        Ok(lines)
+    }
+
+    async fn mod_server_bans(&self, permissions: Permissions) -> Result<Vec<String>> {
+        ensure_decision(
+            permissions,
+            Action::ViewUserSanctionHistory,
+            TargetTier::NotApplicable,
+        )?;
+        let client = self.db.get().await?;
+        let rows = client
+            .query(
+                "SELECT b.ban_type, b.target_user_id, b.fingerprint, b.ip_address,
+                        b.snapshot_username, b.reason, b.expires_at,
+                        target.username AS target_username,
+                        actor.username AS actor_username
+                 FROM server_bans b
+                 LEFT JOIN users target ON target.id = b.target_user_id
+                 LEFT JOIN users actor ON actor.id = b.actor_user_id
+                 WHERE b.expires_at IS NULL OR b.expires_at > current_timestamp
+                 ORDER BY b.created DESC
+                 LIMIT 50",
+                &[],
+            )
+            .await?;
+        let mut lines = Vec::new();
+        for row in rows {
+            let ban_type: String = row.get("ban_type");
+            let target_user_id: Option<Uuid> = row.get("target_user_id");
+            let target_username: Option<String> = row.get("target_username");
+            let fingerprint: Option<String> = row.get("fingerprint");
+            let ip_address: Option<String> = row.get("ip_address");
+            let snapshot_username: Option<String> = row.get("snapshot_username");
+            let actor_username: Option<String> = row.get("actor_username");
+            let reason: String = row.get("reason");
+            let expires_at: Option<DateTime<Utc>> = row.get("expires_at");
+            let target = match ban_type.as_str() {
+                "user" => target_username
+                    .map(|username| format!("@{username}"))
+                    .or_else(|| target_user_id.map(short_user_id))
+                    .unwrap_or_else(|| "-".to_string()),
+                "ip" => {
+                    let mut target = ip_address.unwrap_or_else(|| "-".to_string());
+                    if let Some(username) = snapshot_username {
+                        target.push_str(&format!(" snapshot=@{username}"));
+                    }
+                    target
+                }
+                "fingerprint" => fingerprint
+                    .as_deref()
+                    .map(short_fingerprint)
+                    .unwrap_or_else(|| "-".to_string()),
+                _ => "-".to_string(),
+            };
+            lines.push(format!(
+                "{} {} actor=@{} expires={} reason={}",
+                ban_type,
+                target,
+                actor_username.unwrap_or_else(|| "unknown".to_string()),
+                format_ban_expiry(expires_at),
+                format_ban_reason(&reason)
+            ));
+        }
+        if lines.is_empty() {
+            lines.push("no active server bans".to_string());
+        }
+        Ok(lines)
+    }
+
+    async fn mod_artboard_bans(&self, permissions: Permissions) -> Result<Vec<String>> {
+        ensure_decision(
+            permissions,
+            Action::ViewUserSanctionHistory,
+            TargetTier::NotApplicable,
+        )?;
+        let client = self.db.get().await?;
+        let rows = client
+            .query(
+                "SELECT b.target_user_id, b.reason, b.expires_at,
+                        target.username AS target_username,
+                        actor.username AS actor_username
+                 FROM artboard_bans b
+                 LEFT JOIN users target ON target.id = b.target_user_id
+                 LEFT JOIN users actor ON actor.id = b.actor_user_id
+                 WHERE b.expires_at IS NULL OR b.expires_at > current_timestamp
+                 ORDER BY b.created DESC
+                 LIMIT 50",
+                &[],
+            )
+            .await?;
+        let mut lines = Vec::new();
+        for row in rows {
+            let target_user_id: Uuid = row.get("target_user_id");
+            let target_username: Option<String> = row.get("target_username");
+            let actor_username: Option<String> = row.get("actor_username");
+            let reason: String = row.get("reason");
+            let expires_at: Option<DateTime<Utc>> = row.get("expires_at");
+            lines.push(format!(
+                "@{} actor=@{} expires={} reason={}",
+                target_username.unwrap_or_else(|| short_user_id(target_user_id)),
+                actor_username.unwrap_or_else(|| "unknown".to_string()),
+                format_ban_expiry(expires_at),
+                format_ban_reason(&reason)
+            ));
+        }
+        if lines.is_empty() {
+            lines.push("no active artboard bans".to_string());
+        }
+        Ok(lines)
+    }
+
     async fn mod_audit(
         &self,
         permissions: Permissions,
@@ -2934,9 +3089,35 @@ fn short_user_id(user_id: Uuid) -> String {
     id[..id.len().min(8)].to_string()
 }
 
+fn room_label(room: &ChatRoom) -> String {
+    room.slug.clone().unwrap_or_else(|| room.kind.clone())
+}
+
+fn short_fingerprint(fingerprint: &str) -> String {
+    const SHORT_FINGERPRINT_LEN: usize = 16;
+    let end = fingerprint.len().min(SHORT_FINGERPRINT_LEN);
+    fingerprint[..end].to_string()
+}
+
+fn format_ban_expiry(expires_at: Option<DateTime<Utc>>) -> String {
+    expires_at
+        .map(|expires_at| expires_at.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "never".to_string())
+}
+
+fn format_ban_reason(reason: &str) -> &str {
+    if reason.trim().is_empty() {
+        "-"
+    } else {
+        reason.trim()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ModCommand {
-    Help,
+    Help {
+        topic: Option<String>,
+    },
     Status,
     Whoami,
     Users {
@@ -2955,6 +3136,9 @@ enum ModCommand {
         filter: Option<String>,
     },
     Room {
+        slug: String,
+    },
+    RoomBans {
         slug: String,
     },
     RoomAction {
@@ -2981,12 +3165,14 @@ enum ModCommand {
         duration: Option<chrono::Duration>,
         reason: String,
     },
+    ServerBans,
     Artboard {
         action: ArtboardAction,
         username: String,
         duration: Option<chrono::Duration>,
         reason: String,
     },
+    ArtboardBans,
     Role {
         action: RoleAction,
         username: String,
@@ -3125,17 +3311,20 @@ fn parse_mod_command(input: &str) -> Result<ModCommand> {
     } else {
         input.strip_prefix("/mod ").map(str::trim).unwrap_or(input)
     };
-    if input.is_empty() || input == "help" {
-        return Ok(ModCommand::Help);
+    if input.is_empty() {
+        return Ok(ModCommand::Help { topic: None });
     }
 
     let mut parts = input.split_whitespace();
     let Some(head) = parts.next() else {
-        return Ok(ModCommand::Help);
+        return Ok(ModCommand::Help { topic: None });
     };
     let rest = parts.collect::<Vec<_>>();
 
     match head {
+        "help" => Ok(ModCommand::Help {
+            topic: nonempty(rest.join(" ")),
+        }),
         "status" => Ok(ModCommand::Status),
         "whoami" => Ok(ModCommand::Whoami),
         "users" => Ok(ModCommand::Users {
@@ -3167,6 +3356,9 @@ fn parse_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
         anyhow::bail!("usage: room #slug | room <action> ...");
     };
     match first {
+        "bans" => Ok(ModCommand::RoomBans {
+            slug: required_slug(parts.get(1).copied(), "usage: room bans #slug")?,
+        }),
         "kick" | "ban" | "unban" => {
             let action = match first {
                 "kick" => RoomModAction::Kick,
@@ -3223,6 +3415,9 @@ fn parse_server_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
         anyhow::bail!("usage: server <kick|ban|unban> @name | server <ban-ip|unban-ip> <ip>");
     };
+    if first == "bans" {
+        return Ok(ModCommand::ServerBans);
+    }
     if matches!(first, "ban-ip" | "unban-ip") {
         let ip_address = required_ip_address(
             parts.get(1).copied(),
@@ -3269,6 +3464,9 @@ fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
         anyhow::bail!("usage: artboard <ban|unban> @name");
     };
+    if first == "bans" {
+        return Ok(ModCommand::ArtboardBans);
+    }
     let action = match first {
         "ban" => ArtboardAction::Ban,
         "unban" => ArtboardAction::Unban,
@@ -3511,38 +3709,232 @@ fn tier_label(permissions: Permissions) -> &'static str {
     }
 }
 
-fn mod_help_lines() -> Vec<String> {
-    [
-        "help",
-        "status",
-        "whoami",
-        "users [filter]",
-        "user @name",
-        "sessions [@name]",
-        "audit [filter]",
-        "rooms [filter]",
-        "room #slug",
-        "room kick #slug @name [reason...]",
-        "room ban #slug @name [duration] [reason...]",
-        "room unban #slug @name",
-        "room rename #old #new",
-        "room public #slug",
-        "room private #slug",
-        "room delete #slug",
-        "server kick @name [reason...]",
-        "server ban @name [duration] [reason...]",
-        "server unban @name",
-        "server ban-ip <ip> [duration] [reason...]",
-        "server unban-ip <ip>",
-        "artboard ban @name [duration] [reason...]",
-        "artboard unban @name",
-        "grant mod @name",
-        "revoke mod @name",
-        "grant admin @name",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
+fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
+    let Some(topic) = topic
+        .map(normalize_help_topic)
+        .filter(|topic| !topic.is_empty())
+    else {
+        return help_lines(&[
+            "help [command]",
+            "status",
+            "whoami",
+            "users [filter]",
+            "user @name",
+            "sessions [@name]",
+            "audit [filter]",
+            "rooms [filter]",
+            "room #slug",
+            "room bans #slug",
+            "room kick #slug @name [reason...]",
+            "room ban #slug @name [duration] [reason...]",
+            "room unban #slug @name",
+            "room rename #old #new",
+            "room public #slug",
+            "room private #slug",
+            "room delete #slug",
+            "server bans",
+            "server kick @name [reason...]",
+            "server ban @name [duration] [reason...]",
+            "server unban @name",
+            "server ban-ip <ip> [duration] [reason...]",
+            "server unban-ip <ip>",
+            "artboard bans",
+            "artboard ban @name [duration] [reason...]",
+            "artboard unban @name",
+            "grant mod @name",
+            "revoke mod @name",
+            "grant admin @name",
+            "",
+            "Use help <command> for details, e.g. help audit or help server ban-ip.",
+        ]);
+    };
+
+    let lines = match topic.as_str() {
+        "help" => &[
+            "help [command]",
+            "Shows the command list or focused help for one command.",
+            "command: optional command/subcommand, e.g. audit, room ban, server ban-ip.",
+        ][..],
+        "status" => &[
+            "status",
+            "Shows your effective moderation tier and whether the mod surface is enabled.",
+        ],
+        "whoami" => &[
+            "whoami",
+            "Shows your username and effective admin/moderator flags.",
+        ],
+        "users" => &[
+            "users [filter]",
+            "Lists users.",
+            "filter: optional case-insensitive username substring.",
+        ],
+        "user" => &[
+            "user @name",
+            "Shows one user's id, roles, timestamps, and active server/artboard ban flags.",
+            "@name: username, with or without @.",
+        ],
+        "sessions" => &[
+            "sessions [@name]",
+            "Lists active SSH sessions.",
+            "@name: optional username filter, with or without @.",
+        ],
+        "audit" => &[
+            "audit [filter]",
+            "Shows the latest 50 moderation audit entries.",
+            "filter: optional case-insensitive substring matched against rendered lines.",
+            "Examples: audit server_ban, audit actor=@alice, audit target=user:@bob.",
+        ],
+        "rooms" => &[
+            "rooms [filter]",
+            "Lists rooms with visibility, permanence, member count, and active ban count.",
+            "filter: optional case-insensitive room label substring.",
+        ],
+        "room" => &[
+            "room #slug",
+            "Shows one room's id, kind, visibility, permanence, auto-join flag, and member count.",
+            "#slug: room slug, with or without #.",
+            "Subcommands: room bans, room kick, room ban, room unban, room rename, room public, room private, room delete.",
+        ],
+        "room bans" => &[
+            "room bans #slug",
+            "Lists active bans in a room.",
+            "#slug: room slug, with or without #.",
+        ],
+        "room kick" => &[
+            "room kick #slug @name [reason...]",
+            "Removes a user from a room without creating a ban.",
+            "#slug: room slug. @name: username. reason: optional audit text.",
+        ],
+        "room ban" => &[
+            "room ban #slug @name [duration] [reason...]",
+            "Bans a user from a room and removes their membership.",
+            "#slug: room slug. @name: username.",
+            "duration: optional positive number plus s/m/h/d, e.g. 30m or 7d; omit for permanent.",
+            "reason: optional audit text after duration.",
+        ],
+        "room unban" => &[
+            "room unban #slug @name",
+            "Removes an active room ban for a user.",
+            "#slug: room slug. @name: username.",
+        ],
+        "room rename" => &[
+            "room rename #old #new",
+            "Renames a room slug.",
+            "#old: current slug. #new: new slug.",
+        ],
+        "room public" => &[
+            "room public #slug",
+            "Makes a room public.",
+            "#slug: room slug.",
+        ],
+        "room private" => &[
+            "room private #slug",
+            "Makes a room private.",
+            "#slug: room slug.",
+        ],
+        "room delete" => &["room delete #slug", "Deletes a room.", "#slug: room slug."],
+        "server" => &[
+            "server <kick|ban|unban> @name",
+            "server <ban-ip|unban-ip> <ip>",
+            "Applies server-wide session removal or bans.",
+            "Subcommands: server bans, server kick, server ban, server unban, server ban-ip, server unban-ip.",
+        ],
+        "server bans" => &[
+            "server bans",
+            "Lists active server user, fingerprint, and IP bans.",
+        ],
+        "server kick" => &[
+            "server kick @name [reason...]",
+            "Terminates a user's active sessions without creating a ban.",
+            "@name: username. reason: optional audit text.",
+        ],
+        "server ban" => &[
+            "server ban @name [duration] [reason...]",
+            "Creates a server user ban and terminates active sessions.",
+            "@name: username.",
+            "duration: optional positive number plus s/m/h/d, e.g. 2h or 7d; omit for permanent.",
+            "reason: optional audit text after duration.",
+        ],
+        "server unban" => &[
+            "server unban @name",
+            "Removes active server user/fingerprint bans for that user.",
+            "@name: username.",
+        ],
+        "server ban-ip" => &[
+            "server ban-ip <ip> [duration] [reason...]",
+            "Creates a server IP ban and terminates active sessions from that IP.",
+            "ip: IPv4 or IPv6 address.",
+            "duration: optional positive number plus s/m/h/d; omit for permanent.",
+            "reason: optional audit text after duration.",
+        ],
+        "server unban-ip" => &[
+            "server unban-ip <ip>",
+            "Removes an active server IP ban.",
+            "ip: IPv4 or IPv6 address.",
+        ],
+        "artboard" => &[
+            "artboard <ban|unban> @name",
+            "Controls whether a user may use the artboard.",
+            "Subcommands: artboard bans, artboard ban, artboard unban.",
+        ],
+        "artboard bans" => &["artboard bans", "Lists active artboard bans."],
+        "artboard ban" => &[
+            "artboard ban @name [duration] [reason...]",
+            "Bans a user from the artboard.",
+            "@name: username.",
+            "duration: optional positive number plus s/m/h/d; omit for permanent.",
+            "reason: optional audit text after duration.",
+        ],
+        "artboard unban" => &[
+            "artboard unban @name",
+            "Removes an artboard ban for a user.",
+            "@name: username.",
+        ],
+        "grant" => &[
+            "grant <mod|admin> @name",
+            "Grants a role to a user.",
+            "mod: moderator role. admin: admin role. @name: username.",
+        ],
+        "grant mod" => &[
+            "grant mod @name",
+            "Grants moderator role to a user.",
+            "@name: username.",
+        ],
+        "grant admin" => &[
+            "grant admin @name",
+            "Grants admin role to a user.",
+            "@name: username.",
+        ],
+        "revoke" | "revoke mod" => &[
+            "revoke mod @name",
+            "Revokes moderator role from a user.",
+            "@name: username.",
+        ],
+        _ => {
+            return vec![
+                format!("unknown help topic: {topic}"),
+                "try: help".to_string(),
+            ];
+        }
+    };
+    help_lines(lines)
+}
+
+fn normalize_help_topic(topic: &str) -> String {
+    let topic = topic
+        .trim()
+        .strip_prefix("/mod ")
+        .map(str::trim)
+        .unwrap_or_else(|| topic.trim());
+    topic
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn help_lines(lines: &[&str]) -> Vec<String> {
+    lines.iter().map(|line| (*line).to_string()).collect()
 }
 
 #[cfg(test)]
@@ -3551,9 +3943,71 @@ mod mod_command_tests {
 
     #[test]
     fn parses_optional_mod_prefix() {
-        assert_eq!(parse_mod_command("/mod help").unwrap(), ModCommand::Help);
-        assert_eq!(parse_mod_command("help").unwrap(), ModCommand::Help);
+        assert_eq!(
+            parse_mod_command("/mod help").unwrap(),
+            ModCommand::Help { topic: None }
+        );
+        assert_eq!(
+            parse_mod_command("help").unwrap(),
+            ModCommand::Help { topic: None }
+        );
+        assert_eq!(
+            parse_mod_command("help audit").unwrap(),
+            ModCommand::Help {
+                topic: Some("audit".to_string())
+            }
+        );
+        assert_eq!(
+            parse_mod_command("help server ban-ip").unwrap(),
+            ModCommand::Help {
+                topic: Some("server ban-ip".to_string())
+            }
+        );
         assert!(parse_mod_command("/moderator help").is_err());
+    }
+
+    #[test]
+    fn command_help_explains_audit_filter() {
+        let lines = mod_help_lines(Some("audit"));
+
+        assert!(lines.iter().any(|line| line == "audit [filter]"));
+        assert!(
+            lines.iter().any(|line| line.contains("substring")),
+            "audit help should explain the filter behavior: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn command_help_explains_server_ban_arguments() {
+        let lines = mod_help_lines(Some("server ban"));
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "server ban @name [duration] [reason...]")
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("s/m/h/d")),
+            "server ban help should explain duration syntax: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn parses_ban_list_commands() {
+        assert_eq!(
+            parse_mod_command("server bans").unwrap(),
+            ModCommand::ServerBans
+        );
+        assert_eq!(
+            parse_mod_command("artboard bans").unwrap(),
+            ModCommand::ArtboardBans
+        );
+        assert_eq!(
+            parse_mod_command("room bans #lobby").unwrap(),
+            ModCommand::RoomBans {
+                slug: "lobby".to_string()
+            }
+        );
     }
 
     #[test]
