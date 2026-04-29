@@ -59,6 +59,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         web_url: "http://localhost:3000".to_string(),
         open_access: true,
         force_admin: false,
+        force_admin_users: vec![],
         db: db_config,
         max_conns_global: 100,
         max_conns_per_ip: 3,

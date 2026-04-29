@@ -18,6 +18,7 @@ pub struct Config {
     pub web_url: String,
     pub open_access: bool,
     pub force_admin: bool,
+    pub force_admin_users: Vec<String>,
     pub db: DbConfig,
     pub max_conns_global: usize,
     pub max_conns_per_ip: usize,
@@ -62,7 +63,8 @@ impl Config {
             api_port = self.api_port,
             open_access = self.open_access,
             force_admin = self.force_admin,
-            "network: SSH listener port, internal API port, open-access auth mode, dev force-admin"
+            force_admin_users = ?self.force_admin_users,
+            "network: SSH listener port, internal API port, open-access auth mode, dev force-admin (global + per-user)"
         );
         tracing::info!(
             db_host = %self.db.host,
@@ -132,6 +134,11 @@ impl Config {
             web_url: required("LATE_WEB_URL")?,
             open_access: required_bool("LATE_SSH_OPEN")?,
             force_admin: required_bool("LATE_FORCE_ADMIN")?,
+            force_admin_users: required("LATE_FORCE_ADMIN_USERS")?
+                .split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect(),
             db,
             max_conns_global: required_parse("LATE_MAX_CONNS_GLOBAL")?,
             max_conns_per_ip: required_parse("LATE_MAX_CONNS_PER_IP")?,

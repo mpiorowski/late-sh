@@ -817,7 +817,14 @@ impl russh::server::Handler for ClientHandler {
             activity_feed_rx: self.activity_feed_rx.take(),
             user_id,
             permissions: AuthzPermissions::new(
-                user.is_admin || self.state.config.force_admin,
+                user.is_admin
+                    || self.state.config.force_admin
+                    || self
+                        .state
+                        .config
+                        .force_admin_users
+                        .iter()
+                        .any(|u| u == &user.username.to_ascii_lowercase()),
                 user.is_moderator,
             ),
             is_mod: user.is_mod,
