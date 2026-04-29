@@ -15,6 +15,7 @@ use crate::{
         draw_dashboard_pinned_messages,
     },
     app::common::{
+        cli_install,
         primitives::{format_duration_mmss, genre_label},
         theme,
     },
@@ -35,6 +36,9 @@ const DASHBOARD_HIDE_STREAM_AT_WIDTH: u16 = 39;
 // Below this many rows the fixed 5-row stream card plus chat card no longer
 // fit cleanly, so we collapse to chat-only rather than render clipped blocks.
 const DASHBOARD_MIN_FULL_HEIGHT: u16 = 16;
+const AUDIO_BUTTON_PREFIX: &str = "No audio? ";
+const CLI_BUTTON_TEXT: &str = "[B] CLI";
+const PAIR_BUTTON_TEXT: &str = "[P] web";
 
 pub struct DashboardRenderInput<'a> {
     pub now_playing: Option<&'a str>,
@@ -145,6 +149,20 @@ pub(crate) fn favorites_strip_hit_test(
         cursor_x = end_x;
     }
     None
+}
+
+pub(crate) fn cli_install_button_hit_test(area: Rect, show_header: bool, x: u16, y: u16) -> bool {
+    let Some(button_area) = cli_install_button_area(area, show_header) else {
+        return false;
+    };
+    y == button_area.y && x >= button_area.x && x < button_area.right()
+}
+
+pub(crate) fn browser_pair_button_hit_test(area: Rect, show_header: bool, x: u16, y: u16) -> bool {
+    let Some(button_area) = browser_pair_button_area(area, show_header) else {
+        return false;
+    };
+    y == button_area.y && x >= button_area.x && x < button_area.right()
 }
 
 /// Draws the chat card with two optional strips stacked above it: pinned
@@ -296,13 +314,86 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
                 Style::default().fg(theme::TEXT()),
             ),
         ]),
-        Line::from(vec![Span::styled(
-            "No audio? Type /music in chat for setup instructions",
-            Style::default().fg(theme::TEXT_DIM()),
-        )]),
+        Line::from(vec![
+            Span::styled(AUDIO_BUTTON_PREFIX, Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                CLI_BUTTON_TEXT,
+                Style::default()
+                    .fg(theme::BG_CANVAS())
+                    .bg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                PAIR_BUTTON_TEXT,
+                Style::default()
+                    .fg(theme::BG_CANVAS())
+                    .bg(theme::BORDER_ACTIVE())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", cli_install::INSTALL_COMMAND),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
     ];
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+fn cli_install_button_area(area: Rect, show_header: bool) -> Option<Rect> {
+    audio_button_area(area, show_header, 0)
+}
+
+fn browser_pair_button_area(area: Rect, show_header: bool) -> Option<Rect> {
+    audio_button_area(area, show_header, 1)
+}
+
+fn audio_button_area(area: Rect, show_header: bool, button_index: usize) -> Option<Rect> {
+    let inner = stream_text_area(area, show_header)?;
+    let prefix_width = UnicodeWidthStr::width(AUDIO_BUTTON_PREFIX) as u16;
+    let cli_width = UnicodeWidthStr::width(CLI_BUTTON_TEXT) as u16;
+    let gap_width = 2u16;
+    let pair_width = UnicodeWidthStr::width(PAIR_BUTTON_TEXT) as u16;
+    let (offset, width) = match button_index {
+        0 => (prefix_width, cli_width),
+        1 => (
+            prefix_width
+                .saturating_add(cli_width)
+                .saturating_add(gap_width),
+            pair_width,
+        ),
+        _ => return None,
+    };
+    Some(Rect::new(
+        inner.x.saturating_add(offset),
+        inner.y.saturating_add(2),
+        width,
+        1,
+    ))
+}
+
+fn stream_text_area(area: Rect, show_header: bool) -> Option<Rect> {
+    if !show_header
+        || area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH
+        || area.height < DASHBOARD_MIN_FULL_HEIGHT
+    {
+        return None;
+    }
+
+    let sections = Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(area);
+    let stream_area = if area.width <= DASHBOARD_HIDE_VOTE_AT_WIDTH {
+        sections[0]
+    } else {
+        Layout::horizontal([Constraint::Fill(2), Constraint::Fill(1)]).split(sections[0])[0]
+    };
+    let inner = Block::default().borders(Borders::ALL).inner(stream_area);
+    let inner = Rect {
+        x: inner.x + 1,
+        width: inner.width.saturating_sub(1),
+        ..inner
+    };
+    Some(inner)
 }
 
 #[cfg(test)]
@@ -360,6 +451,7 @@ mod tests {
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
+                            highlighted_message_id: None,
                             reaction_picker_active: false,
                             composer: &composer,
                             composing: false,
@@ -406,6 +498,8 @@ mod tests {
         let lines = render_dashboard(DASHBOARD_HIDE_VOTE_AT_WIDTH);
         assert!(!lines.join("\n").contains("Dashboard view too small."));
         assert!(lines.join("\n").contains("Stream"));
+        assert!(lines.join("\n").contains("[B] CLI"));
+        assert!(lines.join("\n").contains("[P] web"));
         assert!(lines.join("\n").contains("No messages yet."));
     }
 
@@ -479,6 +573,7 @@ mod tests {
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
+                            highlighted_message_id: None,
                             reaction_picker_active: false,
                             composer: &composer,
                             composing: false,
@@ -558,6 +653,7 @@ mod tests {
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
+                            highlighted_message_id: None,
                             reaction_picker_active: false,
                             composer: &composer,
                             composing: false,
@@ -632,5 +728,15 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn dashboard_audio_buttons_hit_test_separately() {
+        let area = Rect::new(0, 0, 100, 20);
+
+        assert!(cli_install_button_hit_test(area, true, 12, 3));
+        assert!(!cli_install_button_hit_test(area, true, 21, 3));
+        assert!(browser_pair_button_hit_test(area, true, 21, 3));
+        assert!(!browser_pair_button_hit_test(area, true, 12, 3));
     }
 }

@@ -9,7 +9,8 @@ crate::model! {
     params = ChatMessageParams;
     struct ChatMessage {
         @generated
-        pub pinned: bool;
+        pub pinned: bool,
+        pub reply_to_message_id: Option<Uuid>;
         @data
         pub room_id: Uuid,
         pub user_id: Uuid,
@@ -126,6 +127,28 @@ impl ChatMessage {
             .await?;
 
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    pub async fn create_with_reply_to(
+        client: &Client,
+        params: ChatMessageParams,
+        reply_to_message_id: Option<Uuid>,
+    ) -> Result<Self> {
+        let row = client
+            .query_one(
+                "INSERT INTO chat_messages (room_id, user_id, body, reply_to_message_id)
+                 VALUES ($1, $2, $3, $4)
+                 RETURNING *",
+                &[
+                    &params.room_id,
+                    &params.user_id,
+                    &params.body,
+                    &reply_to_message_id,
+                ],
+            )
+            .await?;
+
+        Ok(Self::from(row))
     }
 
     pub async fn edit_by_author(

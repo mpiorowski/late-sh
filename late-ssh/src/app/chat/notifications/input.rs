@@ -45,10 +45,7 @@ fn jump_to_selected(app: &mut App) {
         .map(|s| format!("#{s}"))
         .unwrap_or_else(|| "room".to_string());
 
-    app.chat.notifications_selected = false;
-    app.chat.selected_room_id = Some(room_id);
-    app.chat.selected_message_id = Some(message_id);
-    app.chat.highlighted_message_id = Some(message_id);
+    app.chat.focus_message_in_room(room_id, message_id);
     app.sync_visible_chat_room();
     app.chat.request_list();
     app.banner = Some(Banner::success(&format!("Jumped to {room_label}")));

@@ -48,6 +48,7 @@ pub struct DashboardChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
+    pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
@@ -212,7 +213,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static
         reaction_picker_placeholder_lines(dim)
     } else if view.selected_message {
         vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · i compose",
+            "f react · r reply · e edit · d delete · p profile · c copy · Enter jump to reply",
             dim,
         ))]
     } else {
@@ -322,7 +323,12 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 message_reactions: view.message_reactions,
             },
         );
-        lines = visible_chat_rows(view.rows_cache, view.selected_message_id, None, height);
+        lines = visible_chat_rows(
+            view.rows_cache,
+            view.selected_message_id,
+            view.highlighted_message_id,
+            height,
+        );
     }
 
     frame.render_widget(Paragraph::new(lines), messages_area);
@@ -712,8 +718,10 @@ fn draw_mention_autocomplete(
         return;
     }
 
-    let visible = matches.len().min(8) as u16;
-    let width = 26u16.min(anchor.width);
+    let visible_count = matches.len().min(8);
+    let visible = visible_count as u16;
+    let is_commands = matches.first().is_some_and(|m| m.prefix == "/");
+    let width = if is_commands { 52 } else { 26 }.min(anchor.width);
     let height = visible + 2; // borders
     let x = anchor.x + 1;
     let y = anchor.y.saturating_sub(height);
@@ -721,14 +729,20 @@ fn draw_mention_autocomplete(
 
     frame.render_widget(Clear, popup);
 
+    let title = if is_commands {
+        " /commands "
+    } else {
+        " @mentions "
+    };
     let block = Block::default()
-        .title(" @mentions ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
     let items: Vec<Line> = matches
         .iter()
         .enumerate()
+        .skip(selected.saturating_sub(visible_count.saturating_sub(1)))
         .take(8)
         .map(|(i, m)| {
             let is_selected = i == selected;
@@ -740,7 +754,20 @@ fn draw_mention_autocomplete(
                 (false, false) => Style::default().fg(theme::TEXT_FAINT()),
             };
             let prefix = if is_selected { " > " } else { "   " };
-            Line::from(Span::styled(format!("{prefix}@{}", m.name), style))
+            let mut spans = vec![Span::styled(
+                format!("{prefix}{}{}", m.prefix, m.name),
+                style,
+            )];
+            if let Some(description) = m.description {
+                let name_width = m.prefix.len() + m.name.len();
+                let pad = " ".repeat(16usize.saturating_sub(name_width).max(2));
+                spans.push(Span::styled(pad, Style::default().fg(theme::TEXT_DIM())));
+                spans.push(Span::styled(
+                    description,
+                    Style::default().fg(theme::TEXT_DIM()),
+                ));
+            }
+            Line::from(spans)
         })
         .collect();
 
@@ -1547,6 +1574,28 @@ mod tests {
 
         assert_eq!(composer_title(&view, need(esc)), esc);
         assert_eq!(composer_title(&view, need(esc) - 1), "");
+    }
+
+    #[test]
+    fn visible_rows_paint_background_for_selected_highlighted_message() {
+        let message_id = Uuid::now_v7();
+        let mut cache = ChatRowsCache {
+            all_rows: vec![
+                Line::from(Span::raw("alice")),
+                Line::from(Span::raw("hello")),
+            ],
+            ..Default::default()
+        };
+        cache.selected_ranges.insert(message_id, (1, 2));
+        cache.highlighted_ranges.insert(message_id, (0, 2));
+
+        let rows = visible_chat_rows(&cache, Some(message_id), Some(message_id), 4);
+        assert!(
+            rows.iter()
+                .flat_map(|row| row.spans.iter())
+                .any(|span| span.style.bg == Some(theme::BG_SELECTION())),
+            "expected selected highlighted message to receive background"
+        );
     }
 
     #[test]
