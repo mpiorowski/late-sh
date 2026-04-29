@@ -6,7 +6,7 @@
 # headers so the backend can see real client IPs.
 #
 # Two parallel paths during Phase 1–4 of the bastion rollout
-# (PERSISTENT-CONNECTION-GATEWAY.md §3 / §10):
+# (devdocs/LATE-CONNECTION-BASTION.md §3 / §10):
 #
 #   :22    → service-ssh-sv:2222   (legacy in-proc russh)        — production
 #   :5222  → service-bastion-sv:5222 (bastion → /tunnel WS)      — dogfood

@@ -1,7 +1,7 @@
 # =============================================================================
 # NetworkPolicies — defense-in-depth around the bastion ⇄ late-ssh trust seam.
 #
-# Layer 1 in the trust model from PERSISTENT-CONNECTION-GATEWAY.md §7.
+# Layer 1 in the trust model from devdocs/LATE-CONNECTION-BASTION.md §7.
 # Combined with the in-app IP allowlist (Layer 2) and pre-shared secret
 # (Layer 3), this means a future Service/VPC typo cannot silently expose
 # late-ssh's /tunnel to anything other than the bastion.

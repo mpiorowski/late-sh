@@ -1,6 +1,6 @@
 //! Wire protocol for the bastion ⇄ late-ssh `/tunnel` WebSocket.
 //!
-//! Per `PERSISTENT-CONNECTION-GATEWAY.md` §4: binary frames carry opaque
+//! Per `devdocs/LATE-CONNECTION-BASTION.md` §4: binary frames carry opaque
 //! PTY bytes (no inspection); text frames carry a small JSON control
 //! vocabulary. Today the only control variant is `resize`, used to forward
 //! SSH `window-change` requests.

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// Runtime configuration for `late-bastion`.
 ///
 /// Kept intentionally lean — the bastion has no DB, no service deps, no
-/// per-user state, and no ban logic. See `PERSISTENT-CONNECTION-GATEWAY.md`
+/// per-user state, and no ban logic. See `devdocs/LATE-CONNECTION-BASTION.md`
 /// §5 for the "intentionally minimal" principle.
 #[derive(Clone, Debug)]
 pub struct Config {

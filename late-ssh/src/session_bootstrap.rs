@@ -7,7 +7,7 @@
 //! per-session state-loading.
 //!
 //! Caller-side concerns intentionally NOT done here, per the seam
-//! discipline in `PERSISTENT-CONNECTION-GATEWAY.md` §6 and the Phase 2b
+//! discipline in `devdocs/LATE-CONNECTION-BASTION.md` §6 and the Phase 2b
 //! advisor notes:
 //!   - authentication (pubkey on russh / pre-shared secret + handshake
 //!     headers on /tunnel)

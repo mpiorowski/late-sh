@@ -20,7 +20,7 @@
 //! exponential backoff and a 30-second total budget. Terminal close
 //! codes (4000–4003) and HTTP 4xx responses end the session.
 //!
-//! See `PERSISTENT-CONNECTION-GATEWAY.md` §4–§5.
+//! See `devdocs/LATE-CONNECTION-BASTION.md` §4–§5.
 
 use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
@@ -72,7 +72,7 @@ const ESCALATION_MESSAGE_DELAY: Duration = Duration::from_secs(5);
 ///   message lands in a known-clean spot.
 ///
 /// This is the *only* point at which the bastion writes its own bytes
-/// to the user's terminal (per PERSISTENT-CONNECTION-GATEWAY.md §5).
+/// to the user's terminal (per devdocs/LATE-CONNECTION-BASTION.md §5).
 const TERMINAL_RESET: &str = "\x1b[?1049l\x1b[0m\x1b[2J\x1b[H";
 
 /// Initial reconnect message; constants for tunability.
@@ -137,7 +137,7 @@ enum PumpOutcome {
 }
 
 fn classify_close_code(code: u16) -> PumpOutcome {
-    // Per PERSISTENT-CONNECTION-GATEWAY.md §4 close-codes table.
+    // Per devdocs/LATE-CONNECTION-BASTION.md §4 close-codes table.
     //   1000 — graceful drain (SIGTERM); reconnect.
     //   1001/1006 — going-away / abnormal; reconnect.
     //   4000 — backend ended the session (user quit, render error).

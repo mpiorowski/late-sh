@@ -2,7 +2,7 @@
 # late-bastion: thin SSH frontend that tunnels to late-ssh /tunnel over WS.
 #
 # Intentionally minimal — no DB, no per-user state, no ban logic. See
-# PERSISTENT-CONNECTION-GATEWAY.md §5 for the "no smarter than it needs
+# devdocs/LATE-CONNECTION-BASTION.md §5 for the "no smarter than it needs
 # to be to connect the wires" principle. Rolling updates here drop every
 # active SSH session, so this Deployment is expected to update rarely.
 #

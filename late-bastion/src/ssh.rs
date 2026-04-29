@@ -7,7 +7,7 @@
 //! (auth → channel open → pty → shell → window-change), not for any
 //! protocol-aware byte handling.
 //!
-//! Subsequent phase (per `PERSISTENT-CONNECTION-GATEWAY.md` §10):
+//! Subsequent phase (per `devdocs/LATE-CONNECTION-BASTION.md` §10):
 //!   - Phase 4: detect WS close codes, draw plain-text "reconnecting…"
 //!     message into the SSH channel, redial with backoff.
 

@@ -26,7 +26,7 @@ const FRAME_SEND_TIMEOUT: Duration = Duration::from_millis(50);
 /// user-initiated quit (`q,q`) or a render-loop error. The bastion
 /// classifies this as terminal and stops reconnecting. Distinct from
 /// 1000 (used by `/tunnel`'s drain path), which IS retryable. See
-/// `PERSISTENT-CONNECTION-GATEWAY.md` §4 close-codes table.
+/// `devdocs/LATE-CONNECTION-BASTION.md` §4 close-codes table.
 const CLOSE_SESSION_ENDED: u16 = 4000;
 
 /// Transport surface used by `run_session`'s render loop.

@@ -8,7 +8,7 @@
 //! resize control frames).
 //!
 //! The `:4001` listener is intentionally separate from the public `:4000`
-//! API listener (per `PERSISTENT-CONNECTION-GATEWAY.md` §3): mixing trust
+//! API listener (per `devdocs/LATE-CONNECTION-BASTION.md` §3): mixing trust
 //! domains on one socket is a known footgun, and a separate bind gives
 //! kernel-level isolation in addition to the in-app checks below.
 
@@ -296,7 +296,7 @@ async fn tunnel_handler(
     metrics::record_ssh_connection();
 
     // Per-IP rate limiter, keyed on the bastion-asserted client IP per
-    // PERSISTENT-CONNECTION-GATEWAY.md §6 (bastion is intentionally
+    // devdocs/LATE-CONNECTION-BASTION.md §6 (bastion is intentionally
     // ignorant of per-IP state; backend keys on X-Late-Peer-IP instead
     // of the transport peer, which is always the bastion pod).
     if !state.ssh_attempt_limiter.allow(handshake.peer_ip) {

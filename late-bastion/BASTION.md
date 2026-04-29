@@ -2,7 +2,7 @@
 
 Long-lived SSH frontend for `late.sh`. Terminates user SSH connections, then tunnels the shell byte stream over a WebSocket to `late-ssh`'s `/tunnel` endpoint, transparently reconnecting across backend deploys.
 
-> **Authoritative design doc.** [`PERSISTENT-CONNECTION-GATEWAY.md`](../../../aihome/late-sh/PERSISTENT-CONNECTION-GATEWAY.md) (lives outside the repo). The doc covers topology, protocol, security model, deployment, migration strategy, phasing, and decision log. This file is a quick orientation for in-repo readers.
+> **Authoritative design doc.** [`devdocs/LATE-CONNECTION-BASTION.md`](../devdocs/LATE-CONNECTION-BASTION.md). The doc covers topology, protocol, security model, deployment, migration strategy, phasing, and decision log. This file is a quick orientation for in-repo readers.
 
 ## Why this crate exists
 
@@ -50,7 +50,7 @@ Both NGINX TCP entries run in parallel through Phase 4, gated on which port the 
 | 4     | Reconnect loop + plain-text reconnect messages.                                                | Polish.                   |
 | 5     | Production cutover (`:22` swing).                                                              | None (infra only).        |
 
-Phase numbers track [`PERSISTENT-CONNECTION-GATEWAY.md`](../../../aihome/late-sh/PERSISTENT-CONNECTION-GATEWAY.md) §10.
+Phase numbers track [`devdocs/LATE-CONNECTION-BASTION.md`](../devdocs/LATE-CONNECTION-BASTION.md) §10.
 
 ## Configuration
 
