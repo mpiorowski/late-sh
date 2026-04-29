@@ -1,9 +1,11 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    },
 };
 
 use crate::app::common::theme;
@@ -11,11 +13,8 @@ use crate::app::input::{MouseEvent, MouseEventKind};
 
 use super::state::{ModLogKind, ModLogLine, ModModalState};
 
-const MODAL_WIDTH: u16 = 92;
-const MODAL_HEIGHT: u16 = 28;
-
 pub fn draw(frame: &mut Frame, area: Rect, state: &ModModalState) {
-    let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
+    let popup = centered_percent_rect(80, 80, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -53,10 +52,7 @@ pub fn mouse_scroll_delta(mouse: MouseEvent) -> Option<i16> {
 fn draw_log(frame: &mut Frame, area: Rect, state: &ModModalState) {
     let height = area.height as usize;
     let log = state.log();
-    let max_start = log.len().saturating_sub(height);
-    let start = max_start
-        .saturating_sub(state.scroll() as usize)
-        .min(max_start);
+    let start = state.viewport_start(height);
     let lines: Vec<Line<'static>> = log.iter().skip(start).take(height).map(log_line).collect();
     let block = Block::default()
         .borders(Borders::ALL)
@@ -64,6 +60,25 @@ fn draw_log(frame: &mut Frame, area: Rect, state: &ModModalState) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+
+    if log.len() > height {
+        let mut scrollbar_state = ScrollbarState::new(log.len())
+            .position(start.min(log.len().saturating_sub(1)))
+            .viewport_content_length(height);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_style(Style::default().fg(theme::BORDER()))
+            .thumb_style(Style::default().fg(theme::AMBER_DIM()));
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, state: &ModModalState) {
@@ -81,7 +96,9 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         Span::styled(" Enter", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" run  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Ctrl+L", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" clear  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(" clear screen  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("↑↓ PgUp/PgDn", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
@@ -93,6 +110,7 @@ fn log_line(line: &ModLogLine) -> Line<'static> {
         ModLogKind::Input => Style::default()
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD),
+        ModLogKind::Separator => Style::default().fg(theme::AMBER_DIM()),
         ModLogKind::Info => Style::default().fg(theme::TEXT_DIM()),
         ModLogKind::Success => Style::default().fg(theme::SUCCESS()),
         ModLogKind::Error => Style::default().fg(theme::ERROR()),
@@ -100,7 +118,9 @@ fn log_line(line: &ModLogLine) -> Line<'static> {
     Line::from(Span::styled(line.text.clone(), style))
 }
 
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+fn centered_percent_rect(width_percent: u16, height_percent: u16, area: Rect) -> Rect {
+    let width = percent_of(area.width, width_percent).max(1);
+    let height = percent_of(area.height, height_percent).max(1);
     let vertical = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
         .split(area);
@@ -108,4 +128,8 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .split(vertical[0]);
     horizontal[0]
+}
+
+fn percent_of(value: u16, percent: u16) -> u16 {
+    ((value as u32 * percent as u32) / 100) as u16
 }

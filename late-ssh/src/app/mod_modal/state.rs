@@ -1,16 +1,18 @@
 use std::collections::VecDeque;
 
-use ratatui_textarea::{CursorMove, TextArea, WrapMode};
+use ratatui_textarea::{Input, TextArea, WrapMode};
 use uuid::Uuid;
 
 use crate::app::common::composer;
 
-const MAX_LOG_LINES: usize = 300;
+const MAX_LOG_LINES: usize = 1000;
+const COMMAND_SEPARATOR: &str = "───────────";
 
 pub struct ModModalState {
     command_input: TextArea<'static>,
     log: VecDeque<ModLogLine>,
-    scroll: u16,
+    scroll: usize,
+    screen_start: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,6 +24,7 @@ pub struct ModLogLine {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModLogKind {
     Input,
+    Separator,
     Info,
     Success,
     Error,
@@ -33,6 +36,7 @@ impl ModModalState {
             command_input: new_command_input(),
             log: VecDeque::new(),
             scroll: 0,
+            screen_start: 0,
         }
     }
 
@@ -55,8 +59,13 @@ impl ModModalState {
         &self.log
     }
 
-    pub fn scroll(&self) -> u16 {
-        self.scroll
+    pub fn viewport_start(&self, height: usize) -> usize {
+        let len = self.log.len();
+        if height == 0 {
+            return len;
+        }
+        let screen_bottom_start = self.screen_start.min(len).max(len.saturating_sub(height));
+        screen_bottom_start.saturating_sub(self.scroll)
     }
 
     pub fn command_text(&self) -> String {
@@ -67,44 +76,24 @@ impl ModModalState {
         self.command_input = new_command_input();
     }
 
-    pub fn clear_log(&mut self) {
-        self.log.clear();
+    pub fn clear_screen(&mut self) {
+        self.screen_start = self.log.len();
         self.scroll = 0;
     }
 
-    pub fn push_char(&mut self, ch: char) {
-        self.command_input.insert_char(ch);
-    }
-
-    pub fn backspace(&mut self) {
-        self.command_input.delete_char();
-    }
-
-    pub fn delete_right(&mut self) {
-        self.command_input.delete_next_char();
-    }
-
-    pub fn delete_word_left(&mut self) {
-        self.command_input.delete_word();
-    }
-
-    pub fn move_left(&mut self) {
-        self.command_input.move_cursor(CursorMove::Back);
-    }
-
-    pub fn move_right(&mut self) {
-        self.command_input.move_cursor(CursorMove::Forward);
-    }
-
-    pub fn move_word_left(&mut self) {
-        self.command_input.move_cursor(CursorMove::WordBack);
-    }
-
-    pub fn move_word_right(&mut self) {
-        self.command_input.move_cursor(CursorMove::WordForward);
+    pub fn input(&mut self, input: Input) {
+        self.command_input.input(input);
     }
 
     pub fn append_input(&mut self, command: &str) {
+        if !self.log.is_empty()
+            && self
+                .log
+                .back()
+                .is_none_or(|line| line.kind != ModLogKind::Separator)
+        {
+            self.push_log(COMMAND_SEPARATOR.to_string(), ModLogKind::Separator);
+        }
         self.push_log(format!("> {command}"), ModLogKind::Input);
     }
 
@@ -133,9 +122,9 @@ impl ModModalState {
 
     pub fn scroll_log(&mut self, delta: i16) {
         if delta < 0 {
-            self.scroll = self.scroll.saturating_sub(delta.unsigned_abs());
+            self.scroll = self.scroll.saturating_sub(delta.unsigned_abs() as usize);
         } else {
-            self.scroll = self.scroll.saturating_add(delta as u16);
+            self.scroll = self.scroll.saturating_add(delta as usize);
         }
     }
 
@@ -143,6 +132,7 @@ impl ModModalState {
         self.log.push_back(ModLogLine { text, kind });
         while self.log.len() > MAX_LOG_LINES {
             self.log.pop_front();
+            self.screen_start = self.screen_start.saturating_sub(1);
         }
         self.scroll = 0;
     }
@@ -156,4 +146,51 @@ impl Default for ModModalState {
 
 fn new_command_input() -> TextArea<'static> {
     composer::new_themed_textarea("mod command", WrapMode::None, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrollback_keeps_last_thousand_lines_fifo() {
+        let mut state = ModModalState::new();
+
+        for idx in 0..1005 {
+            state.append_info(format!("line {idx}"));
+        }
+
+        assert_eq!(state.log().len(), 1000);
+        assert_eq!(state.log().front().unwrap().text, "line 5");
+        assert_eq!(state.log().back().unwrap().text, "line 1004");
+    }
+
+    #[test]
+    fn clear_screen_preserves_scrollback() {
+        let mut state = ModModalState::new();
+        state.append_info("before");
+
+        state.clear_screen();
+
+        assert_eq!(state.log().len(), 1);
+        assert_eq!(state.viewport_start(8), 1);
+        state.scroll_log(1);
+        assert_eq!(state.viewport_start(8), 0);
+    }
+
+    #[test]
+    fn command_input_adds_separator_between_runs() {
+        let mut state = ModModalState::new();
+
+        state.append_input("help");
+        state.append_result(true, vec!["ok".to_string()]);
+        state.append_input("sessions");
+
+        assert!(
+            state
+                .log()
+                .iter()
+                .any(|line| line.kind == ModLogKind::Separator && line.text == COMMAND_SEPARATOR)
+        );
+    }
 }
