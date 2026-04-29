@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-28 (Chat refresh defuse context)
+- Last updated: 2026-04-29 (Anonymous web spectator POC)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,6 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
+- **Anonymous browser demo:** `late-web` serves `/spectate` and proxies `/ws/spectate` to `late-ssh`'s internal `/tunnel` endpoint with a synthetic read-only spectator identity. This is demo-mode, not spectating an existing user session.
 - **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, The Arcade, Rooms, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..8` rendered as footer chips beneath the message block; admins can toggle a generic per-message `pinned` flag with `Ctrl+P`, and pinned messages visible to the current user stack above the dashboard chat; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, legacy admin-gated Arcade Blackjack), a dedicated Rooms screen for persistent game-backed rooms, plus a dedicated shared multi-user ASCII artboard screen. Rooms currently supports listing Blackjack tables from `game_rooms`; admins can create them, admins/mods can enter them as table viewers, sit in one of four Blackjack seats, place per-seat bets concurrently, and auto-deal the round five seconds after the most recent confirmed bet via an in-memory `BlackjackService` lazily bound by `BlackjackTableManager`; the bottom chat pane is still a placeholder. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` now opens a quit-confirm modal; pressing `q` again exits and `Esc` dismisses it. `@bot` mention replies now receive compact context about online non-bot members in the active room (username plus optional bio/country/timezone, capped and truncated for prompt size).
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
@@ -663,8 +664,8 @@ late-sh/
 │   │   ├── main.rs / lib.rs    # Web entrypoint + router
 │   │   ├── config.rs           # Web config
 │   │   ├── error.rs            # App error mapping
-│   │   └── pages/              # Landing, connect flow, stream proxy, dashboard
-│   └── static/                 # Tailwind output/source
+│   │   └── pages/              # Landing, connect flow, stream proxy, dashboard, gallery, spectate
+│   └── static/                 # Tailwind output/source plus vendored browser assets
 └── infra/
     ├── icecast/icecast.xml     # Icecast config
     └── liquidsoap/             # Radio config + local fallback playlists
@@ -695,6 +696,8 @@ late-sh/
 **Web routes (late-web, port 3000):**
 - `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA (click-to-copy), feature list, now-playing/listeners via htmx
 - `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume control, Web Audio analyzer for TUI visualizer, now-playing via htmx
+- `GET /spectate` - Anonymous browser terminal viewer. Renders a full-screen xterm.js client and opens same-origin `/ws/spectate`.
+- `GET /ws/spectate?cols={u16}&rows={u16}` - Browser WebSocket proxy to the internal `/tunnel` protocol. `late-web` asserts configured spectator credentials and `X-Late-View-Only: 1`; `late-ssh` enforces read-only behavior.
 - `GET /status?pairing={bool}` - htmx fragment: now-playing track + listener count (fetched from SSH API internally). `pairing=false` for landing footer, `pairing=true` for pairing detail view. Polled every 5s.
 - `GET /dashboard` - Live metrics page (HTMX, internal/testing)
 - `GET /test` - Error simulation endpoint
@@ -795,6 +798,7 @@ In progress:
 
 Future:
 - **Nonograms (v2)**: Replace random generation with pixel-art-to-nonogram pipeline or bulk-curate from webpbn.com.
+- **Anonymous spectator hardening:** Split spectator concurrency from real SSH users, add reconnect UX, add fake-tunnel integration coverage for `late-web`, and wire preview/prod ingress/network policies before any external rollout.
 ---
 
 ## 7. Future Work & Roadmap [VOLATILE]
@@ -806,6 +810,7 @@ Known gaps/risks:
 - Time remaining is approximate (up to 5s polling delay on track change)
 - No external metrics or alerting system
 - **Single-replica assumption:** Several structures are purely in-memory and not shared across processes (see multi-replica notes below)
+- **Anonymous spectator POC gaps:** `/spectate` creates a fresh backend session per browser visit and currently shares `late-ssh`'s global tunnel connection semaphore with real users. Keep local/preview limits conservative until a separate spectator limit exists. Production `late.sh` rollout still needs web-ingress WebSocket timeout annotations, service-web → service-ssh-internal network policy, and trusted CIDR updates.
 - **Stateful VT parsing in `late-ssh/src/app/input.rs`:** SSH input now runs through a persistent `vte::Parser`, so CSI/SS3 sequences and bracketed paste survive split russh reads instead of assuming the whole escape sequence lands in one chunk. That removes the old split-paste failure where `[200~` / `[201~` residue or embedded newlines could leak through as live keystrokes. The app still keeps two pragmatic layers on top: `is_likely_paste` heuristically treats large printable unmarked chunks as paste for terminals without bracketed paste, and `sanitize_paste_markers`/`strip_paste_markers` still scrub stored residue defensively when copying URLs from older polluted state. Standalone `Esc` is resolved on a short tick delay so split escape sequences are not mistaken for cancel keys.
 
 Roadmap ideas:
@@ -946,6 +951,8 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - `users.username` is the canonical public handle for chat/DM lookup; SSH login seeds it from the SSH username via `User::next_available_username` (sanitizes to `[A-Za-z0-9._-]`, adds `-N` suffixes to stay unique on `LOWER(username)`)
 - @bot and @graybeard bootstrap on app startup: ensure DB user with a fixed `username`, join public rooms, and insert into `active_users` (always online). Both are dedicated users with fixed fingerprints (`bot-fp-000`, `graybeard-fp-000`)
 - Connection limits (global semaphore + per-IP counter) plus SSH attempt rate limit (sliding window) MUST be enforced before any auth (effective client IP is resolved from PROXY protocol when enabled)
+- Browser spectator read-only enforcement belongs in `late-ssh`, not `late-web`: `late-web` forwards browser bytes and resize frames through `/tunnel`, while `late-ssh` gates state-mutating input when `X-Late-View-Only: 1` is present. Do not rely on xterm.js `disableStdin` as a security boundary.
+- The synthetic spectator identity is matched by `late_core::tunnel_protocol::is_spectator_identity` and must remain narrow. Spectator sessions skip chat auto-join and activity-feed join broadcasts so anonymous page views do not pollute public presence/chat semantics.
 - Chat message deletes are hard deletes; any moderation/delete path must remove rows directly rather than relying on tombstones
 
 ### 8.2 Data integrity invariants

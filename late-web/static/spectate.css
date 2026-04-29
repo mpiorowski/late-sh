@@ -1,0 +1,81 @@
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #050906;
+}
+
+body {
+    margin: 0;
+}
+
+body > main {
+    width: 100vw;
+    height: 100vh;
+    max-width: none;
+    padding: 0;
+    margin: 0;
+}
+
+.spectate-shell {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    background:
+        radial-gradient(circle at 20% 0%, rgba(20, 83, 45, 0.24), transparent 34rem),
+        radial-gradient(circle at 100% 100%, rgba(6, 78, 59, 0.18), transparent 28rem),
+        #050906;
+}
+
+.spectate-terminal {
+    min-width: 0;
+    min-height: 0;
+    padding: 12px;
+}
+
+.spectate-terminal .xterm {
+    height: 100%;
+}
+
+.spectate-overlay {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: rgba(5, 9, 6, 0.72);
+    backdrop-filter: blur(4px);
+}
+
+.spectate-overlay[hidden] {
+    display: none;
+}
+
+.spectate-overlay-card {
+    width: min(24rem, calc(100vw - 2rem));
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    background: rgba(8, 13, 10, 0.94);
+    box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.45);
+    padding: 1.5rem;
+    color: #d1fae5;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.spectate-overlay-kicker {
+    color: #22c55e;
+    font-size: 0.75rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+}
+
+.spectate-overlay-card h1 {
+    margin: 0 0 0.5rem;
+    font-size: 1.5rem;
+}
+
+.spectate-overlay-card p {
+    margin: 0;
+    color: #86efac;
+    font-size: 0.9rem;
+}

@@ -37,6 +37,7 @@ pub struct SessionBootstrapInputs {
     pub is_new_user: bool,
     pub cols: u16,
     pub rows: u16,
+    pub view_only: bool,
     pub session_token: String,
     /// Browser-pair channel. `Some` when the transport opened a paired
     /// CLI/web session for this user; `None` for transports that don't
@@ -59,6 +60,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         is_new_user,
         cols,
         rows,
+        view_only,
         session_token,
         session_rx,
         activity_feed_rx,
@@ -155,6 +157,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     SessionConfig {
         cols,
         rows,
+        view_only,
 
         vote_service: state.vote_service.clone(),
         chat_service: state.chat_service.clone(),

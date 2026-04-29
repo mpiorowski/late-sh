@@ -1,0 +1,23 @@
+{% extends "pages/app.html" %}
+
+{% block title %}spectate late.sh{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
+<link rel="stylesheet" href="/static/spectate.css">
+
+<section class="spectate-shell" aria-label="late.sh terminal spectator">
+    <div id="terminal" class="spectate-terminal"></div>
+    <div id="spectate-overlay" class="spectate-overlay" hidden>
+        <div class="spectate-overlay-card">
+            <div class="spectate-overlay-kicker">late.sh</div>
+            <h1>session ended</h1>
+            <p>Refresh to open a new anonymous read-only terminal.</p>
+        </div>
+    </div>
+</section>
+
+<script src="/static/vendor/xterm/xterm.js"></script>
+<script src="/static/vendor/xterm/addon-fit.js"></script>
+<script src="/static/spectate.js"></script>
+{% endblock %}

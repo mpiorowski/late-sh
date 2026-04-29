@@ -178,6 +178,7 @@ pub fn make_app_with_chat_service(
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
+        view_only: false,
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),
@@ -279,6 +280,7 @@ pub fn make_app_with_paired_client(
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
+        view_only: false,
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),

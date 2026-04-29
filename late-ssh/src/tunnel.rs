@@ -55,7 +55,7 @@ const WS_OUT_BUFFER: usize = 8;
 // imports (`late_ssh::tunnel::HEADER_*`) keep working.
 pub use late_core::tunnel_protocol::{
     HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT, HEADER_ROWS, HEADER_SECRET,
-    HEADER_SESSION_ID, HEADER_TERM, HEADER_USERNAME,
+    HEADER_SESSION_ID, HEADER_TERM, HEADER_USERNAME, HEADER_VIEW_ONLY,
 };
 
 /// Validated handshake. Phase 2c will hand this to the session bootstrap.
@@ -69,6 +69,7 @@ pub struct TunnelHandshake {
     pub rows: u16,
     pub reconnect: bool,
     pub session_id: Option<String>,
+    pub view_only: bool,
 }
 
 /// Why a handshake was rejected. Maps directly onto an HTTP status.
@@ -144,6 +145,7 @@ pub fn validate_handshake(
 
     let reconnect = matches!(header_str(headers, HEADER_RECONNECT), Some("1"));
     let session_id = header_str(headers, HEADER_SESSION_ID).map(str::to_string);
+    let view_only = matches!(header_str(headers, HEADER_VIEW_ONLY), Some("1"));
 
     Ok(TunnelHandshake {
         fingerprint,
@@ -154,6 +156,7 @@ pub fn validate_handshake(
         rows,
         reconnect,
         session_id,
+        view_only,
     })
 }
 
@@ -389,11 +392,16 @@ async fn tunnel_handler(
 
     // Broadcast the join. Subscribers attach in their own time; a send
     // failure here just means no one was listening.
-    let _ = state.activity_feed.send(ActivityEvent {
-        username: user.username.clone(),
-        action: "joined".to_string(),
-        at: Instant::now(),
-    });
+    if !late_core::tunnel_protocol::is_spectator_identity(
+        &handshake.username,
+        &handshake.fingerprint,
+    ) {
+        let _ = state.activity_feed.send(ActivityEvent {
+            username: user.username.clone(),
+            action: "joined".to_string(),
+            at: Instant::now(),
+        });
+    }
 
     tracing::info!(
         peer_ip = %peer_addr.ip(),
@@ -404,6 +412,7 @@ async fn tunnel_handler(
         cols = handshake.cols,
         rows = handshake.rows,
         reconnect = handshake.reconnect,
+        view_only = handshake.view_only,
         session_id = ?handshake.session_id,
         is_new_user,
         "tunnel handshake accepted; running session"
@@ -436,6 +445,7 @@ async fn handle_session(
             is_new_user,
             cols: handshake.cols,
             rows: handshake.rows,
+            view_only: handshake.view_only,
             session_token,
             session_rx: None,
             activity_feed_rx,
@@ -656,13 +666,15 @@ mod tests {
         assert_eq!(result.cols, 120);
         assert_eq!(result.rows, 40);
         assert!(!result.reconnect);
+        assert!(!result.view_only);
         assert!(result.session_id.is_none());
     }
 
     #[test]
-    fn parses_optional_reconnect_and_session_id() {
+    fn parses_optional_reconnect_session_id_and_view_only() {
         let mut h = full_headers();
         h.insert(HEADER_RECONNECT, HeaderValue::from_static("1"));
+        h.insert(HEADER_VIEW_ONLY, HeaderValue::from_static("1"));
         h.insert(
             HEADER_SESSION_ID,
             HeaderValue::from_static("01HX7Q4N4S2NS9X9"),
@@ -671,6 +683,7 @@ mod tests {
         let result =
             validate_handshake(&h, "10.42.0.5".parse().unwrap(), &trusted, "hunter2").unwrap();
         assert!(result.reconnect);
+        assert!(result.view_only);
         assert_eq!(result.session_id.as_deref(), Some("01HX7Q4N4S2NS9X9"));
     }
 

@@ -455,6 +455,11 @@ pub fn flush_pending_escape(app: &mut App) {
 }
 
 pub fn handle(app: &mut App, data: &[u8]) {
+    if app.view_only {
+        let _ = app.vt_input.feed(data);
+        return;
+    }
+
     if app.show_splash {
         // Do not process input while splash screen is showing
         // Escape skips the rest of the intro animation

@@ -531,6 +531,7 @@ impl russh::server::Handler for ClientHandler {
                 is_new_user: self.is_new_user,
                 cols: col_width as u16,
                 rows: row_height as u16,
+                view_only: false,
                 session_token,
                 session_rx: Some(session_rx),
                 activity_feed_rx: self.activity_feed_rx.take(),
@@ -1014,20 +1015,29 @@ pub(crate) async fn ensure_user(
                 },
             )
             .await?;
-            match state.chat_service.auto_join_public_rooms(user.id).await {
-                Ok(joined) => {
-                    tracing::debug!(
-                        user_id = %user.id,
-                        joined,
-                        "seeded auto-join chat rooms for newly created user"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        user_id = %user.id,
-                        error = ?e,
-                        "failed to seed auto-join chat rooms for newly created user"
-                    );
+            if late_core::tunnel_protocol::is_spectator_identity(&user.username, fingerprint) {
+                tracing::debug!(
+                    user_id = %user.id,
+                    username = %user.username,
+                    fingerprint,
+                    "skipping auto-join chat rooms for spectator identity"
+                );
+            } else {
+                match state.chat_service.auto_join_public_rooms(user.id).await {
+                    Ok(joined) => {
+                        tracing::debug!(
+                            user_id = %user.id,
+                            joined,
+                            "seeded auto-join chat rooms for newly created user"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            user_id = %user.id,
+                            error = ?e,
+                            "failed to seed auto-join chat rooms for newly created user"
+                        );
+                    }
                 }
             }
             (user, true)

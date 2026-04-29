@@ -250,6 +250,7 @@ impl russh::server::Handler for ClientHandler {
             rows: self.rows,
             reconnect: false,
             session_id: Uuid::now_v7().to_string(),
+            view_only: false,
         };
 
         let (input_tx, input_rx) = mpsc::channel::<SshInputEvent>(INPUT_QUEUE_CAP);

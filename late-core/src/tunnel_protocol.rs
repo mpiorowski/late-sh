@@ -9,6 +9,9 @@
 //! stay in lockstep on the wire format.
 
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::{HeaderValue, Request};
 
 /// HTTP headers sent by the bastion on the WS upgrade. Defined here so
 /// the backend (`late-ssh`) and client (`late-bastion`) reference the
@@ -23,6 +26,72 @@ pub const HEADER_COLS: &str = "x-late-cols";
 pub const HEADER_ROWS: &str = "x-late-rows";
 pub const HEADER_RECONNECT: &str = "x-late-reconnect";
 pub const HEADER_SESSION_ID: &str = "x-late-session-id";
+pub const HEADER_VIEW_ONLY: &str = "x-late-view-only";
+
+/// Per-client state captured before opening a `/tunnel` WebSocket and encoded
+/// into the backend handshake headers.
+#[derive(Debug, Clone)]
+pub struct HandshakeContext {
+    /// SSH pubkey fingerprint or synthetic browser-viewer fingerprint asserted
+    /// by the trusted tunnel client.
+    pub fingerprint: String,
+    /// Username hint. The backend resolves the canonical user by fingerprint.
+    pub username: String,
+    /// Real client IP asserted by the trusted tunnel client. Backend rate
+    /// limiting keys on this value.
+    pub peer_ip: IpAddr,
+    /// Terminal identifier.
+    pub term: String,
+    /// Initial terminal columns.
+    pub cols: u16,
+    /// Initial terminal rows.
+    pub rows: u16,
+    /// True when this dials a replacement backend for the same shell channel.
+    pub reconnect: bool,
+    /// Stable per-session identifier for logs and trace correlation.
+    pub session_id: String,
+    /// True for browser spectator sessions where late-ssh must ignore
+    /// state-mutating input while still parsing terminal bytes.
+    pub view_only: bool,
+}
+
+/// Build a tungstenite `Request` for `connect_async` carrying the shared secret
+/// and the fields described in [`HandshakeContext`].
+pub fn build_request(
+    ws_url: &str,
+    secret: &str,
+    ctx: &HandshakeContext,
+) -> anyhow::Result<Request<()>> {
+    let mut req = ws_url
+        .into_client_request()
+        .map_err(|e| anyhow::anyhow!("invalid backend tunnel URL '{ws_url}': {e}"))?;
+    let headers = req.headers_mut();
+    headers.insert(HEADER_SECRET, header_value(secret)?);
+    headers.insert(HEADER_FINGERPRINT, header_value(&ctx.fingerprint)?);
+    headers.insert(HEADER_USERNAME, header_value(&ctx.username)?);
+    headers.insert(HEADER_PEER_IP, header_value(&ctx.peer_ip.to_string())?);
+    headers.insert(HEADER_TERM, header_value(&ctx.term)?);
+    headers.insert(HEADER_COLS, header_value(&ctx.cols.to_string())?);
+    headers.insert(HEADER_ROWS, header_value(&ctx.rows.to_string())?);
+    if ctx.reconnect {
+        headers.insert(HEADER_RECONNECT, HeaderValue::from_static("1"));
+    }
+    headers.insert(HEADER_SESSION_ID, header_value(&ctx.session_id)?);
+    if ctx.view_only {
+        headers.insert(HEADER_VIEW_ONLY, HeaderValue::from_static("1"));
+    }
+    Ok(req)
+}
+
+fn header_value(s: &str) -> anyhow::Result<HeaderValue> {
+    HeaderValue::from_str(s).map_err(|e| anyhow::anyhow!("invalid header value '{s}': {e}"))
+}
+
+/// Synthetic identities used by anonymous web spectators. Kept in the shared
+/// protocol module so late-web and late-ssh do not drift on the trust marker.
+pub fn is_spectator_identity(username: &str, fingerprint: &str) -> bool {
+    username == "spectator" || fingerprint.starts_with("web-spectator:")
+}
 
 /// Text-frame control message. Tagged on `t` so adding new variants is
 /// non-breaking as long as both ends are tolerant of unknown tags.
@@ -71,6 +140,20 @@ impl ControlFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ctx() -> HandshakeContext {
+        HandshakeContext {
+            fingerprint: "SHA256:abc".to_string(),
+            username: "alice".to_string(),
+            peer_ip: "203.0.113.7".parse().unwrap(),
+            term: "xterm-256color".to_string(),
+            cols: 120,
+            rows: 40,
+            reconnect: false,
+            session_id: "01HX7Q4N4S2NS9X9".to_string(),
+            view_only: false,
+        }
+    }
 
     #[test]
     fn resize_round_trips() {
@@ -136,5 +219,65 @@ mod tests {
     fn negative_dimension_is_error() {
         let json = r#"{"t":"resize","cols":-1,"rows":24}"#;
         assert!(ControlFrame::from_json(json).is_err());
+    }
+
+    #[test]
+    fn builds_full_handshake() {
+        let req = build_request("ws://backend:4001/tunnel", "hunter2", &ctx()).unwrap();
+        let h = req.headers();
+        assert_eq!(h.get(HEADER_SECRET).unwrap(), "hunter2");
+        assert_eq!(h.get(HEADER_FINGERPRINT).unwrap(), "SHA256:abc");
+        assert_eq!(h.get(HEADER_USERNAME).unwrap(), "alice");
+        assert_eq!(h.get(HEADER_PEER_IP).unwrap(), "203.0.113.7");
+        assert_eq!(h.get(HEADER_TERM).unwrap(), "xterm-256color");
+        assert_eq!(h.get(HEADER_COLS).unwrap(), "120");
+        assert_eq!(h.get(HEADER_ROWS).unwrap(), "40");
+        assert_eq!(h.get(HEADER_SESSION_ID).unwrap(), "01HX7Q4N4S2NS9X9");
+        assert!(h.get(HEADER_RECONNECT).is_none());
+        assert!(h.get(HEADER_VIEW_ONLY).is_none());
+    }
+
+    #[test]
+    fn sets_optional_handshake_headers_when_flagged() {
+        let mut c = ctx();
+        c.reconnect = true;
+        c.view_only = true;
+        let req = build_request("ws://backend:4001/tunnel", "hunter2", &c).unwrap();
+        assert_eq!(req.headers().get(HEADER_RECONNECT).unwrap(), "1");
+        assert_eq!(req.headers().get(HEADER_VIEW_ONLY).unwrap(), "1");
+    }
+
+    #[test]
+    fn ipv6_peer_ip_renders_canonically() {
+        let mut c = ctx();
+        c.peer_ip = "2001:db8::1".parse().unwrap();
+        let req = build_request("ws://backend:4001/tunnel", "hunter2", &c).unwrap();
+        assert_eq!(req.headers().get(HEADER_PEER_IP).unwrap(), "2001:db8::1");
+    }
+
+    #[test]
+    fn rejects_invalid_url() {
+        let err = build_request("not a url", "hunter2", &ctx()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("invalid backend tunnel URL"), "got: {msg}");
+    }
+
+    #[test]
+    fn rejects_non_ascii_header_value() {
+        let mut c = ctx();
+        c.username = "name\nwith\nnewline".to_string();
+        let err = build_request("ws://backend:4001/tunnel", "hunter2", &c).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("invalid header value"), "got: {msg}");
+    }
+
+    #[test]
+    fn spectator_identity_predicate_matches_only_synthetic_markers() {
+        assert!(is_spectator_identity("spectator", "SHA256:regular"));
+        assert!(is_spectator_identity("alice", "web-spectator:v1"));
+        assert!(is_spectator_identity("spectator", "web-spectator:v1"));
+        assert!(!is_spectator_identity("alice", "SHA256:regular"));
+        assert!(!is_spectator_identity("spectator-alice", "SHA256:regular"));
+        assert!(!is_spectator_identity("alice", "SHA256:web-spectator:v1"));
     }
 }

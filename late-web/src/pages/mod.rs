@@ -6,6 +6,7 @@ pub mod connect;
 pub mod dashboard;
 pub mod gallery;
 pub mod shared;
+pub mod spectate;
 pub mod stream;
 
 pub fn router() -> Router<AppState> {
@@ -13,6 +14,7 @@ pub fn router() -> Router<AppState> {
         .nest("/chat", chat::router())
         .merge(connect::router())
         .merge(gallery::router())
+        .merge(spectate::router())
         .merge(stream::router())
         .nest("/dashboard", dashboard::router())
 }

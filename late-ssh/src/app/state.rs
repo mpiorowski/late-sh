@@ -99,6 +99,7 @@ pub struct SessionConfig {
     /// Terminal / layout
     pub cols: u16,
     pub rows: u16,
+    pub view_only: bool,
 
     /// Services / data sources
     pub vote_service: VoteService,
@@ -189,6 +190,7 @@ pub struct App {
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
     pub(crate) vt_input: crate::app::input::VtInputParser,
+    pub(crate) view_only: bool,
 
     /// Terminal / rendering
     pub(super) terminal: Terminal<CrosstermBackend<SharedBuffer>>,
@@ -656,6 +658,7 @@ impl App {
             pending_escape: false,
             pending_escape_started_at: None,
             vt_input: crate::app::input::VtInputParser::default(),
+            view_only: config.view_only,
             terminal,
             shared,
             visualizer: Visualizer::new(),

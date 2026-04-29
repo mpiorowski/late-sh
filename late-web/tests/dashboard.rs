@@ -23,6 +23,14 @@ fn test_state(ssh_internal_url: String) -> AppState {
         ssh_internal_url,
         ssh_public_url: "localhost:3000".to_string(),
         audio_base_url: "http://localhost:8000".to_string(),
+        tunnel_url: "ws://127.0.0.1:4001/tunnel".to_string(),
+        tunnel_shared_secret: "secret".to_string(),
+        spectator_username: "spectator".to_string(),
+        spectator_fingerprint: "web-spectator:v1".to_string(),
+        spectator_default_cols: 120,
+        spectator_default_rows: 40,
+        spectator_max_cols: 300,
+        spectator_max_rows: 100,
     };
     AppState {
         config,
