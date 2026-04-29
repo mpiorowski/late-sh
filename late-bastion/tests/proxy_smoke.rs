@@ -41,7 +41,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use tokio::time::timeout;
-use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tokio_tungstenite::tungstenite::handshake::server::{
+    Callback, ErrorResponse, Request, Response,
+};
 use tokio_tungstenite::tungstenite::http::{HeaderMap, StatusCode};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 use tokio_tungstenite::tungstenite::protocol::frame::CloseFrame;
@@ -52,6 +54,34 @@ const TEST_SECRET: &str = "test-secret";
 /// Channel a test pushes onto to send a binary frame to the user; mock
 /// backend forwards it onto the actual WS sink.
 type BackendSendTx = mpsc::Sender<WsMessage>;
+
+#[derive(Clone)]
+struct CaptureHeaders {
+    captured: Arc<std::sync::Mutex<Option<HeaderMap>>>,
+}
+
+impl Callback for CaptureHeaders {
+    #[allow(clippy::result_large_err)]
+    fn on_request(self, req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
+        *self.captured.lock().unwrap() = Some(req.headers().clone());
+        Ok(resp)
+    }
+}
+
+struct RejectWithStatus {
+    captured: Arc<std::sync::Mutex<Option<HeaderMap>>>,
+    status: StatusCode,
+}
+
+impl Callback for RejectWithStatus {
+    #[allow(clippy::result_large_err)]
+    fn on_request(self, req: &Request, _resp: Response) -> Result<Response, ErrorResponse> {
+        *self.captured.lock().unwrap() = Some(req.headers().clone());
+        let mut err: ErrorResponse = ErrorResponse::new(None);
+        *err.status_mut() = self.status;
+        Err(err)
+    }
+}
 
 struct MockBackend {
     addr: SocketAddr,
@@ -84,13 +114,11 @@ impl MockBackend {
             };
 
             let captured: Arc<std::sync::Mutex<Option<HeaderMap>>> = Default::default();
-            let captured_for_callback = captured.clone();
 
             let ws = match tokio_tungstenite::accept_hdr_async(
                 tcp,
-                |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
-                    *captured_for_callback.lock().unwrap() = Some(req.headers().clone());
-                    Ok(resp)
+                CaptureHeaders {
+                    captured: captured.clone(),
                 },
             )
             .await
@@ -692,12 +720,10 @@ async fn accept_capture(
     tx: &mpsc::Sender<HeaderMap>,
 ) -> Option<tokio_tungstenite::WebSocketStream<TcpStream>> {
     let captured: Arc<std::sync::Mutex<Option<HeaderMap>>> = Default::default();
-    let cap_clone = captured.clone();
     let ws = tokio_tungstenite::accept_hdr_async(
         tcp,
-        move |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
-            *cap_clone.lock().unwrap() = Some(req.headers().clone());
-            Ok(resp)
+        CaptureHeaders {
+            captured: captured.clone(),
         },
     )
     .await
@@ -717,14 +743,11 @@ async fn handle_scripted(tcp: TcpStream, behavior: Behavior, tx: mpsc::Sender<He
             // we reject — capture them so the test can correlate the
             // attempt with this Behavior.
             let captured: Arc<std::sync::Mutex<Option<HeaderMap>>> = Default::default();
-            let cap_clone = captured.clone();
             let _ = tokio_tungstenite::accept_hdr_async(
                 tcp,
-                move |req: &Request, _resp: Response| -> Result<Response, ErrorResponse> {
-                    *cap_clone.lock().unwrap() = Some(req.headers().clone());
-                    let mut err: ErrorResponse = ErrorResponse::new(None);
-                    *err.status_mut() = status;
-                    Err(err)
+                RejectWithStatus {
+                    captured: captured.clone(),
+                    status,
                 },
             )
             .await;
