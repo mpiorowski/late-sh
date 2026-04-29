@@ -43,7 +43,7 @@ pub fn draw(frame: &mut Frame, area: Rect) {
         .bg(theme::BG_HIGHLIGHT());
 
     let install_pill = format!("  {INSTALL_COMMAND}  ");
-    let divider = "── or build from source ──";
+    let divider = "── BUILD SOURCE ──";
 
     let mut lines = vec![
         Line::from(""),

@@ -59,6 +59,16 @@ pub struct DiscoverRoomItem {
     pub last_message_at: Option<DateTime<Utc>>,
 }
 
+pub struct SendMessageTask {
+    pub user_id: Uuid,
+    pub room_id: Uuid,
+    pub room_slug: Option<String>,
+    pub body: String,
+    pub reply_to_message_id: Option<Uuid>,
+    pub request_id: Uuid,
+    pub is_admin: bool,
+}
+
 #[derive(Clone)]
 struct ChatRefreshSession {
     user_id: Uuid,
@@ -821,21 +831,27 @@ impl ChatService {
         request_id: Uuid,
         is_admin: bool,
     ) {
-        self.send_message_with_reply_task(
-            user_id, room_id, room_slug, body, None, request_id, is_admin,
-        );
+        self.send_message_with_reply_task(SendMessageTask {
+            user_id,
+            room_id,
+            room_slug,
+            body,
+            reply_to_message_id: None,
+            request_id,
+            is_admin,
+        });
     }
 
-    pub fn send_message_with_reply_task(
-        &self,
-        user_id: Uuid,
-        room_id: Uuid,
-        room_slug: Option<String>,
-        body: String,
-        reply_to_message_id: Option<Uuid>,
-        request_id: Uuid,
-        is_admin: bool,
-    ) {
+    pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
+        let SendMessageTask {
+            user_id,
+            room_id,
+            room_slug,
+            body,
+            reply_to_message_id,
+            request_id,
+            is_admin,
+        } = task;
         let service = self.clone();
         tokio::spawn(
             async move {

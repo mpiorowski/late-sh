@@ -1107,15 +1107,16 @@ impl ChatState {
                     self.is_admin,
                 );
             } else {
-                self.service.send_message_with_reply_task(
-                    self.user_id,
-                    room_id,
-                    self.room_slug(room_id),
-                    body,
-                    reply_to_message_id,
-                    request_id,
-                    self.is_admin,
-                );
+                self.service
+                    .send_message_with_reply_task(super::svc::SendMessageTask {
+                        user_id: self.user_id,
+                        room_id,
+                        room_slug: self.room_slug(room_id),
+                        body,
+                        reply_to_message_id,
+                        request_id,
+                        is_admin: self.is_admin,
+                    });
             }
             self.pending_send_notices.push_back(request_id);
         }

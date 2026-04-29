@@ -1579,11 +1579,13 @@ mod tests {
     #[test]
     fn visible_rows_paint_background_for_selected_highlighted_message() {
         let message_id = Uuid::now_v7();
-        let mut cache = ChatRowsCache::default();
-        cache.all_rows = vec![
-            Line::from(Span::raw("alice")),
-            Line::from(Span::raw("hello")),
-        ];
+        let mut cache = ChatRowsCache {
+            all_rows: vec![
+                Line::from(Span::raw("alice")),
+                Line::from(Span::raw("hello")),
+            ],
+            ..Default::default()
+        };
         cache.selected_ranges.insert(message_id, (1, 2));
         cache.highlighted_ranges.insert(message_id, (0, 2));
 
