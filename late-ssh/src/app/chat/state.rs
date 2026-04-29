@@ -2134,6 +2134,10 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
 ];
 
 fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {
+    if !query_lower.is_empty() && CHAT_COMMANDS.iter().any(|(name, _)| *name == query_lower) {
+        return Vec::new();
+    }
+
     CHAT_COMMANDS
         .iter()
         .filter(|(name, _)| name.starts_with(query_lower))
@@ -2462,6 +2466,12 @@ mod tests {
         assert!(rank_command_matches("c").is_empty());
         assert!(rank_command_matches("delete").is_empty());
         assert!(rank_command_matches("fill").is_empty());
+    }
+
+    #[test]
+    fn rank_command_matches_hides_exact_command() {
+        assert!(rank_command_matches("exit").is_empty());
+        assert_eq!(names(&rank_command_matches("ex")), vec!["exit"]);
     }
 
     #[test]
