@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::{
+    artboard_ban::ArtboardBan,
     server_ban::ServerBan,
     user::{User, UserParams, extract_theme_id},
 };
@@ -747,6 +748,19 @@ impl russh::server::Handler for ClientHandler {
                 0
             }
         };
+        let artboard_ban = match self.state.db.get().await {
+            Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
+                Ok(ban) => ban,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to check artboard ban status");
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to get db client for artboard ban check");
+                None
+            }
+        };
         let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
         let app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
@@ -805,6 +819,8 @@ impl russh::server::Handler for ClientHandler {
                 user.is_admin || self.state.config.force_admin,
                 user.is_moderator,
             ),
+            artboard_banned: artboard_ban.is_some(),
+            artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
             // Voting
             my_vote,

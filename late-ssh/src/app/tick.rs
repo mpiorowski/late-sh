@@ -72,8 +72,13 @@ impl App {
                     tracing::info!(reason, "session terminated by control message");
                     self.running = false;
                 }
+                SessionMessage::ArtboardBanChanged { banned, expires_at } => {
+                    self.set_artboard_banned(banned, expires_at);
+                    updated = true;
+                }
             }
         }
+        self.expire_artboard_ban_if_needed();
 
         if self.screen == Screen::Games
             && self.is_playing_game

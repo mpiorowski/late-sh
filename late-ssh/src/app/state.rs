@@ -1,4 +1,5 @@
 use anyhow::Context;
+use chrono::{DateTime, Utc};
 use crossterm::{
     cursor,
     terminal::{self, ClearType},
@@ -151,6 +152,8 @@ pub struct SessionConfig {
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
     pub permissions: Permissions,
+    pub artboard_banned: bool,
+    pub artboard_ban_expires_at: Option<DateTime<Utc>>,
 
     /// Voting
     pub my_vote: Option<Genre>,
@@ -215,6 +218,8 @@ pub struct App {
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
+    pub(crate) artboard_banned: bool,
+    pub(crate) artboard_ban_expires_at: Option<DateTime<Utc>>,
 
     /// Voting
     pub(crate) vote: vote::state::VoteState,
@@ -679,6 +684,8 @@ impl App {
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
+            artboard_banned: config.artboard_banned,
+            artboard_ban_expires_at: config.artboard_ban_expires_at,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
                 config.chat_service,
@@ -782,9 +789,18 @@ impl App {
         self.set_cursor_shape(CURSOR_SHAPE_STEADY_BLOCK);
     }
 
-    pub(crate) fn activate_artboard_interaction(&mut self) {
+    pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
+        self.expire_artboard_ban_if_needed();
+        if self.artboard_banned {
+            self.deactivate_artboard_interaction();
+            self.banner = Some(Banner::error(
+                "Artboard editing is disabled for this account.",
+            ));
+            return false;
+        }
         self.enter_dartboard();
         self.artboard_interacting = true;
+        true
     }
 
     pub(crate) fn deactivate_artboard_interaction(&mut self) {
@@ -795,6 +811,45 @@ impl App {
             state.close_glyph_picker();
             state.close_snapshot_browser();
         }
+    }
+
+    pub(crate) fn set_artboard_banned(&mut self, banned: bool, expires_at: Option<DateTime<Utc>>) {
+        let active_ban = banned
+            && expires_at
+                .map(|expires_at| expires_at > Utc::now())
+                .unwrap_or(true);
+        let active_expires_at = active_ban.then_some(expires_at).flatten();
+        if self.artboard_banned == active_ban && self.artboard_ban_expires_at == active_expires_at {
+            return;
+        }
+        self.artboard_banned = active_ban;
+        self.artboard_ban_expires_at = active_expires_at;
+        if active_ban {
+            self.deactivate_artboard_interaction();
+            self.banner = Some(Banner::error(
+                "Artboard editing is disabled for this account.",
+            ));
+        } else {
+            self.banner = Some(Banner::success("Artboard editing is enabled again."));
+        }
+    }
+
+    pub fn set_artboard_banned_for_tests(&mut self, banned: bool) {
+        self.set_artboard_banned(banned, None);
+    }
+
+    pub(crate) fn expire_artboard_ban_if_needed(&mut self) {
+        if !self.artboard_banned {
+            return;
+        }
+        let Some(expires_at) = self.artboard_ban_expires_at else {
+            return;
+        };
+        if expires_at > Utc::now() {
+            return;
+        }
+        self.artboard_banned = false;
+        self.artboard_ban_expires_at = None;
     }
 
     pub(crate) fn set_screen(&mut self, screen: Screen) {

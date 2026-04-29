@@ -2151,6 +2151,30 @@ impl ChatService {
         terminated
     }
 
+    async fn notify_artboard_ban_status(
+        &self,
+        user_id: Uuid,
+        banned: bool,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> usize {
+        let Some(registry) = self.session_registry.as_ref() else {
+            return 0;
+        };
+        let mut notified = 0;
+        for token in self.session_tokens_for_user_id(user_id) {
+            if registry
+                .send_message(
+                    &token,
+                    SessionMessage::ArtboardBanChanged { banned, expires_at },
+                )
+                .await
+            {
+                notified += 1;
+            }
+        }
+        notified
+    }
+
     fn session_tokens_for_user_id(&self, user_id: Uuid) -> Vec<String> {
         let Some(active_users) = self.active_users.as_ref() else {
             return Vec::new();
@@ -2216,9 +2240,11 @@ impl ChatService {
             ArtboardAction::Unban => Action::UnbanFromArtboard,
         };
         ensure_decision(permissions, matrix_action, target_tier)?;
+        let expires_at = matches!(action, ArtboardAction::Ban)
+            .then(|| duration.map(|d| Utc::now() + d))
+            .flatten();
         match action {
             ArtboardAction::Ban => {
-                let expires_at = duration.map(|d| Utc::now() + d);
                 ArtboardBan::activate(
                     &client,
                     target.id,
@@ -2246,6 +2272,21 @@ impl ChatService {
             },
         )
         .await?;
+        let notified = self
+            .notify_artboard_ban_status(
+                target.id,
+                matches!(action, ArtboardAction::Ban),
+                expires_at,
+            )
+            .await;
+        if notified > 0 {
+            tracing::info!(
+                target_user_id = %target.id,
+                banned = matches!(action, ArtboardAction::Ban),
+                notified,
+                "artboard moderation command updated active sessions"
+            );
+        }
         Ok(vec![format!(
             "{} @{}",
             action.past_tense(),

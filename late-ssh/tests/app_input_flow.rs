@@ -187,6 +187,37 @@ async fn artboard_view_mode_click_enters_active_mode_at_clicked_canvas_cell() {
 }
 
 #[tokio::test]
+async fn artboard_ban_locks_user_in_view_mode() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-banned-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-banned-flow-it");
+
+    app.handle_input(b"5");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    app.set_artboard_banned_for_tests(true);
+
+    app.handle_input(b"i");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Artboard editing is disabled for this account."),
+        "expected artboard ban notice; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("Mode       active"),
+        "expected artboard ban to block active mode; frame={frame:?}"
+    );
+
+    app.handle_input(b"\x1b[<0;10;5M");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Mode       active"),
+        "expected artboard ban to block click-to-edit; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn active_artboard_blocks_screen_number_hotkeys_until_escape() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "artboard-active-it").await;

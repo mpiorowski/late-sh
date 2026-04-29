@@ -33,7 +33,13 @@ pub struct BrowserVizFrame {
 pub enum SessionMessage {
     Heartbeat,
     Viz(BrowserVizFrame),
-    Terminate { reason: String },
+    Terminate {
+        reason: String,
+    },
+    ArtboardBanChanged {
+        banned: bool,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

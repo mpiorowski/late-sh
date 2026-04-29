@@ -1,4 +1,5 @@
 use late_core::models::{
+    artboard_ban::ArtboardBan,
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::{ChatRoom, ChatRoomParams},
     chat_room_member::ChatRoomMember,
@@ -1509,6 +1510,84 @@ async fn mod_server_ip_ban_command_bans_snapshots_and_audits() {
         .expect("audit count")
         .get(0);
     assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
+async fn mod_artboard_ban_command_notifies_active_sessions() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "artboard_ban_actor").await;
+    let target = create_test_user(&test_db.db, "artboard_ban_target").await;
+    let session_token = "artboard-ban-session".to_string();
+    let active_users = Arc::new(Mutex::new(HashMap::from([(
+        target.id,
+        ActiveUser {
+            username: target.username.clone(),
+            fingerprint: Some(target.fingerprint.clone()),
+            peer_ip: None,
+            sessions: vec![ActiveSession {
+                token: session_token.clone(),
+                fingerprint: Some(target.fingerprint.clone()),
+                peer_ip: None,
+            }],
+            connection_count: 1,
+            last_login_at: std::time::Instant::now(),
+        },
+    )])));
+    let registry = SessionRegistry::new();
+    let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
+    registry.register(session_token, session_tx).await;
+    let service = ChatService::new_with_active_users(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+        active_users,
+    )
+    .with_session_registry(registry);
+    let mut events = service.subscribe_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "artboard ban @artboard_ban_target 1h paint cooldown".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            user_id,
+            request_id: got_request,
+            lines,
+            success,
+        } => {
+            assert_eq!(user_id, actor.id);
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines, vec!["artboard-banned @artboard_ban_target"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+    let message = timeout(Duration::from_secs(2), session_rx.recv())
+        .await
+        .expect("session message timeout")
+        .expect("session message");
+    match message {
+        SessionMessage::ArtboardBanChanged { banned, expires_at } => {
+            assert!(banned);
+            assert!(expires_at.is_some());
+        }
+        other => panic!("expected artboard ban status message, got {other:?}"),
+    }
+
+    assert!(
+        ArtboardBan::is_active_for_user(&client, target.id)
+            .await
+            .expect("artboard ban lookup")
+    );
 }
 
 #[tokio::test]
