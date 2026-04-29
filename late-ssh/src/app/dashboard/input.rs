@@ -1,4 +1,4 @@
-use crate::app::{chat, state::App, vote};
+use crate::app::{chat, common::cli_install, state::App, vote};
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     let Some(room_id) = app.dashboard_active_room_id() else {
@@ -46,6 +46,14 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         app.sync_visible_chat_room();
         return true;
     }
+    if byte == b'B' {
+        open_cli_install_modal(app);
+        return true;
+    }
+    if byte == b'P' {
+        open_browser_pairing_qr(app);
+        return true;
+    }
 
     let active_room_id = app.dashboard_active_room_id();
 
@@ -67,14 +75,10 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    // Enter is dashboard-specific: copy the CLI install command. Must be
-    // checked before delegating because chat compose also binds Enter.
-    if matches!(byte, b'\r' | b'\n') {
-        app.pending_clipboard =
-            Some("curl -fsSL https://cli.late.sh/install.sh | bash".to_string());
-        app.banner = Some(crate::app::common::primitives::Banner::success(
-            "CLI install command copied!",
-        ));
+    if matches!(byte, b'\r' | b'\n')
+        && let Some(room_id) = active_room_id
+        && app.chat.try_jump_to_selected_reply_target_in_room(room_id)
+    {
         return true;
     }
 
@@ -82,4 +86,18 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return false;
     };
     chat::input::handle_message_action_in_room(app, room_id, byte)
+}
+
+pub(crate) fn open_cli_install_modal(app: &mut App) {
+    app.pending_clipboard = Some(cli_install::INSTALL_COMMAND.to_string());
+    app.show_web_chat_qr = false;
+    app.web_chat_qr_url = None;
+    app.show_cli_install_modal = true;
+}
+
+pub(crate) fn open_browser_pairing_qr(app: &mut App) {
+    app.pending_clipboard = Some(app.connect_url.clone());
+    app.web_chat_qr_url = Some(app.connect_url.clone());
+    app.show_cli_install_modal = false;
+    app.show_web_chat_qr = true;
 }

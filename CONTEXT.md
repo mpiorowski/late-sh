@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-28 (Chat refresh defuse context)
+- Last updated: 2026-04-29 (reply target ids + selected reply jump)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -728,7 +728,7 @@ late-sh/
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
-| ChatMessage | `chat_messages` | `body` 1-2000 chars |
+| ChatMessage | `chat_messages` | `body` 1-2000 chars, nullable `reply_to_message_id` self-FK for reply jumps |
 | Article | `articles` | `url` UNIQUE, `user_id` FK |
 | ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
@@ -989,9 +989,10 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 **Chat reply flow:**
 1. Trigger: User selects a message (`j`/`k`) and presses `r`
-2. Processing: `ChatState::begin_reply_to_selected_in_room(room_id)` captures the target author plus a short preview, enters compose mode, and shows a reply-specific composer title. Callers resolve the target room themselves (chat screen passes `selected_room_id`, dashboard passes `App::dashboard_active_room_id()` — which honors pinned favorites, see below); there is no implicit-room wrapper.
-3. Side effects: Submit prepends a quoted first line (`> @user: preview`) to the stored message body; rendering peels that first line back out and draws it as faint reply context above the new body
-4. Failure: No selected message → `r` is a no-op
+2. Processing: `ChatState::begin_reply_to_selected_in_room(room_id)` captures the target message id, author, and short preview, enters compose mode, and shows a reply-specific composer title. Callers resolve the target room themselves (chat screen passes `selected_room_id`, dashboard passes `App::dashboard_active_room_id()` — which honors pinned favorites, see below); there is no implicit-room wrapper.
+3. Side effects: Submit stores `reply_to_message_id` on the new `chat_messages` row and still prepends a quoted first line (`> @user: preview`) to the stored message body for display/backward compatibility; rendering peels that first line back out and draws it as faint reply context above the new body.
+4. Navigation: With a reply selected via `j`/`k`, Enter tries to jump to `reply_to_message_id` if that original message is already loaded in the current room tail (normally the latest 500). If the target is older/not loaded, Enter is consumed and selection stays put.
+5. Failure: No selected message → `r` is a no-op
 
 **Dashboard favorites quick-switch:**
 1. Trigger: User pins rooms via Settings → Favorites tab, stored in `users.settings.favorite_room_ids` (ordered JSONB UUID array). `Profile.favorite_room_ids` reads/writes it through `ProfileParams`.
@@ -1000,11 +1001,11 @@ Currently the SSH app assumes a single process. These in-memory structures would
 4. Keybinds (dashboard only): `[` / `]` cycle, `,` jumps to previously-active pin (Vim `C-^` style), `g<digit>` jumps to slot 1..9. The `g` prefix is session-local state on `App`; `handle_global_key` short-circuits digits 1-9 on dashboard while armed so the global screen switcher (`1`=Dashboard, `3`=Games, …) doesn't steal them.
 5. Membership churn: `SettingsModalState::open_from_profile` drops favorites whose room isn't in the current `available_rooms` catalog, so ghosts never linger in the UI. The resolver also falls back to general if a stored pin is no longer joined. Index is session-local (not persisted) and clamped on every read.
 
-**Chat @mention autocomplete:**
-1. Trigger: User types `@` in composer (at start or after space)
-2. Processing: `ChatState::update_autocomplete()` filters `all_usernames` (loaded from `users` via `ChatSnapshot`) case-insensitively by the query after `@`
-3. Interaction: Arrow keys navigate matches, Tab/Enter confirms (inserts `@username `), Esc dismisses popup without leaving compose mode
-4. Rendering: `draw_mention_autocomplete()` renders a popup above the composer with up to 8 filtered matches; confirm must also move `composer_cursor` to the end of the inserted mention including the trailing space
+**Chat composer autocomplete:**
+1. Trigger: User types `@` or `/` in the composer (at start or after space). Pressing `/` while not composing on Dashboard/Chat starts the chat composer for the active room and immediately opens the command list.
+2. Processing: `ChatState::update_autocomplete()` filters the shared username directory after `@`, or the static non-admin chat command catalog after `/`.
+3. Interaction: Arrow keys navigate matches, Tab/Enter confirms (inserts `@username ` or `/command `), Esc dismisses popup without leaving compose mode.
+4. Rendering: `draw_mention_autocomplete()` renders the shared popup above the composer with up to 8 filtered matches and scrolls that visible window with the selected row. Command matches are alphabetical and include a short description next to the command name. Confirm must also move `composer_cursor` to the end of the inserted token including the trailing space.
 
 **Vote round switch:**
 1. Trigger: VoteService background tick (5s) detects switch interval (default 60 min) elapsed since last switch
@@ -1033,8 +1034,8 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Composer render cost is cache-sensitive:** The chat composer caches wrapped `ComposerRow`s in `ChatState`; any change to composer text or width must invalidate that cache before render/cursor-up/down.
 - **Icon picker is chat-composer-only:** `Ctrl+]` (byte `0x1D`) opens `app::icon_picker` as a modal overlay, lazy-loads the catalog on first open (two sections each for Emoji and Nerd Font — no Unicode tab, no `unicode_names2` dep), and auto-starts `ChatState::start_composing` if the user isn't already composing. Selected icons are only ever pushed into `app.chat.composer`; Profile and news composers are intentionally not targets. The picker intercepts all input via an early return in `handle_parsed_input`, so while it is open nothing else on screen receives keys.
 - **@mention detection:** Uses simple `@username` substring match in message body. The `all_usernames` field on `ChatSnapshot` is loaded from `users` every refresh (10s) via `User::list_all_usernames` — includes all users, not just online ones.
-- **Reply persistence is currently body-encoded:** There is no reply DB column yet. Replies are stored as a quoted first line in `body` and rendered back out in the TUI. If/when true threaded metadata is added, both send and render paths need coordinated migration.
-- **All services are singletons** shared across SSH sessions. `ProfileService` snapshots are per-user channels keyed by `user_id`; events still require `user_id` filtering in UI state. Per-user background refresh tasks are spawned on session init and aborted on `Drop`, and profile snapshot channels are pruned when receivers go away.
+- **Reply persistence has structured targets for new replies:** New replies store nullable `chat_messages.reply_to_message_id` plus the existing quoted first line in `body`. Older body-only replies have no target id and cannot be jumped to reliably. Enter on a selected reply only jumps when the target is already present in the loaded room tail; it does not fetch older history yet.
+- **All services are singletons** shared across SSH sessions. `ProfileService` snapshots are per-user channels keyed by `user_id`; events still require `user_id` filtering in UI state. Profile snapshots include the `Profile` projection plus a read-only `bonsai_trees` row when one exists, so viewing a profile can render bonsai without creating/mutating another user's tree. Per-user background refresh tasks are spawned on session init and aborted on `Drop`, and profile snapshot channels are pruned when receivers go away.
 - **Chat room `updated` timestamp:** Intentionally NOT used for room ordering to keep stable sort - rooms ordered by type (general → language → private → dm)
 - **Web Audio `createMediaElementSource` is one-shot:** Can only be called once per `<audio>` element. AudioContext + source node must be created once and reused across play/pause cycles. Disconnect suspends the context (`audioCtx.suspend()`), replay resumes it — never close and recreate.
 - **Browser audio pairing status must not be stomped by WS:** WS `onclose`/`onerror` must check `status !== 'playing'` before setting `'disconnected'`, otherwise a WS drop kills the "streaming" UI while audio is still playing fine
@@ -1060,7 +1061,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Desktop notifications bypass the frame diff:** OSC 777 (kitty/Ghostty/rxvt-unicode/foot/wezterm/konsole/mlterm) and OSC 9 (iTerm2) payloads are written to `App::pending_terminal_commands`, not into the ratatui frame. `late-ssh::ssh::render_once` drains that buffer **after** pushing the frame diff and sends each payload as a separate `handle.data` call. Writing them inline with `write!(self.shared, …)` would slip them into the diff and get re-emitted on every redraw. Same rule applies to OSC 52 clipboard copies. The session emits an XTVERSION probe (`CSI > q`) alongside the other alt-screen setup bytes and narrows `App::notification_mode` (`Both` → `Osc777` | `Osc9`) from the DCS reply (`ESC P > | <name>(<version>) ST`) — kitty/wezterm/ghostty/foot/konsole/rxvt-unicode/mlterm land on `Osc777`, iTerm2 on `Osc9`, and unknown/non-responding terminals stay on `Both` (prior behavior). Replies are spliced out of the raw byte stream **before** the splash short-circuit so the leading `ESC` doesn't dismiss the splash (`input::extract_xtversion_replies`); the `vte::Parser` DCS path (`hook`/`put`/`unhook`) catches the same reply again after splash and `App::set_terminal_version` is idempotent, so the double-path is intentional.
 - **Notification pipeline is kind-tagged and throttled server-side:** `ChatState::pending_notifications` holds `PendingNotification { kind: &'static str, title, body }` entries drained each render. `render.rs` picks the first pending whose `kind` is in `users.settings.notify_kinds` and honors the shared `notify_cooldown_mins` via `App::last_notify_at`. Adding a new kind means: (1) add a matching toggle row in the settings modal UI/state, (2) enqueue it from the relevant event handler, and (3) update the render-side matcher/tests that assume the current `"dms" | "mentions" | "game_events"` set. No tmux DCS wrapping — tmux is explicitly unsupported.
 - **Profile notifications default to all-off:** Migration 026 merges profile fields into `users.settings` with `notify_kinds = []` and `notify_cooldown_mins = 0`. `render.rs` only fires if the kind string is present in the user's array, so a brand-new account is silent until they opt in through the settings modal. A focus-tracking `"unfocused"` policy used to exist (DEC mode 1004) but was removed — `notify_kinds` is the whole model now.
-- **`Profile` is a view, not a table:** Migration 026 dropped the `profiles` table — username + notify settings + theme now live on `users` (column + `settings` JSONB). `late_core::models::profile::Profile` is a projection loaded via `Profile::load(client, user_id)` and saved via `Profile::update(client, user_id, params)`, which merges into `settings` with `settings || jsonb_build_object(...)` to preserve unrelated keys (theme_id, ignored_user_ids) under concurrent writes.
+- **`Profile` is a view, not a table:** Migration 026 dropped the `profiles` table — username + notify settings + theme now live on `users` (column + `settings` JSONB). `late_core::models::profile::Profile` is a projection loaded via `Profile::load(client, user_id)` and saved via `Profile::update(client, user_id, params)`, which merges into `settings` with `settings || jsonb_build_object(...)` to preserve unrelated keys (theme_id, ignored_user_ids) under concurrent writes. Profile also exposes JSON-backed system fields (`ide`, `terminal`, `os`) plus language tags (`langs`, normalized to up to eight `#tag` values) and `users.created` as `created_at`; the read-only profile modal renders right-side `bonsa` and `late.fetch` boxes when the modal is wide enough.
 
 ---
 
@@ -1341,6 +1342,8 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
+| `P` | Dashboard | Show browser-pairing QR (copies pairing URL) |
+| `B` | Dashboard | Open CLI install/build-source modal |
 | `j` / `k` / arrows | Dashboard | Scroll chat |
 | `p` | Dashboard chat selection | Open selected user's read-only profile modal |
 | `r` | Dashboard chat selection | Reply to selected general chat message |
@@ -1387,12 +1390,12 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `Tab` / `Shift+Tab` | Chat (`showcase` composing) | Cycle composer fields |
 | `Enter` | Chat (`showcase` composing) | Submit (in description, also submits — there is no Alt+Enter newline yet, use raw `\n`) |
 | `Esc` | Chat (`showcase` composing) | Cancel compose |
-| `i` / `Enter` | Dashboard | Start composing chat |
+| `i` | Dashboard | Start composing chat |
 | `j` / `k` | Chat | Move message selection newer/older |
+| `Enter` | Dashboard / Chat message selection | If the selected message is a reply with a loaded `reply_to_message_id`, jump to the original |
 | `f` then `1`..`8` | Dashboard / Chat message selection | React to selected message |
 | `p` | Chat | Open selected user's read-only profile modal |
 | `r` | Chat | Reply to selected message |
-| `P` | Global | Show browser-pairing QR (copies pairing URL) |
 | `/help` | Chat composer | Open scrollable chat help overlay (commands + all chat keys) |
 | `/active` | Chat composer | List active SSH users from the in-memory session registry |
 | `/list` | Chat composer | List users in the selected non-auto-join ("private") room |
@@ -1403,9 +1406,9 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
 | `Esc` / `q` | Chat overlay (`/help`, ignore list) | Close overlay |
 | `Ctrl+O` | Global | Open the settings modal from anywhere, including active games |
-| `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
+| `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
-| `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/bio, cycle a setting, or open the country/timezone picker |
+| `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/system fields/bio, cycle a setting, or open the country/timezone picker |
 | `Alt+Enter` | Settings modal (bio editing) | Insert newline |
 | `?` | Settings modal | Open help modal on top |
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |

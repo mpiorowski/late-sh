@@ -464,13 +464,6 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-    // Web chat QR overlay: any key dismisses
-    if app.show_web_chat_qr && !data.is_empty() {
-        app.show_web_chat_qr = false;
-        app.web_chat_qr_url = None;
-        return;
-    }
-
     // Split-across-reads `ESC` chords: previous read ended with a lone ESC
     // and this one begins with a control byte that should be treated as an
     // Alt chord instead of feeding a wedged parser.
@@ -534,9 +527,7 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
     match overlay_input_action(event) {
         Some(OverlayInputAction::Close) => app.chat.close_overlay(),
         Some(OverlayInputAction::Scroll(delta)) => app.chat.scroll_overlay(delta),
-        None if close_on_any_key
-            && !matches!(event, ParsedInput::FocusGained | ParsedInput::FocusLost) =>
-        {
+        None if close_on_any_key && input_dismisses_key_modal(event) => {
             app.chat.close_overlay();
         }
         None => {}
@@ -569,6 +560,21 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_cli_install_modal {
+        if input_dismisses_key_modal(&event) {
+            app.show_cli_install_modal = false;
+        }
+        return;
+    }
+
+    if app.show_web_chat_qr {
+        if input_dismisses_key_modal(&event) {
+            app.show_web_chat_qr = false;
+            app.web_chat_qr_url = None;
+        }
         return;
     }
 
@@ -929,12 +935,23 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
         return;
     }
 
+    if byte == b'/' && start_slash_command_composer(app, ctx.screen) {
+        return;
+    }
+
     if handle_global_key(app, ctx, byte) {
         app.chat.clear_message_selection();
         return;
     }
 
     dispatch_screen_key(app, ctx.screen, byte);
+}
+
+fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
+    !matches!(
+        event,
+        ParsedInput::Mouse(_) | ParsedInput::FocusGained | ParsedInput::FocusLost
+    )
 }
 
 fn dispatch_escape(app: &mut App) {
@@ -964,6 +981,15 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.icon_picker_open {
         app.icon_picker_open = false;
+        return;
+    }
+    if app.show_cli_install_modal {
+        app.show_cli_install_modal = false;
+        return;
+    }
+    if app.show_web_chat_qr {
+        app.show_web_chat_qr = false;
+        app.web_chat_qr_url = None;
         return;
     }
     let ctx = InputContext::from_app(app);
@@ -1117,6 +1143,25 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
 
     match screen {
         Screen::Dashboard => {
+            if crate::app::dashboard::ui::cli_install_button_hit_test(
+                content_area,
+                app.profile_state.profile().show_dashboard_header,
+                x,
+                y,
+            ) {
+                crate::app::dashboard::input::open_cli_install_modal(app);
+                return true;
+            }
+            if crate::app::dashboard::ui::browser_pair_button_hit_test(
+                content_area,
+                app.profile_state.profile().show_dashboard_header,
+                x,
+                y,
+            ) {
+                crate::app::dashboard::input::open_browser_pairing_qr(app);
+                return true;
+            }
+
             let Some(pins) = app.dashboard_strip_pins() else {
                 return false;
             };
@@ -1310,6 +1355,28 @@ fn compose_room_switch_allowed(screen: Screen) -> bool {
     screen == Screen::Chat
 }
 
+fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
+    if app.chat.is_composing() || app.chat.news.composing() || app.chat.showcase.composing() {
+        return false;
+    }
+
+    let room_id = match screen {
+        Screen::Dashboard => app.dashboard_active_room_id(),
+        Screen::Chat => app.chat.selected_room_id,
+        _ => None,
+    };
+    let Some(room_id) = room_id else {
+        return false;
+    };
+
+    if screen == Screen::Chat {
+        app.chat
+            .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
+    }
+    app.chat.start_command_composer_in_room(room_id);
+    true
+}
+
 fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.news.stop_composing();
@@ -1322,6 +1389,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_web_chat_qr = false;
+    app.show_cli_install_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
@@ -1492,12 +1560,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         b'\t' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(ctx.screen.next());
-            true
-        }
-        b'P' => {
-            app.pending_clipboard = Some(app.connect_url.clone());
-            app.web_chat_qr_url = Some(app.connect_url.clone());
-            app.show_web_chat_qr = true;
             true
         }
         _ => false,

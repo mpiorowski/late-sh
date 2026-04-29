@@ -2,7 +2,7 @@ use qrcodegen::QrCode;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -47,6 +47,11 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
 
     let block = Block::default()
         .title(format!(" {title} "))
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(popup_area);

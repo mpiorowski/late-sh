@@ -38,6 +38,7 @@ async fn test_chat_message() {
     )
     .await
     .unwrap();
+    assert_eq!(msg1.reply_to_message_id, None);
 
     let msgs = ChatMessage::list_recent(&client, room.id, 10)
         .await
@@ -60,6 +61,60 @@ async fn test_chat_message() {
         .await
         .unwrap();
     assert!(msgs_after_delete.is_empty());
+}
+
+#[tokio::test]
+async fn chat_message_can_reference_reply_target() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general");
+
+    let user = User::create(
+        &client,
+        UserParams {
+            fingerprint: "reply-user-1".to_string(),
+            username: "replyuser".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+
+    let original = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: user.id,
+            body: "original".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let reply = ChatMessage::create_with_reply_to(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: user.id,
+            body: "> @replyuser: original\nreply".to_string(),
+        },
+        Some(original.id),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(reply.reply_to_message_id, Some(original.id));
+
+    let msgs = ChatMessage::list_recent(&client, room.id, 10)
+        .await
+        .unwrap();
+    let listed_reply = msgs
+        .iter()
+        .find(|message| message.id == reply.id)
+        .expect("reply listed");
+    assert_eq!(listed_reply.reply_to_message_id, Some(original.id));
 }
 
 #[tokio::test]

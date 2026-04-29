@@ -24,7 +24,10 @@ use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
-use crate::app::state::{App, SessionConfig};
+use crate::app::{
+    common::theme,
+    state::{App, SessionConfig},
+};
 use crate::authz::Permissions as AuthzPermissions;
 use crate::metrics;
 use crate::state::{ActiveSession, ActivityEvent, State};
@@ -1341,7 +1344,7 @@ async fn has_active_server_ban(
 }
 
 fn late_ssh_theme_id(settings: &Value) -> String {
-    extract_theme_id(settings).unwrap_or_else(|| "late".to_string())
+    extract_theme_id(settings).unwrap_or_else(|| theme::DEFAULT_ID.to_string())
 }
 
 fn reject_publickey_only() -> Auth {

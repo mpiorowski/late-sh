@@ -45,6 +45,7 @@ const BOT_COOLDOWN: Duration = Duration::from_secs(30);
 pub const BOT_TIP_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
 const BOT_TIP_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
 pub const BOT_TIP_MIN_NEW_MESSAGES: usize = 10;
+const BOT_TIP_MENTION_SUPPRESSION_WINDOW: usize = 10;
 const BOT_TIP_HISTORY_SIZE: i64 = 50;
 const GRAYBEARD_FINGERPRINT: &str = "graybeard-fp-000";
 const GRAYBEARD_USERNAME: &str = "graybeard";
@@ -84,11 +85,7 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply n
     You keep coming back to this chat because it's all you have left. \
     You speak in a weary, melancholic, slightly bitter tone. you trail off mid thought. you type in lowercase a lot. \
     you sigh. you 'hmph'. you say things like 'back in my day', 'you kids wouldn't know', 'bless your heart', 'oh sweet child'.";
-pub const GRAYBEARD_CHAT_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
-// Keep graybeard halfway between @bot's 2-hour tips.
-const GRAYBEARD_CHAT_PHASE_OFFSET: Duration = Duration::from_secs(60 * 60); // 1 hour
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
-const GRAYBEARD_MIN_NEW_MESSAGES: usize = 10;
 const GRAYBEARD_BIO: &str = "## graybeard, senior in residence\n\n\
 Burned-out senior developer. Still haunting `#general` to complain about framework churn, cloud bills, \
 and kids letting autocomplete write their code.\n\n\
@@ -161,7 +158,7 @@ impl GhostService {
                     let svc = self.clone();
                     let gb_shutdown = shutdown.clone();
                     tokio::spawn(async move {
-                        svc.run_graybeard_task(graybeard, gb_shutdown).await;
+                        svc.run_graybeard_mention_task(graybeard, gb_shutdown).await;
                     });
                 }
                 Err(err) => {
@@ -356,8 +353,8 @@ impl GhostService {
         Ok(())
     }
 
-    /// @bot periodic tip task: every 2 hours, if there's been recent chatter in
-    /// #general, use web search to surface an interesting tip / "did you know".
+    /// @bot periodic idea task: every 2 hours, if there's been recent ordinary
+    /// chatter in #general and nobody recently mentioned a ghost user.
     async fn run_bot_tip_task(
         self,
         bot: BotUser,
@@ -411,6 +408,14 @@ impl GhostService {
             return Ok(());
         }
 
+        let recent_mentions_ghost = messages
+            .iter()
+            .take(BOT_TIP_MENTION_SUPPRESSION_WINDOW)
+            .any(|m| mentions_bot_or_graybeard(&m.body));
+        if recent_mentions_ghost {
+            return Ok(());
+        }
+
         let (history_str, _) = self.build_chat_history(&messages).await?;
 
         let system_prompt = format!(
@@ -419,7 +424,8 @@ impl GhostService {
             Use Google Search to find ONE genuinely interesting, specific, verifiable fact, tip, or 'did you know' \
             that is loosely relevant to the recent conversation above. \
             Prefer concrete, surprising, citable facts over vague platitudes or generic advice. \
-            If the conversation is quiet or off-topic, pick a fresh developer / UNIX / tech-history curiosity instead. \
+            Avoid tips about this app's current stack, SSH basics, terminal setup, or generic shell productivity unless the recent chat explicitly asks for that. \
+            If the conversation is quiet or off-topic, pick a fresh developer, computing-history, programming-language, networking, hardware, or standards curiosity instead. \
             Do not repeat things already said in the recent history.\n\
             Output ONLY the message text — 1-2 short lines, no markdown, no code fences, no quotes, no URLs, no citations, no username prefix. \
             Do NOT greet. Do NOT say 'I searched' or 'according to'. Just drop the fact. \
@@ -461,11 +467,8 @@ impl GhostService {
         Ok(())
     }
 
-    /// Graybeard: a burned-out dev who haunts #general.
-    /// - Ticks every 2 hours, offset from @bot by 1 hour.
-    /// - Responds to @mentions immediately.
-    /// - Never mentions anyone.
-    async fn run_graybeard_task(
+    /// Graybeard: a burned-out dev who only replies when mentioned.
+    async fn run_graybeard_mention_task(
         self,
         gb: BotUser,
         shutdown: late_core::shutdown::CancellationToken,
@@ -473,30 +476,13 @@ impl GhostService {
         let mut events = self.chat_service.subscribe_events();
         let mut last_reply: HashMap<Uuid, Instant> = HashMap::new();
 
-        // Anchor the interval at the phase offset so graybeard keeps the same
-        // separation from @bot instead of snapping back onto startup-aligned ticks.
-        let mut chat_tick = tokio::time::interval_at(
-            TokioInstant::now() + GRAYBEARD_CHAT_PHASE_OFFSET,
-            GRAYBEARD_CHAT_INTERVAL,
-        );
-        chat_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        tracing::info!(username = %gb.username, "graybeard task started");
+        tracing::info!(username = %gb.username, "graybeard mention responder started");
 
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    tracing::info!(username = %gb.username, "graybeard task shutting down");
+                    tracing::info!(username = %gb.username, "graybeard mention responder shutting down");
                     break;
-                }
-                _ = chat_tick.tick() => {
-                    let svc = self.clone();
-                    let gb = gb.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = svc.graybeard_chat_tick(gb).await {
-                            tracing::error!(error = ?e, "graybeard chat tick failed");
-                        }
-                    });
                 }
                 recv_result = events.recv() => {
                     match recv_result {
@@ -536,85 +522,6 @@ impl GhostService {
                 }
             }
         }
-    }
-
-    /// 2-hour tick: check #general for new messages not from graybeard, then comment.
-    async fn graybeard_chat_tick(&self, gb: BotUser) -> Result<()> {
-        let (general_room, messages) = {
-            let client = self.db.get().await?;
-            ChatRoomMember::auto_join_public_rooms(&client, gb.id).await?;
-            let rooms = ChatRoom::list_for_user(&client, gb.id).await?;
-            let general_room = rooms
-                .into_iter()
-                .find(|r| r.slug.as_deref() == Some("general"))
-                .context("no general room found")?;
-            let messages = ChatMessage::list_recent(&client, general_room.id, 20).await?;
-            (general_room, messages)
-        };
-        if messages.is_empty() {
-            return Ok(());
-        }
-
-        // Only comment if there are at least N new messages since graybeard's last reply.
-        // `list_recent` returns newest-first, so count leading messages not authored by him.
-        let new_since_last = messages.iter().take_while(|m| m.user_id != gb.id).count();
-        if new_since_last < GRAYBEARD_MIN_NEW_MESSAGES {
-            return Ok(());
-        }
-
-        let (history_str, _) = self.build_chat_history(&messages).await?;
-
-        let system_prompt = format!(
-            "Your username is: {username}\n\n\
-            {persona}\n\n\
-            You are chatting in a casual terminal chat room called 'general'. Read the recent messages and react to what people are talking about. \
-            Sound like a real burned-out developer, not a bot or character. \
-            Keep your messages VERY short, 1-2 lines maximum. Do NOT use markdown.\n\
-            If you want to say something, just output the raw message text. \
-            If you have nothing to add, output exactly: SKIP\n\n\
-            CRITICAL RULES:\n\
-            1. NEVER prefix your message with your own username. The system will add it automatically.\n\
-            2. NEVER pretend to be an AI or language model.\n\
-            3. NEVER use @ symbols and NEVER use anyone's actual username. You MAY (and should) address the room collectively as 'kid', 'kids', 'children', 'youngsters', 'sonny', 'junior' — that is encouraged.\n\
-            4. Do not use quotation marks around your message.\n\
-            5. React to what people said but always steer it back to how things were better before — before AI, before frameworks, before the cloud.\n\
-            6. Be messy like a real person: skip periods sometimes, use lowercase, trail off mid thought.\n\
-            7. Do NOT start with 'welcome' or greet people. You are too tired for pleasantries.",
-            username = gb.username,
-            persona = GRAYBEARD_PERSONA
-        );
-
-        let history_with_prompt = format!(
-            "{history_str}---\nNow it is your turn to speak. Reply with ONLY your message content. Do not include your username '{}':",
-            gb.username
-        );
-
-        let Some(reply) = self
-            .ai_service
-            .generate_reply(&system_prompt, &history_with_prompt)
-            .await?
-        else {
-            return Ok(());
-        };
-
-        let Some(safe_reply) = sanitize_generated_reply(&reply, Some(&gb.username)) else {
-            return Ok(());
-        };
-
-        let mut rng = TinyRng::seeded();
-        let delay = rng.next_between_inclusive(5, 30) as u64;
-        tokio::time::sleep(Duration::from_secs(delay)).await;
-
-        self.chat_service.send_message_task(
-            gb.id,
-            general_room.id,
-            Some("general".to_string()),
-            safe_reply,
-            Uuid::now_v7(),
-            crate::authz::Permissions::default(),
-        );
-
-        Ok(())
     }
 
     /// Reply when someone @mentions graybeard.
@@ -783,6 +690,10 @@ impl GhostService {
                 bio: bio.to_string(),
                 country: profile.country,
                 timezone: profile.timezone,
+                ide: profile.ide,
+                terminal: profile.terminal,
+                os: profile.os,
+                langs: profile.langs,
                 notify_kinds: profile.notify_kinds,
                 notify_bell: profile.notify_bell,
                 notify_cooldown_mins: profile.notify_cooldown_mins,
@@ -897,6 +808,10 @@ fn contains_mention(text: &str, target_handle: &str) -> bool {
     }
 
     false
+}
+
+fn mentions_bot_or_graybeard(text: &str) -> bool {
+    contains_mention(text, BOT_USERNAME) || contains_mention(text, GRAYBEARD_USERNAME)
 }
 
 fn valid_mention_start(text: &str, at: usize) -> bool {
@@ -1047,6 +962,14 @@ mod tests {
     #[test]
     fn contains_mention_ignores_email_like_tokens() {
         assert!(!contains_mention("mail me at hi@bot.dev", "bot"));
+    }
+
+    #[test]
+    fn mentions_bot_or_graybeard_matches_only_ghost_handles() {
+        assert!(mentions_bot_or_graybeard("hey @bot"));
+        assert!(mentions_bot_or_graybeard("hey @graybeard"));
+        assert!(!mentions_bot_or_graybeard("hey @botty"));
+        assert!(!mentions_bot_or_graybeard("mail hi@graybeard.dev"));
     }
 
     #[test]

@@ -71,6 +71,16 @@ pub struct DiscoverRoomItem {
     pub last_message_at: Option<DateTime<Utc>>,
 }
 
+pub struct SendMessageTask {
+    pub user_id: Uuid,
+    pub room_id: Uuid,
+    pub room_slug: Option<String>,
+    pub body: String,
+    pub reply_to_message_id: Option<Uuid>,
+    pub request_id: Uuid,
+    pub permissions: Permissions,
+}
+
 #[derive(Clone)]
 struct ChatRefreshSession {
     user_id: Uuid,
@@ -1037,11 +1047,39 @@ impl ChatService {
         request_id: Uuid,
         permissions: Permissions,
     ) {
+        self.send_message_with_reply_task(SendMessageTask {
+            user_id,
+            room_id,
+            room_slug,
+            body,
+            reply_to_message_id: None,
+            request_id,
+            permissions,
+        });
+    }
+
+    pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
+        let SendMessageTask {
+            user_id,
+            room_id,
+            room_slug,
+            body,
+            reply_to_message_id,
+            request_id,
+            permissions,
+        } = task;
         let service = self.clone();
         tokio::spawn(
             async move {
                 match service
-                    .send_message(user_id, room_id, room_slug, body, permissions)
+                    .send_message(
+                        user_id,
+                        room_id,
+                        room_slug,
+                        body,
+                        reply_to_message_id,
+                        permissions,
+                    )
                     .await
                 {
                     Err(e) => {
@@ -1089,6 +1127,7 @@ impl ChatService {
         room_id: Uuid,
         room_slug: Option<String>,
         body: String,
+        reply_to_message_id: Option<Uuid>,
         permissions: Permissions,
     ) -> Result<()> {
         let body = body.trim_start_matches('\n').trim_end();
@@ -1107,6 +1146,14 @@ impl ChatService {
         }
         if RoomBan::is_active_for_room_and_user(&client, room_id, user_id).await? {
             anyhow::bail!("user is banned from this room");
+        }
+        if let Some(reply_to_message_id) = reply_to_message_id {
+            let reply_target = ChatMessage::get(&client, reply_to_message_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("reply target not found"))?;
+            if reply_target.room_id != room_id {
+                anyhow::bail!("reply target is not in this room");
+            }
         }
         let room = ChatRoom::get(&client, room_id)
             .await?
@@ -1127,7 +1174,7 @@ impl ChatService {
             user_id,
             body: body.to_string(),
         };
-        let chat = ChatMessage::create(&client, message).await?;
+        let chat = ChatMessage::create_with_reply_to(&client, message, reply_to_message_id).await?;
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;
