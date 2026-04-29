@@ -24,6 +24,21 @@ LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP ?= 30                      # Max WebSocket pair
 LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS ?= 60                   # Rolling window for WS pair rate limiting
 LATE_ALLOWED_ORIGINS ?= http://localhost:3000               # Comma-separated list of allowed CORS origins
 
+# --- Tunnel (late-ssh /tunnel listener; bastion-only) ---
+LATE_TUNNEL_PORT ?= 4001                                    # /tunnel WS listener port on late-ssh
+LATE_TUNNEL_SHARED_SECRET ?= dev-only-not-a-real-secret     # Pre-shared secret; must match bastion's
+LATE_TUNNEL_TRUSTED_CIDRS ?= 0.0.0.0/0                      # CIDRs allowed to reach /tunnel (compose: open; prod: bastion pod CIDR)
+
+# --- Bastion (late-bastion) ---
+LATE_BASTION_SSH_PORT ?= 5222                               # Bastion russh listener port (dual-path rollout)
+LATE_BASTION_HOST_KEY_PATH ?= /app/bastion_host_key         # Path to bastion's russh host key inside container
+LATE_BASTION_SSH_IDLE_TIMEOUT ?= 3600                       # Bastion russh inactivity timeout (seconds)
+LATE_BASTION_BACKEND_TUNNEL_URL ?= ws://service-ssh:4001/tunnel  # Backend /tunnel URL (compose service name)
+LATE_BASTION_SHARED_SECRET ?= $(LATE_TUNNEL_SHARED_SECRET)  # Must match LATE_TUNNEL_SHARED_SECRET on the backend
+LATE_BASTION_MAX_CONNS_GLOBAL ?= 10000                      # Bastion: global cap on simultaneous SSH connections
+LATE_BASTION_PROXY_PROTOCOL ?= 0                            # Parse PROXY v1 on bastion listener (NGINX → bastion)
+LATE_BASTION_PROXY_TRUSTED_CIDRS ?=                         # CIDRs allowed to send PROXY v1 to bastion
+
 # --- Database ---
 LATE_DB_HOST ?= postgres                                    # PostgreSQL hostname (docker service name)
 LATE_DB_PORT ?= 5432                                        # PostgreSQL port
@@ -76,6 +91,17 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP=$(LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP)" >> .env
 	@echo "LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS=$(LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS)" >> .env
 	@echo "LATE_ALLOWED_ORIGINS=$(LATE_ALLOWED_ORIGINS)" >> .env
+	@echo "LATE_TUNNEL_PORT=$(LATE_TUNNEL_PORT)" >> .env
+	@echo "LATE_TUNNEL_SHARED_SECRET=$(LATE_TUNNEL_SHARED_SECRET)" >> .env
+	@echo "LATE_TUNNEL_TRUSTED_CIDRS=$(LATE_TUNNEL_TRUSTED_CIDRS)" >> .env
+	@echo "LATE_BASTION_SSH_PORT=$(LATE_BASTION_SSH_PORT)" >> .env
+	@echo "LATE_BASTION_HOST_KEY_PATH=$(LATE_BASTION_HOST_KEY_PATH)" >> .env
+	@echo "LATE_BASTION_SSH_IDLE_TIMEOUT=$(LATE_BASTION_SSH_IDLE_TIMEOUT)" >> .env
+	@echo "LATE_BASTION_BACKEND_TUNNEL_URL=$(LATE_BASTION_BACKEND_TUNNEL_URL)" >> .env
+	@echo "LATE_BASTION_SHARED_SECRET=$(LATE_BASTION_SHARED_SECRET)" >> .env
+	@echo "LATE_BASTION_MAX_CONNS_GLOBAL=$(LATE_BASTION_MAX_CONNS_GLOBAL)" >> .env
+	@echo "LATE_BASTION_PROXY_PROTOCOL=$(LATE_BASTION_PROXY_PROTOCOL)" >> .env
+	@echo "LATE_BASTION_PROXY_TRUSTED_CIDRS=$(LATE_BASTION_PROXY_TRUSTED_CIDRS)" >> .env
 	@echo "LATE_DB_HOST=$(LATE_DB_HOST)" >> .env
 	@echo "LATE_DB_PORT=$(LATE_DB_PORT)" >> .env
 	@echo "LATE_DB_USER=$(LATE_DB_USER)" >> .env

@@ -84,27 +84,39 @@ Env-driven. See `src/config.rs` for the canonical list. Required vars:
 - ✅ **Ordering refactor** — both inbound paths (bastion handler, backend `/tunnel` receive loop) collapsed onto a single `mpsc<SshInputEvent>` (`Bytes` | `Resize`). Closes the prior `tokio::select!`-mux + eager-resize race that could surface `[A, R, B]` as `[R, AB]` to the app. Critical for coordinate-sensitive features (mouse SGR, paste, artboard). Validated manually against the artboard.
 - ⏳ **Phase 5** — production cutover (`:22` swing).
 
-## Running locally (Phase 1, smoke only)
+## Running locally
+
+The bastion runs as a docker-compose service alongside `late-ssh`. Both are
+started by:
 
 ```bash
-LATE_BASTION_SSH_PORT=5222 \
-LATE_BASTION_HOST_KEY_PATH=/tmp/bastion_host_key \
-LATE_BASTION_SSH_IDLE_TIMEOUT=300 \
-LATE_BASTION_BACKEND_TUNNEL_URL=ws://localhost:4001/tunnel \
-LATE_BASTION_SHARED_SECRET=dev-only-not-a-real-secret \
-LATE_BASTION_MAX_CONNS_GLOBAL=1024 \
-LATE_BASTION_PROXY_PROTOCOL=0 \
-LATE_BASTION_PROXY_TRUSTED_CIDRS= \
-cargo run -p late-bastion
+make start
 ```
+
+This generates `.env` with dev defaults (see the `LATE_TUNNEL_*` and
+`LATE_BASTION_*` blocks in the `Makefile`), brings up `service-ssh`,
+`service-bastion`, postgres, and the audio stack. The bastion's russh host
+key auto-generates on first boot at `/app/bastion_host_key` (gitignored,
+persists in the repo dir via the `.:/app` bind mount).
 
 Then in another shell:
 
 ```bash
+# bastion path (new):
 ssh -p 5222 -o StrictHostKeyChecking=no localhost
+# legacy path (still up during dual-rollout):
+ssh -p 2222 -o StrictHostKeyChecking=no localhost
 ```
 
-Expected: SSH connects, you see `late-bastion stub: tunnel not yet wired (Phase 3).`, the channel closes cleanly. The `~/.ssh/id_*` you connect with becomes the asserted fingerprint for the (eventual) WS handshake.
+Either path lands you in the same `late-ssh` UI; the bastion path proves the
+end-to-end `/tunnel` plumbing. Bouncing the `late-ssh` container while
+connected via `:5222` exercises the reconnect loop (Phase 4).
+
+Override any var on the make line if needed, e.g.:
+
+```bash
+make start LATE_BASTION_SSH_PORT=2225 LATE_TUNNEL_SHARED_SECRET=hunter2
+```
 
 ## Tests
 
