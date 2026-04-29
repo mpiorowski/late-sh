@@ -111,7 +111,11 @@ pub fn validate_handshake(
         return Err(HandshakeReject::UntrustedPeer);
     }
 
-    let presented_secret = header_str(headers, HEADER_SECRET).unwrap_or("");
+    if expected_secret.trim().is_empty() {
+        return Err(HandshakeReject::BadSecret);
+    }
+
+    let presented_secret = header_str(headers, HEADER_SECRET).ok_or(HandshakeReject::BadSecret)?;
     if !constant_time_eq(presented_secret.as_bytes(), expected_secret.as_bytes()) {
         return Err(HandshakeReject::BadSecret);
     }
@@ -471,17 +475,6 @@ async fn handle_session(
         let _ = ws_sink.close().await;
     });
 
-    let signal = Arc::new(RenderSignal::new());
-    // The receive loop also needs `out_tx` to push a drain Close on
-    // shutdown, so hand a clone to the render loop's frame sink.
-    let render = tokio::spawn(run_session(
-        Arc::clone(&app),
-        input_rx,
-        WsFrameSink::new(out_tx.clone()),
-        frame_drop_log_every,
-        Arc::clone(&signal),
-    ));
-
     // Initial alt-screen enter, mirroring shell_request's pre-loop write.
     // The russh path explicitly pushes `App::enter_alt_screen()` bytes
     // through the SSH channel before spawning the render loop; the
@@ -495,6 +488,17 @@ async fn handle_session(
             crate::app::state::App::enter_alt_screen().into(),
         ))
         .await;
+
+    let signal = Arc::new(RenderSignal::new());
+    // The receive loop also needs `out_tx` to push a drain Close on
+    // shutdown, so hand a clone to the render loop's frame sink.
+    let render = tokio::spawn(run_session(
+        Arc::clone(&app),
+        input_rx,
+        WsFrameSink::new(out_tx.clone()),
+        frame_drop_log_every,
+        Arc::clone(&signal),
+    ));
 
     // Wake the render loop so its first paint goes out promptly without
     // waiting for input.
@@ -705,6 +709,14 @@ mod tests {
             "different",
         )
         .unwrap_err();
+        assert_eq!(err, HandshakeReject::BadSecret);
+    }
+
+    #[test]
+    fn empty_expected_secret_rejected() {
+        let trusted = cidrs(&["10.42.0.0/16"]);
+        let err = validate_handshake(&full_headers(), "10.42.0.5".parse().unwrap(), &trusted, "")
+            .unwrap_err();
         assert_eq!(err, HandshakeReject::BadSecret);
     }
 

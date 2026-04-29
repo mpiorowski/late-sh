@@ -195,19 +195,22 @@ impl russh::server::Handler for ClientHandler {
 
     async fn pty_request(
         &mut self,
-        _channel: ChannelId,
+        channel: ChannelId,
         term: &str,
         col_width: u32,
         row_height: u32,
         _pix_width: u32,
         _pix_height: u32,
         _modes: &[(russh::Pty, u32)],
-        _session: &mut Session,
+        session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::info!(term, col_width, row_height, "pty_request");
         self.term = Some(term.to_string());
         self.cols = col_width.try_into().unwrap_or(u16::MAX);
         self.rows = row_height.try_into().unwrap_or(u16::MAX);
+        if let Err(e) = session.channel_success(channel) {
+            tracing::warn!(error = ?e, "pty channel_success failed");
+        }
         Ok(())
     }
 

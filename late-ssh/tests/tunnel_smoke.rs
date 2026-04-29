@@ -13,6 +13,7 @@ use ipnet::IpNet;
 use late_core::MutexRecover;
 use late_core::shutdown::CancellationToken;
 use late_core::tunnel_protocol::ControlFrame;
+use late_ssh::app::state::App;
 use late_ssh::config::Config;
 use late_ssh::state::State;
 use late_ssh::tunnel::{
@@ -109,17 +110,15 @@ async fn tunnel_happy_path_yields_initial_frame_and_accepts_resize() {
 
     assert_eq!(response.status().as_u16(), 101);
 
-    // Wait for at least one binary frame; the render loop pushes the
-    // initial alt-screen + paint immediately on session start.
+    // The first bytes must enter alt-screen before any rendered TUI
+    // frame, otherwise the initial paint can land in normal scrollback.
     let first = timeout(Duration::from_secs(5), ws.next())
         .await
         .expect("frame timeout")
         .expect("stream ended")
         .expect("ws error");
     match first {
-        Message::Binary(bytes) => {
-            assert!(!bytes.is_empty(), "first binary frame should be non-empty")
-        }
+        Message::Binary(bytes) => assert_eq!(bytes.as_ref(), App::enter_alt_screen().as_slice()),
         other => panic!("expected Binary, got {other:?}"),
     }
 

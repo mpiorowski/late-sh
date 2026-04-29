@@ -315,7 +315,7 @@ async fn bastion_proxies_ssh_to_tunnel_with_full_handshake_and_byte_flow() {
         .expect("channel_open_session");
 
     channel
-        .request_pty(false, "xterm-256color", 100, 30, 0, 0, &[])
+        .request_pty(true, "xterm-256color", 100, 30, 0, 0, &[])
         .await
         .expect("request_pty");
     channel.request_shell(true).await.expect("request_shell");
@@ -417,7 +417,7 @@ async fn bastion_uses_proxy_v1_source_ip_for_peer_ip_header() {
         .await
         .expect("channel_open_session");
     channel
-        .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
+        .request_pty(true, "xterm-256color", 80, 24, 0, 0, &[])
         .await
         .expect("request_pty");
     channel.request_shell(true).await.expect("request_shell");
@@ -457,7 +457,7 @@ async fn bastion_forwards_window_change_as_resize_text_frame() {
         .await
         .expect("channel_open_session");
     channel
-        .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
+        .request_pty(true, "xterm-256color", 80, 24, 0, 0, &[])
         .await
         .expect("request_pty");
     channel.request_shell(true).await.expect("request_shell");
@@ -800,7 +800,7 @@ async fn open_user_session(
         .await
         .expect("channel_open_session");
     channel
-        .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
+        .request_pty(true, "xterm-256color", 80, 24, 0, 0, &[])
         .await
         .expect("request_pty");
     channel.request_shell(true).await.expect("request_shell");

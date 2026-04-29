@@ -146,6 +146,11 @@ variable "BASTION_SHARED_SECRET" {
   type        = string
   sensitive   = true
   default     = ""
+
+  validation {
+    condition     = length(trimspace(var.BASTION_SHARED_SECRET)) > 0
+    error_message = "BASTION_SHARED_SECRET must be non-empty because late-ssh always starts the /tunnel listener."
+  }
 }
 
 variable "BASTION_SSH_PORT" {

@@ -43,6 +43,17 @@ fn required(key: &str) -> anyhow::Result<String> {
     std::env::var(key).with_context(|| format!("{key} must be set"))
 }
 
+fn required_non_empty(key: &str) -> anyhow::Result<String> {
+    non_empty_value(key, required(key)?)
+}
+
+fn non_empty_value(key: &str, value: String) -> anyhow::Result<String> {
+    if value.trim().is_empty() {
+        anyhow::bail!("{key} must not be empty");
+    }
+    Ok(value)
+}
+
 fn required_parse<T: std::str::FromStr>(key: &str) -> anyhow::Result<T>
 where
     T::Err: std::fmt::Display,
@@ -169,7 +180,7 @@ impl Config {
             ws_pair_max_attempts_per_ip: required_parse("LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP")?,
             ws_pair_rate_limit_window_secs: required_parse("LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS")?,
             tunnel_port: required_parse("LATE_TUNNEL_PORT")?,
-            tunnel_shared_secret: required("LATE_TUNNEL_SHARED_SECRET")?,
+            tunnel_shared_secret: required_non_empty("LATE_TUNNEL_SHARED_SECRET")?,
             tunnel_trusted_cidrs: required("LATE_TUNNEL_TRUSTED_CIDRS")?
                 .split(',')
                 .map(str::trim)
@@ -186,5 +197,22 @@ impl Config {
                 model: required("LATE_AI_MODEL")?,
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_empty_value_rejects_empty_and_whitespace() {
+        assert!(non_empty_value("SECRET", String::new()).is_err());
+        assert!(non_empty_value("SECRET", "   ".to_string()).is_err());
+    }
+
+    #[test]
+    fn non_empty_value_preserves_original_secret() {
+        let value = non_empty_value("SECRET", "  padded  ".to_string()).unwrap();
+        assert_eq!(value, "  padded  ");
     }
 }
