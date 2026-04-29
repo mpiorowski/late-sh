@@ -15,7 +15,6 @@ use crate::{
         draw_dashboard_pinned_messages,
     },
     app::common::{
-        cli_install,
         primitives::{format_duration_mmss, genre_label},
         theme,
     },
@@ -330,10 +329,6 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
                     .fg(theme::BG_CANVAS())
                     .bg(theme::BORDER_ACTIVE())
                     .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("  {}", cli_install::INSTALL_COMMAND),
-                Style::default().fg(theme::TEXT_DIM()),
             ),
         ]),
     ];

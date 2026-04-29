@@ -2260,7 +2260,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("members", "room members"),
     ("music", "music help"),
     ("private", "new private room"),
-    ("public", "open public room"),
+    ("public", "open public room for everyone"),
     ("settings", "open settings"),
     ("unignore", "unmute user"),
 ];
