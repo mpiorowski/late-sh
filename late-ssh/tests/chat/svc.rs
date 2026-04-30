@@ -1005,6 +1005,66 @@ async fn join_public_room_task_only_adds_requesting_user() {
 }
 
 #[tokio::test]
+async fn open_public_room_task_auto_joins_everyone_and_enables_auto_join() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let creator = create_test_user(&test_db.db, "public_creator").await;
+    let existing_user = create_test_user(&test_db.db, "public_existing").await;
+    let other_user = create_test_user(&test_db.db, "public_other").await;
+
+    service.open_public_room_task(creator.id, "rustaceans".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    let room_id = match event {
+        ChatEvent::RoomJoined {
+            user_id,
+            room_id,
+            slug,
+        } => {
+            assert_eq!(user_id, creator.id);
+            assert_eq!(slug, "rustaceans");
+            room_id
+        }
+        other => panic!("expected RoomJoined, got {other:?}"),
+    };
+
+    for user in [&creator, &existing_user, &other_user] {
+        assert!(
+            ChatRoomMember::is_member(&client, room_id, user.id)
+                .await
+                .unwrap(),
+            "{} should be joined to #rustaceans",
+            user.username
+        );
+    }
+
+    let room = ChatRoom::get(&client, room_id)
+        .await
+        .expect("reload room")
+        .expect("room exists");
+    assert!(room.auto_join);
+
+    let future_user = create_test_user(&test_db.db, "public_future").await;
+    ChatRoomMember::auto_join_public_rooms(&client, future_user.id)
+        .await
+        .expect("auto-join future user");
+    assert!(
+        ChatRoomMember::is_member(&client, room_id, future_user.id)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn fill_room_task_adds_all_users_to_public_room() {
     let test_db = new_test_db().await;
     let service = ChatService::new(

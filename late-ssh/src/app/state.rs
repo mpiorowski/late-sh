@@ -222,6 +222,7 @@ pub struct App {
     pub(crate) chat: chat::state::ChatState,
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
+    pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
 
     /// Which favorite room the dashboard's chat card is currently showing,
     /// when the user has 2+ favorites pinned. Clamped on read against the
@@ -260,6 +261,12 @@ pub struct App {
     pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
     pub(crate) rooms_add_form_open: bool,
     pub(crate) rooms_display_name_input: String,
+    pub(crate) rooms_create_focus_index: usize,
+    pub(crate) rooms_create_pace_index: usize,
+    pub(crate) rooms_create_stake_index: usize,
+    pub(crate) rooms_filter: crate::app::rooms::filter::RoomsFilter,
+    pub(crate) rooms_search_active: bool,
+    pub(crate) rooms_search_query: String,
     pub(super) rooms_snapshot_rx:
         tokio::sync::watch::Receiver<crate::app::rooms::svc::RoomsSnapshot>,
     pub(super) rooms_event_rx: tokio::sync::broadcast::Receiver<crate::app::rooms::svc::RoomsEvent>,
@@ -347,6 +354,10 @@ impl App {
         match self.screen {
             Screen::Dashboard => self.dashboard_active_room_id(),
             Screen::Chat => self.chat.selected_room_id,
+            Screen::Rooms => self
+                .rooms_active_room
+                .as_ref()
+                .map(|room| room.chat_room_id),
             _ => None,
         }
     }
@@ -690,6 +701,7 @@ impl App {
             ),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
+            rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             dashboard_favorite_index: 0,
             dashboard_previous_favorite_index: None,
             dashboard_g_prefix_armed: false,
@@ -715,6 +727,12 @@ impl App {
             rooms_active_room: None,
             rooms_add_form_open: false,
             rooms_display_name_input: String::new(),
+            rooms_create_focus_index: 0,
+            rooms_create_pace_index: 1,
+            rooms_create_stake_index: 0,
+            rooms_filter: crate::app::rooms::filter::RoomsFilter::default(),
+            rooms_search_active: false,
+            rooms_search_query: String::new(),
             rooms_snapshot_rx,
             rooms_event_rx,
             rooms_snapshot,

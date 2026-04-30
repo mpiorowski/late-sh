@@ -155,6 +155,32 @@ async fn shift_tab_cycles_screens_backwards() {
 }
 
 #[tokio::test]
+async fn tab_cycles_screens_forward_through_rooms() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "screen-tab-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    let mut app = make_app(test_db.db.clone(), user.id, "screen-tab-flow-it");
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Chat ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " The Arcade ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+}
+
+#[tokio::test]
 async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "artboard-view-it").await;
