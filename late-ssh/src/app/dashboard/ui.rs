@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -62,6 +62,7 @@ pub struct DashboardRenderInput<'a> {
     /// Pinned chat messages visible to this user; rendered as a slim amber
     /// strip above the favorites strip. Empty slice = no strip.
     pub pinned_messages: &'a [ChatMessage],
+    pub show_room_showcases: bool,
     pub rooms_snapshot: &'a RoomsSnapshot,
     pub blackjack_snapshots: &'a std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     pub blackjack_prefix_armed: bool,
@@ -119,7 +120,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 
 fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     let rooms = dashboard_blackjack_rooms(view.rooms_snapshot);
-    if let Some(grid_height) = blackjack_grid_height(area) {
+    if view.show_room_showcases && let Some(grid_height) = blackjack_grid_height(area) {
         let split =
             Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
         draw_blackjack_grid(
@@ -674,6 +675,7 @@ mod tests {
                         show_header: true,
                         favorites_strip: None,
                         pinned_messages: &[],
+                        show_room_showcases: true,
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
@@ -770,8 +772,7 @@ mod tests {
     fn dashboard_blackjack_grid_renders_room_slots_when_tall_enough() {
         let lines = render_dashboard_with_size(100, 36);
         let rendered = lines.join("\n");
-        assert!(rendered.contains("Blackjack Rooms"));
-        assert!(rendered.contains("loading tables"));
+        assert!(rendered.contains("loading…"));
         assert!(rendered.contains("b1"));
         assert!(rendered.contains("b2"));
         assert!(rendered.contains("b3"));
@@ -813,6 +814,7 @@ mod tests {
                         show_header: false,
                         favorites_strip: None,
                         pinned_messages: &[],
+                        show_room_showcases: true,
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
@@ -898,6 +900,7 @@ mod tests {
                             (go_room, "#go".to_string(), false, 0),
                         ]),
                         pinned_messages: &[],
+                        show_room_showcases: true,
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,

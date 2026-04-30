@@ -46,7 +46,10 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    if byte == b'b' && dashboard_blackjack_room_count(app) > 0 {
+    if byte == b'b'
+        && app.profile_state.profile().show_dashboard_room_showcases
+        && dashboard_blackjack_room_count(app) > 0
+    {
         app.dashboard_blackjack_prefix_armed = true;
         return true;
     }
