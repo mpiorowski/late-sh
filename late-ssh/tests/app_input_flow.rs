@@ -970,7 +970,7 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
         Some("general".to_string()),
         post_ignore_body.to_string(),
         Uuid::now_v7(),
-        late_ssh::authz::Permissions::default(),
+        false,
     );
     wait_until(
         || async {

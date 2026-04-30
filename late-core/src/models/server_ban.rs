@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -8,8 +9,7 @@ crate::model! {
     params = ServerBanParams;
     struct ServerBan {
         @data
-        pub ban_type: String,
-        pub target_user_id: Option<Uuid>,
+        pub target_user_id: Uuid,
         pub fingerprint: Option<String>,
         pub ip_address: Option<String>,
         pub snapshot_username: Option<String>,
@@ -19,77 +19,44 @@ crate::model! {
     }
 }
 
+pub struct ServerBanActivation<'a> {
+    pub target_user_id: Uuid,
+    pub fingerprint: Option<&'a str>,
+    pub ip_address: Option<&'a str>,
+    pub snapshot_username: Option<&'a str>,
+    pub actor_user_id: Uuid,
+    pub reason: &'a str,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
 impl ServerBan {
     pub async fn activate(
-        client: &Client,
-        target_user_id: Uuid,
-        fingerprint: &str,
-        actor_user_id: Uuid,
-        reason: &str,
-        expires_at: Option<DateTime<Utc>>,
+        client: &impl GenericClient,
+        activation: ServerBanActivation<'_>,
     ) -> Result<Self> {
-        Self::create(
-            client,
-            ServerBanParams {
-                ban_type: "user".to_string(),
-                target_user_id: Some(target_user_id),
-                fingerprint: Some(fingerprint.to_string()),
-                ip_address: None,
-                snapshot_username: None,
-                actor_user_id,
-                reason: reason.to_string(),
-                expires_at,
-            },
-        )
-        .await
-    }
-
-    pub async fn activate_fingerprint(
-        client: &Client,
-        fingerprint: &str,
-        actor_user_id: Uuid,
-        reason: &str,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Result<Self> {
-        Self::create(
-            client,
-            ServerBanParams {
-                ban_type: "fingerprint".to_string(),
-                target_user_id: None,
-                fingerprint: Some(fingerprint.to_string()),
-                ip_address: None,
-                snapshot_username: None,
-                actor_user_id,
-                reason: reason.to_string(),
-                expires_at,
-            },
-        )
-        .await
-    }
-
-    pub async fn activate_ip(
-        client: &Client,
-        ip_address: &str,
-        snapshot_username: Option<&str>,
-        snapshot_fingerprint: Option<&str>,
-        actor_user_id: Uuid,
-        reason: &str,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Result<Self> {
-        Self::create(
-            client,
-            ServerBanParams {
-                ban_type: "ip".to_string(),
-                target_user_id: None,
-                fingerprint: snapshot_fingerprint.map(str::to_string),
-                ip_address: Some(ip_address.to_string()),
-                snapshot_username: snapshot_username.map(str::to_string),
-                actor_user_id,
-                reason: reason.to_string(),
-                expires_at,
-            },
-        )
-        .await
+        let fingerprint = activation.fingerprint.map(str::to_string);
+        let ip_address = activation.ip_address.map(str::to_string);
+        let snapshot_username = activation.snapshot_username.map(str::to_string);
+        let reason = activation.reason.to_string();
+        let row = client
+            .query_one(
+                "INSERT INTO server_bans
+                 (target_user_id, fingerprint, ip_address, snapshot_username,
+                  actor_user_id, reason, expires_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 RETURNING *",
+                &[
+                    &activation.target_user_id,
+                    &fingerprint,
+                    &ip_address,
+                    &snapshot_username,
+                    &activation.actor_user_id,
+                    &reason,
+                    &activation.expires_at,
+                ],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
     pub async fn find_active_for_user_id(
@@ -101,7 +68,6 @@ impl ServerBan {
                 "SELECT *
                  FROM server_bans
                  WHERE target_user_id = $1
-                   AND ban_type = 'user'
                    AND (expires_at IS NULL OR expires_at > current_timestamp)
                  ORDER BY created DESC
                  LIMIT 1",
@@ -119,9 +85,7 @@ impl ServerBan {
                 "SELECT sb.*, u.username AS actor_username
                  FROM server_bans sb
                  LEFT JOIN users u ON u.id = sb.actor_user_id
-                 WHERE sb.target_user_id IS NOT NULL
-                   AND sb.ban_type = 'user'
-                   AND (sb.expires_at IS NULL OR sb.expires_at > current_timestamp)
+                 WHERE sb.expires_at IS NULL OR sb.expires_at > current_timestamp
                  ORDER BY sb.created DESC",
                 &[],
             )
@@ -144,7 +108,6 @@ impl ServerBan {
                 "SELECT *
                  FROM server_bans
                  WHERE fingerprint = $1
-                   AND ban_type = 'fingerprint'
                    AND (expires_at IS NULL OR expires_at > current_timestamp)
                  ORDER BY created DESC
                  LIMIT 1",
@@ -163,7 +126,6 @@ impl ServerBan {
                 "SELECT *
                  FROM server_bans
                  WHERE ip_address = $1
-                   AND ban_type = 'ip'
                    AND (expires_at IS NULL OR expires_at > current_timestamp)
                  ORDER BY created DESC
                  LIMIT 1",
@@ -174,7 +136,7 @@ impl ServerBan {
     }
 
     pub async fn delete_active_for_user(
-        client: &Client,
+        client: &impl GenericClient,
         target_user_id: Uuid,
         fingerprint: &str,
     ) -> Result<u64> {
@@ -182,8 +144,8 @@ impl ServerBan {
             .execute(
                 "DELETE FROM server_bans
                  WHERE (
-                       (ban_type = 'user' AND target_user_id = $1)
-                       OR (ban_type = 'fingerprint' AND fingerprint = $2)
+                       target_user_id = $1
+                       OR fingerprint = $2
                    )
                    AND (expires_at IS NULL OR expires_at > current_timestamp)",
                 &[&target_user_id, &fingerprint],
@@ -191,12 +153,14 @@ impl ServerBan {
             .await?)
     }
 
-    pub async fn delete_active_for_ip_address(client: &Client, ip_address: &str) -> Result<u64> {
+    pub async fn delete_active_for_ip_address(
+        client: &impl GenericClient,
+        ip_address: &str,
+    ) -> Result<u64> {
         Ok(client
             .execute(
                 "DELETE FROM server_bans
                  WHERE ip_address = $1
-                   AND ban_type = 'ip'
                    AND (expires_at IS NULL OR expires_at > current_timestamp)",
                 &[&ip_address],
             )

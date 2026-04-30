@@ -12,7 +12,6 @@ crate::model! {
         @generated
         pub last_seen: DateTime<Utc>,
         pub is_admin: bool,
-        pub is_mod: bool,
         pub is_moderator: bool;
 
         @data

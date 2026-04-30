@@ -152,7 +152,6 @@ pub struct SessionConfig {
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
     pub permissions: Permissions,
-    pub is_mod: bool,
     pub artboard_banned: bool,
     pub artboard_ban_expires_at: Option<DateTime<Utc>>,
 
@@ -220,7 +219,7 @@ pub struct App {
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
-    pub(crate) is_mod: bool,
+    pub(crate) is_moderator: bool,
     pub(crate) artboard_banned: bool,
     pub(crate) artboard_ban_expires_at: Option<DateTime<Utc>>,
 
@@ -700,7 +699,7 @@ impl App {
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
-            is_mod: config.is_mod,
+            is_moderator: config.permissions.is_moderator(),
             artboard_banned: config.artboard_banned,
             artboard_ban_expires_at: config.artboard_ban_expires_at,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
@@ -869,6 +868,7 @@ impl App {
         let was_moderator = self.permissions.is_moderator();
         self.permissions = permissions;
         self.is_admin = permissions.is_admin();
+        self.is_moderator = permissions.is_moderator();
         self.chat.set_permissions(permissions);
         self.bonsai_state.is_admin = permissions.is_admin();
         self.banner = Some(Banner::success(&format!(

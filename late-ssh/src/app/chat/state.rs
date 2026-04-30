@@ -561,7 +561,7 @@ impl ChatState {
         body: &str,
     ) -> Option<Banner> {
         let is_own = message_user_id == self.user_id;
-        if !is_own && !self.permissions.is_admin() {
+        if !is_own && !self.permissions.can_moderate() {
             return Some(Banner::error("Can only edit your own messages"));
         }
         self.edited_message_id = Some(selected_id);
@@ -1182,7 +1182,7 @@ impl ChatState {
                         body,
                         reply_to_message_id,
                         request_id,
-                        permissions: self.permissions,
+                        is_admin: self.is_admin,
                     });
             }
             self.pending_send_notices.push_back(request_id);

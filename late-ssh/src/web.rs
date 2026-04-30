@@ -15,7 +15,7 @@ use std::{
 };
 use uuid::Uuid;
 
-use crate::{app::chat::svc::ChatEvent, authz::Permissions, state::State};
+use crate::{app::chat::svc::ChatEvent, state::State};
 
 // ---------------------------------------------------------------------------
 // WebChatRegistry — magic-link tokens for web/mobile chat
@@ -179,7 +179,7 @@ async fn handle_chat_socket(mut socket: WebSocket, user_id: Uuid, username: Stri
                             Some("general".to_string()),
                             body,
                             Uuid::now_v7(),
-                            Permissions::default(),
+        false,
                         );
                     }
                     WsChatInbound::Heartbeat {} => {}

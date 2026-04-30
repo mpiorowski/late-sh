@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -64,32 +65,39 @@ impl RoomBan {
     }
 
     pub async fn activate(
-        client: &Client,
+        client: &impl GenericClient,
         room_id: Uuid,
         target_user_id: Uuid,
         actor_user_id: Uuid,
         reason: impl Into<String>,
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<Self> {
-        let params = RoomBanParams {
-            room_id,
-            target_user_id,
-            actor_user_id,
-            reason: reason.into(),
-            expires_at,
-        };
-
-        if let Some(existing) =
-            Self::find_for_room_and_user(client, room_id, target_user_id).await?
-        {
-            Self::update(client, existing.id, params).await
-        } else {
-            Self::create(client, params).await
-        }
+        let reason = reason.into();
+        let row = client
+            .query_one(
+                "INSERT INTO room_bans
+                 (room_id, target_user_id, actor_user_id, reason, expires_at)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (room_id, target_user_id)
+                 DO UPDATE SET actor_user_id = EXCLUDED.actor_user_id,
+                               reason = EXCLUDED.reason,
+                               expires_at = EXCLUDED.expires_at,
+                               updated = current_timestamp
+                 RETURNING *",
+                &[
+                    &room_id,
+                    &target_user_id,
+                    &actor_user_id,
+                    &reason,
+                    &expires_at,
+                ],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
     pub async fn delete_for_room_and_user(
-        client: &Client,
+        client: &impl GenericClient,
         room_id: Uuid,
         target_user_id: Uuid,
     ) -> Result<u64> {

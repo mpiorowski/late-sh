@@ -424,7 +424,7 @@ fn visible_real_room_at(app: &App, index: usize) -> Option<crate::app::rooms::sv
 }
 
 fn enter_selected_room(app: &mut App) {
-    if !can_enter_room(app.is_admin, app.is_mod) {
+    if !can_enter_room(app.is_admin, app.is_moderator) {
         app.banner = Some(Banner::error(
             "Admin or mod only: rooms are locked for now.",
         ));
@@ -482,8 +482,8 @@ fn can_create_room(is_admin: bool) -> bool {
     is_admin
 }
 
-fn can_enter_room(is_admin: bool, is_mod: bool) -> bool {
-    is_admin || is_mod
+fn can_enter_room(is_admin: bool, is_moderator: bool) -> bool {
+    is_admin || is_moderator
 }
 
 #[cfg(test)]

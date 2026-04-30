@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -73,27 +74,31 @@ impl ArtboardBan {
     }
 
     pub async fn activate(
-        client: &Client,
+        client: &impl GenericClient,
         target_user_id: Uuid,
         actor_user_id: Uuid,
         reason: impl Into<String>,
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<Self> {
-        let params = ArtboardBanParams {
-            target_user_id,
-            actor_user_id,
-            reason: reason.into(),
-            expires_at,
-        };
-
-        if let Some(existing) = Self::find_for_user(client, target_user_id).await? {
-            Self::update(client, existing.id, params).await
-        } else {
-            Self::create(client, params).await
-        }
+        let reason = reason.into();
+        let row = client
+            .query_one(
+                "INSERT INTO artboard_bans
+                 (target_user_id, actor_user_id, reason, expires_at)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (target_user_id)
+                 DO UPDATE SET actor_user_id = EXCLUDED.actor_user_id,
+                               reason = EXCLUDED.reason,
+                               expires_at = EXCLUDED.expires_at,
+                               updated = current_timestamp
+                 RETURNING *",
+                &[&target_user_id, &actor_user_id, &reason, &expires_at],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
-    pub async fn delete_for_user(client: &Client, target_user_id: Uuid) -> Result<u64> {
+    pub async fn delete_for_user(client: &impl GenericClient, target_user_id: Uuid) -> Result<u64> {
         Ok(client
             .execute(
                 "DELETE FROM artboard_bans WHERE target_user_id = $1",

@@ -40,7 +40,7 @@ async fn emits_send_failed_event_when_sender_is_not_room_member() {
         None,
         "hello".to_string(),
         request_id,
-        Permissions::default(),
+        false,
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -85,7 +85,7 @@ async fn emits_message_created_and_send_succeeded_when_sender_is_member() {
         room.slug.clone(),
         "hello world".to_string(),
         request_id,
-        Permissions::default(),
+        false,
     );
 
     let first = timeout(Duration::from_secs(2), events.recv())
@@ -161,7 +161,7 @@ async fn dm_message_rejoins_recipient_who_left() {
         room.slug.clone(),
         "ping after leave".to_string(),
         request_id,
-        Permissions::default(),
+        false,
     );
 
     let first = timeout(Duration::from_secs(2), events.recv())
@@ -291,7 +291,7 @@ async fn emits_send_failed_event_when_non_admin_posts_to_announcements() {
         room.slug.clone(),
         "not allowed".to_string(),
         request_id,
-        Permissions::default(),
+        false,
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1724,89 +1724,12 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
         other => panic!("expected terminate message, got {other:?}"),
     }
 
-    assert!(
-        ServerBan::find_active_for_user_id(&client, target.id)
-            .await
-            .expect("server ban lookup")
-            .is_some()
-    );
-}
-
-#[tokio::test]
-async fn mod_server_ip_ban_command_bans_snapshots_and_audits() {
-    let test_db = new_test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let actor = create_test_user(&test_db.db, "ip_ban_actor").await;
-    let target = create_test_user(&test_db.db, "ip_ban_target").await;
-    let banned_ip: IpAddr = "203.0.113.10".parse().expect("test ip");
-    let session_token = "ip-ban-session".to_string();
-    let active_users = Arc::new(Mutex::new(HashMap::from([(
-        target.id,
-        ActiveUser {
-            username: target.username.clone(),
-            fingerprint: Some(target.fingerprint.clone()),
-            peer_ip: Some(banned_ip),
-            sessions: vec![ActiveSession {
-                token: session_token.clone(),
-                fingerprint: Some(target.fingerprint.clone()),
-                peer_ip: Some(banned_ip),
-            }],
-            connection_count: 1,
-            last_login_at: std::time::Instant::now(),
-        },
-    )])));
-    let registry = SessionRegistry::new();
-    let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
-    let service = ChatService::new_with_active_users(
-        test_db.db.clone(),
-        NotificationService::new(test_db.db.clone()),
-        active_users,
-    )
-    .with_session_registry(registry);
-    let mut events = service.subscribe_events();
-
-    let request_id = Uuid::now_v7();
-    service.run_mod_command_task(
-        actor.id,
-        Permissions::new(true, false),
-        request_id,
-        "server ban-ip 203.0.113.10 1h suspicious".to_string(),
-    );
-
-    let event = timeout(Duration::from_secs(2), events.recv())
+    let ban = ServerBan::find_active_for_user_id(&client, target.id)
         .await
-        .expect("event timeout")
-        .expect("event");
-    match event {
-        ChatEvent::ModCommandOutput {
-            user_id,
-            request_id: got_request,
-            lines,
-            success,
-        } => {
-            assert_eq!(user_id, actor.id);
-            assert_eq!(got_request, request_id);
-            assert!(success, "unexpected mod command failure: {lines:?}");
-            assert_eq!(lines, vec!["banned ip 203.0.113.10"]);
-        }
-        other => panic!("expected ModCommandOutput, got {other:?}"),
-    }
-    let message = timeout(Duration::from_secs(2), session_rx.recv())
-        .await
-        .expect("session message timeout")
-        .expect("session message");
-    match message {
-        SessionMessage::Terminate { reason } => assert_eq!(reason, "server IP ban"),
-        other => panic!("expected terminate message, got {other:?}"),
-    }
-
-    let ban = ServerBan::find_active_for_ip_address(&client, "203.0.113.10")
-        .await
-        .expect("ip ban lookup")
-        .expect("active ip ban");
-    assert_eq!(ban.ban_type, "ip");
-    assert_eq!(ban.ip_address.as_deref(), Some("203.0.113.10"));
+        .expect("server ban lookup")
+        .expect("active server ban");
+    assert_eq!(ban.target_user_id, target.id);
+    assert_eq!(ban.ip_address.as_deref(), Some("203.0.113.12"));
     assert_eq!(
         ban.snapshot_username.as_deref(),
         Some(target.username.as_str())
@@ -1820,12 +1743,9 @@ async fn mod_server_ip_ban_command_bans_snapshots_and_audits() {
         .query_one(
             "SELECT COUNT(*) FROM moderation_audit_log
              WHERE actor_user_id = $1
-               AND action = 'server_ip_ban'
-               AND target_kind = 'ip'
-               AND metadata->>'ip_address' = '203.0.113.10'
-               AND metadata->>'snapshot_username' = $2
-               AND metadata->>'snapshot_fingerprint' = $3",
-            &[&actor.id, &target.username, &target.fingerprint],
+               AND action = 'server_ban'
+               AND target_id = $2",
+            &[&actor.id, &target.id],
         )
         .await
         .expect("audit count")
@@ -1986,162 +1906,6 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
 }
 
 #[tokio::test]
-async fn mod_ban_list_commands_show_active_bans() {
-    let test_db = new_test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let actor = create_test_user(&test_db.db, "ban_list_actor").await;
-    let target = create_test_user(&test_db.db, "ban_list_target").await;
-    let room = ChatRoom::get_or_create_public_room(&client, "ban-list-room")
-        .await
-        .expect("create room");
-    let expires_at = Some(chrono::Utc::now() + chrono::Duration::hours(1));
-    RoomBan::activate(
-        &client,
-        room.id,
-        target.id,
-        actor.id,
-        "room cleanup",
-        expires_at,
-    )
-    .await
-    .expect("activate room ban");
-    ServerBan::activate(
-        &client,
-        target.id,
-        &target.fingerprint,
-        actor.id,
-        "server cleanup",
-        expires_at,
-    )
-    .await
-    .expect("activate server ban");
-    ServerBan::activate_ip(
-        &client,
-        "203.0.113.55",
-        Some(&target.username),
-        Some(&target.fingerprint),
-        actor.id,
-        "ip cleanup",
-        expires_at,
-    )
-    .await
-    .expect("activate ip ban");
-    ArtboardBan::activate(&client, target.id, actor.id, "artboard cleanup", expires_at)
-        .await
-        .expect("activate artboard ban");
-
-    let service = ChatService::new(
-        test_db.db.clone(),
-        NotificationService::new(test_db.db.clone()),
-    );
-    let mut events = service.subscribe_events();
-
-    let request_id = Uuid::now_v7();
-    service.run_mod_command_task(
-        actor.id,
-        Permissions::new(false, true),
-        request_id,
-        "server bans".to_string(),
-    );
-    let event = timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("server bans event timeout")
-        .expect("server bans event");
-    match event {
-        ChatEvent::ModCommandOutput {
-            request_id: got_request,
-            lines,
-            success,
-            ..
-        } => {
-            assert_eq!(got_request, request_id);
-            assert!(success, "unexpected server bans failure: {lines:?}");
-            assert!(
-                lines.iter().any(|line| {
-                    line.contains("user @ban_list_target")
-                        && line.contains("actor=@ban_list_actor")
-                        && line.contains("reason=server cleanup")
-                }),
-                "server bans should include user ban: {lines:?}"
-            );
-            assert!(
-                lines.iter().any(|line| {
-                    line.contains("ip 203.0.113.55")
-                        && line.contains("snapshot=@ban_list_target")
-                        && line.contains("reason=ip cleanup")
-                }),
-                "server bans should include ip ban: {lines:?}"
-            );
-        }
-        other => panic!("expected ModCommandOutput, got {other:?}"),
-    }
-
-    let request_id = Uuid::now_v7();
-    service.run_mod_command_task(
-        actor.id,
-        Permissions::new(false, true),
-        request_id,
-        "artboard bans".to_string(),
-    );
-    let event = timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("artboard bans event timeout")
-        .expect("artboard bans event");
-    match event {
-        ChatEvent::ModCommandOutput {
-            request_id: got_request,
-            lines,
-            success,
-            ..
-        } => {
-            assert_eq!(got_request, request_id);
-            assert!(success, "unexpected artboard bans failure: {lines:?}");
-            assert!(
-                lines.iter().any(|line| {
-                    line.contains("@ban_list_target")
-                        && line.contains("actor=@ban_list_actor")
-                        && line.contains("reason=artboard cleanup")
-                }),
-                "artboard bans should include target ban: {lines:?}"
-            );
-        }
-        other => panic!("expected ModCommandOutput, got {other:?}"),
-    }
-
-    let request_id = Uuid::now_v7();
-    service.run_mod_command_task(
-        actor.id,
-        Permissions::new(false, true),
-        request_id,
-        "room bans #ban-list-room".to_string(),
-    );
-    let event = timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("room bans event timeout")
-        .expect("room bans event");
-    match event {
-        ChatEvent::ModCommandOutput {
-            request_id: got_request,
-            lines,
-            success,
-            ..
-        } => {
-            assert_eq!(got_request, request_id);
-            assert!(success, "unexpected room bans failure: {lines:?}");
-            assert!(
-                lines.iter().any(|line| {
-                    line.contains("@ban_list_target")
-                        && line.contains("actor=@ban_list_actor")
-                        && line.contains("reason=room cleanup")
-                }),
-                "room bans should include target ban: {lines:?}"
-            );
-        }
-        other => panic!("expected ModCommandOutput, got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn grant_mod_command_updates_active_session_permissions() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -2238,7 +2002,7 @@ async fn send_message_task_rejects_active_room_ban_even_if_still_member() {
         room.slug.clone(),
         "should not send".to_string(),
         request_id,
-        Permissions::default(),
+        false,
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())

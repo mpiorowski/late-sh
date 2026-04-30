@@ -503,14 +503,6 @@ impl russh::server::Handler for ClientHandler {
             return Ok(reject_publickey_only());
         }
         let fingerprint = key.fingerprint(keys::HashAlg::Sha256).to_string();
-        let (user, is_new_user) =
-            match crate::ssh::ensure_user(&self.state, login_username, &fingerprint).await {
-                Ok(pair) => pair,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to ensure user, rejecting auth");
-                    return Ok(reject_publickey_only());
-                }
-            };
         let client = match self.state.db.get().await {
             Ok(client) => client,
             Err(e) => {
@@ -518,10 +510,9 @@ impl russh::server::Handler for ClientHandler {
                 return Ok(reject_publickey_only());
             }
         };
-        match has_active_server_ban(&client, &user, &fingerprint, self.peer_ip).await {
+        match has_active_server_ban_before_user_lookup(&client, &fingerprint, self.peer_ip).await {
             Ok(true) => {
                 tracing::warn!(
-                    username = %user.username,
                     fingerprint = %fingerprint,
                     peer_ip = ?self.peer_ip,
                     "active server ban rejected SSH auth"
@@ -534,6 +525,40 @@ impl russh::server::Handler for ClientHandler {
                 return Ok(reject_publickey_only());
             }
         }
+        match User::find_by_fingerprint(&client, &fingerprint).await {
+            Ok(Some(existing_user)) => {
+                match ServerBan::find_active_for_user_id(&client, existing_user.id).await {
+                    Ok(Some(_)) => {
+                        tracing::warn!(
+                            username = %existing_user.username,
+                            fingerprint = %fingerprint,
+                            peer_ip = ?self.peer_ip,
+                            "active server ban rejected SSH auth"
+                        );
+                        return Ok(reject_publickey_only());
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+                        return Ok(reject_publickey_only());
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to look up user before ban check, rejecting auth");
+                return Ok(reject_publickey_only());
+            }
+        }
+        drop(client);
+        let (user, is_new_user) =
+            match crate::ssh::ensure_user(&self.state, login_username, &fingerprint).await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to ensure user, rejecting auth");
+                    return Ok(reject_publickey_only());
+                }
+            };
         self.is_new_user = is_new_user;
         if !self.active_user_incremented {
             let mut active_users = self.state.active_users.lock_recover();
@@ -830,7 +855,6 @@ impl russh::server::Handler for ClientHandler {
                         .any(|u| u == &user.username.to_ascii_lowercase()),
                 user.is_moderator,
             ),
-            is_mod: user.is_mod,
             artboard_banned: artboard_ban.is_some(),
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
@@ -1315,6 +1339,7 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
     Ok((user, is_new_user))
 }
 
+#[cfg(test)]
 async fn has_active_server_ban(
     client: &tokio_postgres::Client,
     user: &User,
@@ -1343,6 +1368,23 @@ async fn has_active_server_ban(
     )
 }
 
+async fn has_active_server_ban_before_user_lookup(
+    client: &tokio_postgres::Client,
+    fingerprint: &str,
+    peer_ip: Option<IpAddr>,
+) -> Result<bool> {
+    if let Some(peer_ip) = peer_ip
+        && ServerBan::find_active_for_ip_address(client, &peer_ip.to_string())
+            .await?
+            .is_some()
+    {
+        return Ok(true);
+    }
+    Ok(ServerBan::find_active_for_fingerprint(client, fingerprint)
+        .await?
+        .is_some())
+}
+
 fn late_ssh_theme_id(settings: &Value) -> String {
     extract_theme_id(settings).unwrap_or_else(|| theme::DEFAULT_ID.to_string())
 }
@@ -1358,7 +1400,7 @@ fn reject_publickey_only() -> Auth {
 mod tests {
     use super::*;
     use late_core::{
-        models::server_ban::ServerBan,
+        models::server_ban::{ServerBan, ServerBanActivation},
         test_utils::{create_test_user, test_db},
     };
     use std::str::FromStr;
@@ -1398,11 +1440,15 @@ mod tests {
 
         ServerBan::activate(
             &client,
-            target.id,
-            &target.fingerprint,
-            actor.id,
-            "test ban",
-            None,
+            ServerBanActivation {
+                target_user_id: target.id,
+                fingerprint: Some(&target.fingerprint),
+                ip_address: None,
+                snapshot_username: Some(&target.username),
+                actor_user_id: actor.id,
+                reason: "test ban",
+                expires_at: None,
+            },
         )
         .await
         .expect("activate server ban");
@@ -1423,12 +1469,17 @@ mod tests {
             .await
             .expect("pre-fingerprint ban lookup")
         );
-        ServerBan::activate_fingerprint(
+        ServerBan::activate(
             &client,
-            &fingerprint_target.fingerprint,
-            actor.id,
-            "test fingerprint ban",
-            None,
+            ServerBanActivation {
+                target_user_id: fingerprint_target.id,
+                fingerprint: Some(&fingerprint_target.fingerprint),
+                ip_address: None,
+                snapshot_username: Some(&fingerprint_target.username),
+                actor_user_id: actor.id,
+                reason: "test fingerprint ban",
+                expires_at: None,
+            },
         )
         .await
         .expect("activate fingerprint ban");
@@ -1448,14 +1499,18 @@ mod tests {
                 .await
                 .expect("pre-ip ban lookup")
         );
-        ServerBan::activate_ip(
+        let banned_ip_text = banned_ip.to_string();
+        ServerBan::activate(
             &client,
-            &banned_ip.to_string(),
-            Some(&ip_target.username),
-            Some(&ip_target.fingerprint),
-            actor.id,
-            "test ip ban",
-            None,
+            ServerBanActivation {
+                target_user_id: ip_target.id,
+                fingerprint: Some(&ip_target.fingerprint),
+                ip_address: Some(&banned_ip_text),
+                snapshot_username: Some(&ip_target.username),
+                actor_user_id: actor.id,
+                reason: "test ip ban",
+                expires_at: None,
+            },
         )
         .await
         .expect("activate ip ban");

@@ -347,7 +347,7 @@ impl GhostService {
             None,
             body,
             Uuid::now_v7(),
-            crate::authz::Permissions::default(),
+            false,
         );
 
         Ok(())
@@ -461,7 +461,7 @@ impl GhostService {
             Some("general".to_string()),
             safe_reply,
             Uuid::now_v7(),
-            crate::authz::Permissions::default(),
+            false,
         );
 
         Ok(())
@@ -590,7 +590,7 @@ impl GhostService {
             None,
             safe_reply,
             Uuid::now_v7(),
-            crate::authz::Permissions::default(),
+            false,
         );
 
         Ok(())

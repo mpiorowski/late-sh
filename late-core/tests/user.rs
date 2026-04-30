@@ -16,7 +16,6 @@ async fn setup_db() -> (deadpool_postgres::Client, TestDb) {
             updated timestamptz not null default current_timestamp,
             last_seen timestamptz not null default current_timestamp,
             is_admin boolean not null default false,
-            is_mod boolean not null default false,
             is_moderator boolean not null default false,
             fingerprint text not null,
             username text not null default '',

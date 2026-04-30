@@ -11,7 +11,6 @@ use std::{
 };
 use uuid::Uuid;
 
-use deadpool_postgres::GenericClient;
 use late_core::{
     MutexRecover,
     db::Db,
@@ -24,17 +23,25 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         room_ban::RoomBan,
-        server_ban::ServerBan,
+        server_ban::{ServerBan, ServerBanActivation},
         user::User,
     },
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::app::bonsai::state::stage_for;
-use crate::authz::{Action, Permissions, TargetTier};
+use crate::authz::{Caps, Permissions, Tier};
 use crate::metrics;
+use crate::moderation::command::{
+    ArtboardAction, ModCommand, RoleAction, RoomModAction, ServerUserAction, mod_help_lines,
+    normalize_mod_slug, parse_mod_command, strip_user_prefix,
+};
+use crate::moderation::service::{
+    ModAuditRecord, cap_for_server_ban, ensure_can, ensure_message_permission, ensure_mod_surface,
+    ensure_not_self, record_mod_audit, target_tier_for_user_id, tier_for_user,
+};
 use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::ActiveUsers;
 
@@ -78,7 +85,7 @@ pub struct SendMessageTask {
     pub body: String,
     pub reply_to_message_id: Option<Uuid>,
     pub request_id: Uuid,
-    pub permissions: Permissions,
+    pub is_admin: bool,
 }
 
 #[derive(Clone)]
@@ -117,16 +124,6 @@ struct RoomModRequest {
     username: String,
     duration: Option<chrono::Duration>,
     reason: String,
-}
-
-struct ModAuditRecord {
-    permissions: Permissions,
-    matrix_action: Action,
-    target_tier: TargetTier,
-    audit_action: &'static str,
-    target_kind: &'static str,
-    target_id: Option<Uuid>,
-    metadata: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -406,29 +403,7 @@ impl ChatService {
         let command = parse_mod_command(input)?;
         match command {
             ModCommand::Help { topic } => Ok(mod_help_lines(topic.as_deref())),
-            ModCommand::Status => Ok(vec![format!(
-                "status: tier={} mod_surface={}",
-                tier_label(permissions),
-                permissions.can_access_mod_surface()
-            )]),
-            ModCommand::Whoami => {
-                let client = self.db.get().await?;
-                let actor = User::get(&client, actor_user_id)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("actor user not found"))?;
-                Ok(vec![format!(
-                    "@{} admin={} mod={}",
-                    actor.username,
-                    actor.is_admin || permissions.is_admin(),
-                    actor.is_moderator || permissions.is_moderator()
-                )])
-            }
-            ModCommand::Users { filter } => self.mod_list_users(permissions, filter).await,
             ModCommand::User { username } => self.mod_user_detail(permissions, &username).await,
-            ModCommand::Rooms { filter } => self.mod_list_rooms(permissions, filter).await,
-            ModCommand::Room { slug } => self.mod_room_detail(permissions, &slug).await,
-            ModCommand::RoomBans { slug } => self.mod_room_bans(permissions, &slug).await,
-            ModCommand::Audit { filter } => self.mod_audit(permissions, filter).await,
             ModCommand::RoomAction {
                 action,
                 slug,
@@ -449,14 +424,6 @@ impl ChatService {
                 )
                 .await
             }
-            ModCommand::RoomAdmin {
-                action,
-                slug,
-                value,
-            } => {
-                self.mod_room_admin(actor_user_id, permissions, action, &slug, value)
-                    .await
-            }
             ModCommand::ServerUser {
                 action,
                 username,
@@ -473,23 +440,6 @@ impl ChatService {
                 )
                 .await
             }
-            ModCommand::ServerIp {
-                action,
-                ip_address,
-                duration,
-                reason,
-            } => {
-                self.mod_server_ip(
-                    actor_user_id,
-                    permissions,
-                    action,
-                    &ip_address,
-                    duration,
-                    reason,
-                )
-                .await
-            }
-            ModCommand::ServerBans => self.mod_server_bans(permissions).await,
             ModCommand::Artboard {
                 action,
                 username,
@@ -506,16 +456,10 @@ impl ChatService {
                 )
                 .await
             }
-            ModCommand::ArtboardBans => self.mod_artboard_bans(permissions).await,
             ModCommand::Role { action, username } => {
                 self.mod_role(actor_user_id, permissions, action, &username)
                     .await
             }
-            ModCommand::Sessions { .. } => Ok(vec![
-                "sessions: not wired in this PR slice yet".to_string(),
-                "live session details will use SessionRegistry from the modal/app layer"
-                    .to_string(),
-            ]),
         }
     }
 
@@ -1049,7 +993,7 @@ impl ChatService {
         room_slug: Option<String>,
         body: String,
         request_id: Uuid,
-        permissions: Permissions,
+        is_admin: bool,
     ) {
         self.send_message_with_reply_task(SendMessageTask {
             user_id,
@@ -1058,7 +1002,7 @@ impl ChatService {
             body,
             reply_to_message_id: None,
             request_id,
-            permissions,
+            is_admin,
         });
     }
 
@@ -1070,7 +1014,7 @@ impl ChatService {
             body,
             reply_to_message_id,
             request_id,
-            permissions,
+            is_admin,
         } = task;
         let service = self.clone();
         tokio::spawn(
@@ -1082,7 +1026,7 @@ impl ChatService {
                         room_slug,
                         body,
                         reply_to_message_id,
-                        permissions,
+                        is_admin,
                     )
                     .await
                 {
@@ -1132,14 +1076,14 @@ impl ChatService {
         room_slug: Option<String>,
         body: String,
         reply_to_message_id: Option<Uuid>,
-        permissions: Permissions,
+        is_admin: bool,
     ) -> Result<()> {
         let body = body.trim_start_matches('\n').trim_end();
         if body.is_empty() {
             return Ok(());
         }
 
-        if room_slug.as_deref() == Some("announcements") && !permissions.can_post_announcements() {
+        if room_slug.as_deref() == Some("announcements") && !is_admin {
             anyhow::bail!("announcements is admin-only");
         }
 
@@ -1260,15 +1204,13 @@ impl ChatService {
         let existing = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("message not found"))?;
-        let target_tier = if existing.user_id == user_id {
-            TargetTier::Own
+        let is_owner = existing.user_id == user_id;
+        let target_tier = if is_owner {
+            Tier::Regular
         } else {
-            let author = User::get(&client, existing.user_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("message author not found"))?;
-            TargetTier::from_user_flags(author.is_admin, author.is_moderator)
+            target_tier_for_user_id(&client, existing.user_id).await?
         };
-        ensure_decision(permissions, Action::EditMessage, target_tier)?;
+        ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
 
         let tx = client.transaction().await?;
         let row = tx
@@ -1286,8 +1228,7 @@ impl ChatService {
             user_id,
             ModAuditRecord {
                 permissions,
-                matrix_action: Action::EditMessage,
-                target_tier,
+                target_is_self: is_owner,
                 audit_action: "message_edit",
                 target_kind: "message",
                 target_id: Some(message_id),
@@ -2120,17 +2061,20 @@ impl ChatService {
         let msg = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Message not found"))?;
-        let target_tier = if msg.user_id == user_id {
-            TargetTier::Own
+        let is_owner = msg.user_id == user_id;
+        let target_tier = if is_owner {
+            Tier::Regular
         } else {
-            let author = User::get(&client, msg.user_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("message author not found"))?;
-            TargetTier::from_user_flags(author.is_admin, author.is_moderator)
+            target_tier_for_user_id(&client, msg.user_id).await?
         };
-        ensure_decision(permissions, Action::DeleteMessage, target_tier)?;
+        ensure_message_permission(
+            permissions,
+            is_owner,
+            Caps::DELETE_OTHER_MESSAGE,
+            target_tier,
+        )?;
         let tx = client.transaction().await?;
-        let count = if target_tier == TargetTier::Own {
+        let count = if is_owner {
             tx.execute(
                 "DELETE FROM chat_messages WHERE id = $1 AND user_id = $2",
                 &[&message_id, &user_id],
@@ -2148,8 +2092,7 @@ impl ChatService {
             user_id,
             ModAuditRecord {
                 permissions,
-                matrix_action: Action::DeleteMessage,
-                target_tier,
+                target_is_self: is_owner,
                 audit_action: "message_delete",
                 target_kind: "message",
                 target_id: Some(message_id),
@@ -2160,42 +2103,6 @@ impl ChatService {
         tx.commit().await?;
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
-    }
-
-    async fn mod_list_users(
-        &self,
-        permissions: Permissions,
-        filter: Option<String>,
-    ) -> Result<Vec<String>> {
-        ensure_mod_surface(permissions)?;
-        let client = self.db.get().await?;
-        let needle = filter.unwrap_or_default().to_ascii_lowercase();
-        let users = User::all(&client).await?;
-        let mut lines: Vec<String> = users
-            .into_iter()
-            .filter(|user| {
-                needle.is_empty() || user.username.to_ascii_lowercase().contains(&needle)
-            })
-            .map(|user| {
-                let mut tags = Vec::new();
-                if user.is_admin {
-                    tags.push("admin");
-                }
-                if user.is_moderator {
-                    tags.push("mod");
-                }
-                if tags.is_empty() {
-                    format!("@{}", user.username)
-                } else {
-                    format!("@{} [{}]", user.username, tags.join(","))
-                }
-            })
-            .collect();
-        lines.sort();
-        if lines.is_empty() {
-            lines.push("no matching users".to_string());
-        }
-        Ok(lines)
     }
 
     async fn mod_user_detail(
@@ -2220,281 +2127,6 @@ impl ChatService {
         ])
     }
 
-    async fn mod_list_rooms(
-        &self,
-        permissions: Permissions,
-        filter: Option<String>,
-    ) -> Result<Vec<String>> {
-        ensure_mod_surface(permissions)?;
-        let client = self.db.get().await?;
-        let needle = filter.unwrap_or_default().to_ascii_lowercase();
-        let rows = client
-            .query(
-                "SELECT r.id, r.kind, r.visibility, r.permanent, r.slug, r.language_code,
-                        COUNT(DISTINCT m.user_id)::bigint AS member_count,
-                        COUNT(DISTINCT b.id)::bigint AS active_ban_count
-                 FROM chat_rooms r
-                 LEFT JOIN chat_room_members m ON m.room_id = r.id
-                 LEFT JOIN room_bans b
-                   ON b.room_id = r.id
-                  AND (b.expires_at IS NULL OR b.expires_at > current_timestamp)
-                 GROUP BY r.id
-                 ORDER BY COALESCE(r.slug, COALESCE(r.language_code, r.kind)), r.created",
-                &[],
-            )
-            .await?;
-        let mut lines = Vec::new();
-        for row in rows {
-            let kind: String = row.get("kind");
-            let visibility: String = row.get("visibility");
-            let permanent: bool = row.get("permanent");
-            let slug: Option<String> = row.get("slug");
-            let language_code: Option<String> = row.get("language_code");
-            let member_count: i64 = row.get("member_count");
-            let active_ban_count: i64 = row.get("active_ban_count");
-            let label = slug
-                .map(|slug| format!("#{slug}"))
-                .or_else(|| language_code.map(|code| format!("language:{code}")))
-                .unwrap_or(kind);
-            if !needle.is_empty() && !label.to_ascii_lowercase().contains(&needle) {
-                continue;
-            }
-            lines.push(format!(
-                "{label} visibility={visibility} permanent={permanent} members={member_count} bans={active_ban_count}"
-            ));
-        }
-        if lines.is_empty() {
-            lines.push("no matching rooms".to_string());
-        }
-        Ok(lines)
-    }
-
-    async fn mod_room_detail(&self, permissions: Permissions, slug: &str) -> Result<Vec<String>> {
-        ensure_mod_surface(permissions)?;
-        let client = self.db.get().await?;
-        let room = find_room_by_mod_slug(&client, slug).await?;
-        let members = ChatRoomMember::list_user_ids(&client, room.id).await?;
-        Ok(vec![
-            format!(
-                "#{}",
-                room.slug.clone().unwrap_or_else(|| room.kind.clone())
-            ),
-            format!("id: {}", room.id),
-            format!("kind: {}", room.kind),
-            format!("visibility: {}", room.visibility),
-            format!("permanent: {}", room.permanent),
-            format!("auto_join: {}", room.auto_join),
-            format!("members: {}", members.len()),
-        ])
-    }
-
-    async fn mod_room_bans(&self, permissions: Permissions, slug: &str) -> Result<Vec<String>> {
-        ensure_decision(
-            permissions,
-            Action::ViewUserSanctionHistory,
-            TargetTier::NotApplicable,
-        )?;
-        let client = self.db.get().await?;
-        let room = find_room_by_mod_slug(&client, slug).await?;
-        let rows = client
-            .query(
-                "SELECT b.target_user_id, b.reason, b.expires_at,
-                        target.username AS target_username,
-                        actor.username AS actor_username
-                 FROM room_bans b
-                 LEFT JOIN users target ON target.id = b.target_user_id
-                 LEFT JOIN users actor ON actor.id = b.actor_user_id
-                 WHERE b.room_id = $1
-                   AND (b.expires_at IS NULL OR b.expires_at > current_timestamp)
-                 ORDER BY b.created DESC
-                 LIMIT 50",
-                &[&room.id],
-            )
-            .await?;
-        let mut lines = Vec::new();
-        for row in rows {
-            let target_user_id: Uuid = row.get("target_user_id");
-            let target_username: Option<String> = row.get("target_username");
-            let actor_username: Option<String> = row.get("actor_username");
-            let reason: String = row.get("reason");
-            let expires_at: Option<DateTime<Utc>> = row.get("expires_at");
-            lines.push(format!(
-                "@{} actor=@{} expires={} reason={}",
-                target_username.unwrap_or_else(|| short_user_id(target_user_id)),
-                actor_username.unwrap_or_else(|| "unknown".to_string()),
-                format_ban_expiry(expires_at),
-                format_ban_reason(&reason)
-            ));
-        }
-        if lines.is_empty() {
-            lines.push(format!("no active bans for #{}", room_label(&room)));
-        }
-        Ok(lines)
-    }
-
-    async fn mod_server_bans(&self, permissions: Permissions) -> Result<Vec<String>> {
-        ensure_decision(
-            permissions,
-            Action::ViewUserSanctionHistory,
-            TargetTier::NotApplicable,
-        )?;
-        let client = self.db.get().await?;
-        let rows = client
-            .query(
-                "SELECT b.ban_type, b.target_user_id, b.fingerprint, b.ip_address,
-                        b.snapshot_username, b.reason, b.expires_at,
-                        target.username AS target_username,
-                        actor.username AS actor_username
-                 FROM server_bans b
-                 LEFT JOIN users target ON target.id = b.target_user_id
-                 LEFT JOIN users actor ON actor.id = b.actor_user_id
-                 WHERE b.expires_at IS NULL OR b.expires_at > current_timestamp
-                 ORDER BY b.created DESC
-                 LIMIT 50",
-                &[],
-            )
-            .await?;
-        let mut lines = Vec::new();
-        for row in rows {
-            let ban_type: String = row.get("ban_type");
-            let target_user_id: Option<Uuid> = row.get("target_user_id");
-            let target_username: Option<String> = row.get("target_username");
-            let fingerprint: Option<String> = row.get("fingerprint");
-            let ip_address: Option<String> = row.get("ip_address");
-            let snapshot_username: Option<String> = row.get("snapshot_username");
-            let actor_username: Option<String> = row.get("actor_username");
-            let reason: String = row.get("reason");
-            let expires_at: Option<DateTime<Utc>> = row.get("expires_at");
-            let target = match ban_type.as_str() {
-                "user" => target_username
-                    .map(|username| format!("@{username}"))
-                    .or_else(|| target_user_id.map(short_user_id))
-                    .unwrap_or_else(|| "-".to_string()),
-                "ip" => {
-                    let mut target = ip_address.unwrap_or_else(|| "-".to_string());
-                    if let Some(username) = snapshot_username {
-                        target.push_str(&format!(" snapshot=@{username}"));
-                    }
-                    target
-                }
-                "fingerprint" => fingerprint
-                    .as_deref()
-                    .map(short_fingerprint)
-                    .unwrap_or_else(|| "-".to_string()),
-                _ => "-".to_string(),
-            };
-            lines.push(format!(
-                "{} {} actor=@{} expires={} reason={}",
-                ban_type,
-                target,
-                actor_username.unwrap_or_else(|| "unknown".to_string()),
-                format_ban_expiry(expires_at),
-                format_ban_reason(&reason)
-            ));
-        }
-        if lines.is_empty() {
-            lines.push("no active server bans".to_string());
-        }
-        Ok(lines)
-    }
-
-    async fn mod_artboard_bans(&self, permissions: Permissions) -> Result<Vec<String>> {
-        ensure_decision(
-            permissions,
-            Action::ViewUserSanctionHistory,
-            TargetTier::NotApplicable,
-        )?;
-        let client = self.db.get().await?;
-        let rows = client
-            .query(
-                "SELECT b.target_user_id, b.reason, b.expires_at,
-                        target.username AS target_username,
-                        actor.username AS actor_username
-                 FROM artboard_bans b
-                 LEFT JOIN users target ON target.id = b.target_user_id
-                 LEFT JOIN users actor ON actor.id = b.actor_user_id
-                 WHERE b.expires_at IS NULL OR b.expires_at > current_timestamp
-                 ORDER BY b.created DESC
-                 LIMIT 50",
-                &[],
-            )
-            .await?;
-        let mut lines = Vec::new();
-        for row in rows {
-            let target_user_id: Uuid = row.get("target_user_id");
-            let target_username: Option<String> = row.get("target_username");
-            let actor_username: Option<String> = row.get("actor_username");
-            let reason: String = row.get("reason");
-            let expires_at: Option<DateTime<Utc>> = row.get("expires_at");
-            lines.push(format!(
-                "@{} actor=@{} expires={} reason={}",
-                target_username.unwrap_or_else(|| short_user_id(target_user_id)),
-                actor_username.unwrap_or_else(|| "unknown".to_string()),
-                format_ban_expiry(expires_at),
-                format_ban_reason(&reason)
-            ));
-        }
-        if lines.is_empty() {
-            lines.push("no active artboard bans".to_string());
-        }
-        Ok(lines)
-    }
-
-    async fn mod_audit(
-        &self,
-        permissions: Permissions,
-        filter: Option<String>,
-    ) -> Result<Vec<String>> {
-        ensure_decision(
-            permissions,
-            Action::ViewAuditLogOther,
-            TargetTier::NotApplicable,
-        )?;
-        let client = self.db.get().await?;
-        let rows = client
-            .query(
-                "SELECT log.created, log.action, log.target_kind, log.target_id,
-                        actor.username AS actor_username,
-                        target.username AS target_username
-                 FROM moderation_audit_log log
-                 LEFT JOIN users actor ON actor.id = log.actor_user_id
-                 LEFT JOIN users target ON target.id = log.target_id
-                 ORDER BY log.created DESC
-                 LIMIT 50",
-                &[],
-            )
-            .await?;
-        let needle = filter.unwrap_or_default().to_ascii_lowercase();
-        let mut lines = Vec::new();
-        for row in rows {
-            let action: String = row.get("action");
-            let target_kind: String = row.get("target_kind");
-            let target_id: Option<Uuid> = row.get("target_id");
-            let actor_username: Option<String> = row.get("actor_username");
-            let target_username: Option<String> = row.get("target_username");
-            let created: DateTime<Utc> = row.get("created");
-            let target = target_username
-                .map(|name| format!("@{name}"))
-                .or_else(|| target_id.map(|id| id.to_string()))
-                .unwrap_or_else(|| "-".to_string());
-            let line = format!(
-                "{} {} actor=@{} target={}:{}",
-                created.format("%Y-%m-%d %H:%M"),
-                action,
-                actor_username.unwrap_or_else(|| "unknown".to_string()),
-                target_kind,
-                target
-            );
-            if needle.is_empty() || line.to_ascii_lowercase().contains(&needle) {
-                lines.push(line);
-            }
-        }
-        if lines.is_empty() {
-            lines.push("no audit entries".to_string());
-        }
-        Ok(lines)
-    }
-
     async fn mod_room_action(
         &self,
         actor_user_id: Uuid,
@@ -2505,13 +2137,13 @@ impl ChatService {
         let room = find_room_by_mod_slug(&client, &request.slug).await?;
         let target = find_user_by_mod_name(&client, &request.username).await?;
         ensure_not_self(actor_user_id, target.id)?;
-        let target_tier = TargetTier::from_user_flags(target.is_admin, target.is_moderator);
-        let matrix_action = match request.action {
-            RoomModAction::Kick => Action::KickFromRoom,
-            RoomModAction::Ban => Action::BanFromRoom,
-            RoomModAction::Unban => Action::UnbanFromRoom,
+        let target_tier = tier_for_user(&target);
+        let cap = match request.action {
+            RoomModAction::Kick => Caps::KICK_FROM_ROOM,
+            RoomModAction::Ban => Caps::BAN_FROM_ROOM,
+            RoomModAction::Unban => Caps::UNBAN_FROM_ROOM,
         };
-        ensure_decision(permissions, matrix_action, target_tier)?;
+        ensure_can(permissions, cap, target_tier)?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
         let tx = client.transaction().await?;
         match request.action {
@@ -2524,22 +2156,13 @@ impl ChatService {
             }
             RoomModAction::Ban => {
                 let expires_at = request.duration.map(|d| Utc::now() + d);
-                tx.execute(
-                    "INSERT INTO room_bans
-                     (room_id, target_user_id, actor_user_id, reason, expires_at)
-                     VALUES ($1, $2, $3, $4, $5)
-                     ON CONFLICT (room_id, target_user_id)
-                     DO UPDATE SET actor_user_id = EXCLUDED.actor_user_id,
-                                   reason = EXCLUDED.reason,
-                                   expires_at = EXCLUDED.expires_at,
-                                   updated = current_timestamp",
-                    &[
-                        &room.id,
-                        &target.id,
-                        &actor_user_id,
-                        &request.reason,
-                        &expires_at,
-                    ],
+                RoomBan::activate(
+                    &tx,
+                    room.id,
+                    target.id,
+                    actor_user_id,
+                    &request.reason,
+                    expires_at,
                 )
                 .await?;
                 tx.execute(
@@ -2549,11 +2172,7 @@ impl ChatService {
                 .await?;
             }
             RoomModAction::Unban => {
-                tx.execute(
-                    "DELETE FROM room_bans WHERE room_id = $1 AND target_user_id = $2",
-                    &[&room.id, &target.id],
-                )
-                .await?;
+                RoomBan::delete_for_room_and_user(&tx, room.id, target.id).await?;
             }
         }
         let audit_action = match request.action {
@@ -2566,8 +2185,7 @@ impl ChatService {
             actor_user_id,
             ModAuditRecord {
                 permissions,
-                matrix_action,
-                target_tier,
+                target_is_self: false,
                 audit_action,
                 target_kind: "user",
                 target_id: Some(target.id),
@@ -2591,10 +2209,10 @@ impl ChatService {
                 .await;
             if notified > 0 {
                 tracing::info!(
-                    target_user_id = %target.id,
                     room_id = %room.id,
+                    target_user_id = %target.id,
                     notified,
-                    "room moderation command updated active sessions"
+                    "room moderation command notified active sessions"
                 );
             }
         }
@@ -2635,112 +2253,6 @@ impl ChatService {
         notified
     }
 
-    async fn mod_room_admin(
-        &self,
-        actor_user_id: Uuid,
-        permissions: Permissions,
-        action: RoomAdminAction,
-        slug: &str,
-        value: Option<String>,
-    ) -> Result<Vec<String>> {
-        let mut client = self.db.get().await?;
-        let room = find_room_by_mod_slug(&client, slug).await?;
-        let is_system = matches!(room.slug.as_deref(), Some("general" | "announcements"));
-        let target_tier = if is_system {
-            TargetTier::System
-        } else {
-            TargetTier::NotApplicable
-        };
-        let matrix_action = match action {
-            RoomAdminAction::Rename => Action::RenameRoom,
-            RoomAdminAction::Public | RoomAdminAction::Private => Action::SetRoomVisibility,
-            RoomAdminAction::Delete => Action::DeleteRoom,
-        };
-        ensure_decision(permissions, matrix_action, target_tier)?;
-        let label = room.slug.clone().unwrap_or_else(|| room.kind.clone());
-        match action {
-            RoomAdminAction::Rename => {
-                let Some(new_slug) = value else {
-                    anyhow::bail!("usage: room rename #old #new");
-                };
-                let normalized = normalize_mod_slug(&new_slug)?;
-                let tx = client.transaction().await?;
-                tx.execute(
-                    "UPDATE chat_rooms SET slug = $1, updated = current_timestamp WHERE id = $2",
-                    &[&normalized, &room.id],
-                )
-                .await?;
-                record_mod_audit(
-                    &tx,
-                    actor_user_id,
-                    ModAuditRecord {
-                        permissions,
-                        matrix_action,
-                        target_tier,
-                        audit_action: "room_rename",
-                        target_kind: "room",
-                        target_id: Some(room.id),
-                        metadata: json!({ "old_slug": label, "new_slug": normalized }),
-                    },
-                )
-                .await?;
-                tx.commit().await?;
-                Ok(vec![format!("renamed #{label} to #{normalized}")])
-            }
-            RoomAdminAction::Public | RoomAdminAction::Private => {
-                let visibility = match action {
-                    RoomAdminAction::Public => "public",
-                    RoomAdminAction::Private => "private",
-                    RoomAdminAction::Rename | RoomAdminAction::Delete => unreachable!(),
-                };
-                let tx = client.transaction().await?;
-                tx
-                    .execute(
-                        "UPDATE chat_rooms SET visibility = $1, updated = current_timestamp WHERE id = $2",
-                        &[&visibility, &room.id],
-                    )
-                    .await?;
-                record_mod_audit(
-                    &tx,
-                    actor_user_id,
-                    ModAuditRecord {
-                        permissions,
-                        matrix_action,
-                        target_tier,
-                        audit_action: "room_visibility",
-                        target_kind: "room",
-                        target_id: Some(room.id),
-                        metadata: json!({ "room_slug": label, "visibility": visibility }),
-                    },
-                )
-                .await?;
-                tx.commit().await?;
-                Ok(vec![format!("set #{label} {visibility}")])
-            }
-            RoomAdminAction::Delete => {
-                let tx = client.transaction().await?;
-                tx.execute("DELETE FROM chat_rooms WHERE id = $1", &[&room.id])
-                    .await?;
-                record_mod_audit(
-                    &tx,
-                    actor_user_id,
-                    ModAuditRecord {
-                        permissions,
-                        matrix_action,
-                        target_tier,
-                        audit_action: "room_delete",
-                        target_kind: "room",
-                        target_id: Some(room.id),
-                        metadata: json!({ "room_slug": label }),
-                    },
-                )
-                .await?;
-                tx.commit().await?;
-                Ok(vec![format!("deleted #{label}")])
-            }
-        }
-    }
-
     async fn mod_server_user(
         &self,
         actor_user_id: Uuid,
@@ -2753,45 +2265,39 @@ impl ChatService {
         let mut client = self.db.get().await?;
         let target = find_user_by_mod_name(&client, username).await?;
         ensure_not_self(actor_user_id, target.id)?;
-        let target_tier = TargetTier::from_user_flags(target.is_admin, target.is_moderator);
-        let matrix_action = match action {
-            ServerUserAction::Kick => Action::KickUserSessions,
-            ServerUserAction::Ban if duration.is_some() => Action::TempBanUser,
-            ServerUserAction::Ban => Action::PermaBanUser,
-            ServerUserAction::Unban => Action::UnbanUser,
+        let target_tier = tier_for_user(&target);
+        let cap = match action {
+            ServerUserAction::Kick => Caps::KICK_USER,
+            ServerUserAction::Ban => cap_for_server_ban(duration),
+            ServerUserAction::Unban => Caps::UNBAN_USER,
         };
-        ensure_decision(permissions, matrix_action, target_tier)?;
+        ensure_can(permissions, cap, target_tier)?;
+        let active_snapshot = self.snapshot_for_user_server_ban(target.id);
         let tx = client.transaction().await?;
         match action {
             ServerUserAction::Kick => {}
             ServerUserAction::Ban => {
                 let expires_at = duration.map(|d| Utc::now() + d);
-                tx.execute(
-                    "INSERT INTO server_bans
-                     (ban_type, target_user_id, fingerprint, ip_address, snapshot_username,
-                      actor_user_id, reason, expires_at)
-                     VALUES ('user', $1, $2, NULL, NULL, $3, $4, $5)",
-                    &[
-                        &target.id,
-                        &target.fingerprint,
-                        &actor_user_id,
-                        &reason,
-                        &expires_at,
-                    ],
+                let ip_address = active_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.peer_ip)
+                    .map(|ip| ip.to_string());
+                ServerBan::activate(
+                    &tx,
+                    ServerBanActivation {
+                        target_user_id: target.id,
+                        fingerprint: Some(&target.fingerprint),
+                        ip_address: ip_address.as_deref(),
+                        snapshot_username: Some(&target.username),
+                        actor_user_id,
+                        reason: &reason,
+                        expires_at,
+                    },
                 )
                 .await?;
             }
             ServerUserAction::Unban => {
-                tx.execute(
-                    "DELETE FROM server_bans
-                     WHERE (
-                           (ban_type = 'user' AND target_user_id = $1)
-                           OR (ban_type = 'fingerprint' AND fingerprint = $2)
-                       )
-                       AND (expires_at IS NULL OR expires_at > current_timestamp)",
-                    &[&target.id, &target.fingerprint],
-                )
-                .await?;
+                ServerBan::delete_active_for_user(&tx, target.id, &target.fingerprint).await?;
             }
         }
         let audit_action = match action {
@@ -2804,8 +2310,7 @@ impl ChatService {
             actor_user_id,
             ModAuditRecord {
                 permissions,
-                matrix_action,
-                target_tier,
+                target_is_self: false,
                 audit_action,
                 target_kind: "user",
                 target_id: Some(target.id),
@@ -2831,94 +2336,6 @@ impl ChatService {
             action.past_tense(),
             target.username
         )])
-    }
-
-    async fn mod_server_ip(
-        &self,
-        actor_user_id: Uuid,
-        permissions: Permissions,
-        action: ServerIpAction,
-        ip_address: &str,
-        duration: Option<chrono::Duration>,
-        reason: String,
-    ) -> Result<Vec<String>> {
-        let mut client = self.db.get().await?;
-        let target_tier = TargetTier::Regular;
-        let matrix_action = match action {
-            ServerIpAction::Ban if duration.is_some() => Action::TempBanUser,
-            ServerIpAction::Ban => Action::PermaBanUser,
-            ServerIpAction::Unban => Action::UnbanUser,
-        };
-        ensure_decision(permissions, matrix_action, target_tier)?;
-        let snapshot = matches!(action, ServerIpAction::Ban)
-            .then(|| self.snapshot_for_ip_ban(ip_address))
-            .flatten();
-        let tx = client.transaction().await?;
-        match action {
-            ServerIpAction::Ban => {
-                let expires_at = duration.map(|d| Utc::now() + d);
-                let snapshot_username =
-                    snapshot.as_ref().map(|snapshot| snapshot.username.as_str());
-                let snapshot_fingerprint = snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.fingerprint.as_deref());
-                tx.execute(
-                    "INSERT INTO server_bans
-                     (ban_type, target_user_id, fingerprint, ip_address, snapshot_username,
-                      actor_user_id, reason, expires_at)
-                     VALUES ('ip', NULL, $1, $2, $3, $4, $5, $6)",
-                    &[
-                        &snapshot_fingerprint,
-                        &ip_address,
-                        &snapshot_username,
-                        &actor_user_id,
-                        &reason,
-                        &expires_at,
-                    ],
-                )
-                .await?;
-            }
-            ServerIpAction::Unban => {
-                tx.execute(
-                    "DELETE FROM server_bans
-                     WHERE ip_address = $1
-                       AND ban_type = 'ip'
-                       AND (expires_at IS NULL OR expires_at > current_timestamp)",
-                    &[&ip_address],
-                )
-                .await?;
-            }
-        }
-        record_mod_audit(
-            &tx,
-            actor_user_id,
-            ModAuditRecord {
-                permissions,
-                matrix_action,
-                target_tier,
-                audit_action: action.audit_name(),
-                target_kind: "ip",
-                target_id: None,
-                metadata: json!({
-                    "ip_address": ip_address,
-                    "reason": reason,
-                    "snapshot_username": snapshot.as_ref().map(|snapshot| snapshot.username.as_str()),
-                    "snapshot_fingerprint": snapshot.as_ref().and_then(|snapshot| snapshot.fingerprint.as_deref()),
-                }),
-            },
-        )
-        .await?;
-        tx.commit().await?;
-        if matches!(action, ServerIpAction::Ban) {
-            let tokens = self.session_tokens_for_ip(ip_address);
-            let terminated = self.terminate_session_tokens(tokens, "server IP ban").await;
-            tracing::info!(
-                ip_address,
-                terminated,
-                "server IP ban terminated active sessions"
-            );
-        }
-        Ok(vec![format!("{} ip {}", action.past_tense(), ip_address)])
     }
 
     async fn terminate_session_tokens(&self, tokens: Vec<String>, reason: &str) -> usize {
@@ -2993,40 +2410,19 @@ impl ChatService {
             .unwrap_or_default()
     }
 
-    fn session_tokens_for_ip(&self, ip_address: &str) -> Vec<String> {
-        let Some(active_users) = self.active_users.as_ref() else {
-            return Vec::new();
-        };
-        let Ok(ip_address) = ip_address.parse::<IpAddr>() else {
-            return Vec::new();
-        };
-        let guard = active_users.lock_recover();
-        unique_session_tokens(guard.values().flat_map(|user| {
-            user.sessions
-                .iter()
-                .filter(move |session| session.peer_ip == Some(ip_address))
-                .map(|session| &session.token)
-        }))
-    }
-
-    fn snapshot_for_ip_ban(&self, ip_address: &str) -> Option<ServerIpBanSnapshot> {
+    fn snapshot_for_user_server_ban(&self, user_id: Uuid) -> Option<ServerBanSnapshot> {
         let active_users = self.active_users.as_ref()?;
         let guard = active_users.lock_recover();
-        let ip_address = ip_address.parse::<IpAddr>().ok()?;
-        let mut matches = guard
-            .values()
-            .flat_map(|user| {
-                user.sessions
-                    .iter()
-                    .filter(move |session| session.peer_ip == Some(ip_address))
-                    .map(|session| ServerIpBanSnapshot {
-                        username: user.username.clone(),
-                        fingerprint: session.fingerprint.clone(),
-                    })
-            })
-            .collect::<Vec<_>>();
-        matches.sort_by_key(|snapshot| snapshot.username.to_ascii_lowercase());
-        matches.into_iter().next()
+        let user = guard.get(&user_id)?;
+        let session = user
+            .sessions
+            .iter()
+            .find(|session| session.peer_ip.is_some())?;
+        Some(ServerBanSnapshot {
+            username: user.username.clone(),
+            fingerprint: session.fingerprint.clone(),
+            peer_ip: session.peer_ip,
+        })
     }
 
     async fn mod_artboard(
@@ -3041,37 +2437,22 @@ impl ChatService {
         let mut client = self.db.get().await?;
         let target = find_user_by_mod_name(&client, username).await?;
         ensure_not_self(actor_user_id, target.id)?;
-        let target_tier = TargetTier::from_user_flags(target.is_admin, target.is_moderator);
-        let matrix_action = match action {
-            ArtboardAction::Ban => Action::BanFromArtboard,
-            ArtboardAction::Unban => Action::UnbanFromArtboard,
+        let target_tier = tier_for_user(&target);
+        let cap = match action {
+            ArtboardAction::Ban => Caps::BAN_FROM_ARTBOARD,
+            ArtboardAction::Unban => Caps::UNBAN_FROM_ARTBOARD,
         };
-        ensure_decision(permissions, matrix_action, target_tier)?;
+        ensure_can(permissions, cap, target_tier)?;
         let expires_at = matches!(action, ArtboardAction::Ban)
             .then(|| duration.map(|d| Utc::now() + d))
             .flatten();
         let tx = client.transaction().await?;
         match action {
             ArtboardAction::Ban => {
-                tx.execute(
-                    "INSERT INTO artboard_bans
-                     (target_user_id, actor_user_id, reason, expires_at)
-                     VALUES ($1, $2, $3, $4)
-                     ON CONFLICT (target_user_id)
-                     DO UPDATE SET actor_user_id = EXCLUDED.actor_user_id,
-                                   reason = EXCLUDED.reason,
-                                   expires_at = EXCLUDED.expires_at,
-                                   updated = current_timestamp",
-                    &[&target.id, &actor_user_id, &reason, &expires_at],
-                )
-                .await?;
+                ArtboardBan::activate(&tx, target.id, actor_user_id, &reason, expires_at).await?;
             }
             ArtboardAction::Unban => {
-                tx.execute(
-                    "DELETE FROM artboard_bans WHERE target_user_id = $1",
-                    &[&target.id],
-                )
-                .await?;
+                ArtboardBan::delete_for_user(&tx, target.id).await?;
             }
         }
         record_mod_audit(
@@ -3079,8 +2460,7 @@ impl ChatService {
             actor_user_id,
             ModAuditRecord {
                 permissions,
-                matrix_action,
-                target_tier,
+                target_is_self: false,
                 audit_action: action.audit_name(),
                 target_kind: "user",
                 target_id: Some(target.id),
@@ -3121,26 +2501,19 @@ impl ChatService {
         let mut client = self.db.get().await?;
         let target = find_user_by_mod_name(&client, username).await?;
         ensure_not_self(actor_user_id, target.id)?;
-        let matrix_action = match action {
-            RoleAction::GrantMod => Action::GrantModerator,
-            RoleAction::RevokeMod => Action::RevokeModerator,
-            RoleAction::GrantAdmin => Action::GrantAdmin,
+        let target_tier = tier_for_user(&target);
+        let cap = match action {
+            RoleAction::GrantMod => Caps::GRANT_MOD,
+            RoleAction::RevokeMod => Caps::REVOKE_MOD,
         };
-        ensure_decision(permissions, matrix_action, TargetTier::NotApplicable)?;
+        ensure_can(permissions, cap, target_tier)?;
         let (column, value, label) = match action {
             RoleAction::GrantMod => ("is_moderator", true, "granted moderator to"),
             RoleAction::RevokeMod => ("is_moderator", false, "revoked moderator from"),
-            RoleAction::GrantAdmin => ("is_admin", true, "granted admin to"),
-        };
-        let new_is_admin = if matches!(action, RoleAction::GrantAdmin) {
-            true
-        } else {
-            target.is_admin
         };
         let new_is_moderator = match action {
             RoleAction::GrantMod => true,
             RoleAction::RevokeMod => false,
-            RoleAction::GrantAdmin => target.is_moderator,
         };
         let tx = client.transaction().await?;
         let query =
@@ -3151,8 +2524,7 @@ impl ChatService {
             actor_user_id,
             ModAuditRecord {
                 permissions,
-                matrix_action,
-                target_tier: TargetTier::NotApplicable,
+                target_is_self: false,
                 audit_action: action.audit_name(),
                 target_kind: "user",
                 target_id: Some(target.id),
@@ -3164,7 +2536,7 @@ impl ChatService {
         let notified = self
             .notify_permissions_changed(
                 target.id,
-                Permissions::new(new_is_admin || self.force_admin, new_is_moderator),
+                Permissions::new(target.is_admin || self.force_admin, new_is_moderator),
             )
             .await;
         if notified > 0 {
@@ -3183,499 +2555,11 @@ fn short_user_id(user_id: Uuid) -> String {
     id[..id.len().min(8)].to_string()
 }
 
-fn room_label(room: &ChatRoom) -> String {
-    room.slug.clone().unwrap_or_else(|| room.kind.clone())
-}
-
-fn short_fingerprint(fingerprint: &str) -> String {
-    const SHORT_FINGERPRINT_LEN: usize = 16;
-    let end = fingerprint.len().min(SHORT_FINGERPRINT_LEN);
-    fingerprint[..end].to_string()
-}
-
-fn format_ban_expiry(expires_at: Option<DateTime<Utc>>) -> String {
-    expires_at
-        .map(|expires_at| expires_at.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| "never".to_string())
-}
-
-fn format_ban_reason(reason: &str) -> &str {
-    if reason.trim().is_empty() {
-        "-"
-    } else {
-        reason.trim()
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ModCommand {
-    Help {
-        topic: Option<String>,
-    },
-    Status,
-    Whoami,
-    Users {
-        filter: Option<String>,
-    },
-    User {
-        username: String,
-    },
-    Sessions {
-        username: Option<String>,
-    },
-    Audit {
-        filter: Option<String>,
-    },
-    Rooms {
-        filter: Option<String>,
-    },
-    Room {
-        slug: String,
-    },
-    RoomBans {
-        slug: String,
-    },
-    RoomAction {
-        action: RoomModAction,
-        slug: String,
-        username: String,
-        duration: Option<chrono::Duration>,
-        reason: String,
-    },
-    RoomAdmin {
-        action: RoomAdminAction,
-        slug: String,
-        value: Option<String>,
-    },
-    ServerUser {
-        action: ServerUserAction,
-        username: String,
-        duration: Option<chrono::Duration>,
-        reason: String,
-    },
-    ServerIp {
-        action: ServerIpAction,
-        ip_address: String,
-        duration: Option<chrono::Duration>,
-        reason: String,
-    },
-    ServerBans,
-    Artboard {
-        action: ArtboardAction,
-        username: String,
-        duration: Option<chrono::Duration>,
-        reason: String,
-    },
-    ArtboardBans,
-    Role {
-        action: RoleAction,
-        username: String,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RoomModAction {
-    Kick,
-    Ban,
-    Unban,
-}
-
-impl RoomModAction {
-    const fn past_tense(self) -> &'static str {
-        match self {
-            Self::Kick => "kicked",
-            Self::Ban => "banned",
-            Self::Unban => "unbanned",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RoomAdminAction {
-    Rename,
-    Public,
-    Private,
-    Delete,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ServerUserAction {
-    Kick,
-    Ban,
-    Unban,
-}
-
-impl ServerUserAction {
-    const fn past_tense(self) -> &'static str {
-        match self {
-            Self::Kick => "kicked",
-            Self::Ban => "banned",
-            Self::Unban => "unbanned",
-        }
-    }
-
-    const fn audit_name(self) -> &'static str {
-        match self {
-            Self::Kick => "server_kick",
-            Self::Ban => "server_ban",
-            Self::Unban => "server_unban",
-        }
-    }
-
-    const fn termination_reason(self) -> &'static str {
-        match self {
-            Self::Kick => "server kick",
-            Self::Ban => "server ban",
-            Self::Unban => "server unban",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ServerIpAction {
-    Ban,
-    Unban,
-}
-
-impl ServerIpAction {
-    const fn past_tense(self) -> &'static str {
-        match self {
-            Self::Ban => "banned",
-            Self::Unban => "unbanned",
-        }
-    }
-
-    const fn audit_name(self) -> &'static str {
-        match self {
-            Self::Ban => "server_ip_ban",
-            Self::Unban => "server_ip_unban",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ServerIpBanSnapshot {
+struct ServerBanSnapshot {
     username: String,
     fingerprint: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ArtboardAction {
-    Ban,
-    Unban,
-}
-
-impl ArtboardAction {
-    const fn past_tense(self) -> &'static str {
-        match self {
-            Self::Ban => "artboard-banned",
-            Self::Unban => "removed artboard ban for",
-        }
-    }
-
-    const fn audit_name(self) -> &'static str {
-        match self {
-            Self::Ban => "artboard_ban",
-            Self::Unban => "artboard_unban",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RoleAction {
-    GrantMod,
-    RevokeMod,
-    GrantAdmin,
-}
-
-impl RoleAction {
-    const fn audit_name(self) -> &'static str {
-        match self {
-            Self::GrantMod => "grant_moderator",
-            Self::RevokeMod => "revoke_moderator",
-            Self::GrantAdmin => "grant_admin",
-        }
-    }
-}
-
-fn parse_mod_command(input: &str) -> Result<ModCommand> {
-    let input = input.trim();
-    let input = if input == "/mod" {
-        ""
-    } else {
-        input.strip_prefix("/mod ").map(str::trim).unwrap_or(input)
-    };
-    if input.is_empty() {
-        return Ok(ModCommand::Help { topic: None });
-    }
-
-    let mut parts = input.split_whitespace();
-    let Some(head) = parts.next() else {
-        return Ok(ModCommand::Help { topic: None });
-    };
-    let rest = parts.collect::<Vec<_>>();
-
-    match head {
-        "help" => Ok(ModCommand::Help {
-            topic: nonempty(rest.join(" ")),
-        }),
-        "status" => Ok(ModCommand::Status),
-        "whoami" => Ok(ModCommand::Whoami),
-        "users" => Ok(ModCommand::Users {
-            filter: nonempty(rest.join(" ")),
-        }),
-        "user" => Ok(ModCommand::User {
-            username: required_username(rest.first().copied(), "usage: user @name")?,
-        }),
-        "sessions" => Ok(ModCommand::Sessions {
-            username: rest.first().map(|value| strip_user_prefix(value)),
-        }),
-        "audit" => Ok(ModCommand::Audit {
-            filter: nonempty(rest.join(" ")),
-        }),
-        "rooms" => Ok(ModCommand::Rooms {
-            filter: nonempty(rest.join(" ")),
-        }),
-        "room" => parse_room_mod_command(&rest),
-        "server" => parse_server_mod_command(&rest),
-        "artboard" => parse_artboard_mod_command(&rest),
-        "grant" => parse_role_mod_command(RoleAction::GrantMod, RoleAction::GrantAdmin, &rest),
-        "revoke" => parse_role_mod_command(RoleAction::RevokeMod, RoleAction::RevokeMod, &rest),
-        _ => anyhow::bail!("unknown mod command: {head}"),
-    }
-}
-
-fn parse_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: room #slug | room <action> ...");
-    };
-    match first {
-        "bans" => Ok(ModCommand::RoomBans {
-            slug: required_slug(parts.get(1).copied(), "usage: room bans #slug")?,
-        }),
-        "kick" | "ban" | "unban" => {
-            let action = match first {
-                "kick" => RoomModAction::Kick,
-                "ban" => RoomModAction::Ban,
-                "unban" => RoomModAction::Unban,
-                _ => unreachable!(),
-            };
-            let slug = required_slug(parts.get(1).copied(), "usage: room kick #slug @name")?;
-            let username =
-                required_username(parts.get(2).copied(), "usage: room kick #slug @name")?;
-            let (duration, reason_start) = if matches!(action, RoomModAction::Ban) {
-                parse_optional_duration(parts.get(3).copied(), 3)?
-            } else {
-                (None, 3)
-            };
-            Ok(ModCommand::RoomAction {
-                action,
-                slug,
-                username,
-                duration,
-                reason: parts.get(reason_start..).unwrap_or_default().join(" "),
-            })
-        }
-        "rename" => Ok(ModCommand::RoomAdmin {
-            action: RoomAdminAction::Rename,
-            slug: required_slug(parts.get(1).copied(), "usage: room rename #old #new")?,
-            value: Some(required_slug(
-                parts.get(2).copied(),
-                "usage: room rename #old #new",
-            )?),
-        }),
-        "public" => Ok(ModCommand::RoomAdmin {
-            action: RoomAdminAction::Public,
-            slug: required_slug(parts.get(1).copied(), "usage: room public #slug")?,
-            value: None,
-        }),
-        "private" => Ok(ModCommand::RoomAdmin {
-            action: RoomAdminAction::Private,
-            slug: required_slug(parts.get(1).copied(), "usage: room private #slug")?,
-            value: None,
-        }),
-        "delete" => Ok(ModCommand::RoomAdmin {
-            action: RoomAdminAction::Delete,
-            slug: required_slug(parts.get(1).copied(), "usage: room delete #slug")?,
-            value: None,
-        }),
-        _ => Ok(ModCommand::Room {
-            slug: strip_slug_prefix(first),
-        }),
-    }
-}
-
-fn parse_server_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: server <kick|ban|unban> @name | server <ban-ip|unban-ip> <ip>");
-    };
-    if first == "bans" {
-        return Ok(ModCommand::ServerBans);
-    }
-    if matches!(first, "ban-ip" | "unban-ip") {
-        let ip_address = required_ip_address(
-            parts.get(1).copied(),
-            "usage: server <ban-ip|unban-ip> <ip>",
-        )?;
-        let action = match first {
-            "ban-ip" => ServerIpAction::Ban,
-            "unban-ip" => ServerIpAction::Unban,
-            _ => unreachable!(),
-        };
-        let (duration, reason_start) = if matches!(action, ServerIpAction::Ban) {
-            parse_optional_duration(parts.get(2).copied(), 2)?
-        } else {
-            (None, 2)
-        };
-        return Ok(ModCommand::ServerIp {
-            action,
-            ip_address,
-            duration,
-            reason: parts.get(reason_start..).unwrap_or_default().join(" "),
-        });
-    }
-    let action = match first {
-        "kick" => ServerUserAction::Kick,
-        "ban" => ServerUserAction::Ban,
-        "unban" => ServerUserAction::Unban,
-        _ => anyhow::bail!("unknown server action: {first}"),
-    };
-    let username = required_username(parts.get(1).copied(), "usage: server <action> @name")?;
-    let (duration, reason_start) = if matches!(action, ServerUserAction::Ban) {
-        parse_optional_duration(parts.get(2).copied(), 2)?
-    } else {
-        (None, 2)
-    };
-    Ok(ModCommand::ServerUser {
-        action,
-        username,
-        duration,
-        reason: parts.get(reason_start..).unwrap_or_default().join(" "),
-    })
-}
-
-fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: artboard <ban|unban> @name");
-    };
-    if first == "bans" {
-        return Ok(ModCommand::ArtboardBans);
-    }
-    let action = match first {
-        "ban" => ArtboardAction::Ban,
-        "unban" => ArtboardAction::Unban,
-        _ => anyhow::bail!("unknown artboard action: {first}"),
-    };
-    let username = required_username(parts.get(1).copied(), "usage: artboard <action> @name")?;
-    let (duration, reason_start) = if matches!(action, ArtboardAction::Ban) {
-        parse_optional_duration(parts.get(2).copied(), 2)?
-    } else {
-        (None, 2)
-    };
-    Ok(ModCommand::Artboard {
-        action,
-        username,
-        duration,
-        reason: parts.get(reason_start..).unwrap_or_default().join(" "),
-    })
-}
-
-fn parse_role_mod_command(
-    mod_action: RoleAction,
-    admin_action: RoleAction,
-    parts: &[&str],
-) -> Result<ModCommand> {
-    let Some(role) = parts.first().copied() else {
-        anyhow::bail!("usage: grant mod @name | grant admin @name | revoke mod @name");
-    };
-    let action = match role {
-        "mod" | "moderator" => mod_action,
-        "admin" if matches!(admin_action, RoleAction::GrantAdmin) => admin_action,
-        "admin" => anyhow::bail!("revoke admin is not implemented"),
-        _ => anyhow::bail!("unknown role: {role}"),
-    };
-    Ok(ModCommand::Role {
-        action,
-        username: required_username(parts.get(1).copied(), "usage: grant mod @name")?,
-    })
-}
-
-fn parse_optional_duration(
-    value: Option<&str>,
-    duration_index: usize,
-) -> Result<(Option<chrono::Duration>, usize)> {
-    let Some(value) = value else {
-        return Ok((None, duration_index));
-    };
-    if let Some(duration) = parse_mod_duration(value)? {
-        Ok((Some(duration), duration_index + 1))
-    } else {
-        Ok((None, duration_index))
-    }
-}
-
-fn parse_mod_duration(value: &str) -> Result<Option<chrono::Duration>> {
-    if value.is_empty() {
-        return Ok(None);
-    }
-    let Some(unit) = value.chars().last() else {
-        return Ok(None);
-    };
-    if !matches!(unit, 's' | 'm' | 'h' | 'd' | 'S' | 'M' | 'H' | 'D') {
-        return Ok(None);
-    }
-    let amount_text = &value[..value.len() - unit.len_utf8()];
-    let amount: i64 = amount_text
-        .parse()
-        .map_err(|_| anyhow::anyhow!("invalid duration: {value}"))?;
-    if amount <= 0 {
-        anyhow::bail!("duration must be positive");
-    }
-    let duration = match unit.to_ascii_lowercase() {
-        's' => chrono::Duration::seconds(amount),
-        'm' => chrono::Duration::minutes(amount),
-        'h' => chrono::Duration::hours(amount),
-        'd' => chrono::Duration::days(amount),
-        _ => unreachable!(),
-    };
-    Ok(Some(duration))
-}
-
-fn nonempty(value: String) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-fn required_username(value: Option<&str>, usage: &str) -> Result<String> {
-    let Some(value) = value else {
-        anyhow::bail!("{usage}");
-    };
-    let username = strip_user_prefix(value);
-    if username.is_empty() {
-        anyhow::bail!("{usage}");
-    }
-    Ok(username)
-}
-
-fn required_slug(value: Option<&str>, usage: &str) -> Result<String> {
-    let Some(value) = value else {
-        anyhow::bail!("{usage}");
-    };
-    let slug = strip_slug_prefix(value);
-    if slug.is_empty() {
-        anyhow::bail!("{usage}");
-    }
-    Ok(slug)
-}
-
-fn required_ip_address(value: Option<&str>, usage: &str) -> Result<String> {
-    let Some(value) = value else {
-        anyhow::bail!("{usage}");
-    };
-    let ip_address: IpAddr = value
-        .parse()
-        .map_err(|_| anyhow::anyhow!("invalid IP address: {value}"))?;
-    Ok(ip_address.to_string())
+    peer_ip: Option<IpAddr>,
 }
 
 fn unique_session_tokens<'a>(tokens: impl Iterator<Item = &'a String>) -> Vec<String> {
@@ -3684,45 +2568,6 @@ fn unique_session_tokens<'a>(tokens: impl Iterator<Item = &'a String>) -> Vec<St
         .filter(|token| seen.insert((*token).clone()))
         .cloned()
         .collect()
-}
-
-fn strip_user_prefix(value: &str) -> String {
-    value.trim().trim_start_matches('@').to_string()
-}
-
-fn strip_slug_prefix(value: &str) -> String {
-    value.trim().trim_start_matches('#').to_string()
-}
-
-fn normalize_mod_slug(slug: &str) -> Result<String> {
-    let slug = strip_slug_prefix(slug).to_ascii_lowercase();
-    let slug = slug.trim();
-    if slug.is_empty() {
-        anyhow::bail!("room slug cannot be empty");
-    }
-
-    let mut normalized = String::with_capacity(slug.len());
-    let mut last_was_dash = false;
-    for ch in slug.chars() {
-        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
-            normalized.push(ch);
-            last_was_dash = false;
-        } else if ch.is_whitespace() || matches!(ch, '-' | '_' | '.' | '/' | '\\') {
-            if !normalized.is_empty() && !last_was_dash {
-                normalized.push('-');
-                last_was_dash = true;
-            }
-        } else if !normalized.is_empty() && !last_was_dash {
-            normalized.push('-');
-            last_was_dash = true;
-        }
-    }
-
-    let normalized = normalized.trim_matches('-').to_string();
-    if normalized.is_empty() {
-        anyhow::bail!("room slug cannot be empty");
-    }
-    Ok(normalized)
 }
 
 async fn find_user_by_mod_name(client: &tokio_postgres::Client, username: &str) -> Result<User> {
@@ -3741,437 +2586,4 @@ async fn find_room_by_mod_slug(client: &tokio_postgres::Client, slug: &str) -> R
         .await?;
     row.map(ChatRoom::from)
         .ok_or_else(|| anyhow::anyhow!("room not found: #{slug}"))
-}
-
-fn ensure_mod_surface(permissions: Permissions) -> Result<()> {
-    ensure_decision(
-        permissions,
-        Action::OpenControlCenter,
-        TargetTier::NotApplicable,
-    )
-}
-
-fn ensure_decision(permissions: Permissions, action: Action, target: TargetTier) -> Result<()> {
-    if permissions.decide(action, target).is_allowed() {
-        Ok(())
-    } else {
-        anyhow::bail!("Moderator or admin only")
-    }
-}
-
-fn ensure_not_self(actor_user_id: Uuid, target_user_id: Uuid) -> Result<()> {
-    if actor_user_id == target_user_id {
-        anyhow::bail!("cannot target yourself");
-    }
-    Ok(())
-}
-
-async fn record_mod_audit(
-    client: &impl GenericClient,
-    actor_user_id: Uuid,
-    record: ModAuditRecord,
-) -> Result<()> {
-    if record
-        .permissions
-        .should_audit(record.matrix_action, record.target_tier)
-    {
-        client
-            .execute(
-                "INSERT INTO moderation_audit_log
-                 (actor_user_id, action, target_kind, target_id, metadata)
-                 VALUES ($1, $2, $3, $4, $5)",
-                &[
-                    &actor_user_id,
-                    &record.audit_action,
-                    &record.target_kind,
-                    &record.target_id,
-                    &record.metadata,
-                ],
-            )
-            .await?;
-    }
-    Ok(())
-}
-
-fn tier_label(permissions: Permissions) -> &'static str {
-    if permissions.is_admin() {
-        "admin"
-    } else if permissions.is_moderator() {
-        "moderator"
-    } else {
-        "regular"
-    }
-}
-
-fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
-    let Some(topic) = topic
-        .map(normalize_help_topic)
-        .filter(|topic| !topic.is_empty())
-    else {
-        return help_lines(&[
-            "help [command]",
-            "status",
-            "whoami",
-            "users [filter]",
-            "user @name",
-            "sessions [@name]",
-            "audit [filter]",
-            "rooms [filter]",
-            "room #slug",
-            "room bans #slug",
-            "room kick #slug @name [reason...]",
-            "room ban #slug @name [duration] [reason...]",
-            "room unban #slug @name",
-            "room rename #old #new",
-            "room public #slug",
-            "room private #slug",
-            "room delete #slug",
-            "server bans",
-            "server kick @name [reason...]",
-            "server ban @name [duration] [reason...]",
-            "server unban @name",
-            "server ban-ip <ip> [duration] [reason...]",
-            "server unban-ip <ip>",
-            "artboard bans",
-            "artboard ban @name [duration] [reason...]",
-            "artboard unban @name",
-            "grant mod @name",
-            "revoke mod @name",
-            "grant admin @name",
-            "",
-            "Use help <command> for details, e.g. help audit or help server ban-ip.",
-        ]);
-    };
-
-    let lines = match topic.as_str() {
-        "help" => &[
-            "help [command]",
-            "Shows the command list or focused help for one command.",
-            "command: optional command/subcommand, e.g. audit, room ban, server ban-ip.",
-        ][..],
-        "status" => &[
-            "status",
-            "Shows your effective moderation tier and whether the mod surface is enabled.",
-        ],
-        "whoami" => &[
-            "whoami",
-            "Shows your username and effective admin/moderator flags.",
-        ],
-        "users" => &[
-            "users [filter]",
-            "Lists users.",
-            "filter: optional case-insensitive username substring.",
-        ],
-        "user" => &[
-            "user @name",
-            "Shows one user's id, roles, timestamps, and active server/artboard ban flags.",
-            "@name: username, with or without @.",
-        ],
-        "sessions" => &[
-            "sessions [@name]",
-            "Lists active SSH sessions.",
-            "@name: optional username filter, with or without @.",
-        ],
-        "audit" => &[
-            "audit [filter]",
-            "Shows the latest 50 moderation audit entries.",
-            "filter: optional case-insensitive substring matched against rendered lines.",
-            "Examples: audit server_ban, audit actor=@alice, audit target=user:@bob.",
-        ],
-        "rooms" => &[
-            "rooms [filter]",
-            "Lists rooms with visibility, permanence, member count, and active ban count.",
-            "filter: optional case-insensitive room label substring.",
-        ],
-        "room" => &[
-            "room #slug",
-            "Shows one room's id, kind, visibility, permanence, auto-join flag, and member count.",
-            "#slug: room slug, with or without #.",
-            "Subcommands: room bans, room kick, room ban, room unban, room rename, room public, room private, room delete.",
-        ],
-        "room bans" => &[
-            "room bans #slug",
-            "Lists active bans in a room.",
-            "#slug: room slug, with or without #.",
-        ],
-        "room kick" => &[
-            "room kick #slug @name [reason...]",
-            "Removes a user from a room without creating a ban.",
-            "#slug: room slug. @name: username. reason: optional audit text.",
-        ],
-        "room ban" => &[
-            "room ban #slug @name [duration] [reason...]",
-            "Bans a user from a room and removes their membership.",
-            "#slug: room slug. @name: username.",
-            "duration: optional positive number plus s/m/h/d, e.g. 30m or 7d; omit for permanent.",
-            "reason: optional audit text after duration.",
-        ],
-        "room unban" => &[
-            "room unban #slug @name",
-            "Removes an active room ban for a user.",
-            "#slug: room slug. @name: username.",
-        ],
-        "room rename" => &[
-            "room rename #old #new",
-            "Renames a room slug.",
-            "#old: current slug. #new: new slug.",
-        ],
-        "room public" => &[
-            "room public #slug",
-            "Makes a room public.",
-            "#slug: room slug.",
-        ],
-        "room private" => &[
-            "room private #slug",
-            "Makes a room private.",
-            "#slug: room slug.",
-        ],
-        "room delete" => &["room delete #slug", "Deletes a room.", "#slug: room slug."],
-        "server" => &[
-            "server <kick|ban|unban> @name",
-            "server <ban-ip|unban-ip> <ip>",
-            "Applies server-wide session removal or bans.",
-            "Subcommands: server bans, server kick, server ban, server unban, server ban-ip, server unban-ip.",
-        ],
-        "server bans" => &[
-            "server bans",
-            "Lists active server user, fingerprint, and IP bans.",
-        ],
-        "server kick" => &[
-            "server kick @name [reason...]",
-            "Terminates a user's active sessions without creating a ban.",
-            "@name: username. reason: optional audit text.",
-        ],
-        "server ban" => &[
-            "server ban @name [duration] [reason...]",
-            "Creates a server user ban and terminates active sessions.",
-            "@name: username.",
-            "duration: optional positive number plus s/m/h/d, e.g. 2h or 7d; omit for permanent.",
-            "reason: optional audit text after duration.",
-        ],
-        "server unban" => &[
-            "server unban @name",
-            "Removes active server user/fingerprint bans for that user.",
-            "@name: username.",
-        ],
-        "server ban-ip" => &[
-            "server ban-ip <ip> [duration] [reason...]",
-            "Creates a server IP ban and terminates active sessions from that IP.",
-            "ip: IPv4 or IPv6 address.",
-            "duration: optional positive number plus s/m/h/d; omit for permanent.",
-            "reason: optional audit text after duration.",
-        ],
-        "server unban-ip" => &[
-            "server unban-ip <ip>",
-            "Removes an active server IP ban.",
-            "ip: IPv4 or IPv6 address.",
-        ],
-        "artboard" => &[
-            "artboard <ban|unban> @name",
-            "Controls whether a user may use the artboard.",
-            "Subcommands: artboard bans, artboard ban, artboard unban.",
-        ],
-        "artboard bans" => &["artboard bans", "Lists active artboard bans."],
-        "artboard ban" => &[
-            "artboard ban @name [duration] [reason...]",
-            "Bans a user from the artboard.",
-            "@name: username.",
-            "duration: optional positive number plus s/m/h/d; omit for permanent.",
-            "reason: optional audit text after duration.",
-        ],
-        "artboard unban" => &[
-            "artboard unban @name",
-            "Removes an artboard ban for a user.",
-            "@name: username.",
-        ],
-        "grant" => &[
-            "grant <mod|admin> @name",
-            "Grants a role to a user.",
-            "mod: moderator role. admin: admin role. @name: username.",
-        ],
-        "grant mod" => &[
-            "grant mod @name",
-            "Grants moderator role to a user.",
-            "@name: username.",
-        ],
-        "grant admin" => &[
-            "grant admin @name",
-            "Grants admin role to a user.",
-            "@name: username.",
-        ],
-        "revoke" | "revoke mod" => &[
-            "revoke mod @name",
-            "Revokes moderator role from a user.",
-            "@name: username.",
-        ],
-        _ => {
-            return vec![
-                format!("unknown help topic: {topic}"),
-                "try: help".to_string(),
-            ];
-        }
-    };
-    help_lines(lines)
-}
-
-fn normalize_help_topic(topic: &str) -> String {
-    let topic = topic
-        .trim()
-        .strip_prefix("/mod ")
-        .map(str::trim)
-        .unwrap_or_else(|| topic.trim());
-    topic
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
-fn help_lines(lines: &[&str]) -> Vec<String> {
-    lines.iter().map(|line| (*line).to_string()).collect()
-}
-
-#[cfg(test)]
-mod mod_command_tests {
-    use super::*;
-
-    #[test]
-    fn parses_optional_mod_prefix() {
-        assert_eq!(
-            parse_mod_command("/mod help").unwrap(),
-            ModCommand::Help { topic: None }
-        );
-        assert_eq!(
-            parse_mod_command("help").unwrap(),
-            ModCommand::Help { topic: None }
-        );
-        assert_eq!(
-            parse_mod_command("help audit").unwrap(),
-            ModCommand::Help {
-                topic: Some("audit".to_string())
-            }
-        );
-        assert_eq!(
-            parse_mod_command("help server ban-ip").unwrap(),
-            ModCommand::Help {
-                topic: Some("server ban-ip".to_string())
-            }
-        );
-        assert!(parse_mod_command("/moderator help").is_err());
-    }
-
-    #[test]
-    fn command_help_explains_audit_filter() {
-        let lines = mod_help_lines(Some("audit"));
-
-        assert!(lines.iter().any(|line| line == "audit [filter]"));
-        assert!(
-            lines.iter().any(|line| line.contains("substring")),
-            "audit help should explain the filter behavior: {lines:?}"
-        );
-    }
-
-    #[test]
-    fn command_help_explains_server_ban_arguments() {
-        let lines = mod_help_lines(Some("server ban"));
-
-        assert!(
-            lines
-                .iter()
-                .any(|line| line == "server ban @name [duration] [reason...]")
-        );
-        assert!(
-            lines.iter().any(|line| line.contains("s/m/h/d")),
-            "server ban help should explain duration syntax: {lines:?}"
-        );
-    }
-
-    #[test]
-    fn parses_ban_list_commands() {
-        assert_eq!(
-            parse_mod_command("server bans").unwrap(),
-            ModCommand::ServerBans
-        );
-        assert_eq!(
-            parse_mod_command("artboard bans").unwrap(),
-            ModCommand::ArtboardBans
-        );
-        assert_eq!(
-            parse_mod_command("room bans #lobby").unwrap(),
-            ModCommand::RoomBans {
-                slug: "lobby".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn normalizes_room_slugs_like_chat_rooms() {
-        assert_eq!(normalize_mod_slug("#Rust_Nerds").unwrap(), "rust-nerds");
-        assert_eq!(normalize_mod_slug("vps/d9d0").unwrap(), "vps-d9d0");
-        assert!(normalize_mod_slug("!!!").is_err());
-    }
-
-    #[test]
-    fn parses_room_ban_with_duration_and_reason() {
-        assert_eq!(
-            parse_mod_command("room ban #lobby @alice 7d cleanup").unwrap(),
-            ModCommand::RoomAction {
-                action: RoomModAction::Ban,
-                slug: "lobby".to_string(),
-                username: "alice".to_string(),
-                duration: Some(chrono::Duration::days(7)),
-                reason: "cleanup".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_server_permanent_ban_without_duration() {
-        assert_eq!(
-            parse_mod_command("server ban @alice policy").unwrap(),
-            ModCommand::ServerUser {
-                action: ServerUserAction::Ban,
-                username: "alice".to_string(),
-                duration: None,
-                reason: "policy".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_server_kick() {
-        assert_eq!(
-            parse_mod_command("server kick @alice go outside").unwrap(),
-            ModCommand::ServerUser {
-                action: ServerUserAction::Kick,
-                username: "alice".to_string(),
-                duration: None,
-                reason: "go outside".to_string(),
-            }
-        );
-        assert!(parse_mod_command("server disconnect @alice").is_err());
-    }
-
-    #[test]
-    fn parses_server_ip_ban_with_duration_and_reason() {
-        assert_eq!(
-            parse_mod_command("server ban-ip 203.0.113.10 2h subnet abuse").unwrap(),
-            ModCommand::ServerIp {
-                action: ServerIpAction::Ban,
-                ip_address: "203.0.113.10".to_string(),
-                duration: Some(chrono::Duration::hours(2)),
-                reason: "subnet abuse".to_string(),
-            }
-        );
-        assert_eq!(
-            parse_mod_command("server unban-ip 2001:db8::1").unwrap(),
-            ModCommand::ServerIp {
-                action: ServerIpAction::Unban,
-                ip_address: "2001:db8::1".to_string(),
-                duration: None,
-                reason: String::new(),
-            }
-        );
-        assert!(parse_mod_command("server ban-ip nope").is_err());
-    }
 }

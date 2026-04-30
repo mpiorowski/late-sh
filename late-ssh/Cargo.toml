@@ -43,6 +43,7 @@ emojis.workspace = true
 getrandom.workspace = true
 rand_core = { workspace = true, features = ["std"] }
 base64.workspace = true
+bitflags.workspace = true
 vte.workspace = true
 pkcs5.workspace = true
 russh.workspace = true

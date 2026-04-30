@@ -356,7 +356,7 @@ impl ArticleService {
                 Some("general".to_string()),
                 announcement,
                 Uuid::now_v7(),
-                crate::authz::Permissions::default(),
+                false,
             );
         }
 
