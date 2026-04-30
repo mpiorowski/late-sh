@@ -1005,7 +1005,7 @@ async fn join_public_room_task_only_adds_requesting_user() {
 }
 
 #[tokio::test]
-async fn open_public_room_task_auto_joins_everyone_and_enables_auto_join() {
+async fn open_public_room_task_joins_only_creator_and_disables_auto_join() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
         test_db.db.clone(),
@@ -1037,28 +1037,34 @@ async fn open_public_room_task_auto_joins_everyone_and_enables_auto_join() {
         other => panic!("expected RoomJoined, got {other:?}"),
     };
 
-    for user in [&creator, &existing_user, &other_user] {
-        assert!(
-            ChatRoomMember::is_member(&client, room_id, user.id)
-                .await
-                .unwrap(),
-            "{} should be joined to #rustaceans",
-            user.username
-        );
-    }
+    assert!(
+        ChatRoomMember::is_member(&client, room_id, creator.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !ChatRoomMember::is_member(&client, room_id, existing_user.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !ChatRoomMember::is_member(&client, room_id, other_user.id)
+            .await
+            .unwrap()
+    );
 
     let room = ChatRoom::get(&client, room_id)
         .await
         .expect("reload room")
         .expect("room exists");
-    assert!(room.auto_join);
+    assert!(!room.auto_join);
 
     let future_user = create_test_user(&test_db.db, "public_future").await;
     ChatRoomMember::auto_join_public_rooms(&client, future_user.id)
         .await
         .expect("auto-join future user");
     assert!(
-        ChatRoomMember::is_member(&client, room_id, future_user.id)
+        !ChatRoomMember::is_member(&client, room_id, future_user.id)
             .await
             .unwrap()
     );

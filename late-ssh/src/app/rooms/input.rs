@@ -1,6 +1,6 @@
 use crate::app::{
     common::primitives::Banner,
-    input::{ParsedInput, sanitize_paste_markers},
+    input::{MouseEventKind, ParsedInput, sanitize_paste_markers},
     rooms::{
         blackjack::settings::{BlackjackTableSettings, PACE_OPTIONS, STAKE_OPTIONS},
         filter::RoomsFilter,
@@ -23,6 +23,19 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             ParsedInput::Char(ch) if ch.is_ascii() => {
                 return handle_active_room_key(app, *ch as u8);
             }
+            ParsedInput::Arrow(key) => return handle_active_room_arrow(app, *key),
+            ParsedInput::PageUp => {
+                return handle_active_room_scroll(app, active_room_page_step(app));
+            }
+            ParsedInput::PageDown => {
+                return handle_active_room_scroll(app, -active_room_page_step(app));
+            }
+            ParsedInput::End => return handle_active_room_scroll(app, isize::MIN),
+            ParsedInput::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => return handle_active_room_scroll(app, 1),
+                MouseEventKind::ScrollDown => return handle_active_room_scroll(app, -1),
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -439,8 +452,11 @@ fn enter_selected_room(app: &mut App) {
             let svc = app
                 .blackjack_table_manager
                 .get_or_create(room.id, room.blackjack_settings.clone());
-            app.blackjack_state =
-                crate::app::rooms::blackjack::state::State::new(svc, app.user_id, app.chip_balance);
+            app.blackjack_state = Some(crate::app::rooms::blackjack::state::State::new(
+                svc,
+                app.user_id,
+                app.chip_balance,
+            ));
         }
         app.rooms_active_room = Some(room);
         app.rooms_add_form_open = false;
@@ -454,19 +470,33 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
     let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
 
-    if matches!(byte, b'i' | b'I') {
-        app.chat.start_composing_in_room(chat_room_id);
+    if byte == 0x1B
+        && app
+            .chat
+            .selected_message_body_in_room(chat_room_id)
+            .is_some()
+    {
+        app.chat.clear_message_selection();
+        return true;
+    }
+
+    if should_route_active_room_chat_key(app, chat_room_id, byte)
+        && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
+    {
         return true;
     }
 
     match game_kind {
         crate::app::rooms::svc::GameKind::Blackjack => {
+            let Some(blackjack_state) = &mut app.blackjack_state else {
+                return false;
+            };
             let byte = if matches!(byte, b'q' | b'Q') {
                 0x1B
             } else {
                 byte
             };
-            match crate::app::rooms::blackjack::input::handle_key(&mut app.blackjack_state, byte) {
+            match crate::app::rooms::blackjack::input::handle_key(blackjack_state, byte) {
                 crate::app::rooms::blackjack::input::InputAction::Ignored => false,
                 crate::app::rooms::blackjack::input::InputAction::Handled => true,
                 crate::app::rooms::blackjack::input::InputAction::Leave => {
@@ -476,6 +506,56 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
             }
         }
     }
+}
+
+fn handle_active_room_arrow(app: &mut App, key: u8) -> bool {
+    let Some(room) = app.rooms_active_room.as_ref() else {
+        return false;
+    };
+    crate::app::chat::input::handle_message_arrow_in_room(app, room.chat_room_id, key)
+}
+
+fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
+    let Some(room) = app.rooms_active_room.as_ref() else {
+        return false;
+    };
+    crate::app::chat::input::handle_scroll_in_room(app, room.chat_room_id, delta);
+    true
+}
+
+fn active_room_page_step(app: &App) -> isize {
+    (app.size.1 / 6).max(1) as isize
+}
+
+fn should_route_active_room_chat_key(app: &App, chat_room_id: uuid::Uuid, byte: u8) -> bool {
+    if app.chat.is_reaction_leader_active() {
+        return true;
+    }
+    if matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15) {
+        return true;
+    }
+    let selected_in_room = app
+        .chat
+        .selected_message_body_in_room(chat_room_id)
+        .is_some();
+    selected_in_room
+        && matches!(
+            byte,
+            b'd' | b'D'
+                | b'r'
+                | b'R'
+                | b'e'
+                | b'E'
+                | b'p'
+                | b'c'
+                | b'f'
+                | b'F'
+                | b'g'
+                | b'G'
+                | b'\r'
+                | b'\n'
+                | 0x10
+        )
 }
 
 fn can_create_room(is_admin: bool) -> bool {

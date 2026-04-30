@@ -1556,13 +1556,11 @@ impl ChatService {
     async fn open_public_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
         let client = self.db.get().await?;
         let room = ChatRoom::get_or_create_public_room(&client, slug).await?;
-        ChatRoom::set_auto_join(&client, room.id, true).await?;
-        let users_added = ChatRoom::add_all_users(&client, room.id).await?;
+        ChatRoom::set_auto_join(&client, room.id, false).await?;
         tracing::info!(
             slug = %slug,
             room_id = %room.id,
-            users_added,
-            "public room opened and auto-join enabled"
+            "public room opened"
         );
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)

@@ -1,8 +1,13 @@
 use std::time::Duration;
 
-use late_core::{db::Db, models::game_room::GameRoom};
+use late_core::{
+    db::Db,
+    models::{chat_room_member::ChatRoomMember, game_room::GameRoom},
+};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
+
+use crate::app::ai::ghost::DEALER_FINGERPRINT;
 
 use super::blackjack::settings::BlackjackTableSettings;
 
@@ -225,9 +230,18 @@ impl RoomsService {
             Some(user_id),
         )
         .await?;
+        add_dealer_to_game_room_chat(&client, room.chat_room_id).await?;
         self.publish_rooms(&client).await?;
         Ok(room)
     }
+}
+
+async fn add_dealer_to_game_room_chat(
+    client: &tokio_postgres::Client,
+    chat_room_id: Uuid,
+) -> anyhow::Result<()> {
+    ChatRoomMember::join_user_by_fingerprint(client, chat_room_id, DEALER_FINGERPRINT).await?;
+    Ok(())
 }
 
 async fn count_open_rooms_created_by(

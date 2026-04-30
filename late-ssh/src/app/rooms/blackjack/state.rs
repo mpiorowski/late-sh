@@ -120,6 +120,15 @@ pub enum Outcome {
     DealerWin,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeatAction {
+    Sit,
+    Bet,
+    Hit,
+    Stand,
+    MissedDeal,
+}
+
 pub fn settle(player: &[PlayingCard], dealer: &[PlayingCard]) -> Outcome {
     if is_bust(player) {
         return Outcome::DealerWin;
@@ -193,6 +202,7 @@ pub struct BlackjackSnapshot {
     pub stake_chips: Vec<i64>,
     pub selected_chip_index: usize,
     pub status_message: String,
+    pub private_notice: Option<String>,
     pub dealer_revealed: bool,
     pub dealer_score: Option<HandScore>,
     pub player_score: Option<HandScore>,
@@ -209,6 +219,7 @@ pub struct BlackjackSeat {
     pub phase: SeatPhase,
     pub score: Option<HandScore>,
     pub last_outcome: Option<Outcome>,
+    pub last_action: Option<SeatAction>,
     pub last_net_change: i64,
 }
 
@@ -403,17 +414,17 @@ impl State {
         }
         let request_id = Uuid::now_v7();
         self.pending_request_id = Some(request_id);
-        self.private_notice = Some(format!("Placing bet: {amount} chips..."));
+        self.private_notice = None;
         self.svc.submit_stake_task(self.user_id, request_id);
     }
 
     pub fn sit(&mut self) {
-        self.private_notice = Some("Taking a seat...".to_string());
+        self.private_notice = None;
         self.svc.sit_task(self.user_id);
     }
 
     pub fn leave_seat(&mut self) {
-        self.private_notice = Some("Leaving seat...".to_string());
+        self.private_notice = None;
         self.svc.leave_seat_task(self.user_id);
     }
 
@@ -496,8 +507,22 @@ impl State {
             snapshot.last_outcome = user_seat.last_outcome;
             snapshot.last_net_change = user_seat.last_net_change;
         }
-        snapshot.status_message = self.status_message();
+        snapshot.private_notice = self.user_facing_notice();
         snapshot
+    }
+
+    fn user_facing_notice(&self) -> Option<String> {
+        if let Some(notice) = &self.private_notice {
+            return Some(notice.clone());
+        }
+        if self.snapshot.phase == Phase::Betting
+            && self.is_seated()
+            && self.user_seat().and_then(|seat| seat.bet_amount).is_none()
+            && self.balance < self.snapshot.min_bet
+        {
+            return Some("You need more chips to bet.".to_string());
+        }
+        None
     }
 
     pub fn player_score(&self) -> Option<HandScore> {
@@ -510,29 +535,6 @@ impl State {
 
     pub fn dealer_revealed(&self) -> bool {
         self.snapshot.dealer_revealed
-    }
-
-    pub fn status_message(&self) -> String {
-        if let Some(notice) = &self.private_notice {
-            return notice.clone();
-        }
-
-        if self.snapshot.phase == Phase::Betting
-            && self.is_seated()
-            && self.user_seat().and_then(|seat| seat.bet_amount).is_none()
-        {
-            if self.balance < self.snapshot.min_bet {
-                return "You need more chips to bet.".to_string();
-            }
-            if self.stake_amount() > 0 {
-                return "Space adds another chip. Backspace pulls one back. Enter/S locks stake."
-                    .to_string();
-            }
-            return "Select chips with [ ] or A/D. Space tosses one in. Backspace pulls one back. Enter/S locks stake."
-                .to_string();
-        }
-
-        self.snapshot.status_message.clone()
     }
 
     fn apply_event(&mut self, event: BlackjackEvent) {

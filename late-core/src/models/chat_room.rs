@@ -213,6 +213,15 @@ impl ChatRoom {
         }
     }
 
+    pub async fn is_kind(client: &Client, room_id: Uuid, kind: &str) -> Result<bool> {
+        let row = client
+            .query_opt("SELECT kind FROM chat_rooms WHERE id = $1", &[&room_id])
+            .await?;
+        Ok(row
+            .map(|row| row.get::<_, String>(0) == kind)
+            .unwrap_or(false))
+    }
+
     pub async fn touch_updated(client: &Client, room_id: Uuid) -> Result<u64> {
         let rows = client
             .execute(

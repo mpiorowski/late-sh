@@ -12,16 +12,19 @@ use crate::app::{
         player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
         settings::BlackjackTableSettings,
         state::{
-            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase, SeatPhase, Shoe,
-            dealer_must_hit, is_bust, is_natural_blackjack, payout_credit, score, settle,
+            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase, SeatAction,
+            SeatPhase, Shoe, dealer_must_hit, is_bust, is_natural_blackjack, payout_credit, score,
+            settle,
         },
     },
 };
 
 const BETTING_LOCK_CAP_SECS: u64 = 60;
+const MAX_MISSED_DEALS: u8 = 3;
 
 #[derive(Clone)]
 pub struct BlackjackService {
+    room_id: Uuid,
     chip_svc: ChipService,
     player_directory: BlackjackPlayerDirectory,
     snapshot_tx: watch::Sender<BlackjackSnapshot>,
@@ -46,6 +49,7 @@ pub enum BlackjackEvent {
         result: Result<i64, String>,
     },
     HandSettled {
+        room_id: Uuid,
         user_id: Uuid,
         bet: i64,
         outcome: Outcome,
@@ -153,11 +157,13 @@ struct BetSuccess {
 
 impl BlackjackService {
     pub fn new(
+        room_id: Uuid,
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
     ) -> Self {
         Self::new_with_settings(
+            room_id,
             chip_svc,
             player_directory,
             event_tx,
@@ -166,6 +172,7 @@ impl BlackjackService {
     }
 
     pub fn new_with_settings(
+        room_id: Uuid,
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
@@ -175,6 +182,7 @@ impl BlackjackService {
         let initial_snapshot = table.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
         Self {
+            room_id,
             chip_svc,
             player_directory,
             snapshot_tx,
@@ -190,6 +198,10 @@ impl BlackjackService {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<BlackjackEvent> {
         self.event_tx.subscribe()
+    }
+
+    pub fn room_id(&self) -> Uuid {
+        self.room_id
     }
 
     pub fn current_snapshot(&self) -> BlackjackSnapshot {
@@ -460,6 +472,8 @@ impl BlackjackService {
                     table.bet_for_amount(amount)?
                 };
                 table.seats[seat_index].bet = Some(bet);
+                table.seats[seat_index].last_action = Some(SeatAction::Bet);
+                table.seats[seat_index].missed_deals = 0;
                 table.update_player_balance(user_id, new_balance);
 
                 let mut settlements = Vec::new();
@@ -742,6 +756,7 @@ impl BlackjackService {
                 self.publish_snapshot_locked(&table);
             }
             let _ = self.event_tx.send(BlackjackEvent::HandSettled {
+                room_id: self.room_id,
                 user_id: settlement.user_id,
                 bet: settlement.bet,
                 outcome: settlement.outcome,
@@ -780,7 +795,9 @@ struct SeatState {
     hand: Vec<PlayingCard>,
     stood: bool,
     last_outcome: Option<Outcome>,
+    last_action: Option<SeatAction>,
     last_net_change: i64,
+    missed_deals: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -802,7 +819,9 @@ impl SeatState {
             hand: Vec::new(),
             stood: false,
             last_outcome: None,
+            last_action: None,
             last_net_change: 0,
+            missed_deals: 0,
         }
     }
 
@@ -821,6 +840,7 @@ impl SeatState {
                 Some(score(&self.hand))
             },
             last_outcome: self.last_outcome,
+            last_action: self.last_action,
             last_net_change: self.last_net_change,
         }
     }
@@ -854,6 +874,7 @@ impl SeatState {
         self.hand.clear();
         self.stood = false;
         self.last_outcome = None;
+        self.last_action = None;
         self.last_net_change = 0;
     }
 
@@ -864,6 +885,20 @@ impl SeatState {
     fn stake_amount(&self) -> i64 {
         self.stake_chips.iter().sum()
     }
+}
+
+fn format_auto_left_notice(seat_indices: &[usize]) -> String {
+    let seats = seat_indices
+        .iter()
+        .map(|index| (index + 1).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let noun = if seat_indices.len() == 1 {
+        "Seat"
+    } else {
+        "Seats"
+    };
+    format!("{noun} {seats} missed {MAX_MISSED_DEALS} deals and left.")
 }
 
 impl SharedTableState {
@@ -910,6 +945,7 @@ impl SharedTableState {
             stake_chips: Vec::new(),
             selected_chip_index: 0,
             status_message: self.status_message.clone(),
+            private_notice: None,
             dealer_revealed: matches!(self.phase, Phase::DealerTurn | Phase::Settling),
             dealer_score: if matches!(self.phase, Phase::DealerTurn | Phase::Settling) {
                 Some(score(&self.dealer_hand))
@@ -1137,6 +1173,23 @@ impl SharedTableState {
         self.start_round()
     }
 
+    fn record_missed_deals(&mut self) -> Vec<usize> {
+        let mut auto_left_seats = Vec::new();
+        for (index, seat) in self.seats.iter_mut().enumerate() {
+            if seat.user_id.is_none() || seat.bet.is_some() {
+                continue;
+            }
+
+            seat.missed_deals = seat.missed_deals.saturating_add(1);
+            seat.last_action = Some(SeatAction::MissedDeal);
+            if seat.missed_deals >= MAX_MISSED_DEALS {
+                *seat = SeatState::empty();
+                auto_left_seats.push(index);
+            }
+        }
+        auto_left_seats
+    }
+
     fn start_round(&mut self) -> Result<Vec<Settlement>, ActionFailure> {
         self.clear_betting_countdown();
         self.clear_action_countdown();
@@ -1147,6 +1200,7 @@ impl SharedTableState {
             return Err(ActionFailure::InvalidPhase("at least one bet is required"));
         }
 
+        let auto_left_seats = self.record_missed_deals();
         self.dealer_hand.clear();
         for seat in &mut self.seats {
             seat.stake_chips.clear();
@@ -1154,6 +1208,10 @@ impl SharedTableState {
             seat.stood = false;
             seat.last_outcome = None;
             seat.last_net_change = 0;
+            if seat.bet.is_some() {
+                seat.last_action = None;
+                seat.missed_deals = 0;
+            }
         }
 
         for _ in 0..2 {
@@ -1188,6 +1246,13 @@ impl SharedTableState {
             self.clear_action_countdown();
             self.status_message = "Round settled. Press Space or Enter for next hand.".to_string();
         }
+        if !auto_left_seats.is_empty() {
+            self.status_message = format!(
+                "{} {}",
+                self.status_message,
+                format_auto_left_notice(&auto_left_seats)
+            );
+        }
         Ok(settlements)
     }
 
@@ -1196,6 +1261,7 @@ impl SharedTableState {
             return Err(ActionFailure::InvalidPhase("your hand is not active"));
         }
         self.seats[index].hand.push(self.shoe.draw());
+        self.seats[index].last_action = Some(SeatAction::Hit);
         let settlements = if is_bust(&self.seats[index].hand) {
             let mut settlements = Vec::new();
             if let Some(settlement) = self.finish_seat(index, Outcome::DealerWin) {
@@ -1219,6 +1285,7 @@ impl SharedTableState {
             return Err(ActionFailure::InvalidPhase("your hand is not active"));
         }
         self.seats[index].stood = true;
+        self.seats[index].last_action = Some(SeatAction::Stand);
         Ok(self.advance_or_finish_round())
     }
 
@@ -1254,6 +1321,7 @@ impl SharedTableState {
         for seat in &mut self.seats {
             if seat.has_unresolved_bet() && !seat.stood {
                 seat.stood = true;
+                seat.last_action = Some(SeatAction::Stand);
             }
         }
         self.advance_or_finish_round()
@@ -1300,6 +1368,7 @@ impl SharedTableState {
             return Err(SeatFailure::TableFull);
         };
         self.seats[seat_index].user_id = Some(user_id);
+        self.seats[seat_index].last_action = Some(SeatAction::Sit);
         Ok(seat_index)
     }
 
@@ -1435,8 +1504,40 @@ mod tests {
 
         assert!(settlements.is_empty());
         assert!(table.seats[seat_a].stood);
+        assert_eq!(table.seats[seat_a].last_action, Some(SeatAction::Stand));
         assert!(!table.seats[seat_b].stood);
         assert_eq!(table.phase, Phase::PlayerTurn);
+    }
+
+    #[test]
+    fn seated_player_auto_leaves_after_three_missed_deals() {
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        let active_user = user_id();
+        let idle_user = user_id();
+        let active_seat = table.sit(active_user).expect("seat should be open");
+        let idle_seat = table.sit(idle_user).expect("seat should be open");
+
+        for missed_deals in 1..MAX_MISSED_DEALS {
+            table.seats[active_seat].bet = Some(Bet::new(MIN_BET).unwrap());
+            table.start_round().expect("round should start");
+            assert_eq!(table.user_seat_index(idle_user), Some(idle_seat));
+            assert_eq!(table.seats[idle_seat].missed_deals, missed_deals);
+            assert_eq!(
+                table.seats[idle_seat].last_action,
+                Some(SeatAction::MissedDeal)
+            );
+            table.reset_to_betting("next hand");
+        }
+
+        table.seats[active_seat].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.start_round().expect("round should start");
+
+        assert_eq!(table.user_seat_index(idle_user), None);
+        assert!(
+            table
+                .status_message
+                .contains("Seat 2 missed 3 deals and left.")
+        );
     }
 
     #[test]

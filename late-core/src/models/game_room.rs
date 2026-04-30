@@ -118,6 +118,25 @@ impl GameRoom {
         Ok(row.map(Self::from))
     }
 
+    pub async fn open_chat_room_id(
+        client: &Client,
+        room_id: Uuid,
+        game_kind: GameKind,
+    ) -> Result<Option<Uuid>> {
+        let game_kind = game_kind.as_str();
+        let row = client
+            .query_opt(
+                "SELECT chat_room_id
+                 FROM game_rooms
+                 WHERE id = $1
+                   AND game_kind = $2
+                   AND status <> 'closed'",
+                &[&room_id, &game_kind],
+            )
+            .await?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
     pub async fn find_by_slug(client: &Client, slug: &str) -> Result<Option<Self>> {
         let row = client
             .query_opt("SELECT * FROM game_rooms WHERE slug = $1", &[&slug])
