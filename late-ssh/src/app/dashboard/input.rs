@@ -152,13 +152,7 @@ fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
 
 pub(crate) fn blackjack_slot_for_key(byte: u8) -> Option<usize> {
     match byte {
-        b'1'..=b'9' => Some((byte - b'1') as usize),
-        b'0' => Some(9),
-        b'-' | b'_' => Some(10),
-        b'=' | b'+' => Some(11),
-        b'[' | b'{' => Some(12),
-        b']' | b'}' => Some(13),
-        b'\\' | b'|' => Some(14),
+        b'1'..=b'3' => Some((byte - b'1') as usize),
         _ => None,
     }
 }

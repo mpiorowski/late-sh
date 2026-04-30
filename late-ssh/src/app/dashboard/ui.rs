@@ -18,7 +18,6 @@ use crate::{
         primitives::{format_duration_mmss, genre_label},
         theme,
     },
-    app::dashboard::input::blackjack_slot_for_key,
     app::rooms::{
         blackjack::state::BlackjackSnapshot,
         svc::{GameKind, RoomListItem, RoomsSnapshot},
@@ -42,13 +41,12 @@ const DASHBOARD_HIDE_STREAM_AT_WIDTH: u16 = 39;
 const DASHBOARD_MIN_FULL_HEIGHT: u16 = 16;
 const BLACKJACK_GRID_MIN_WIDTH: u16 = 48;
 const BLACKJACK_GRID_MIN_CHAT_HEIGHT: u16 = 6;
-const BLACKJACK_GRID_ROWS_COMPACT: usize = 4;
-const BLACKJACK_GRID_ROWS_TALL: usize = 5;
 const BLACKJACK_GRID_COLUMNS: usize = 3;
+const BLACKJACK_GRID_TEXT_ROWS: u16 = 3;
+const BLACKJACK_GRID_HEIGHT: u16 = BLACKJACK_GRID_TEXT_ROWS + 1; // + bottom rule
 const AUDIO_BUTTON_PREFIX: &str = "No audio? ";
 const CLI_BUTTON_TEXT: &str = "[B] CLI";
 const PAIR_BUTTON_TEXT: &str = "[P] web";
-const BLACKJACK_SLOT_KEYS: &[u8] = b"1234567890-=[]\\";
 
 pub struct DashboardRenderInput<'a> {
     pub now_playing: Option<&'a str>,
@@ -154,20 +152,10 @@ fn blackjack_grid_height(area: Rect) -> Option<u16> {
         return None;
     }
 
-    let rows = blackjack_grid_rows(area.height);
-    let height = (1 + rows * 3) as u16;
-    if area.height >= height.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT) {
-        Some(height)
+    if area.height >= BLACKJACK_GRID_HEIGHT.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT) {
+        Some(BLACKJACK_GRID_HEIGHT)
     } else {
         None
-    }
-}
-
-fn blackjack_grid_rows(height: u16) -> usize {
-    if height >= 32 {
-        BLACKJACK_GRID_ROWS_TALL
-    } else {
-        BLACKJACK_GRID_ROWS_COMPACT
     }
 }
 
@@ -176,7 +164,7 @@ fn dashboard_blackjack_rooms(snapshot: &RoomsSnapshot) -> Vec<&RoomListItem> {
         .rooms
         .iter()
         .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
-        .take(BLACKJACK_GRID_ROWS_TALL * BLACKJACK_GRID_COLUMNS)
+        .take(BLACKJACK_GRID_COLUMNS)
         .collect()
 }
 
@@ -187,68 +175,47 @@ fn draw_blackjack_grid(
     snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     prefix_armed: bool,
 ) {
-    if area.height < 4 {
+    if area.height < BLACKJACK_GRID_HEIGHT {
         return;
     }
 
-    let rows = blackjack_grid_rows(area.height).min(BLACKJACK_GRID_ROWS_TALL);
-    let slots = rows * BLACKJACK_GRID_COLUMNS;
-    let chunks = Layout::vertical(
-        std::iter::once(Constraint::Length(1))
-            .chain((0..rows).map(|_| Constraint::Length(3)))
-            .collect::<Vec<_>>(),
-    )
+    let chunks = Layout::vertical([
+        Constraint::Length(BLACKJACK_GRID_TEXT_ROWS),
+        Constraint::Length(1),
+    ])
     .split(area);
 
-    let header = if prefix_armed {
-        Line::from(vec![
-            Span::styled(
-                "Blackjack Rooms",
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" · press slot key", Style::default().fg(theme::TEXT_DIM())),
-        ])
-    } else if rooms.is_empty() {
-        Line::from(vec![
-            Span::styled(
-                "Blackjack Rooms",
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" · loading tables", Style::default().fg(theme::TEXT_DIM())),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                "Blackjack Rooms",
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" · b + slot", Style::default().fg(theme::TEXT_DIM())),
-        ])
-    };
-    frame.render_widget(Paragraph::new(header), chunks[0]);
+    let cols = Layout::horizontal([
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+    ])
+    .split(chunks[0]);
 
-    for row in 0..rows {
-        let cols = Layout::horizontal([
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-        ])
-        .split(chunks[row + 1]);
-        for col in 0..BLACKJACK_GRID_COLUMNS {
-            let slot = row * BLACKJACK_GRID_COLUMNS + col;
-            if slot >= slots {
-                continue;
-            }
-            let room = rooms.get(slot).copied();
-            draw_blackjack_slot(frame, cols[col], slot, room, snapshots, prefix_armed);
-        }
+    let loading = rooms.is_empty();
+    for slot in 0..BLACKJACK_GRID_COLUMNS {
+        let room = rooms.get(slot).copied();
+        draw_blackjack_slot(
+            frame,
+            cols[slot],
+            slot,
+            room,
+            snapshots,
+            prefix_armed,
+            loading,
+        );
     }
+
+    // Single dim rule across the whole strip, separating it from chat below.
+    let rule_width = chunks[1].width as usize;
+    let rule = "─".repeat(rule_width);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            rule,
+            Style::default().fg(theme::BORDER_DIM()),
+        ))),
+        chunks[1],
+    );
 }
 
 fn draw_blackjack_slot(
@@ -258,73 +225,117 @@ fn draw_blackjack_slot(
     room: Option<&RoomListItem>,
     snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     prefix_armed: bool,
+    loading: bool,
 ) {
-    if area.width < 8 || area.height < 3 {
+    if area.width < 10 || area.height < BLACKJACK_GRID_TEXT_ROWS {
         return;
     }
 
-    let key = BLACKJACK_SLOT_KEYS
-        .get(slot)
-        .and_then(|byte| blackjack_slot_for_key(*byte).map(|_| *byte as char))
-        .unwrap_or('?');
-    let title = format!(" b{key} ");
-    let active_style = if prefix_armed {
+    let key_char = match slot {
+        0 => '1',
+        1 => '2',
+        2 => '3',
+        _ => '?',
+    };
+    let key_style = if prefix_armed {
         Style::default()
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD)
+    } else if room.is_some() {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme::AMBER())
+        Style::default().fg(theme::TEXT_FAINT())
     };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(active_style);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let key_tag = Span::styled(format!("b{key_char} "), key_style);
+
+    let inner_width = area.width as usize;
 
     let Some(room) = room else {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "loading",
-                Style::default().fg(theme::TEXT_FAINT()),
-            )))
-            .alignment(Alignment::Center),
-            inner,
-        );
+        let label = if loading { "loading…" } else { "open slot" };
+        let lines = vec![
+            Line::from(vec![
+                key_tag,
+                Span::styled(label, Style::default().fg(theme::TEXT_FAINT())),
+            ]),
+            Line::from(""),
+            Line::from(""),
+        ];
+        frame.render_widget(Paragraph::new(lines), area);
         return;
     };
 
-    let seats = blackjack_seats_label(room, snapshots);
-    let width = inner.width as usize;
-    let line = Line::from(vec![
+    let snapshot = snapshots.get(&room.id);
+    let max_seats: usize = snapshot.map(|s| s.seats.len()).unwrap_or(4);
+    let occupied: Option<usize> =
+        snapshot.map(|s| s.seats.iter().filter(|seat| seat.user_id.is_some()).count());
+
+    let name_budget = inner_width.saturating_sub(3).max(4); // room for "bN "
+    let line1 = Line::from(vec![
+        key_tag,
         Span::styled(
-            truncate(
-                &room.display_name,
-                width.saturating_sub(seats.len() + 3).max(4),
-            ),
+            truncate(&room.display_name, name_budget),
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" "),
-        Span::styled(seats, Style::default().fg(theme::TEXT_DIM())),
     ]);
-    frame.render_widget(Paragraph::new(line), inner);
+
+    let pace_label = room.blackjack_settings.pace.label();
+    let stake_label = room.blackjack_settings.stake_label();
+    let line2 = Line::from(vec![
+        Span::styled(
+            pace_label,
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(stake_label, Style::default().fg(theme::TEXT_DIM())),
+    ]);
+
+    let mut seat_text = String::new();
+    for i in 0..max_seats {
+        let filled = occupied.map(|o| i < o).unwrap_or(false);
+        seat_text.push(if filled { '●' } else { '○' });
+    }
+    let count_label = match occupied {
+        Some(n) => format!(" {}/{}", n, max_seats),
+        None => format!(" ?/{}", max_seats),
+    };
+    let phase_label = blackjack_phase_label(snapshot);
+    let phase_color = match snapshot.map(|s| s.phase) {
+        Some(crate::app::rooms::blackjack::state::Phase::PlayerTurn)
+        | Some(crate::app::rooms::blackjack::state::Phase::DealerTurn) => theme::AMBER_GLOW(),
+        Some(_) => theme::TEXT(),
+        None => theme::TEXT_FAINT(),
+    };
+    let line3 = Line::from(vec![
+        Span::styled(seat_text, Style::default().fg(theme::AMBER())),
+        Span::styled(count_label, Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(phase_label, Style::default().fg(phase_color)),
+    ]);
+
+    frame.render_widget(Paragraph::new(vec![line1, line2, line3]), area);
 }
 
-fn blackjack_seats_label(
-    room: &RoomListItem,
-    snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
-) -> String {
-    let Some(snapshot) = snapshots.get(&room.id) else {
-        return "?/4".to_string();
+fn blackjack_phase_label(snapshot: Option<&BlackjackSnapshot>) -> String {
+    use crate::app::rooms::blackjack::state::Phase;
+    let Some(snap) = snapshot else {
+        return "idle".to_string();
     };
-    let occupied = snapshot
-        .seats
-        .iter()
-        .filter(|seat| seat.user_id.is_some())
-        .count();
-    format!("{}/{}", occupied, snapshot.seats.len())
+    match snap.phase {
+        Phase::Betting => match snap.betting_countdown_secs {
+            Some(secs) => format!("betting · {secs}s"),
+            None => "betting".to_string(),
+        },
+        Phase::BetPending => "bet pending".to_string(),
+        Phase::PlayerTurn => "player turn".to_string(),
+        Phase::DealerTurn => "dealer".to_string(),
+        Phase::Settling => "settling".to_string(),
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -762,7 +773,9 @@ mod tests {
         assert!(rendered.contains("Blackjack Rooms"));
         assert!(rendered.contains("loading tables"));
         assert!(rendered.contains("b1"));
-        assert!(rendered.contains("b="));
+        assert!(rendered.contains("b2"));
+        assert!(rendered.contains("b3"));
+        assert!(!rendered.contains("b4"));
     }
 
     #[test]

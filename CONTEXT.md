@@ -999,8 +999,8 @@ Currently the SSH app assumes a single process. These in-memory structures would
 5. Membership churn: `SettingsModalState::open_from_profile` drops favorites whose room isn't in the current `available_rooms` catalog, so ghosts never linger in the UI. The resolver also falls back to general if a stored pin is no longer joined. Index is session-local (not persisted) and clamped on every read.
 
 **Dashboard Blackjack room slots:**
-1. When the dashboard header is visible and there is enough vertical space below Stream/Vote, render a 3-column Blackjack Rooms grid above the dashboard chat card. It uses the live `RoomsSnapshot`, shows 4 rows normally and 5 rows on taller dashboards, and keeps placeholder/loading cells visible until rooms arrive.
-2. Slot bindings use a reliable two-key prefix: `b1..b9`, `b0`, `b-`, `b=`, then `b[`, `b]`, `b\` for the fifth row. Dashboard global key routing must let these slot keys through while `dashboard_blackjack_prefix_armed` is true, so `b-`/`b=` do not trigger paired-client volume.
+1. When the dashboard header is visible and there is enough vertical space below Stream/Vote, render a single-row, 3-column Blackjack Rooms strip above the dashboard chat card. Each box is 6 rows tall and shows the room name (title), pace · stake, a seat-dot row (`●●○○ 2/4`), and current phase plus countdown (e.g. `betting · 12s`). It uses the live `RoomsSnapshot`, takes only the first three Blackjack rooms, and falls back to a `loading…` / `open slot` placeholder per box.
+2. Slot bindings are a two-key prefix limited to `b1`, `b2`, `b3`. Dashboard global key routing must let `1`/`2`/`3` through while `dashboard_blackjack_prefix_armed` is true so the global screen switcher does not steal them.
 3. Entering a dashboard slot delegates to `rooms::input::enter_room`, then switches to the Rooms screen. That keeps table touch, game-chat join/tail fetch, and per-room Blackjack state setup identical to the Rooms directory path.
 
 **Chat composer autocomplete:**
