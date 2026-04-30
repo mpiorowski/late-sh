@@ -1,8 +1,16 @@
+use std::time::Duration;
+
 use late_core::{db::Db, models::game_room::GameRoom};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
+use super::blackjack::settings::BlackjackTableSettings;
+
 pub use late_core::models::game_room::GameKind;
+
+const MAX_TABLES_PER_USER: i64 = 3;
+const INACTIVE_TABLE_TTL: Duration = Duration::from_secs(12 * 60 * 60);
+const INACTIVE_TABLE_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
 pub struct RoomsService {
@@ -25,6 +33,7 @@ pub struct RoomListItem {
     pub slug: String,
     pub display_name: String,
     pub status: String,
+    pub blackjack_settings: BlackjackTableSettings,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +74,7 @@ impl TryFrom<GameRoom> for RoomListItem {
             slug: room.slug,
             display_name: room.display_name,
             status: room.status,
+            blackjack_settings: BlackjackTableSettings::from_json(&room.settings),
         })
     }
 }
@@ -98,6 +108,18 @@ impl RoomsService {
         });
     }
 
+    pub fn cleanup_inactive_tables_task(&self) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = svc.close_inactive_tables(INACTIVE_TABLE_TTL).await {
+                    tracing::error!(error = ?e, "failed to close inactive game rooms");
+                }
+                tokio::time::sleep(INACTIVE_TABLE_CLEANUP_INTERVAL).await;
+            }
+        });
+    }
+
     async fn refresh(&self) -> anyhow::Result<()> {
         let client = self.db.get().await?;
         self.publish_rooms(&client).await
@@ -113,11 +135,41 @@ impl RoomsService {
         Ok(())
     }
 
-    pub fn create_game_room_task(&self, user_id: Uuid, game_kind: GameKind, display_name: String) {
+    async fn close_inactive_tables(&self, ttl: Duration) -> anyhow::Result<u64> {
+        let client = self.db.get().await?;
+        let closed = close_inactive_rooms(&client, ttl).await?;
+        if closed > 0 {
+            tracing::info!(closed, "closed inactive game rooms");
+            self.publish_rooms(&client).await?;
+        }
+        Ok(closed)
+    }
+
+    pub fn touch_room_task(&self, room_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.touch_room(room_id).await {
+                tracing::error!(error = ?e, %room_id, "failed to touch game room");
+            }
+        });
+    }
+
+    async fn touch_room(&self, room_id: Uuid) -> anyhow::Result<()> {
+        let client = self.db.get().await?;
+        touch_room_activity(&client, room_id).await
+    }
+
+    pub fn create_game_room_task(
+        &self,
+        user_id: Uuid,
+        game_kind: GameKind,
+        display_name: String,
+        settings: BlackjackTableSettings,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc
-                .create_game_room(user_id, game_kind, &display_name)
+                .create_game_room(user_id, game_kind, &display_name, settings)
                 .await
             {
                 Ok(room) => {
@@ -151,21 +203,81 @@ impl RoomsService {
         user_id: Uuid,
         game_kind: GameKind,
         display_name: &str,
+        settings: BlackjackTableSettings,
     ) -> anyhow::Result<GameRoom> {
         let client = self.db.get().await?;
+        let existing_count = count_open_rooms_created_by(&client, user_id, game_kind).await?;
+        if existing_count >= MAX_TABLES_PER_USER {
+            anyhow::bail!(
+                "table limit reached: max {} open {} tables per user",
+                MAX_TABLES_PER_USER,
+                game_kind_label(game_kind)
+            );
+        }
+
         let slug = generate_room_slug(game_kind);
         let room = GameRoom::create_with_chat_room(
             &client,
             game_kind,
             &slug,
             display_name,
-            serde_json::json!({}),
+            settings.to_json(),
             Some(user_id),
         )
         .await?;
         self.publish_rooms(&client).await?;
         Ok(room)
     }
+}
+
+async fn count_open_rooms_created_by(
+    client: &tokio_postgres::Client,
+    user_id: Uuid,
+    game_kind: GameKind,
+) -> anyhow::Result<i64> {
+    let game_kind = game_kind.as_str();
+    let row = client
+        .query_one(
+            "SELECT COUNT(*)::bigint AS count
+             FROM game_rooms
+             WHERE created_by = $1
+               AND game_kind = $2
+               AND status <> 'closed'",
+            &[&user_id, &game_kind],
+        )
+        .await?;
+    Ok(row.get("count"))
+}
+
+async fn close_inactive_rooms(
+    client: &tokio_postgres::Client,
+    ttl: Duration,
+) -> anyhow::Result<u64> {
+    let ttl_seconds = ttl.as_secs() as i64;
+    let updated = client
+        .execute(
+            "UPDATE game_rooms
+             SET status = $1,
+                 updated = current_timestamp
+             WHERE status <> $1
+               AND updated < current_timestamp - ($2::bigint * interval '1 second')",
+            &[&GameRoom::STATUS_CLOSED, &ttl_seconds],
+        )
+        .await?;
+    Ok(updated)
+}
+
+async fn touch_room_activity(client: &tokio_postgres::Client, room_id: Uuid) -> anyhow::Result<()> {
+    client
+        .execute(
+            "UPDATE game_rooms
+             SET updated = current_timestamp
+             WHERE id = $1
+               AND status <> $2",
+            &[&room_id, &GameRoom::STATUS_CLOSED],
+        )
+        .await?;
+    Ok(())
 }
 
 fn generate_room_slug(game_kind: GameKind) -> String {

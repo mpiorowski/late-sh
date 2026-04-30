@@ -205,6 +205,10 @@ pub enum ChatEvent {
         room_id: Uuid,
         slug: String,
     },
+    GameRoomJoined {
+        user_id: Uuid,
+        room_id: Uuid,
+    },
     RoomFailed {
         user_id: Uuid,
         message: String,
@@ -1749,6 +1753,29 @@ impl ChatService {
         );
     }
 
+    pub fn join_game_room_task(&self, user_id: Uuid, room_id: Uuid) {
+        let service = self.clone();
+        let span = info_span!("chat.join_game_room_task", user_id = %user_id, room_id = %room_id);
+        tokio::spawn(
+            async move {
+                match service.join_game_room(user_id, room_id).await {
+                    Ok(room_id) => {
+                        let _ = service
+                            .evt_tx
+                            .send(ChatEvent::GameRoomJoined { user_id, room_id });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::RoomFailed {
+                            user_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            .instrument(span),
+        );
+    }
+
     async fn join_public_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
         let client = self.db.get().await?;
         let room = ChatRoom::get(&client, room_id)
@@ -1756,6 +1783,18 @@ impl ChatService {
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
         if room.kind != "topic" || room.visibility != "public" {
             anyhow::bail!("Only public rooms can be joined from discover");
+        }
+        ChatRoomMember::join(&client, room.id, user_id).await?;
+        Ok(room.id)
+    }
+
+    async fn join_game_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
+        let client = self.db.get().await?;
+        let room = ChatRoom::get(&client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
+        if room.kind != "game" {
+            anyhow::bail!("Only game rooms can be joined here");
         }
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
