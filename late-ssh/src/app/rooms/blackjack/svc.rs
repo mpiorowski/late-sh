@@ -23,6 +23,7 @@ const BETTING_LOCK_CAP_SECS: u64 = 30;
 const MAX_MISSED_DEALS: u8 = 3;
 const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
 const DEALER_CARD_DELAY_MS: u64 = 1100;
+const SETTLEMENT_MIN_VIEW_MS: u64 = 1500;
 
 #[derive(Clone)]
 pub struct BlackjackService {
@@ -748,6 +749,9 @@ impl BlackjackService {
         if table.phase != Phase::Settling {
             return Err(ActionFailure::InvalidPhase("hand is still in progress"));
         }
+        if !table.settlement_min_view_elapsed() {
+            return Err(ActionFailure::InvalidPhase("round result is still showing"));
+        }
         let status = table.betting_prompt_with_timer();
         table.reset_to_betting(&status);
         let activity_generation = table.record_activity(user_id);
@@ -950,6 +954,7 @@ struct SharedTableState {
     action_countdown_id: u64,
     dealer_turn_id: u64,
     dealer_turn_scheduled: bool,
+    settled_at: Option<Instant>,
     status_message: String,
 }
 
@@ -1123,6 +1128,7 @@ impl SharedTableState {
             action_countdown_id: 0,
             dealer_turn_id: 0,
             dealer_turn_scheduled: false,
+            settled_at: None,
             status_message: "Sit to join, or watch the table.".to_string(),
         }
     }
@@ -1218,6 +1224,7 @@ impl SharedTableState {
             self.clear_action_countdown();
             return None;
         }
+        self.settled_at = None;
         self.action_countdown_id = self.action_countdown_id.wrapping_add(1);
         self.action_deadline =
             Some(Instant::now() + Duration::from_secs(self.settings.action_timeout_secs()));
@@ -1253,6 +1260,7 @@ impl SharedTableState {
     fn begin_dealer_turn(&mut self) {
         self.clear_action_countdown();
         self.phase = Phase::DealerTurn;
+        self.settled_at = None;
         self.dealer_turn_id = self.dealer_turn_id.wrapping_add(1);
         self.dealer_turn_scheduled = false;
         self.status_message = "Dealer reveals the hole card.".to_string();
@@ -1297,6 +1305,7 @@ impl SharedTableState {
             }
         }
         self.phase = Phase::Settling;
+        self.settled_at = Some(Instant::now());
         self.dealer_turn_scheduled = false;
         self.status_message = "Round settled. Press Space or Enter for next hand.".to_string();
         let left_seats = self.remove_deferred_leave_seats();
@@ -1305,6 +1314,12 @@ impl SharedTableState {
             settlements,
             left_seats,
         }
+    }
+
+    fn settlement_min_view_elapsed(&self) -> bool {
+        self.settled_at.is_none_or(|settled_at| {
+            settled_at.elapsed() >= Duration::from_millis(SETTLEMENT_MIN_VIEW_MS)
+        })
     }
 
     fn betting_prompt(&self) -> String {
@@ -1591,13 +1606,26 @@ impl SharedTableState {
         }
 
         let dealer_blackjack = is_natural_blackjack(&self.dealer_hand);
+        if dealer_blackjack {
+            self.begin_dealer_turn();
+            self.status_message = "Dealer reveals blackjack.".to_string();
+            if !auto_left_seats.is_empty() {
+                self.status_message = format!(
+                    "{} {}",
+                    self.status_message,
+                    format_auto_left_notice(&auto_left_seats)
+                );
+            }
+            return Ok(Vec::new());
+        }
+
         let mut settlements = Vec::new();
         for index in 0..self.seats.len() {
             if self.seats[index].bet.is_none() {
                 continue;
             }
             let player_blackjack = is_natural_blackjack(&self.seats[index].hand);
-            if player_blackjack || dealer_blackjack {
+            if player_blackjack {
                 let outcome = settle(&self.seats[index].hand, &self.dealer_hand);
                 if let Some(settlement) = self.finish_seat(index, outcome) {
                     settlements.push(settlement);
@@ -1607,9 +1635,11 @@ impl SharedTableState {
 
         if self.has_playable_seats() {
             self.phase = Phase::PlayerTurn;
+            self.settled_at = None;
             self.status_message = "Players hit or stand.".to_string();
         } else {
             self.phase = Phase::Settling;
+            self.settled_at = Some(Instant::now());
             self.clear_action_countdown();
             self.status_message = "Round settled. Press Space or Enter for next hand.".to_string();
         }
@@ -1659,6 +1689,7 @@ impl SharedTableState {
     fn advance_or_finish_round(&mut self) -> Vec<Settlement> {
         if self.has_playable_seats() {
             self.phase = Phase::PlayerTurn;
+            self.settled_at = None;
             self.status_message = "Waiting for remaining seats.".to_string();
             return Vec::new();
         }
@@ -1709,6 +1740,7 @@ impl SharedTableState {
     fn reset_to_betting(&mut self, status: &str) {
         self.dealer_hand.clear();
         self.phase = Phase::Betting;
+        self.settled_at = None;
         self.clear_betting_countdown();
         self.clear_action_countdown();
         for seat in &mut self.seats {
@@ -1851,7 +1883,10 @@ mod tests {
         assert_eq!(table.dealer_hand.len(), 2);
         assert_eq!(table.seats[seat_a].hand.len(), 2);
         assert_eq!(table.seats[seat_b].hand.len(), 2);
-        assert!(matches!(table.phase, Phase::PlayerTurn | Phase::Settling));
+        assert!(matches!(
+            table.phase,
+            Phase::PlayerTurn | Phase::DealerTurn | Phase::Settling
+        ));
     }
 
     #[test]
