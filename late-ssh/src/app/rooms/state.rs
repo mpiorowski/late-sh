@@ -14,9 +14,22 @@ impl App {
     }
 
     fn clamp_rooms_selection(&mut self) {
-        self.rooms_selected_index = self
-            .rooms_selected_index
-            .min(self.rooms_snapshot.rooms.len());
+        let count = self.visible_real_rooms_count();
+        if count == 0 {
+            self.rooms_selected_index = 0;
+        } else {
+            self.rooms_selected_index = self.rooms_selected_index.min(count - 1);
+        }
+    }
+
+    fn visible_real_rooms_count(&self) -> usize {
+        let q = self.rooms_search_query.trim().to_lowercase();
+        self.rooms_snapshot
+            .rooms
+            .iter()
+            .filter(|room| self.rooms_filter.matches_real(room.game_kind))
+            .filter(|room| q.is_empty() || room.display_name.to_lowercase().contains(&q))
+            .count()
     }
 
     fn refresh_active_room(&mut self) {

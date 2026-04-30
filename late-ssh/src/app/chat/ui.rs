@@ -821,6 +821,99 @@ pub struct ChatRenderInput<'a> {
     pub showcase_composing: bool,
 }
 
+pub struct EmbeddedRoomChatView<'a> {
+    pub title: &'a str,
+    pub messages: &'a [ChatMessage],
+    pub rows_cache: &'a mut ChatRowsCache,
+    pub usernames: &'a HashMap<Uuid, String>,
+    pub countries: &'a HashMap<Uuid, String>,
+    pub badges: &'a HashMap<Uuid, BadgeTier>,
+    pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub current_user_id: Uuid,
+    pub selected_message_id: Option<Uuid>,
+    pub highlighted_message_id: Option<Uuid>,
+    pub reaction_picker_active: bool,
+    pub composer: &'a TextArea<'static>,
+    pub composing: bool,
+    pub mention_matches: &'a [MentionMatch],
+    pub mention_selected: usize,
+    pub mention_active: bool,
+    pub reply_author: Option<&'a str>,
+    pub is_editing: bool,
+    pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+}
+
+pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoomChatView<'_>) {
+    let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
+    let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
+        .max(composer_placeholder_lines(&ComposerBlockView {
+            composer: view.composer,
+            composing: view.composing,
+            selected_message: view.selected_message_id.is_some(),
+            reaction_picker_active: view.reaction_picker_active,
+            reply_author: view.reply_author,
+            is_editing: view.is_editing,
+            mention_active: view.mention_active,
+            mention_matches: view.mention_matches,
+            mention_selected: view.mention_selected,
+        }));
+    let composer_height = total_composer_lines.min(4) as u16 + 2;
+    let layout =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
+    let messages_area = layout[0];
+    let composer_area = layout[1];
+
+    let height = messages_area.height.saturating_sub(2).max(1) as usize;
+    let width = messages_area.width.saturating_sub(2).max(1) as usize;
+    ensure_chat_rows_cache(
+        view.rows_cache,
+        view.messages.iter().collect(),
+        width,
+        ChatRowsContext {
+            current_user_id: view.current_user_id,
+            usernames: view.usernames,
+            countries: view.countries,
+            badges: view.badges,
+            bonsai_glyphs: view.bonsai_glyphs,
+            message_reactions: view.message_reactions,
+        },
+    );
+    let mut lines = visible_chat_rows(
+        view.rows_cache,
+        view.selected_message_id,
+        view.highlighted_message_id,
+        height,
+    );
+    if lines.is_empty() {
+        lines = vec![Line::from(Span::styled(
+            "No messages yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))];
+    }
+
+    let messages_block = Block::default()
+        .title(format!(" {} ", view.title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()));
+    frame.render_widget(Paragraph::new(lines).block(messages_block), messages_area);
+
+    draw_composer_block(
+        frame,
+        composer_area,
+        &ComposerBlockView {
+            composer: view.composer,
+            composing: view.composing,
+            selected_message: view.selected_message_id.is_some(),
+            reaction_picker_active: view.reaction_picker_active,
+            reply_author: view.reply_author,
+            is_editing: view.is_editing,
+            mention_active: view.mention_active,
+            mention_matches: view.mention_matches,
+            mention_selected: view.mention_selected,
+        },
+    );
+}
+
 struct RoomListRows {
     lines: Vec<Line<'static>>,
     hit_slots: Vec<Option<RoomSlot>>,
@@ -1480,6 +1573,7 @@ mod tests {
             discover_view: crate::app::chat::discover::ui::DiscoverListView {
                 items: &[],
                 selected_index: 0,
+                loading: false,
             },
             rows_cache,
             chat_rooms: rooms,

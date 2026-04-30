@@ -75,19 +75,35 @@ impl UserChips {
         Ok(Self::from(row))
     }
 
-    /// Deduct chips (for betting). Enforces the floor — balance never drops below CHIP_FLOOR.
-    /// Returns None if the user doesn't have enough chips above the floor for the bet.
+    /// Deduct chips (for betting). The floor is restored after losing settlements,
+    /// so a user can wager their visible balance.
+    /// Returns None if the user doesn't have enough chips for the bet.
     pub async fn deduct(client: &Client, user_id: Uuid, amount: i64) -> Result<Option<Self>> {
         let row = client
             .query_opt(
                 "UPDATE user_chips
                  SET balance = balance - $2, updated = current_timestamp
-                 WHERE user_id = $1 AND balance - $2 >= $3
+                 WHERE user_id = $1 AND balance >= $2
                  RETURNING *",
-                &[&user_id, &amount, &CHIP_FLOOR],
+                &[&user_id, &amount],
             )
             .await?;
         Ok(row.map(Self::from))
+    }
+
+    pub async fn restore_floor(client: &Client, user_id: Uuid) -> Result<Self> {
+        let row = client
+            .query_one(
+                "INSERT INTO user_chips (user_id, balance)
+                 VALUES ($1, $2)
+                 ON CONFLICT (user_id) DO UPDATE SET
+                   balance = GREATEST(user_chips.balance, $2),
+                   updated = current_timestamp
+                 RETURNING *",
+                &[&user_id, &CHIP_FLOOR],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).
