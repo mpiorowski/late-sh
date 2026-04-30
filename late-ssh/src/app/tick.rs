@@ -96,7 +96,7 @@ impl App {
         {
             self.leaderboard = rx.borrow_and_update().clone();
             if let Some(&balance) = self.leaderboard.user_chips.get(&self.user_id)
-                && self.blackjack_state.as_ref().map_or(true, |state| {
+                && self.blackjack_state.as_ref().is_none_or(|state| {
                     state.snapshot.phase == crate::app::rooms::blackjack::state::Phase::Betting
                 })
             {

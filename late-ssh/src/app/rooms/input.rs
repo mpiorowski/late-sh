@@ -65,6 +65,10 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             open_create_form(app);
             true
         }
+        ParsedInput::Char('d') | ParsedInput::Char('D') => {
+            delete_selected_room(app);
+            true
+        }
         ParsedInput::Char('j') => {
             move_selection(app, 1);
             true
@@ -295,6 +299,26 @@ fn open_create_form(app: &mut App) {
     }
 }
 
+fn delete_selected_room(app: &mut App) {
+    if !can_delete_room(app.is_admin) {
+        app.banner = Some(Banner::error(
+            "Admin only: deleting rooms is locked for now.",
+        ));
+        return;
+    }
+
+    let Some(room) = visible_real_room_at(app, app.rooms_selected_index) else {
+        return;
+    };
+
+    app.rooms_service
+        .delete_game_room_task(app.user_id, room.id, room.display_name.clone());
+    app.banner = Some(Banner::success(&format!(
+        "Deleting table: {}",
+        room.display_name
+    )));
+}
+
 fn handle_escape(app: &mut App) {
     if app.rooms_add_form_open {
         app.rooms_add_form_open = false;
@@ -437,30 +461,34 @@ fn visible_real_room_at(app: &App, index: usize) -> Option<crate::app::rooms::sv
 }
 
 fn enter_selected_room(app: &mut App) {
-    if !can_enter_room(app.is_admin, app.is_mod) {
-        app.banner = Some(Banner::error(
-            "Admin or mod only: rooms are locked for now.",
-        ));
+    let Some(room) = visible_real_room_at(app, app.rooms_selected_index) else {
         return;
+    };
+    let _ = enter_room(app, room);
+}
+
+pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListItem) -> bool {
+    if !can_enter_room(app.is_admin, app.is_mod) {
+        app.banner = Some(Banner::error("Rooms are locked for now."));
+        return false;
     }
 
-    if let Some(room) = visible_real_room_at(app, app.rooms_selected_index) {
-        app.chat.join_game_room_chat(room.chat_room_id);
-        app.chat.request_room_tail(room.chat_room_id);
-        if matches!(room.game_kind, crate::app::rooms::svc::GameKind::Blackjack) {
-            app.rooms_service.touch_room_task(room.id);
-            let svc = app
-                .blackjack_table_manager
-                .get_or_create(room.id, room.blackjack_settings.clone());
-            app.blackjack_state = Some(crate::app::rooms::blackjack::state::State::new(
-                svc,
-                app.user_id,
-                app.chip_balance,
-            ));
-        }
-        app.rooms_active_room = Some(room);
-        app.rooms_add_form_open = false;
+    app.chat.join_game_room_chat(room.chat_room_id);
+    app.chat.request_room_tail(room.chat_room_id);
+    if matches!(room.game_kind, crate::app::rooms::svc::GameKind::Blackjack) {
+        app.rooms_service.touch_room_task(room.id);
+        let svc = app
+            .blackjack_table_manager
+            .get_or_create(room.id, room.blackjack_settings.clone());
+        app.blackjack_state = Some(crate::app::rooms::blackjack::state::State::new(
+            svc,
+            app.user_id,
+            app.chip_balance,
+        ));
     }
+    app.rooms_active_room = Some(room);
+    app.rooms_add_form_open = false;
+    true
 }
 
 fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
@@ -562,13 +590,18 @@ fn can_create_room(is_admin: bool) -> bool {
     is_admin
 }
 
+fn can_delete_room(is_admin: bool) -> bool {
+    is_admin
+}
+
 fn can_enter_room(is_admin: bool, is_mod: bool) -> bool {
-    is_admin || is_mod
+    let _ = (is_admin, is_mod);
+    true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{can_create_room, can_enter_room};
+    use super::{can_create_room, can_delete_room, can_enter_room};
 
     #[test]
     fn room_creation_stays_admin_only() {
@@ -577,10 +610,16 @@ mod tests {
     }
 
     #[test]
+    fn room_deletion_stays_admin_only() {
+        assert!(can_delete_room(true));
+        assert!(!can_delete_room(false));
+    }
+
+    #[test]
     fn room_entry_allows_admins_and_mods() {
         assert!(can_enter_room(true, false));
         assert!(can_enter_room(false, true));
         assert!(can_enter_room(true, true));
-        assert!(!can_enter_room(false, false));
+        assert!(can_enter_room(false, false));
     }
 }

@@ -231,6 +231,7 @@ impl App {
         let message_reactions = self.chat.message_reactions();
         let dashboard_active_room = self.dashboard_active_room_id();
         let dashboard_strip_pins = self.dashboard_strip_pins();
+        let rooms_blackjack_snapshots = self.blackjack_table_manager.table_snapshots();
         let dashboard_messages = dashboard_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -243,6 +244,9 @@ impl App {
             show_header: show_dashboard_header,
             favorites_strip: dashboard_strip_pins.as_deref(),
             pinned_messages: self.chat.pinned_messages(),
+            rooms_snapshot: &self.rooms_snapshot,
+            blackjack_snapshots: &rooms_blackjack_snapshots,
+            blackjack_prefix_armed: self.dashboard_blackjack_prefix_armed,
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
@@ -332,7 +336,6 @@ impl App {
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
-        let rooms_blackjack_snapshots = self.blackjack_table_manager.table_snapshots();
         let rooms_chat_view =
             self.rooms_active_room
                 .as_ref()
@@ -790,7 +793,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     ));
 
     if screen == Screen::Rooms {
-        append_rooms_title_extras(&mut spans, &ctx);
+        append_rooms_title_extras(&mut spans, ctx);
     }
 
     if screen == Screen::Artboard {

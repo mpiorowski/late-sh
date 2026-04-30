@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -17,6 +17,11 @@ use crate::{
     app::common::{
         primitives::{format_duration_mmss, genre_label},
         theme,
+    },
+    app::dashboard::input::blackjack_slot_for_key,
+    app::rooms::{
+        blackjack::state::BlackjackSnapshot,
+        svc::{GameKind, RoomListItem, RoomsSnapshot},
     },
     app::vote::svc::{Genre, VoteCount},
     app::vote::ui::{VoteCardView, draw_vote_card},
@@ -35,9 +40,15 @@ const DASHBOARD_HIDE_STREAM_AT_WIDTH: u16 = 39;
 // Below this many rows the fixed 5-row stream card plus chat card no longer
 // fit cleanly, so we collapse to chat-only rather than render clipped blocks.
 const DASHBOARD_MIN_FULL_HEIGHT: u16 = 16;
+const BLACKJACK_GRID_MIN_WIDTH: u16 = 48;
+const BLACKJACK_GRID_MIN_CHAT_HEIGHT: u16 = 6;
+const BLACKJACK_GRID_ROWS_COMPACT: usize = 4;
+const BLACKJACK_GRID_ROWS_TALL: usize = 5;
+const BLACKJACK_GRID_COLUMNS: usize = 3;
 const AUDIO_BUTTON_PREFIX: &str = "No audio? ";
 const CLI_BUTTON_TEXT: &str = "[B] CLI";
 const PAIR_BUTTON_TEXT: &str = "[P] web";
+const BLACKJACK_SLOT_KEYS: &[u8] = b"1234567890-=[]\\";
 
 pub struct DashboardRenderInput<'a> {
     pub now_playing: Option<&'a str>,
@@ -53,6 +64,9 @@ pub struct DashboardRenderInput<'a> {
     /// Pinned chat messages visible to this user; rendered as a slim amber
     /// strip above the favorites strip. Empty slice = no strip.
     pub pinned_messages: &'a [ChatMessage],
+    pub rooms_snapshot: &'a RoomsSnapshot,
+    pub blackjack_snapshots: &'a std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+    pub blackjack_prefix_armed: bool,
     pub chat_view: DashboardChatView<'a>,
 }
 
@@ -102,13 +116,224 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         );
     }
 
-    draw_chat_section(
-        frame,
-        sections[1],
-        view.pinned_messages,
-        view.favorites_strip,
-        view.chat_view,
-    );
+    draw_blackjack_and_chat_section(frame, sections[1], view);
+}
+
+fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
+    let rooms = dashboard_blackjack_rooms(view.rooms_snapshot);
+    if let Some(grid_height) = blackjack_grid_height(area) {
+        let split =
+            Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
+        draw_blackjack_grid(
+            frame,
+            split[0],
+            &rooms,
+            view.blackjack_snapshots,
+            view.blackjack_prefix_armed,
+        );
+        draw_chat_section(
+            frame,
+            split[1],
+            view.pinned_messages,
+            view.favorites_strip,
+            view.chat_view,
+        );
+    } else {
+        draw_chat_section(
+            frame,
+            area,
+            view.pinned_messages,
+            view.favorites_strip,
+            view.chat_view,
+        );
+    }
+}
+
+fn blackjack_grid_height(area: Rect) -> Option<u16> {
+    if area.width < BLACKJACK_GRID_MIN_WIDTH {
+        return None;
+    }
+
+    let rows = blackjack_grid_rows(area.height);
+    let height = (1 + rows * 3) as u16;
+    if area.height >= height.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT) {
+        Some(height)
+    } else {
+        None
+    }
+}
+
+fn blackjack_grid_rows(height: u16) -> usize {
+    if height >= 32 {
+        BLACKJACK_GRID_ROWS_TALL
+    } else {
+        BLACKJACK_GRID_ROWS_COMPACT
+    }
+}
+
+fn dashboard_blackjack_rooms(snapshot: &RoomsSnapshot) -> Vec<&RoomListItem> {
+    snapshot
+        .rooms
+        .iter()
+        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
+        .take(BLACKJACK_GRID_ROWS_TALL * BLACKJACK_GRID_COLUMNS)
+        .collect()
+}
+
+fn draw_blackjack_grid(
+    frame: &mut Frame,
+    area: Rect,
+    rooms: &[&RoomListItem],
+    snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+    prefix_armed: bool,
+) {
+    if area.height < 4 {
+        return;
+    }
+
+    let rows = blackjack_grid_rows(area.height).min(BLACKJACK_GRID_ROWS_TALL);
+    let slots = rows * BLACKJACK_GRID_COLUMNS;
+    let chunks = Layout::vertical(
+        std::iter::once(Constraint::Length(1))
+            .chain((0..rows).map(|_| Constraint::Length(3)))
+            .collect::<Vec<_>>(),
+    )
+    .split(area);
+
+    let header = if prefix_armed {
+        Line::from(vec![
+            Span::styled(
+                "Blackjack Rooms",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · press slot key", Style::default().fg(theme::TEXT_DIM())),
+        ])
+    } else if rooms.is_empty() {
+        Line::from(vec![
+            Span::styled(
+                "Blackjack Rooms",
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · loading tables", Style::default().fg(theme::TEXT_DIM())),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(
+                "Blackjack Rooms",
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · b + slot", Style::default().fg(theme::TEXT_DIM())),
+        ])
+    };
+    frame.render_widget(Paragraph::new(header), chunks[0]);
+
+    for row in 0..rows {
+        let cols = Layout::horizontal([
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+        ])
+        .split(chunks[row + 1]);
+        for col in 0..BLACKJACK_GRID_COLUMNS {
+            let slot = row * BLACKJACK_GRID_COLUMNS + col;
+            if slot >= slots {
+                continue;
+            }
+            let room = rooms.get(slot).copied();
+            draw_blackjack_slot(frame, cols[col], slot, room, snapshots, prefix_armed);
+        }
+    }
+}
+
+fn draw_blackjack_slot(
+    frame: &mut Frame,
+    area: Rect,
+    slot: usize,
+    room: Option<&RoomListItem>,
+    snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+    prefix_armed: bool,
+) {
+    if area.width < 8 || area.height < 3 {
+        return;
+    }
+
+    let key = BLACKJACK_SLOT_KEYS
+        .get(slot)
+        .and_then(|byte| blackjack_slot_for_key(*byte).map(|_| *byte as char))
+        .unwrap_or('?');
+    let title = format!(" b{key} ");
+    let active_style = if prefix_armed {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::AMBER())
+    };
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(active_style);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(room) = room else {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "loading",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )))
+            .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    };
+
+    let seats = blackjack_seats_label(room, snapshots);
+    let width = inner.width as usize;
+    let line = Line::from(vec![
+        Span::styled(
+            truncate(
+                &room.display_name,
+                width.saturating_sub(seats.len() + 3).max(4),
+            ),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(seats, Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(line), inner);
+}
+
+fn blackjack_seats_label(
+    room: &RoomListItem,
+    snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+) -> String {
+    let Some(snapshot) = snapshots.get(&room.id) else {
+        return "?/4".to_string();
+    };
+    let occupied = snapshot
+        .seats
+        .iter()
+        .filter(|seat| seat.user_id.is_some())
+        .count();
+    format!("{}/{}", occupied, snapshot.seats.len())
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 pub(crate) fn favorites_strip_hit_test(
@@ -420,6 +645,8 @@ mod tests {
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
+        let rooms_snapshot = RoomsSnapshot::default();
+        let blackjack_snapshots: HashMap<Uuid, BlackjackSnapshot> = HashMap::new();
 
         terminal
             .draw(|frame| {
@@ -436,6 +663,9 @@ mod tests {
                         show_header: true,
                         favorites_strip: None,
                         pinned_messages: &[],
+                        rooms_snapshot: &rooms_snapshot,
+                        blackjack_snapshots: &blackjack_snapshots,
+                        blackjack_prefix_armed: false,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,
@@ -526,6 +756,16 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_blackjack_grid_renders_room_slots_when_tall_enough() {
+        let lines = render_dashboard_with_size(100, 36);
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("Blackjack Rooms"));
+        assert!(rendered.contains("loading tables"));
+        assert!(rendered.contains("b1"));
+        assert!(rendered.contains("b="));
+    }
+
+    #[test]
     fn dashboard_hides_stream_and_vote_when_header_setting_disabled() {
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -542,6 +782,8 @@ mod tests {
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
+        let rooms_snapshot = RoomsSnapshot::default();
+        let blackjack_snapshots: HashMap<Uuid, BlackjackSnapshot> = HashMap::new();
 
         terminal
             .draw(|frame| {
@@ -558,6 +800,9 @@ mod tests {
                         show_header: false,
                         favorites_strip: None,
                         pinned_messages: &[],
+                        rooms_snapshot: &rooms_snapshot,
+                        blackjack_snapshots: &blackjack_snapshots,
+                        blackjack_prefix_armed: false,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,
@@ -617,6 +862,8 @@ mod tests {
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
+        let rooms_snapshot = RoomsSnapshot::default();
+        let blackjack_snapshots: HashMap<Uuid, BlackjackSnapshot> = HashMap::new();
         let rust_room = Uuid::now_v7();
         let go_room = Uuid::now_v7();
 
@@ -638,6 +885,9 @@ mod tests {
                             (go_room, "#go".to_string(), false, 0),
                         ]),
                         pinned_messages: &[],
+                        rooms_snapshot: &rooms_snapshot,
+                        blackjack_snapshots: &blackjack_snapshots,
+                        blackjack_prefix_armed: false,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,

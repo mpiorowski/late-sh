@@ -998,6 +998,11 @@ Currently the SSH app assumes a single process. These in-memory structures would
 4. Keybinds (dashboard only): `[` / `]` cycle, `,` jumps to previously-active pin (Vim `C-^` style), `g<digit>` jumps to slot 1..9. The `g` prefix is session-local state on `App`; `handle_global_key` short-circuits digits 1-9 on dashboard while armed so the global screen switcher (`1`=Dashboard, `3`=Games, …) doesn't steal them.
 5. Membership churn: `SettingsModalState::open_from_profile` drops favorites whose room isn't in the current `available_rooms` catalog, so ghosts never linger in the UI. The resolver also falls back to general if a stored pin is no longer joined. Index is session-local (not persisted) and clamped on every read.
 
+**Dashboard Blackjack room slots:**
+1. When the dashboard header is visible and there is enough vertical space below Stream/Vote, render a 3-column Blackjack Rooms grid above the dashboard chat card. It uses the live `RoomsSnapshot`, shows 4 rows normally and 5 rows on taller dashboards, and keeps placeholder/loading cells visible until rooms arrive.
+2. Slot bindings use a reliable two-key prefix: `b1..b9`, `b0`, `b-`, `b=`, then `b[`, `b]`, `b\` for the fifth row. Dashboard global key routing must let these slot keys through while `dashboard_blackjack_prefix_armed` is true, so `b-`/`b=` do not trigger paired-client volume.
+3. Entering a dashboard slot delegates to `rooms::input::enter_room`, then switches to the Rooms screen. That keeps table touch, game-chat join/tail fetch, and per-room Blackjack state setup identical to the Rooms directory path.
+
 **Chat composer autocomplete:**
 1. Trigger: User types `@` or `/` in the composer (at start or after space). Pressing `/` while not composing on Dashboard/Chat starts the chat composer for the active room and immediately opens the command list.
 2. Processing: `ChatState::update_autocomplete()` filters the shared username directory after `@`, or the static non-admin chat command catalog after `/`.

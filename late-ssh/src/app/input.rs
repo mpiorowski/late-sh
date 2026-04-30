@@ -1421,9 +1421,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    // When the dashboard's `g` favorite-jump prefix is armed, digits 1-9
-    // belong to the jump (`g3` → favorite slot 3), not the global screen
+    // When a dashboard two-key prefix is armed, slot digits belong to the
+    // prefix (`g3` favorite jump, `b3` blackjack room), not the global screen
     // switcher. Let them fall through to dashboard::input::handle_key.
+    if ctx.screen == Screen::Dashboard
+        && app.dashboard_blackjack_prefix_armed
+        && dashboard::input::blackjack_slot_for_key(byte).is_some()
+    {
+        return false;
+    }
+
     if (b'1'..=b'9').contains(&byte)
         && ctx.screen == Screen::Dashboard
         && app.dashboard_g_prefix_armed

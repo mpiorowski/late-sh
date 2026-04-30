@@ -48,9 +48,18 @@ pub enum RoomsEvent {
         game_kind: GameKind,
         display_name: String,
     },
+    Deleted {
+        user_id: Uuid,
+        display_name: String,
+    },
     Error {
         user_id: Uuid,
         game_kind: GameKind,
+        display_name: String,
+        message: String,
+    },
+    DeleteError {
+        user_id: Uuid,
         display_name: String,
         message: String,
     },
@@ -234,6 +243,44 @@ impl RoomsService {
         self.publish_rooms(&client).await?;
         Ok(room)
     }
+
+    pub fn delete_game_room_task(&self, user_id: Uuid, room_id: Uuid, display_name: String) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            match svc.delete_game_room(room_id).await {
+                Ok(()) => {
+                    let _ = svc.event_tx.send(RoomsEvent::Deleted {
+                        user_id,
+                        display_name,
+                    });
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = ?e,
+                        %user_id,
+                        %room_id,
+                        display_name,
+                        "failed to delete game room"
+                    );
+                    let _ = svc.event_tx.send(RoomsEvent::DeleteError {
+                        user_id,
+                        display_name,
+                        message: room_error_message(&e),
+                    });
+                }
+            }
+        });
+    }
+
+    async fn delete_game_room(&self, room_id: Uuid) -> anyhow::Result<()> {
+        let client = self.db.get().await?;
+        let count = GameRoom::close_by_id(&client, room_id).await?;
+        if count == 0 {
+            anyhow::bail!("table already deleted");
+        }
+        self.publish_rooms(&client).await?;
+        Ok(())
+    }
 }
 
 async fn add_dealer_to_game_room_chat(
@@ -270,5 +317,9 @@ fn generate_room_slug(game_kind: GameKind) -> String {
 }
 
 fn room_create_error_message(error: &anyhow::Error) -> String {
+    room_error_message(error)
+}
+
+fn room_error_message(error: &anyhow::Error) -> String {
     error.root_cause().to_string()
 }

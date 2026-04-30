@@ -172,6 +172,20 @@ impl GameRoom {
         Ok(updated)
     }
 
+    pub async fn close_by_id(client: &Client, room_id: Uuid) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE game_rooms
+                 SET status = $1,
+                     updated = current_timestamp
+                 WHERE id = $2
+                   AND status <> $1",
+                &[&Self::STATUS_CLOSED, &room_id],
+            )
+            .await?;
+        Ok(updated)
+    }
+
     pub async fn touch_activity(client: &Client, room_id: Uuid) -> Result<u64> {
         let updated = client
             .execute(

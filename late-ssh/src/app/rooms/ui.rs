@@ -682,6 +682,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
     if view.is_admin {
         spans.push(Span::raw(" · "));
         spans.push(hint_pair("n", "new"));
+        spans.push(Span::raw(" · "));
+        spans.push(hint_pair("d", "delete"));
     }
 
     if view.is_admin || view.is_mod {

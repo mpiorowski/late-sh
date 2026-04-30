@@ -133,6 +133,7 @@ enum SeatFailure {
     TableFull,
     NotSeated,
     CannotLeaveWithBet,
+    BlockedUsername,
 }
 
 impl SeatFailure {
@@ -144,6 +145,7 @@ impl SeatFailure {
             SeatFailure::CannotLeaveWithBet => {
                 "finish the round before leaving your seat".to_string()
             }
+            SeatFailure::BlockedUsername => "imred cannot sit at this table".to_string(),
         }
     }
 }
@@ -229,20 +231,25 @@ impl BlackjackService {
     }
 
     async fn sit(&self, user_id: Uuid) -> Result<usize, SeatFailure> {
+        let player = self.player_directory.player_info(user_id).await.ok();
+        if player
+            .as_ref()
+            .is_some_and(|player| blocked_seat_username(&player.username))
+        {
+            return Err(SeatFailure::BlockedUsername);
+        }
+
         let seat_index = {
             let mut table = self.table.lock().await;
             let seat_index = table.sit(user_id)?;
+            if let Some(player) = player {
+                table.set_player_info(user_id, player);
+            }
             table.status_message =
                 format!("Seat {} joined. {}", seat_index + 1, table.betting_prompt());
             self.publish_snapshot_locked(&table);
             seat_index
         };
-
-        if let Ok(player) = self.player_directory.player_info(user_id).await {
-            let mut table = self.table.lock().await;
-            table.set_player_info(user_id, player);
-            self.publish_snapshot_locked(&table);
-        }
 
         Ok(seat_index)
     }
@@ -770,6 +777,10 @@ impl BlackjackService {
     fn publish_snapshot_locked(&self, table: &SharedTableState) {
         let _ = self.snapshot_tx.send(table.snapshot());
     }
+}
+
+fn blocked_seat_username(username: &str) -> bool {
+    username.trim().eq_ignore_ascii_case("imred")
 }
 
 struct SharedTableState {
@@ -1402,6 +1413,13 @@ mod tests {
 
     fn user_id() -> Uuid {
         Uuid::now_v7()
+    }
+
+    #[test]
+    fn imred_cannot_sit() {
+        assert!(blocked_seat_username("imred"));
+        assert!(blocked_seat_username(" ImRed "));
+        assert!(!blocked_seat_username("notimred"));
     }
 
     #[test]
