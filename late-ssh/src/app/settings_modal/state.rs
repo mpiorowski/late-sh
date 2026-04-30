@@ -186,7 +186,7 @@ pub struct SettingsModalState {
     theme_selected_row: usize,
     theme_scroll_offset: usize,
     theme_visible_height: Cell<usize>,
-    theme_collapsed_groups: u8,
+    theme_collapsed_groups: u16,
     editing_username: bool,
     username_input: TextArea<'static>,
     editing_system_field: Option<SystemField>,

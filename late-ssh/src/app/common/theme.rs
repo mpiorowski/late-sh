@@ -76,8 +76,8 @@ impl ThemeGroup {
         }
     }
 
-    pub fn bit(self) -> u8 {
-        1 << (self as u8)
+    pub fn bit(self) -> u16 {
+        1u16 << (self as u16)
     }
 }
 
@@ -1526,5 +1526,16 @@ mod tests {
     fn cycle_theme_wraps() {
         assert_eq!(cycle_id("discord", true), "contrast");
         assert_eq!(cycle_id("contrast", false), "discord");
+    }
+
+    #[test]
+    fn every_theme_group_has_distinct_bit() {
+        let mut mask = 0u16;
+        for group in ThemeGroup::ALL {
+            let bit = group.bit();
+            assert_ne!(bit, 0);
+            assert_eq!(mask & bit, 0);
+            mask |= bit;
+        }
     }
 }
