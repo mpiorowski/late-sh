@@ -1,6 +1,7 @@
 pub mod artboard;
 pub mod article;
 pub mod article_feed_read;
+pub mod blackjack;
 pub mod bonsai;
 pub mod chat_message;
 pub mod chat_message_reaction;

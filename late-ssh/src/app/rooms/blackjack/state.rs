@@ -8,7 +8,10 @@ use uuid::Uuid;
 
 use crate::app::{
     games::cards::{CardRank, CardSuit, PlayingCard},
-    rooms::blackjack::svc::{BlackjackEvent, BlackjackService},
+    rooms::blackjack::{
+        player::BlackjackPlayerInfo,
+        svc::{BlackjackEvent, BlackjackService},
+    },
 };
 
 pub const MIN_BET: i64 = 10;
@@ -176,6 +179,7 @@ pub struct BlackjackSnapshot {
     pub balance: i64,
     pub seats: Vec<BlackjackSeat>,
     pub betting_countdown_secs: Option<u64>,
+    pub action_countdown_secs: Option<u64>,
     pub dealer_hand: Vec<PlayingCard>,
     /// User-facing active/reference hand. The authoritative hands live on seats.
     pub player_hand: Vec<PlayingCard>,
@@ -192,14 +196,15 @@ pub struct BlackjackSnapshot {
     pub dealer_revealed: bool,
     pub dealer_score: Option<HandScore>,
     pub player_score: Option<HandScore>,
-    pub outcome_banner: Option<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlackjackSeat {
     pub index: usize,
     pub user_id: Option<Uuid>,
+    pub player: Option<BlackjackPlayerInfo>,
     pub bet_amount: Option<i64>,
+    pub stake_chips: Vec<i64>,
     pub hand: Vec<PlayingCard>,
     pub phase: SeatPhase,
     pub score: Option<HandScore>,
@@ -276,7 +281,6 @@ impl Default for Shoe {
 pub struct State {
     user_id: Uuid,
     pub(crate) balance: i64,
-    pub(crate) stake_chips: Vec<i64>,
     pub(crate) selected_chip_index: usize,
     pub(crate) snapshot: BlackjackSnapshot,
     pub(crate) private_notice: Option<String>,
@@ -294,7 +298,6 @@ impl State {
         Self {
             user_id,
             balance,
-            stake_chips: Vec::new(),
             selected_chip_index: 0,
             snapshot,
             private_notice: None,
@@ -355,18 +358,25 @@ impl State {
             self.private_notice = Some(format!("Table max is {} chips.", self.snapshot.max_bet));
             return;
         }
-        self.stake_chips.push(chip);
+        if next_amount > self.balance {
+            self.private_notice = Some(format!("Only {} chips available to bet.", self.balance));
+            return;
+        }
+        self.private_notice = None;
+        self.svc.throw_chip_task(self.user_id, chip);
     }
 
     pub fn pull_last_chip(&mut self) {
         if self.snapshot.phase == Phase::Betting {
-            self.stake_chips.pop();
+            self.private_notice = None;
+            self.svc.pull_stake_chip_task(self.user_id);
         }
     }
 
     pub fn clear_stake(&mut self) {
         if self.snapshot.phase == Phase::Betting {
-            self.stake_chips.clear();
+            self.private_notice = None;
+            self.svc.clear_stake_task(self.user_id);
         }
     }
 
@@ -387,25 +397,14 @@ impl State {
             self.private_notice = Some("Throw chips onto the stake first.".to_string());
             return;
         }
-        self.submit_bet(amount);
-    }
-
-    pub fn submit_bet(&mut self, amount: i64) {
-        if self.snapshot.phase != Phase::Betting {
-            return;
-        }
-        if !self.is_seated() {
-            self.private_notice = Some("Sit before betting.".to_string());
-            return;
-        }
-        if self.user_seat().and_then(|seat| seat.bet_amount).is_some() {
-            self.private_notice = Some("Bet already placed. Dealer will deal soon.".to_string());
+        if amount > self.balance {
+            self.private_notice = Some(format!("Only {} chips available to bet.", self.balance));
             return;
         }
         let request_id = Uuid::now_v7();
         self.pending_request_id = Some(request_id);
         self.private_notice = Some(format!("Placing bet: {amount} chips..."));
-        self.svc.place_bet_task(self.user_id, request_id, amount);
+        self.svc.submit_stake_task(self.user_id, request_id);
     }
 
     pub fn sit(&mut self) {
@@ -437,7 +436,9 @@ impl State {
     }
 
     pub fn stake_amount(&self) -> i64 {
-        self.stake_chips.iter().sum()
+        self.user_seat()
+            .map(|seat| seat.stake_chips.iter().sum())
+            .unwrap_or(0)
     }
 
     pub fn seat_index(&self) -> Option<usize> {
@@ -479,7 +480,10 @@ impl State {
             self.active_seat().or_else(|| self.user_seat())
         };
         snapshot.balance = self.balance;
-        snapshot.stake_chips = self.stake_chips.clone();
+        snapshot.stake_chips = self
+            .user_seat()
+            .map(|seat| seat.stake_chips.clone())
+            .unwrap_or_default();
         snapshot.selected_chip_index = self
             .selected_chip_index
             .min(snapshot.chip_denominations.len().saturating_sub(1));
@@ -491,7 +495,6 @@ impl State {
         if let Some(user_seat) = self.user_seat() {
             snapshot.last_outcome = user_seat.last_outcome;
             snapshot.last_net_change = user_seat.last_net_change;
-            snapshot.outcome_banner = seat_outcome_banner(user_seat);
         }
         snapshot.status_message = self.status_message();
         snapshot
@@ -509,10 +512,6 @@ impl State {
         self.snapshot.dealer_revealed
     }
 
-    pub fn outcome_banner(&self) -> Option<(String, String)> {
-        self.snapshot.outcome_banner.clone()
-    }
-
     pub fn status_message(&self) -> String {
         if let Some(notice) = &self.private_notice {
             return notice.clone();
@@ -522,11 +521,14 @@ impl State {
             && self.is_seated()
             && self.user_seat().and_then(|seat| seat.bet_amount).is_none()
         {
+            if self.balance < self.snapshot.min_bet {
+                return "You need more chips to bet.".to_string();
+            }
             if self.stake_amount() > 0 {
-                return "Space adds another chip. Backspace pulls one back. Enter locks stake."
+                return "Space adds another chip. Backspace pulls one back. Enter/S locks stake."
                     .to_string();
             }
-            return "Select chips with [ ] or A/D. Space tosses one in. Enter locks stake."
+            return "Select chips with [ ] or A/D. Space tosses one in. Backspace pulls one back. Enter/S locks stake."
                 .to_string();
         }
 
@@ -547,7 +549,6 @@ impl State {
                 match result {
                     Ok(new_balance) => {
                         self.balance = new_balance;
-                        self.stake_chips.clear();
                         self.private_notice = None;
                     }
                     Err(message) => {
@@ -563,7 +564,6 @@ impl State {
             BlackjackEvent::SeatLeft { user_id, .. } => {
                 if user_id == self.user_id {
                     self.private_notice = None;
-                    self.stake_chips.clear();
                 }
             }
             BlackjackEvent::HandSettled {
@@ -582,23 +582,6 @@ impl State {
             }
         }
     }
-}
-
-pub fn seat_outcome_banner(seat: &BlackjackSeat) -> Option<(String, String)> {
-    let outcome = seat.last_outcome?;
-    let subtitle = match outcome {
-        Outcome::PlayerBlackjack | Outcome::PlayerWin => format!("+{}", seat.last_net_change),
-        Outcome::Push => "Bet returned".to_string(),
-        Outcome::DealerWin => "No payout".to_string(),
-    };
-    let title = match outcome {
-        Outcome::PlayerBlackjack => "BLACKJACK!",
-        Outcome::PlayerWin => "You win!",
-        Outcome::Push => "Push",
-        Outcome::DealerWin if is_bust(&seat.hand) => "Bust",
-        Outcome::DealerWin => "Dealer wins",
-    };
-    Some((title.to_string(), subtitle))
 }
 
 fn fresh_shoe() -> Vec<PlayingCard> {

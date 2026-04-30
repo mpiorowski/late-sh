@@ -45,7 +45,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                 state.clear_stake();
                 InputAction::Handled
             }
-            b'\r' | b'\n' => {
+            b'\r' | b'\n' | b's' | b'S' => {
                 state.submit_stake();
                 InputAction::Handled
             }
@@ -71,7 +71,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         Phase::DealerTurn => InputAction::Ignored,
         Phase::Settling => match byte {
             0x1B => InputAction::Leave,
-            b'n' | b'N' | b'\r' | b'\n' | b' ' => {
+            b'\r' | b'\n' | b' ' => {
                 state.next_hand();
                 InputAction::Handled
             }

@@ -1,17 +1,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const STAKE_OPTIONS: [i64; 4] = [10, 50, 100, 1000];
+pub const STAKE_OPTIONS: [i64; 4] = [10, 50, 100, 500];
 pub const PACE_OPTIONS: [BlackjackPace; 3] = [
     BlackjackPace::Quick,
     BlackjackPace::Standard,
     BlackjackPace::Chill,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlackjackPace {
     Quick,
+    #[default]
     Standard,
     Chill,
 }
@@ -27,24 +28,18 @@ impl BlackjackPace {
 
     pub fn table_label(self) -> &'static str {
         match self {
-            Self::Quick => "~2m / round",
-            Self::Standard => "~5m / round",
-            Self::Chill => "~10m / round",
+            Self::Quick => "2m action timer",
+            Self::Standard => "5m action timer",
+            Self::Chill => "10m action timer",
         }
     }
 
-    pub fn betting_window_secs(self) -> u64 {
+    pub fn action_timeout_secs(self) -> u64 {
         match self {
-            Self::Quick => 3,
-            Self::Standard => 5,
-            Self::Chill => 10,
+            Self::Quick => 2 * 60,
+            Self::Standard => 5 * 60,
+            Self::Chill => 10 * 60,
         }
-    }
-}
-
-impl Default for BlackjackPace {
-    fn default() -> Self {
-        Self::Standard
     }
 }
 
@@ -93,8 +88,8 @@ impl BlackjackTableSettings {
         self.pace.table_label()
     }
 
-    pub fn betting_window_secs(&self) -> u64 {
-        self.pace.betting_window_secs()
+    pub fn action_timeout_secs(&self) -> u64 {
+        self.pace.action_timeout_secs()
     }
 
     fn normalized_ref(&self) -> Self {

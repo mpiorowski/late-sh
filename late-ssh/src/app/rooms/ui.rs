@@ -7,11 +7,12 @@ use ratatui::{
 };
 
 use crate::app::{
+    chat::ui::EmbeddedRoomChatView,
     common::theme,
     rooms::{
         blackjack::{
             settings::{PACE_OPTIONS, STAKE_OPTIONS},
-            state::State as BlackjackState,
+            state::{BlackjackSnapshot, State as BlackjackState},
         },
         filter::RoomsFilter,
         mock::{PLACEHOLDERS, PlaceholderKind, meta_for_real},
@@ -36,6 +37,9 @@ pub struct RoomsPageView<'a> {
     pub filter: RoomsFilter,
     pub search_active: bool,
     pub search_query: &'a str,
+    pub usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
+    pub blackjack_snapshots: &'a std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+    pub active_room_chat: Option<EmbeddedRoomChatView<'a>>,
 }
 
 #[derive(Clone, Copy)]
@@ -44,9 +48,9 @@ enum Row<'a> {
     Placeholder(PlaceholderKind),
 }
 
-pub fn draw_rooms_page(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
+pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_>) {
     let block = Block::default()
-        .title(rooms_title(view))
+        .title(rooms_title(&view))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
@@ -58,7 +62,14 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) 
     }
 
     if let Some(room) = view.active_room {
-        draw_active_room(frame, inner, room, view.blackjack_state);
+        draw_active_room(
+            frame,
+            inner,
+            room,
+            view.blackjack_state,
+            view.usernames,
+            view.active_room_chat.take(),
+        );
         return;
     }
 
@@ -70,19 +81,19 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) 
     ])
     .split(inner);
 
-    draw_filter_bar(frame, layout[0], view);
+    draw_filter_bar(frame, layout[0], &view);
 
-    let rows = build_rows(view);
+    let rows = build_rows(&view);
     if inner.width >= NARROW_WIDTH {
-        draw_room_list_wide(frame, layout[2], view, &rows);
+        draw_room_list_wide(frame, layout[2], &view, &rows);
     } else {
-        draw_room_list_narrow(frame, layout[2], view, &rows);
+        draw_room_list_narrow(frame, layout[2], &view, &rows);
     }
 
-    draw_footer(frame, layout[3], view);
+    draw_footer(frame, layout[3], &view);
 
     if view.add_form_open {
-        draw_create_blackjack_modal(frame, inner, view);
+        draw_create_blackjack_modal(frame, inner, &view);
     }
 }
 
@@ -178,92 +189,203 @@ fn draw_filter_bar(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+const CREATE_MODAL_WIDTH: u16 = 64;
+const CREATE_MODAL_HEIGHT: u16 = 16;
+const CREATE_LABEL_WIDTH: usize = 14;
+
 fn draw_create_blackjack_modal(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
-    let modal_area = centered_rect(area, 56.min(area.width), 12.min(area.height));
+    let modal_area = centered_rect(
+        area,
+        CREATE_MODAL_WIDTH.min(area.width),
+        CREATE_MODAL_HEIGHT.min(area.height),
+    );
+    frame.render_widget(Clear, modal_area);
+
     let block = Block::default()
         .title(" New Blackjack Table ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(modal_area);
-    frame.render_widget(Clear, modal_area);
     frame.render_widget(block, modal_area);
 
-    let pace = PACE_OPTIONS
-        .get(view.create_pace_index)
-        .copied()
-        .unwrap_or_default();
-    let stake = STAKE_OPTIONS
-        .get(view.create_stake_index)
-        .copied()
-        .unwrap_or(STAKE_OPTIONS[0]);
+    let layout = Layout::vertical([
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // section: Table
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // Name row
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // section: Game
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // Pace row
+        Constraint::Length(1), // Stake row
+        Constraint::Min(0),    // flex spacer
+        Constraint::Length(1), // footer
+    ])
+    .split(inner);
 
-    let name_value = format!("{}█", view.display_name);
-    let stake_value = format!("{stake} chips");
-    let lines = vec![
-        form_line("Name", &name_value, view.create_focus_index == 0),
-        form_line("Pace", pace.table_label(), view.create_focus_index == 1),
-        option_line(
+    let width = inner.width as usize;
+
+    frame.render_widget(Paragraph::new(create_section_heading("Table")), layout[1]);
+    frame.render_widget(Paragraph::new(create_name_row(view, width)), layout[3]);
+
+    frame.render_widget(Paragraph::new(create_section_heading("Game")), layout[5]);
+    frame.render_widget(
+        Paragraph::new(create_option_row(
+            view.create_focus_index == 1,
+            "Pace",
             PACE_OPTIONS
                 .iter()
-                .map(|pace| pace.label())
+                .map(|pace| pace.label().to_string())
                 .collect::<Vec<_>>(),
             view.create_pace_index,
-        ),
-        form_line("Stake", &stake_value, view.create_focus_index == 2),
-        option_line(
+            width,
+        )),
+        layout[7],
+    );
+    frame.render_widget(
+        Paragraph::new(create_option_row(
+            view.create_focus_index == 2,
+            "Stake",
             STAKE_OPTIONS
                 .iter()
-                .map(|stake| format!("{stake}"))
+                .map(|stake| stake.to_string())
                 .collect::<Vec<_>>(),
             view.create_stake_index,
-        ),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Tab field · ←/→ select · Enter create · Esc cancel",
-            Style::default().fg(theme::TEXT_DIM()),
+            width,
         )),
-    ];
+        layout[8],
+    );
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(create_footer_line()), layout[10]);
 }
 
-fn form_line<'a>(label: &'static str, value: &'a str, focused: bool) -> Line<'a> {
-    let label_style = if focused {
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
-    let value_style = if focused {
-        Style::default().fg(theme::TEXT_BRIGHT())
-    } else {
-        Style::default().fg(theme::TEXT())
-    };
+fn create_section_heading(title: &str) -> Line<'static> {
+    let dim = Style::default().fg(theme::BORDER());
+    let accent = Style::default()
+        .fg(theme::AMBER())
+        .add_modifier(Modifier::BOLD);
     Line::from(vec![
-        Span::styled(format!("{label:<7}"), label_style),
-        Span::styled(value.to_string(), value_style),
+        Span::styled("  ── ", dim),
+        Span::styled(title.to_string(), accent),
+        Span::styled(" ──", dim),
     ])
 }
 
-fn option_line<T: ToString>(options: Vec<T>, selected_index: usize) -> Line<'static> {
-    let mut spans = vec![Span::raw("        ")];
-    for (index, option) in options.into_iter().enumerate() {
+fn create_name_row(view: &RoomsPageView<'_>, width: usize) -> Line<'static> {
+    let focused = view.create_focus_index == 0;
+    let (value_text, value_color) = if focused {
+        (format!("{}█", view.display_name), theme::AMBER())
+    } else if view.display_name.trim().is_empty() {
+        ("not set".to_string(), theme::TEXT_FAINT())
+    } else {
+        (view.display_name.to_string(), theme::TEXT_BRIGHT())
+    };
+
+    let (prefix_style, label_style, mut value_style, trailing_style) = row_styles(focused);
+    value_style = value_style.fg(value_color);
+
+    let marker = if focused { "›" } else { " " };
+    let prefix = format!(" {marker} ");
+    let label_text = format!("{:<width$}", "Name", width = CREATE_LABEL_WIDTH);
+    let used = prefix.chars().count() + label_text.chars().count() + value_text.chars().count();
+    let padding = width.saturating_sub(used);
+
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(label_text, label_style),
+        Span::styled(value_text, value_style),
+        Span::styled(" ".repeat(padding), trailing_style),
+    ])
+}
+
+fn create_option_row(
+    focused: bool,
+    label: &str,
+    options: Vec<String>,
+    selected_index: usize,
+    width: usize,
+) -> Line<'static> {
+    let (prefix_style, label_style, _, trailing_style) = row_styles(focused);
+
+    let marker = if focused { "›" } else { " " };
+    let prefix = format!(" {marker} ");
+    let label_text = format!("{:<width$}", label, width = CREATE_LABEL_WIDTH);
+
+    let mut spans = vec![
+        Span::styled(prefix.clone(), prefix_style),
+        Span::styled(label_text.clone(), label_style),
+    ];
+    let mut used = prefix.chars().count() + label_text.chars().count();
+
+    for (index, option) in options.iter().enumerate() {
         if index > 0 {
-            spans.push(Span::raw(" "));
+            spans.push(Span::styled("  ", trailing_style));
+            used += 2;
         }
+        let pill = format!(" {} ", option);
+        used += pill.chars().count();
         let selected = index == selected_index;
         let style = if selected {
             Style::default()
                 .fg(theme::BG_SELECTION())
                 .bg(theme::AMBER())
                 .add_modifier(Modifier::BOLD)
+        } else if focused {
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .bg(theme::BG_SELECTION())
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        spans.push(Span::styled(format!(" {} ", option.to_string()), style));
+        spans.push(Span::styled(pill, style));
     }
+
+    let padding = width.saturating_sub(used);
+    spans.push(Span::styled(" ".repeat(padding), trailing_style));
     Line::from(spans)
+}
+
+fn row_styles(focused: bool) -> (Style, Style, Style, Style) {
+    if focused {
+        (
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD),
+            Style::default().bg(theme::BG_SELECTION()),
+            Style::default().bg(theme::BG_SELECTION()),
+        )
+    } else {
+        (
+            Style::default().fg(theme::TEXT_FAINT()),
+            Style::default().fg(theme::TEXT_DIM()),
+            Style::default(),
+            Style::default(),
+        )
+    }
+}
+
+fn create_footer_line() -> Line<'static> {
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled("Tab", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" field  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" select  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" create  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+    ])
 }
 
 fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
@@ -305,7 +427,7 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
         match row {
             Row::Real(room) => {
                 let selected = real_index == view.selected_index;
-                lines.push(real_row_wide(room, selected));
+                lines.push(real_row_wide(room, selected, view));
                 real_index += 1;
             }
             Row::Placeholder(kind) => {
@@ -344,7 +466,7 @@ fn divider_line(width: u16) -> Line<'static> {
     ))
 }
 
-fn real_row_wide(room: &RoomListItem, selected: bool) -> Line<'_> {
+fn real_row_wide<'a>(room: &'a RoomListItem, selected: bool, view: &RoomsPageView<'_>) -> Line<'a> {
     let meta = meta_for_real(room.game_kind);
     let (status_text, status_color) = real_status(&room.status);
 
@@ -374,7 +496,7 @@ fn real_row_wide(room: &RoomListItem, selected: bool) -> Line<'_> {
             format!("{:<12}", game_kind_label(room.game_kind)),
             Style::default().fg(theme::AMBER()),
         ),
-        Span::styled(format!("{:<8}", format!("?/{}", meta.seats)), dim),
+        Span::styled(format!("{:<8}", seats_label(room, meta.seats, view)), dim),
         Span::styled(format!("{:<14}", room.blackjack_settings.pace_label()), dim),
         Span::styled(
             format!("{:<10}", room.blackjack_settings.stake_label()),
@@ -445,7 +567,7 @@ fn draw_room_list_narrow(
         match row {
             Row::Real(room) => {
                 let selected = real_index == view.selected_index;
-                let (a, b) = real_card_narrow(room, selected);
+                let (a, b) = real_card_narrow(room, selected, view);
                 lines.push(a);
                 lines.push(b);
                 real_index += 1;
@@ -468,7 +590,11 @@ fn draw_room_list_narrow(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn real_card_narrow(room: &RoomListItem, selected: bool) -> (Line<'_>, Line<'_>) {
+fn real_card_narrow<'a>(
+    room: &'a RoomListItem,
+    selected: bool,
+    view: &RoomsPageView<'_>,
+) -> (Line<'a>, Line<'a>) {
     let meta = meta_for_real(room.game_kind);
     let (status_text, status_color) = real_status(&room.status);
     let pointer = if selected { "▸ " } else { "  " };
@@ -498,8 +624,8 @@ fn real_card_narrow(room: &RoomListItem, selected: bool) -> (Line<'_>, Line<'_>)
         Span::raw("    "),
         Span::styled(
             format!(
-                "?/{} seats · {} · {}",
-                meta.seats,
+                "{} seats · {} · {}",
+                seats_label(room, meta.seats, view),
                 room.blackjack_settings.pace_label(),
                 room.blackjack_settings.stake_label()
             ),
@@ -569,7 +695,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
         Span::raw(" · "),
         hint_pair("Enter", "join"),
         Span::raw(" · "),
-        hint_pair("Tab", "filter"),
+        hint_pair("h/l", "filter"),
         Span::raw(" · "),
         hint_pair("/", "search"),
     ];
@@ -611,6 +737,18 @@ fn stakes_label() -> &'static str {
     "chips"
 }
 
+fn seats_label(room: &RoomListItem, fallback_total: u8, view: &RoomsPageView<'_>) -> String {
+    let Some(snapshot) = view.blackjack_snapshots.get(&room.id) else {
+        return format!("?/{}", fallback_total);
+    };
+    let occupied = snapshot
+        .seats
+        .iter()
+        .filter(|seat| seat.user_id.is_some())
+        .count();
+    format!("{}/{}", occupied, snapshot.seats.len())
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
@@ -625,6 +763,8 @@ fn draw_active_room(
     area: Rect,
     room: &RoomListItem,
     blackjack_state: &BlackjackState,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    active_room_chat: Option<EmbeddedRoomChatView<'_>>,
 ) {
     let layout = Layout::vertical([
         Constraint::Percentage(70),
@@ -633,8 +773,12 @@ fn draw_active_room(
     ])
     .split(area);
 
-    draw_game_area(frame, layout[0], room, blackjack_state);
-    draw_chat_placeholder(frame, layout[2], room);
+    draw_game_area(frame, layout[0], room, blackjack_state, usernames);
+    if let Some(chat) = active_room_chat {
+        crate::app::chat::ui::draw_embedded_room_chat(frame, layout[2], chat);
+    } else {
+        draw_chat_placeholder(frame, layout[2], room);
+    }
 }
 
 fn draw_game_area(
@@ -642,10 +786,17 @@ fn draw_game_area(
     area: Rect,
     room: &RoomListItem,
     blackjack_state: &BlackjackState,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
 ) {
     match room.game_kind {
         crate::app::rooms::svc::GameKind::Blackjack => {
-            crate::app::rooms::blackjack::ui::draw_game(frame, area, blackjack_state, false);
+            crate::app::rooms::blackjack::ui::draw_game(
+                frame,
+                area,
+                blackjack_state,
+                false,
+                usernames,
+            );
         }
     }
 }

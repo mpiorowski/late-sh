@@ -56,7 +56,7 @@ pub fn meta_for_real(kind: GameKind) -> GameMeta {
         GameKind::Blackjack => GameMeta {
             short: "BJ",
             seats: 4,
-            pace: "~5m / round",
+            pace: "5m action timer",
         },
     }
 }

@@ -10,10 +10,10 @@ use crate::app::{
     common::theme,
     games::{
         cards::{AsciiCardTheme, PlayingCard},
-        ui::{draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint},
+        ui::{draw_game_frame, info_label_value, info_tagline, key_hint},
     },
     rooms::blackjack::state::{
-        BlackjackSeat, BlackjackSnapshot, Outcome, Phase, SeatPhase, State,
+        BlackjackSeat, BlackjackSnapshot, Outcome, Phase, SeatPhase, State, is_bust,
     },
 };
 
@@ -21,9 +21,19 @@ const FANCY_MIN_HEIGHT: u16 = 22;
 const FANCY_MIN_WIDTH: u16 = 60;
 const SEAT_PANEL_WIDTH: u16 = 12;
 const SEAT_PANEL_HEIGHT: u16 = 7;
+const SEAT_PANEL_WIDTH_OUTLINE: u16 = 22;
+const SEAT_PANEL_HEIGHT_OUTLINE: u16 = 11;
 const DEALER_BLOCK_HEIGHT: u16 = 9;
+const ULTRA_FANCY_MIN_WIDTH: u16 = 96;
+const ULTRA_FANCY_MIN_HEIGHT: u16 = 26;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
+pub fn draw_game(
+    frame: &mut Frame,
+    area: Rect,
+    state: &State,
+    show_sidebar: bool,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+) {
     let snapshot = state.snapshot();
     draw_game_snapshot(
         frame,
@@ -32,6 +42,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         state.seat_index(),
         state.can_act(),
         show_sidebar,
+        usernames,
     );
 }
 
@@ -42,6 +53,7 @@ fn draw_game_snapshot(
     user_seat_index: Option<usize>,
     user_is_active: bool,
     show_sidebar: bool,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
 ) {
     if area.height >= FANCY_MIN_HEIGHT && area.width >= FANCY_MIN_WIDTH {
         draw_table_fancy(
@@ -50,6 +62,7 @@ fn draw_game_snapshot(
             snapshot,
             user_seat_index,
             user_is_active,
+            usernames,
         );
     } else {
         draw_table_compact(
@@ -71,6 +84,7 @@ fn draw_table_fancy(
     snapshot: &BlackjackSnapshot,
     user_seat_index: Option<usize>,
     user_is_active: bool,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
 ) {
     let block = Block::default()
         .title(table_title(snapshot, user_seat_index))
@@ -79,30 +93,59 @@ fn draw_table_fancy(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let seat_count = snapshot.seats.len() as u16;
+    let outline_strip_w = seat_count
+        .saturating_mul(SEAT_PANEL_WIDTH_OUTLINE)
+        .saturating_add(seat_count.saturating_sub(1).saturating_mul(2));
+    let ultra = inner.width >= ULTRA_FANCY_MIN_WIDTH
+        && inner.height >= ULTRA_FANCY_MIN_HEIGHT
+        && inner.width >= outline_strip_w;
+    let panel_w = if ultra {
+        SEAT_PANEL_WIDTH_OUTLINE
+    } else {
+        SEAT_PANEL_WIDTH
+    };
+    let panel_h = if ultra {
+        SEAT_PANEL_HEIGHT_OUTLINE
+    } else {
+        SEAT_PANEL_HEIGHT
+    };
+    let card_theme = if ultra {
+        AsciiCardTheme::Outline
+    } else {
+        AsciiCardTheme::Minimal
+    };
+
     let chunks = Layout::vertical([
         Constraint::Length(DEALER_BLOCK_HEIGHT),
-        Constraint::Length(1),                  // felt divider
-        Constraint::Length(SEAT_PANEL_HEIGHT),
-        Constraint::Min(1),                     // status line(s)
-        Constraint::Length(1),                  // info bar
-        Constraint::Length(1),                  // key hints
+        Constraint::Length(1), // felt divider
+        Constraint::Length(panel_h),
+        Constraint::Min(1),    // status line(s)
+        Constraint::Length(1), // info bar
+        Constraint::Length(1), // key hints
     ])
     .split(inner);
 
     draw_dealer_block(frame, chunks[0], snapshot);
     draw_felt_divider(frame, chunks[1]);
-    draw_seats_strip(frame, chunks[2], snapshot, user_seat_index);
+    draw_seats_strip(
+        frame,
+        chunks[2],
+        snapshot,
+        user_seat_index,
+        panel_w,
+        card_theme,
+        usernames,
+    );
     draw_status_line(frame, chunks[3], snapshot);
     draw_info_bar(frame, chunks[4], snapshot, user_seat_index);
-    draw_key_bar(frame, chunks[5], snapshot.phase, user_seat_index.is_some(), user_is_active);
-
-    if let Some((title, subtitle)) = &snapshot.outcome_banner {
-        let color = match snapshot.last_outcome {
-            Some(Outcome::PlayerBlackjack | Outcome::PlayerWin | Outcome::Push) => theme::SUCCESS(),
-            Some(Outcome::DealerWin) | None => theme::ERROR(),
-        };
-        draw_game_overlay(frame, inner, title.as_str(), subtitle.as_str(), color);
-    }
+    draw_key_bar(
+        frame,
+        chunks[5],
+        snapshot.phase,
+        user_seat_index.is_some(),
+        user_is_active,
+    );
 }
 
 fn table_title(snapshot: &BlackjackSnapshot, user_seat_index: Option<usize>) -> String {
@@ -130,7 +173,12 @@ fn draw_dealer_block(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapshot
     let theme_card = AsciiCardTheme::Outline;
     let card_h = theme_card.card_height() as u16;
 
-    let label_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+    let label_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
     let cards_area = Rect {
         x: area.x,
         y: area.y + 2,
@@ -145,14 +193,12 @@ fn draw_dealer_block(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapshot
         height: 1,
     };
 
-    let label = Line::from(vec![
-        Span::styled(
-            "── DEALER ──",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
+    let label = Line::from(vec![Span::styled(
+        "── DEALER ──",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    )]);
     frame.render_widget(
         Paragraph::new(label).alignment(Alignment::Center),
         label_area,
@@ -255,13 +301,15 @@ fn draw_seats_strip(
     area: Rect,
     snapshot: &BlackjackSnapshot,
     user_seat_index: Option<usize>,
+    panel_w: u16,
+    card_theme: AsciiCardTheme,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
 ) {
     if area.height == 0 || snapshot.seats.is_empty() {
         return;
     }
 
     let n = snapshot.seats.len() as u16;
-    let panel_w = SEAT_PANEL_WIDTH;
     let total_w = panel_w * n + (n.saturating_sub(1)) * 2;
     let start_x = area.x + (area.width.saturating_sub(total_w)) / 2;
 
@@ -276,8 +324,360 @@ fn draw_seats_strip(
             width: panel_w,
             height: area.height,
         };
-        draw_seat_panel(frame, panel_area, seat, user_seat_index, snapshot.phase);
+        if card_theme == AsciiCardTheme::Outline {
+            draw_seat_panel_outline(
+                frame,
+                panel_area,
+                seat,
+                user_seat_index,
+                snapshot,
+                usernames,
+            );
+        } else {
+            draw_seat_panel(
+                frame,
+                panel_area,
+                seat,
+                user_seat_index,
+                snapshot,
+                usernames,
+            );
+        }
     }
+}
+
+fn draw_seat_panel_outline(
+    frame: &mut Frame,
+    area: Rect,
+    seat: &BlackjackSeat,
+    user_seat_index: Option<usize>,
+    snapshot: &BlackjackSnapshot,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+) {
+    let is_you = Some(seat.index) == user_seat_index;
+    let is_active = seat.phase == SeatPhase::Playing;
+    let is_seated = seat.user_id.is_some();
+    let phase = snapshot.phase;
+    let show_seat_chips =
+        phase == Phase::Betting && !seat.stake_chips.is_empty() && seat.bet_amount.is_none();
+
+    let title_text = format!(" Seat {} ", seat.index + 1);
+    let border_color = if is_you {
+        theme::SUCCESS()
+    } else if is_active {
+        theme::AMBER()
+    } else if is_seated {
+        theme::TEXT()
+    } else {
+        theme::BORDER_DIM()
+    };
+
+    let block = Block::default()
+        .title(title_text)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 8 {
+        // not enough room for full outline cards; degrade to compact panel inside
+        draw_seat_panel_inner(frame, inner, seat, user_seat_index, snapshot, usernames);
+        return;
+    }
+
+    // Layout: identity (1) + cards/chips (5) + extras/total (1) + bet+balance (1) + outcome (rest)
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(5),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+
+    // Row 1: identity (username)
+    let identity = identity_span(seat, is_you, is_seated, usernames);
+    frame.render_widget(
+        Paragraph::new(Line::from(identity)).alignment(Alignment::Center),
+        rows[0],
+    );
+
+    // Row 2: outline cards (or empty placeholders) — chips no longer overlay this slot
+    draw_hand_outline(frame, rows[1], &seat.hand, true);
+
+    // Row 3: extras (cards 3+), chip total, or status hint
+    if show_seat_chips {
+        let total: i64 = seat.stake_chips.iter().sum();
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("stake ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(
+                    total.to_string(),
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]))
+            .alignment(Alignment::Center),
+            rows[2],
+        );
+    } else if seat.hand.len() > 2 {
+        let extras: Vec<Span<'static>> = seat
+            .hand
+            .iter()
+            .skip(2)
+            .flat_map(|card| {
+                vec![
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("{}{}", card.rank.label(), card.suit.symbol()),
+                        Style::default().fg(card_color(*card)),
+                    ),
+                ]
+            })
+            .collect();
+        let mut spans = vec![Span::styled("+", Style::default().fg(theme::TEXT_DIM()))];
+        spans.extend(extras);
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
+            rows[2],
+        );
+    } else if seat.hand.is_empty() && !is_seated {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "press s to sit",
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .alignment(Alignment::Center),
+            rows[2],
+        );
+    } else {
+        let status_line = seat_status_line(seat, phase, is_you);
+        frame.render_widget(
+            Paragraph::new(status_line).alignment(Alignment::Center),
+            rows[2],
+        );
+    }
+
+    // Row 4: bet + total + balance (balance only on user's own seat)
+    let bet_line = bet_balance_line(seat, snapshot, is_you);
+    frame.render_widget(
+        Paragraph::new(bet_line).alignment(Alignment::Center),
+        rows[3],
+    );
+
+    // Row 5: outcome chip + payout subtitle
+    if let Some((label, color)) = outcome_label(seat) {
+        let mut chip_lines = vec![
+            Line::from(Span::styled(
+                label,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Center),
+        ];
+        if let Some(subtitle) = outcome_subtitle(seat) {
+            chip_lines.push(
+                Line::from(Span::styled(
+                    subtitle,
+                    Style::default().fg(theme::TEXT_DIM()),
+                ))
+                .alignment(Alignment::Center),
+            );
+        }
+        frame.render_widget(Paragraph::new(chip_lines), rows[4]);
+    }
+}
+
+fn bet_balance_line<'a>(
+    seat: &BlackjackSeat,
+    snapshot: &'a BlackjackSnapshot,
+    is_you: bool,
+) -> Line<'a> {
+    let mut spans: Vec<Span<'a>> = Vec::new();
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let amber = Style::default().fg(theme::AMBER());
+    let success = Style::default().fg(theme::SUCCESS());
+
+    match (seat.bet_amount, &seat.score) {
+        (Some(amount), Some(score)) => {
+            spans.push(Span::styled("tot ", dim));
+            spans.push(Span::styled(
+                score.total.to_string(),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ));
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled("bet ", dim));
+            spans.push(Span::styled(amount.to_string(), amber));
+        }
+        (Some(amount), None) => {
+            spans.push(Span::styled("bet ", dim));
+            spans.push(Span::styled(amount.to_string(), amber));
+        }
+        (None, _) if seat.user_id.is_some() => {
+            spans.push(Span::styled("no bet", dim));
+        }
+        _ => {}
+    }
+
+    if let Some(player) = &seat.player {
+        if !spans.is_empty() {
+            spans.push(Span::raw("  ·  "));
+        }
+        spans.push(Span::styled("$", dim));
+        let balance = if is_you {
+            snapshot.balance
+        } else {
+            player.balance
+        };
+        spans.push(Span::styled(balance.to_string(), success));
+    }
+
+    Line::from(spans)
+}
+
+fn draw_hand_outline(frame: &mut Frame, area: Rect, cards: &[PlayingCard], show_empty: bool) {
+    let card_w: u16 = 9;
+    let card_h: u16 = 5;
+    let gap: u16 = 1;
+
+    let visible_count = cards.len().min(2).max(if show_empty { 2 } else { 0 });
+    if visible_count == 0 {
+        return;
+    }
+    let visible_u = visible_count as u16;
+    let total_w = card_w * visible_u + gap * visible_u.saturating_sub(1);
+    let start_x = area.x + area.width.saturating_sub(total_w) / 2;
+    let card_y = area.y + area.height.saturating_sub(card_h) / 2;
+
+    for i in 0..visible_count {
+        let x = start_x + (card_w + gap) * i as u16;
+        if x + card_w > area.x + area.width {
+            break;
+        }
+        let card_area = Rect {
+            x,
+            y: card_y,
+            width: card_w,
+            height: card_h,
+        };
+        let (lines, color) = match cards.get(i) {
+            Some(card) => (
+                AsciiCardTheme::Outline.render_face_lines(*card),
+                card_color(*card),
+            ),
+            None => (
+                AsciiCardTheme::Outline.render_empty_lines(),
+                theme::TEXT_DIM(),
+            ),
+        };
+        render_card_lines(frame, card_area, &lines, color);
+    }
+}
+
+fn identity_span(
+    seat: &BlackjackSeat,
+    is_you: bool,
+    is_seated: bool,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+) -> Span<'static> {
+    if !is_seated {
+        return Span::styled("open", Style::default().fg(theme::TEXT_DIM()));
+    }
+    let name = seat
+        .player
+        .as_ref()
+        .map(|player| player.username.clone())
+        .or_else(|| seat.user_id.and_then(|uid| usernames.get(&uid).cloned()))
+        .unwrap_or_else(|| "player".to_string());
+    let display = if is_you { format!("▶ {name}") } else { name };
+    let style = if is_you {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT())
+    };
+    Span::styled(display, style)
+}
+
+fn outcome_label(seat: &BlackjackSeat) -> Option<(&'static str, ratatui::style::Color)> {
+    let outcome = seat.last_outcome?;
+    Some(match outcome {
+        Outcome::PlayerBlackjack => ("BLACKJACK", theme::SUCCESS()),
+        Outcome::PlayerWin => ("WIN", theme::SUCCESS()),
+        Outcome::Push => ("PUSH", theme::TEXT_DIM()),
+        Outcome::DealerWin if is_bust(&seat.hand) => ("BUST", theme::ERROR()),
+        Outcome::DealerWin => ("LOSS", theme::ERROR()),
+    })
+}
+
+fn outcome_subtitle(seat: &BlackjackSeat) -> Option<String> {
+    let outcome = seat.last_outcome?;
+    Some(match outcome {
+        Outcome::PlayerBlackjack | Outcome::PlayerWin => format!("+{}", seat.last_net_change),
+        Outcome::Push => "bet returned".to_string(),
+        Outcome::DealerWin => "no payout".to_string(),
+    })
+}
+
+fn draw_seat_panel_inner(
+    frame: &mut Frame,
+    inner: Rect,
+    seat: &BlackjackSeat,
+    user_seat_index: Option<usize>,
+    snapshot: &BlackjackSnapshot,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+) {
+    let is_you = Some(seat.index) == user_seat_index;
+    let is_seated = seat.user_id.is_some();
+    let phase = snapshot.phase;
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(
+        Line::from(identity_span(seat, is_you, is_seated, usernames)).alignment(Alignment::Center),
+    );
+    let card_line = if seat.hand.is_empty() {
+        if !is_seated {
+            Line::from(Span::styled(
+                "press s",
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else if phase == Phase::Betting && !seat.stake_chips.is_empty() {
+            Line::from(Span::styled(
+                render_chip_stack(&seat.stake_chips),
+                Style::default().fg(theme::AMBER()),
+            ))
+        } else {
+            Line::from(Span::styled("·  ·", Style::default().fg(theme::TEXT_DIM())))
+        }
+    } else {
+        Line::from(compact_card_spans(&seat.hand))
+    };
+    lines.push(card_line.alignment(Alignment::Center));
+    lines.push(seat_status_line(seat, phase, is_you).alignment(Alignment::Center));
+    lines.push(bet_balance_line(seat, snapshot, is_you).alignment(Alignment::Center));
+    if let Some((label, color)) = outcome_label(seat) {
+        lines.push(
+            Line::from(Span::styled(
+                label,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Center),
+        );
+        if let Some(subtitle) = outcome_subtitle(seat) {
+            lines.push(
+                Line::from(Span::styled(
+                    subtitle,
+                    Style::default().fg(theme::TEXT_DIM()),
+                ))
+                .alignment(Alignment::Center),
+            );
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_seat_panel(
@@ -285,7 +685,8 @@ fn draw_seat_panel(
     area: Rect,
     seat: &BlackjackSeat,
     user_seat_index: Option<usize>,
-    phase: Phase,
+    snapshot: &BlackjackSnapshot,
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
 ) {
     let is_you = Some(seat.index) == user_seat_index;
     let is_active = seat.phase == SeatPhase::Playing;
@@ -312,85 +713,7 @@ fn draw_seat_panel(
         return;
     }
 
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Row 1: identity
-    let identity = if is_you {
-        Span::styled(
-            "▶ YOU",
-            Style::default()
-                .fg(theme::SUCCESS())
-                .add_modifier(Modifier::BOLD),
-        )
-    } else if seat.user_id.is_some() {
-        Span::styled(
-            "player",
-            Style::default().fg(theme::TEXT()),
-        )
-    } else {
-        Span::styled(
-            "open",
-            Style::default().fg(theme::TEXT_DIM()),
-        )
-    };
-    lines.push(Line::from(identity).alignment(Alignment::Center));
-
-    // Row 2: cards (compact)
-    let card_line = if seat.hand.is_empty() {
-        if seat.user_id.is_none() {
-            Line::from(Span::styled(
-                "press s",
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
-            ))
-        } else {
-            Line::from(Span::styled(
-                "·  ·",
-                Style::default().fg(theme::TEXT_DIM()),
-            ))
-        }
-    } else {
-        Line::from(compact_card_spans(&seat.hand))
-    };
-    lines.push(card_line.alignment(Alignment::Center));
-
-    // Row 3: total / status callout
-    let status_line = seat_status_line(seat, phase);
-    lines.push(status_line.alignment(Alignment::Center));
-
-    // Row 4: bet
-    let bet_line = match seat.bet_amount {
-        Some(amount) => Line::from(Span::styled(
-            format!("bet {amount}"),
-            Style::default().fg(theme::AMBER()),
-        )),
-        None if seat.user_id.is_some() => Line::from(Span::styled(
-            "no bet",
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-        None => Line::from(""),
-    };
-    lines.push(bet_line.alignment(Alignment::Center));
-
-    // Row 5: outcome chip if any
-    if let Some(outcome) = seat.last_outcome {
-        let (label, color) = match outcome {
-            Outcome::PlayerBlackjack => ("BLACKJACK", theme::SUCCESS()),
-            Outcome::PlayerWin => ("WIN", theme::SUCCESS()),
-            Outcome::Push => ("PUSH", theme::TEXT_DIM()),
-            Outcome::DealerWin => ("LOSS", theme::ERROR()),
-        };
-        lines.push(
-            Line::from(Span::styled(
-                label,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ))
-            .alignment(Alignment::Center),
-        );
-    }
-
-    frame.render_widget(Paragraph::new(lines), inner);
+    draw_seat_panel_inner(frame, inner, seat, user_seat_index, snapshot, usernames);
 }
 
 fn compact_card_spans(cards: &[PlayingCard]) -> Vec<Span<'static>> {
@@ -405,7 +728,7 @@ fn compact_card_spans(cards: &[PlayingCard]) -> Vec<Span<'static>> {
     spans
 }
 
-fn seat_status_line(seat: &BlackjackSeat, phase: Phase) -> Line<'static> {
+fn seat_status_line(seat: &BlackjackSeat, phase: Phase, is_you: bool) -> Line<'static> {
     match (seat.user_id, &seat.score, seat.phase) {
         (None, _, _) => Line::from(Span::styled(
             "to sit",
@@ -419,16 +742,18 @@ fn seat_status_line(seat: &BlackjackSeat, phase: Phase) -> Line<'static> {
             "betting…",
             Style::default().fg(theme::TEXT_DIM()),
         )),
-        (Some(_), _, SeatPhase::Ready) => Line::from(Span::styled(
-            "ready",
-            Style::default().fg(theme::SUCCESS()),
-        )),
-        (Some(_), _, SeatPhase::Playing) => Line::from(Span::styled(
-            "your turn",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )),
+        (Some(_), _, SeatPhase::Ready) => {
+            Line::from(Span::styled("ready", Style::default().fg(theme::SUCCESS())))
+        }
+        (Some(_), _, SeatPhase::Playing) => {
+            let label = if is_you { "your turn" } else { "thinking…" };
+            Line::from(Span::styled(
+                label,
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ))
+        }
         (Some(_), Some(score), SeatPhase::Stood) => Line::from(Span::styled(
             format!("stood {}", score.total),
             Style::default().fg(theme::TEXT()),
@@ -437,10 +762,7 @@ fn seat_status_line(seat: &BlackjackSeat, phase: Phase) -> Line<'static> {
             format!("tot {}", score.total),
             Style::default().fg(theme::TEXT_BRIGHT()),
         )),
-        (Some(_), None, _) => Line::from(Span::styled(
-            "—",
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
+        (Some(_), None, _) => Line::from(Span::styled("—", Style::default().fg(theme::TEXT_DIM()))),
     }
 }
 
@@ -455,10 +777,7 @@ fn draw_status_line(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapshot)
             Style::default().fg(theme::TEXT()),
         ),
     ]);
-    frame.render_widget(
-        Paragraph::new(line).alignment(Alignment::Center),
-        area,
-    );
+    frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
 fn draw_info_bar(
@@ -472,38 +791,31 @@ fn draw_info_bar(
     }
     let dim = Style::default().fg(theme::TEXT_DIM());
     let amber = Style::default().fg(theme::AMBER());
-    let success = Style::default().fg(theme::SUCCESS());
 
     let mut spans: Vec<Span> = Vec::new();
-    spans.push(Span::styled("Bal ", dim));
-    spans.push(Span::styled(snapshot.balance.to_string(), success));
 
-    if user_seat_index.is_some() {
-        spans.push(Span::raw("  ·  "));
+    if user_seat_index.is_some() && snapshot.phase == Phase::Betting {
         spans.push(Span::styled("chip ", dim));
         spans.push(Span::styled(
             selected_chip_amount(snapshot).to_string(),
             amber,
         ));
-
         spans.push(Span::raw("  ·  "));
-        spans.push(Span::styled("stake ", dim));
-        spans.push(Span::styled(render_chip_stack(&snapshot.stake_chips), amber));
-
-        if let Some(amount) = snapshot.current_bet_amount {
-            spans.push(Span::raw("  ·  "));
-            spans.push(Span::styled("locked ", dim));
-            spans.push(Span::styled(amount.to_string(), amber));
-        }
     }
 
-    spans.push(Span::raw("  ·  "));
     spans.push(Span::styled("phase ", dim));
-    spans.push(Span::styled(snapshot.phase.label().to_string(), Style::default().fg(theme::TEXT_BRIGHT())));
+    spans.push(Span::styled(
+        snapshot.phase.label().to_string(),
+        Style::default().fg(theme::TEXT_BRIGHT()),
+    ));
 
     if let Some(secs) = snapshot.betting_countdown_secs {
         spans.push(Span::raw("  ·  "));
         spans.push(Span::styled("deal ", dim));
+        spans.push(Span::styled(format!("{secs}s"), amber));
+    } else if let Some(secs) = snapshot.action_countdown_secs {
+        spans.push(Span::raw("  ·  "));
+        spans.push(Span::styled("act ", dim));
         spans.push(Span::styled(format!("{secs}s"), amber));
     }
 
@@ -513,13 +825,7 @@ fn draw_info_bar(
     );
 }
 
-fn draw_key_bar(
-    frame: &mut Frame,
-    area: Rect,
-    phase: Phase,
-    is_seated: bool,
-    is_active: bool,
-) {
+fn draw_key_bar(frame: &mut Frame, area: Rect, phase: Phase, is_seated: bool, is_active: bool) {
     if area.height == 0 {
         return;
     }
@@ -577,9 +883,14 @@ fn draw_table_compact(
             theme::TEXT_BRIGHT(),
         ),
         info_label_value(
-            "Deal",
+            if snapshot.phase == Phase::PlayerTurn {
+                "Act"
+            } else {
+                "Deal"
+            },
             snapshot
                 .betting_countdown_secs
+                .or(snapshot.action_countdown_secs)
                 .map(|secs| format!("{secs}s"))
                 .unwrap_or_else(|| "auto".to_string()),
             theme::AMBER(),
@@ -636,14 +947,6 @@ fn draw_table_compact(
         ),
         rows[3],
     );
-
-    if let Some((title, subtitle)) = &snapshot.outcome_banner {
-        let color = match snapshot.last_outcome {
-            Some(Outcome::PlayerBlackjack | Outcome::PlayerWin | Outcome::Push) => theme::SUCCESS(),
-            Some(Outcome::DealerWin) | None => theme::ERROR(),
-        };
-        draw_game_overlay(frame, inner, title.as_str(), subtitle.as_str(), color);
-    }
 }
 
 // ──────────────── Shared helpers ────────────────
@@ -654,21 +957,23 @@ fn key_line(phase: Phase, is_seated: bool, is_active: bool) -> Line<'static> {
     }
     match phase {
         Phase::Betting => key_hint(
-            "[ ] chip · Space throw · Enter lock · L leave · Esc back",
+            "[ ] chip · Space throw · Backspace pull · Enter/S lock · L leave · Esc back",
             "",
         ),
         Phase::BetPending => key_hint("waiting — bet in flight", ""),
-        Phase::PlayerTurn if is_active => key_hint(
-            "H/Space hit · S stand · L leave · Esc auto-stand",
-            "",
-        ),
+        Phase::PlayerTurn if is_active => {
+            key_hint("H/Space hit · S stand · L leave · Esc auto-stand", "")
+        }
         Phase::PlayerTurn => key_hint("watching others · L leave seat · Esc back", ""),
         Phase::DealerTurn => key_hint("dealer resolving…", ""),
-        Phase::Settling => key_hint("N/Enter next hand · L leave · Esc back", ""),
+        Phase::Settling => key_hint("Space/Enter next hand · L leave · Esc back", ""),
     }
 }
 
-fn render_seats_compact(snapshot: &BlackjackSnapshot, user_seat_index: Option<usize>) -> Line<'static> {
+fn render_seats_compact(
+    snapshot: &BlackjackSnapshot,
+    user_seat_index: Option<usize>,
+) -> Line<'static> {
     let mut spans = vec![Span::styled(
         "Seats: ",
         Style::default().fg(theme::TEXT_DIM()),
@@ -750,7 +1055,11 @@ fn render_seat_hands_compact(
                 Style::default().fg(theme::TEXT_DIM())
             };
             let hand = if seat.hand.is_empty() {
-                "—".to_string()
+                if !seat.stake_chips.is_empty() && seat.bet_amount.is_none() {
+                    render_chip_stack(&seat.stake_chips)
+                } else {
+                    "—".to_string()
+                }
             } else {
                 render_cards_compact(&seat.hand, true)
             };
@@ -800,9 +1109,7 @@ fn render_chip_stack(chips: &[i64]) -> String {
 fn render_amount_as_chips(amount: i64) -> String {
     let mut remaining = amount;
     let mut chips = Vec::new();
-    for chip in [10000, 5000, 2000, 1000, 500, 200, 100, 50, 20, 10]
-        .iter()
-    {
+    for chip in [10000, 5000, 2000, 1000, 500, 200, 100, 50, 20, 10].iter() {
         while remaining >= *chip {
             chips.push(*chip);
             remaining -= *chip;

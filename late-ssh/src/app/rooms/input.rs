@@ -44,14 +44,6 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             handle_escape(app);
             true
         }
-        ParsedInput::Byte(b'\t') => {
-            cycle_filter(app, true);
-            true
-        }
-        ParsedInput::BackTab => {
-            cycle_filter(app, false);
-            true
-        }
         ParsedInput::Char('/') => {
             enter_search(app);
             true
@@ -66,6 +58,14 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         }
         ParsedInput::Char('k') => {
             move_selection(app, -1);
+            true
+        }
+        ParsedInput::Char('h' | 'H') => {
+            cycle_filter(app, false);
+            true
+        }
+        ParsedInput::Char('l' | 'L') => {
+            cycle_filter(app, true);
             true
         }
         _ => false,
@@ -168,6 +168,14 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
         }
         b'B' => {
             move_selection(app, 1);
+            true
+        }
+        b'D' => {
+            cycle_filter(app, false);
+            true
+        }
+        b'C' => {
+            cycle_filter(app, true);
             true
         }
         _ => false,
@@ -424,7 +432,10 @@ fn enter_selected_room(app: &mut App) {
     }
 
     if let Some(room) = visible_real_room_at(app, app.rooms_selected_index) {
+        app.chat.join_game_room_chat(room.chat_room_id);
+        app.chat.request_room_tail(room.chat_room_id);
         if matches!(room.game_kind, crate::app::rooms::svc::GameKind::Blackjack) {
+            app.rooms_service.touch_room_task(room.id);
             let svc = app
                 .blackjack_table_manager
                 .get_or_create(room.id, room.blackjack_settings.clone());
@@ -437,11 +448,18 @@ fn enter_selected_room(app: &mut App) {
 }
 
 fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
-    let Some(room) = &app.rooms_active_room else {
+    let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
     };
+    let game_kind = room.game_kind;
+    let chat_room_id = room.chat_room_id;
 
-    match room.game_kind {
+    if matches!(byte, b'i' | b'I') {
+        app.chat.start_composing_in_room(chat_room_id);
+        return true;
+    }
+
+    match game_kind {
         crate::app::rooms::svc::GameKind::Blackjack => {
             let byte = if matches!(byte, b'q' | b'Q') {
                 0x1B

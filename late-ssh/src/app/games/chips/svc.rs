@@ -46,4 +46,10 @@ impl ChipService {
         let chips = UserChips::add_bonus(&client, user_id, amount).await?;
         Ok(chips.balance)
     }
+
+    pub async fn restore_floor(&self, user_id: Uuid) -> anyhow::Result<i64> {
+        let client = self.db.get().await?;
+        let chips = UserChips::restore_floor(&client, user_id).await?;
+        Ok(chips.balance)
+    }
 }

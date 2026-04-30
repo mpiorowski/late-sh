@@ -272,6 +272,10 @@ impl ChatState {
         }
     }
 
+    pub fn join_game_room_chat(&self, room_id: Uuid) {
+        self.service.join_game_room_task(self.user_id, room_id);
+    }
+
     fn sync_refresh_room_id(&mut self) {
         if self.refresh_room_id != self.selected_room_id {
             self.refresh_room_id = self.selected_room_id;
@@ -1247,6 +1251,7 @@ impl ChatState {
         self.showcase_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
+        self.discover.start_loading();
         self.service.list_discover_rooms_task(self.user_id);
     }
 
@@ -1577,6 +1582,10 @@ impl ChatState {
                     self.pending_chat_screen_switch = true;
                     banner = Some(Banner::success(&format!("Joined #{slug}")));
                 }
+                ChatEvent::GameRoomJoined { user_id, room_id } if self.user_id == user_id => {
+                    self.request_list();
+                    self.request_room_tail(room_id);
+                }
                 ChatEvent::RoomFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
@@ -1659,6 +1668,7 @@ impl ChatState {
                     self.discover.set_items(rooms);
                 }
                 ChatEvent::DiscoverRoomsFailed { user_id, message } if self.user_id == user_id => {
+                    self.discover.finish_loading();
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::MessageReactionsUpdated {

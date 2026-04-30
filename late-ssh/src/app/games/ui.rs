@@ -176,6 +176,7 @@ pub struct GamesHubView<'a> {
     pub is_admin: bool,
     pub leaderboard: &'a Arc<LeaderboardData>,
     pub show_sidebar: bool,
+    pub usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
 }
 
 pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
@@ -214,6 +215,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
                 area,
                 view.blackjack_state,
                 view.show_sidebar,
+                view.usernames,
             );
             return;
         }

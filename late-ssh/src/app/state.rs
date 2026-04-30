@@ -222,6 +222,7 @@ pub struct App {
     pub(crate) chat: chat::state::ChatState,
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
+    pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
 
     /// Which favorite room the dashboard's chat card is currently showing,
     /// when the user has 2+ favorites pinned. Clamped on read against the
@@ -353,6 +354,10 @@ impl App {
         match self.screen {
             Screen::Dashboard => self.dashboard_active_room_id(),
             Screen::Chat => self.chat.selected_room_id,
+            Screen::Rooms => self
+                .rooms_active_room
+                .as_ref()
+                .map(|room| room.chat_room_id),
             _ => None,
         }
     }
@@ -696,6 +701,7 @@ impl App {
             ),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
+            rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             dashboard_favorite_index: 0,
             dashboard_previous_favorite_index: None,
             dashboard_g_prefix_armed: false,

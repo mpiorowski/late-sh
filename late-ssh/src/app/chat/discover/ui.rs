@@ -11,6 +11,7 @@ use ratatui::{
 pub struct DiscoverListView<'a> {
     pub items: &'a [DiscoverRoomItem],
     pub selected_index: usize,
+    pub loading: bool,
 }
 
 const ITEM_HEIGHT: u16 = 5;
@@ -23,6 +24,13 @@ pub fn draw_discover_list(frame: &mut Frame, area: Rect, view: &DiscoverListView
 
     let inner_area = block.inner(area);
     frame.render_widget(block, area);
+
+    if view.loading {
+        let text = Text::from("Loading rooms...");
+        let loading_p = Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM()));
+        frame.render_widget(loading_p, inner_area);
+        return;
+    }
 
     if view.items.is_empty() {
         let text = Text::from("No public rooms to discover right now.");
@@ -104,5 +112,55 @@ pub fn draw_discover_list(frame: &mut Frame, area: Rect, view: &DiscoverListView
 
         let p = Paragraph::new(lines).wrap(Wrap { trim: true });
         frame.render_widget(p, content_area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn render_discover(view: DiscoverListView<'_>) -> String {
+        let width = 60;
+        let height = 10;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal
+            .draw(|frame| draw_discover_list(frame, Rect::new(0, 0, width, height), &view))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let mut rendered = String::new();
+        for y in 0..height {
+            for x in 0..width {
+                rendered.push_str(buffer[(x, y)].symbol());
+            }
+            rendered.push('\n');
+        }
+        rendered
+    }
+
+    #[test]
+    fn loading_state_does_not_claim_there_are_no_rooms() {
+        let rendered = render_discover(DiscoverListView {
+            items: &[],
+            selected_index: 0,
+            loading: true,
+        });
+
+        assert!(rendered.contains("Loading rooms..."));
+        assert!(!rendered.contains("No public rooms"));
+    }
+
+    #[test]
+    fn loaded_empty_state_explains_no_discoverable_rooms() {
+        let rendered = render_discover(DiscoverListView {
+            items: &[],
+            selected_index: 0,
+            loading: false,
+        });
+
+        assert!(rendered.contains("No public rooms to discover right now."));
     }
 }

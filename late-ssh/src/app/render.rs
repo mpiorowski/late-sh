@@ -105,6 +105,12 @@ struct DrawContext<'a> {
     rooms_filter: crate::app::rooms::filter::RoomsFilter,
     rooms_search_active: bool,
     rooms_search_query: &'a str,
+    rooms_usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
+    rooms_blackjack_snapshots: &'a std::collections::HashMap<
+        uuid::Uuid,
+        crate::app::rooms::blackjack::state::BlackjackSnapshot,
+    >,
+    rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::games::tetris::state::State,
     sudoku_state: &'a crate::app::games::sudoku::state::State,
@@ -267,6 +273,7 @@ impl App {
         let discover_view = chat::discover::ui::DiscoverListView {
             items: self.chat.discover.all_items(),
             selected_index: self.chat.discover.selected_index(),
+            loading: self.chat.discover.is_loading(),
         };
         let notifications_view = chat::notifications::ui::NotificationListView {
             items: self.chat.notifications.all_items(),
@@ -325,6 +332,31 @@ impl App {
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
+        let rooms_blackjack_snapshots = self.blackjack_table_manager.table_snapshots();
+        let rooms_chat_view =
+            self.rooms_active_room
+                .as_ref()
+                .map(|room| chat::ui::EmbeddedRoomChatView {
+                    title: "Chat",
+                    messages: self.chat.messages_for_room(room.chat_room_id),
+                    rows_cache: &mut self.rooms_chat_rows_cache,
+                    usernames: chat_usernames,
+                    countries: chat_countries,
+                    badges: &chat_badges,
+                    message_reactions,
+                    current_user_id: self.user_id,
+                    selected_message_id: self.chat.selected_message_id,
+                    highlighted_message_id: self.chat.highlighted_message_id,
+                    reaction_picker_active: self.chat.is_reaction_leader_active(),
+                    composer: self.chat.composer(),
+                    composing: self.chat.composing,
+                    mention_matches: &self.chat.mention_ac.matches,
+                    mention_selected: self.chat.mention_ac.selected,
+                    mention_active: self.chat.mention_ac.active,
+                    reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                    is_editing: self.chat.edited_message_id.is_some(),
+                    bonsai_glyphs,
+                });
         let online_count = self
             .active_users
             .as_ref()
@@ -355,6 +387,9 @@ impl App {
                         rooms_filter: self.rooms_filter,
                         rooms_search_active: self.rooms_search_active,
                         rooms_search_query: self.rooms_search_query.as_str(),
+                        rooms_usernames: chat_usernames,
+                        rooms_blackjack_snapshots: &rooms_blackjack_snapshots,
+                        rooms_chat_view,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         sudoku_state: &self.sudoku_state,
@@ -580,12 +615,13 @@ impl App {
                     is_admin: ctx.is_admin,
                     leaderboard: ctx.leaderboard,
                     show_sidebar: ctx.show_games_sidebar,
+                    usernames: ctx.rooms_usernames,
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
                 frame,
                 content_area,
-                &crate::app::rooms::ui::RoomsPageView {
+                crate::app::rooms::ui::RoomsPageView {
                     add_form_open: ctx.rooms_add_form_open,
                     display_name: ctx.rooms_display_name_input,
                     create_focus_index: ctx.rooms_create_focus_index,
@@ -600,6 +636,9 @@ impl App {
                     filter: ctx.rooms_filter,
                     search_active: ctx.rooms_search_active,
                     search_query: ctx.rooms_search_query,
+                    usernames: ctx.rooms_usernames,
+                    blackjack_snapshots: ctx.rooms_blackjack_snapshots,
+                    active_room_chat: ctx.rooms_chat_view,
                 },
             ),
         }
