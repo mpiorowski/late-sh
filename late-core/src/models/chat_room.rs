@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -213,6 +214,91 @@ impl ChatRoom {
         }
     }
 
+    pub async fn is_kind(client: &Client, room_id: Uuid, kind: &str) -> Result<bool> {
+        let row = client
+            .query_opt("SELECT kind FROM chat_rooms WHERE id = $1", &[&room_id])
+            .await?;
+        Ok(row
+            .map(|row| row.get::<_, String>(0) == kind)
+            .unwrap_or(false))
+    }
+
+    pub async fn list_discover_public_topic_rooms(
+        client: &Client,
+    ) -> Result<Vec<DiscoverPublicTopicRoom>> {
+        let rows = client
+            .query(
+                "SELECT r.id,
+                        r.slug,
+                        COUNT(DISTINCT m.user_id)::bigint AS member_count,
+                        COUNT(DISTINCT msg.id)::bigint AS message_count,
+                        MAX(msg.created) AS last_message_at
+                 FROM chat_rooms r
+                 LEFT JOIN chat_room_members m ON m.room_id = r.id
+                 LEFT JOIN chat_messages msg ON msg.room_id = r.id
+                 WHERE r.kind = 'topic'
+                   AND r.visibility = 'public'
+                   AND r.permanent = false
+                 GROUP BY r.id, r.slug
+                 ORDER BY
+                    COALESCE(MAX(msg.created), r.created) DESC,
+                    message_count DESC,
+                    member_count DESC,
+                    r.slug ASC",
+                &[],
+            )
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let slug: Option<String> = row.get("slug");
+                slug.map(|slug| DiscoverPublicTopicRoom {
+                    room_id: row.get("id"),
+                    slug,
+                    member_count: row.get("member_count"),
+                    message_count: row.get("message_count"),
+                    last_message_at: row.get("last_message_at"),
+                })
+            })
+            .collect())
+    }
+
+    pub async fn list_public_topic_room_summaries(
+        client: &Client,
+    ) -> Result<Vec<PublicTopicRoomSummary>> {
+        let rows = client
+            .query(
+                "SELECT r.kind,
+                        r.slug,
+                        r.language_code,
+                        COUNT(m.user_id)::bigint AS member_count
+                 FROM chat_rooms r
+                 LEFT JOIN chat_room_members m ON m.room_id = r.id
+                 WHERE r.kind = 'topic'
+                   AND r.visibility = 'public'
+                   AND r.permanent = false
+                 GROUP BY r.id, r.kind, r.slug, r.language_code, r.created
+                 ORDER BY
+                    member_count DESC,
+                    COALESCE(r.slug, COALESCE(r.language_code, '')) ASC,
+                    r.created ASC,
+                    r.id ASC",
+                &[],
+            )
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| PublicTopicRoomSummary {
+                kind: row.get("kind"),
+                slug: row.get("slug"),
+                language_code: row.get("language_code"),
+                member_count: row.get("member_count"),
+            })
+            .collect())
+    }
+
     pub async fn touch_updated(client: &Client, room_id: Uuid) -> Result<u64> {
         let rows = client
             .execute(
@@ -319,6 +405,23 @@ impl ChatRoom {
             .await?;
         Ok(count)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoverPublicTopicRoom {
+    pub room_id: Uuid,
+    pub slug: String,
+    pub member_count: i64,
+    pub message_count: i64,
+    pub last_message_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicTopicRoomSummary {
+    pub kind: String,
+    pub slug: Option<String>,
+    pub language_code: Option<String>,
+    pub member_count: i64,
 }
 
 pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {

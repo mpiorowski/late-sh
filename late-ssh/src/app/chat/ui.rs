@@ -1,5 +1,5 @@
-use late_core::models::chat_message::ChatMessage;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
+use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -23,7 +23,7 @@ use crate::app::common::{
 };
 use late_core::models::leaderboard::BadgeTier;
 
-use super::state::{MentionMatch, ROOM_JUMP_KEYS, RoomSlot};
+use super::state::{MentionMatch, ROOM_JUMP_KEYS, RoomSlot, is_chat_list_room};
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -34,6 +34,13 @@ fn custom_badge_for_username(username: &str) -> Option<&'static str> {
         "kirii.md" => Some(" 🎨"),
         _ => None,
     }
+}
+
+fn is_bot_author(username: &str) -> bool {
+    matches!(
+        username.trim().to_ascii_lowercase().as_str(),
+        "bot" | "graybeard" | "dealer"
+    )
 }
 
 // ── Dashboard chat card ─────────────────────────────────────
@@ -494,7 +501,7 @@ fn ensure_chat_rows_cache(
             format_username_with_country(msg.user_id, raw_author, ctx.countries)
         };
         let contributor_badge = custom_badge_for_username(raw_author).unwrap_or_default();
-        let is_bot = raw_author == "bot" || raw_author == "graybeard";
+        let is_bot = is_bot_author(raw_author);
         let badge = if !is_bot {
             ctx.badges.get(&msg.user_id).copied()
         } else {
@@ -824,6 +831,7 @@ pub struct ChatRenderInput<'a> {
 pub struct EmbeddedRoomChatView<'a> {
     pub title: &'a str,
     pub messages: &'a [ChatMessage],
+    pub overlay: Option<&'a Overlay>,
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
@@ -895,7 +903,11 @@ pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoom
         .title(format!(" {} ", view.title))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
+    let messages_inner = messages_block.inner(messages_area);
     frame.render_widget(Paragraph::new(lines).block(messages_block), messages_area);
+    if let Some(overlay) = view.overlay {
+        draw_overlay(frame, messages_inner, overlay);
+    }
 
     draw_composer_block(
         frame,
@@ -980,7 +992,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         }
     };
 
-    let room_line = |room: &late_core::models::chat_room::ChatRoom,
+    let room_line = |room: &ChatRoom,
                      label: String,
                      is_selected: bool,
                      jump_key: Option<u8>|
@@ -1024,7 +1036,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
     for slug in &core_order {
         if let Some((room, _)) = chat_rooms
             .iter()
-            .find(|(r, _)| r.permanent && r.slug.as_deref() == Some(slug))
+            .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
         {
             let is_selected = room_selected(room.id);
             push_row(
@@ -1040,7 +1052,10 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         }
     }
     for (room, _) in chat_rooms.iter().filter(|(r, _)| {
-        r.kind != "dm" && r.permanent && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
+        is_chat_list_room(r)
+            && r.kind != "dm"
+            && r.permanent
+            && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
     }) {
         let is_selected = room_selected(room.id);
         let label = room
@@ -1158,7 +1173,9 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
 
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
+        .filter(|(r, _)| {
+            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "public"
+        })
         .collect();
     public_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !public_rooms.is_empty() {
@@ -1186,7 +1203,9 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
 
     let mut private_rooms: Vec<_> = chat_rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
+        .filter(|(r, _)| {
+            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "private"
+        })
         .collect();
     private_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !private_rooms.is_empty() {
@@ -1342,7 +1361,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     } else {
         let selected_room = selected_room_id
             .and_then(|id| chat_rooms.iter().find(|(room, _)| room.id == id))
-            .or_else(|| chat_rooms.first());
+            .filter(|(room, _)| is_chat_list_room(room))
+            .or_else(|| chat_rooms.iter().find(|(room, _)| is_chat_list_room(room)));
 
         let (message_title, message_lines): (String, Vec<Line>) =
             if let Some((room, messages)) = selected_room {
@@ -1519,6 +1539,15 @@ mod tests {
     #[test]
     fn short_user_id_handles_nil() {
         assert_eq!(short_user_id(Uuid::nil()), "00000000");
+    }
+
+    #[test]
+    fn is_bot_author_matches_all_ghost_users() {
+        assert!(is_bot_author("bot"));
+        assert!(is_bot_author("graybeard"));
+        assert!(is_bot_author("dealer"));
+        assert!(is_bot_author(" Dealer "));
+        assert!(!is_bot_author("mat"));
     }
 
     #[test]
@@ -1904,6 +1933,63 @@ mod tests {
                 RoomSlot::Discover,
             ]
         );
+    }
+
+    #[test]
+    fn room_list_rows_skip_game_rooms() {
+        let general = ChatRoom {
+            id: Uuid::now_v7(),
+            created: Utc::now(),
+            updated: Utc::now(),
+            kind: "general".to_string(),
+            visibility: "public".to_string(),
+            auto_join: true,
+            slug: Some("general".to_string()),
+            permanent: true,
+            language_code: None,
+            dm_user_a: None,
+            dm_user_b: None,
+        };
+        let game = ChatRoom {
+            id: Uuid::now_v7(),
+            created: Utc::now(),
+            updated: Utc::now(),
+            kind: "game".to_string(),
+            visibility: "public".to_string(),
+            auto_join: false,
+            slug: Some("bj-abc123".to_string()),
+            permanent: false,
+            language_code: None,
+            dm_user_a: None,
+            dm_user_b: None,
+        };
+        let rooms = vec![(general.clone(), Vec::new()), (game.clone(), Vec::new())];
+        let mut rows_cache = ChatRowsCache::default();
+        let usernames = HashMap::new();
+        let countries = HashMap::new();
+        let badges = HashMap::new();
+        let message_reactions = HashMap::new();
+        let unread_counts = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let composer = TextArea::default();
+        let news_composer = TextArea::default();
+        let view = chat_view(
+            &mut rows_cache,
+            &rooms,
+            Some(general.id),
+            &usernames,
+            &countries,
+            &badges,
+            &message_reactions,
+            &unread_counts,
+            &bonsai_glyphs,
+            &composer,
+            &news_composer,
+        );
+
+        let room_rows = build_room_list_rows(&view, Rect::new(0, 0, 40, 20));
+
+        assert!(!room_rows.hit_slots.contains(&Some(RoomSlot::Room(game.id))));
     }
 
     #[test]

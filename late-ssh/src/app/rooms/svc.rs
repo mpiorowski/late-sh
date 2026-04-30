@@ -1,8 +1,13 @@
 use std::time::Duration;
 
-use late_core::{db::Db, models::game_room::GameRoom};
+use late_core::{
+    db::Db,
+    models::{chat_room_member::ChatRoomMember, game_room::GameRoom},
+};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
+
+use crate::app::ai::ghost::DEALER_FINGERPRINT;
 
 use super::blackjack::settings::BlackjackTableSettings;
 
@@ -43,9 +48,18 @@ pub enum RoomsEvent {
         game_kind: GameKind,
         display_name: String,
     },
+    Deleted {
+        user_id: Uuid,
+        display_name: String,
+    },
     Error {
         user_id: Uuid,
         game_kind: GameKind,
+        display_name: String,
+        message: String,
+    },
+    DeleteError {
+        user_id: Uuid,
         display_name: String,
         message: String,
     },
@@ -225,9 +239,56 @@ impl RoomsService {
             Some(user_id),
         )
         .await?;
+        add_dealer_to_game_room_chat(&client, room.chat_room_id).await?;
         self.publish_rooms(&client).await?;
         Ok(room)
     }
+
+    pub fn delete_game_room_task(&self, user_id: Uuid, room_id: Uuid, display_name: String) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            match svc.delete_game_room(room_id).await {
+                Ok(()) => {
+                    let _ = svc.event_tx.send(RoomsEvent::Deleted {
+                        user_id,
+                        display_name,
+                    });
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = ?e,
+                        %user_id,
+                        %room_id,
+                        display_name,
+                        "failed to delete game room"
+                    );
+                    let _ = svc.event_tx.send(RoomsEvent::DeleteError {
+                        user_id,
+                        display_name,
+                        message: room_error_message(&e),
+                    });
+                }
+            }
+        });
+    }
+
+    async fn delete_game_room(&self, room_id: Uuid) -> anyhow::Result<()> {
+        let client = self.db.get().await?;
+        let count = GameRoom::close_by_id(&client, room_id).await?;
+        if count == 0 {
+            anyhow::bail!("table already deleted");
+        }
+        self.publish_rooms(&client).await?;
+        Ok(())
+    }
+}
+
+async fn add_dealer_to_game_room_chat(
+    client: &tokio_postgres::Client,
+    chat_room_id: Uuid,
+) -> anyhow::Result<()> {
+    ChatRoomMember::join_user_by_fingerprint(client, chat_room_id, DEALER_FINGERPRINT).await?;
+    Ok(())
 }
 
 async fn count_open_rooms_created_by(
@@ -235,48 +296,18 @@ async fn count_open_rooms_created_by(
     user_id: Uuid,
     game_kind: GameKind,
 ) -> anyhow::Result<i64> {
-    let game_kind = game_kind.as_str();
-    let row = client
-        .query_one(
-            "SELECT COUNT(*)::bigint AS count
-             FROM game_rooms
-             WHERE created_by = $1
-               AND game_kind = $2
-               AND status <> 'closed'",
-            &[&user_id, &game_kind],
-        )
-        .await?;
-    Ok(row.get("count"))
+    GameRoom::count_open_created_by(client, user_id, game_kind).await
 }
 
 async fn close_inactive_rooms(
     client: &tokio_postgres::Client,
     ttl: Duration,
 ) -> anyhow::Result<u64> {
-    let ttl_seconds = ttl.as_secs() as i64;
-    let updated = client
-        .execute(
-            "UPDATE game_rooms
-             SET status = $1,
-                 updated = current_timestamp
-             WHERE status <> $1
-               AND updated < current_timestamp - ($2::bigint * interval '1 second')",
-            &[&GameRoom::STATUS_CLOSED, &ttl_seconds],
-        )
-        .await?;
-    Ok(updated)
+    GameRoom::close_inactive(client, ttl).await
 }
 
 async fn touch_room_activity(client: &tokio_postgres::Client, room_id: Uuid) -> anyhow::Result<()> {
-    client
-        .execute(
-            "UPDATE game_rooms
-             SET updated = current_timestamp
-             WHERE id = $1
-               AND status <> $2",
-            &[&room_id, &GameRoom::STATUS_CLOSED],
-        )
-        .await?;
+    GameRoom::touch_activity(client, room_id).await?;
     Ok(())
 }
 
@@ -286,5 +317,9 @@ fn generate_room_slug(game_kind: GameKind) -> String {
 }
 
 fn room_create_error_message(error: &anyhow::Error) -> String {
+    room_error_message(error)
+}
+
+fn room_error_message(error: &anyhow::Error) -> String {
     error.root_cause().to_string()
 }

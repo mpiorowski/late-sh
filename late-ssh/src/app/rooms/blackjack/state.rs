@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{
@@ -21,6 +23,7 @@ pub const BLACKJACK_TARGET: u8 = 21;
 pub const DEALER_STAND_ON: u8 = 17;
 pub const SHOE_DECKS: usize = 6;
 pub const SHOE_PENETRATION: usize = 52;
+const SETTLEMENT_MIN_VIEW_MS: u64 = 1500;
 
 pub const DEALER_STANDS_ON_SOFT_17: bool = true;
 
@@ -120,6 +123,16 @@ pub enum Outcome {
     DealerWin,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeatAction {
+    Sit,
+    Bet,
+    Hit,
+    Stand,
+    MissedDeal,
+    MissedAction,
+}
+
 pub fn settle(player: &[PlayingCard], dealer: &[PlayingCard]) -> Outcome {
     if is_bust(player) {
         return Outcome::DealerWin;
@@ -193,6 +206,7 @@ pub struct BlackjackSnapshot {
     pub stake_chips: Vec<i64>,
     pub selected_chip_index: usize,
     pub status_message: String,
+    pub private_notice: Option<String>,
     pub dealer_revealed: bool,
     pub dealer_score: Option<HandScore>,
     pub player_score: Option<HandScore>,
@@ -209,6 +223,7 @@ pub struct BlackjackSeat {
     pub phase: SeatPhase,
     pub score: Option<HandScore>,
     pub last_outcome: Option<Outcome>,
+    pub last_action: Option<SeatAction>,
     pub last_net_change: i64,
 }
 
@@ -285,6 +300,7 @@ pub struct State {
     pub(crate) snapshot: BlackjackSnapshot,
     pub(crate) private_notice: Option<String>,
     pending_request_id: Option<Uuid>,
+    settling_seen_at: Option<Instant>,
     svc: BlackjackService,
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_rx: broadcast::Receiver<BlackjackEvent>,
@@ -294,6 +310,11 @@ impl State {
     pub fn new(svc: BlackjackService, user_id: Uuid, balance: i64) -> Self {
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
+        let settling_seen_at = if snapshot.phase == Phase::Settling {
+            Some(Instant::now())
+        } else {
+            None
+        };
         let event_rx = svc.subscribe_events();
         Self {
             user_id,
@@ -302,6 +323,7 @@ impl State {
             snapshot,
             private_notice: None,
             pending_request_id: None,
+            settling_seen_at,
             svc,
             snapshot_rx,
             event_rx,
@@ -310,7 +332,13 @@ impl State {
 
     pub fn tick(&mut self) {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
+            let previous_phase = self.snapshot.phase;
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+            if self.snapshot.phase == Phase::Settling && previous_phase != Phase::Settling {
+                self.settling_seen_at = Some(Instant::now());
+            } else if self.snapshot.phase != Phase::Settling {
+                self.settling_seen_at = None;
+            }
         }
 
         loop {
@@ -334,6 +362,12 @@ impl State {
         }
         let current = self.selected_chip_index as isize;
         self.selected_chip_index = (current + delta).rem_euclid(len) as usize;
+    }
+
+    pub fn touch_activity(&self) {
+        if self.is_seated() {
+            self.svc.touch_activity_task(self.user_id);
+        }
     }
 
     pub fn selected_chip_value(&self) -> i64 {
@@ -403,17 +437,17 @@ impl State {
         }
         let request_id = Uuid::now_v7();
         self.pending_request_id = Some(request_id);
-        self.private_notice = Some(format!("Placing bet: {amount} chips..."));
+        self.private_notice = None;
         self.svc.submit_stake_task(self.user_id, request_id);
     }
 
     pub fn sit(&mut self) {
-        self.private_notice = Some("Taking a seat...".to_string());
+        self.private_notice = None;
         self.svc.sit_task(self.user_id);
     }
 
     pub fn leave_seat(&mut self) {
-        self.private_notice = Some("Leaving seat...".to_string());
+        self.private_notice = None;
         self.svc.leave_seat_task(self.user_id);
     }
 
@@ -426,7 +460,16 @@ impl State {
     }
 
     pub fn next_hand(&mut self) {
+        if !self.settlement_min_view_elapsed() {
+            return;
+        }
         self.svc.next_hand_task(self.user_id);
+    }
+
+    pub fn settlement_min_view_elapsed(&self) -> bool {
+        self.settling_seen_at.is_none_or(|settling_seen_at| {
+            settling_seen_at.elapsed() >= Duration::from_millis(SETTLEMENT_MIN_VIEW_MS)
+        })
     }
 
     pub fn current_bet_amount(&self) -> Option<i64> {
@@ -496,8 +539,22 @@ impl State {
             snapshot.last_outcome = user_seat.last_outcome;
             snapshot.last_net_change = user_seat.last_net_change;
         }
-        snapshot.status_message = self.status_message();
+        snapshot.private_notice = self.user_facing_notice();
         snapshot
+    }
+
+    fn user_facing_notice(&self) -> Option<String> {
+        if let Some(notice) = &self.private_notice {
+            return Some(notice.clone());
+        }
+        if self.snapshot.phase == Phase::Betting
+            && self.is_seated()
+            && self.user_seat().and_then(|seat| seat.bet_amount).is_none()
+            && self.balance < self.snapshot.min_bet
+        {
+            return Some("You need more chips to bet.".to_string());
+        }
+        None
     }
 
     pub fn player_score(&self) -> Option<HandScore> {
@@ -510,29 +567,6 @@ impl State {
 
     pub fn dealer_revealed(&self) -> bool {
         self.snapshot.dealer_revealed
-    }
-
-    pub fn status_message(&self) -> String {
-        if let Some(notice) = &self.private_notice {
-            return notice.clone();
-        }
-
-        if self.snapshot.phase == Phase::Betting
-            && self.is_seated()
-            && self.user_seat().and_then(|seat| seat.bet_amount).is_none()
-        {
-            if self.balance < self.snapshot.min_bet {
-                return "You need more chips to bet.".to_string();
-            }
-            if self.stake_amount() > 0 {
-                return "Space adds another chip. Backspace pulls one back. Enter/S locks stake."
-                    .to_string();
-            }
-            return "Select chips with [ ] or A/D. Space tosses one in. Backspace pulls one back. Enter/S locks stake."
-                .to_string();
-        }
-
-        self.snapshot.status_message.clone()
     }
 
     fn apply_event(&mut self, event: BlackjackEvent) {

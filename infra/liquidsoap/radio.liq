@@ -145,7 +145,7 @@ end
 server.register(namespace="vibe", "set", fun (v) -> set_vibe(v))
 server.register(namespace="vibe", "toggle", fun (_) -> toggle_vibe())
 
-radio = switch(track_sensitive=true, [
+radio = switch(track_sensitive=false, [
   ({vibe() == "lofi"}, lofi_safe),
   ({vibe() == "classic"}, classic_safe),
   ({vibe() == "ambient"}, ambient_safe),

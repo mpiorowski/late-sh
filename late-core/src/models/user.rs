@@ -31,6 +31,7 @@ const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
+const SHOW_DASHBOARD_ROOM_SHOWCASES_KEY: &str = "show_dashboard_room_showcases";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const SHOW_GAMES_SIDEBAR_KEY: &str = "show_games_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
@@ -114,6 +115,43 @@ impl User {
             map.insert(row.get("id"), row.get("username"));
         }
         Ok(map)
+    }
+
+    pub async fn list_ids(client: &Client) -> Result<Vec<Uuid>> {
+        let rows = client.query("SELECT id FROM users", &[]).await?;
+        Ok(rows.into_iter().map(|row| row.get("id")).collect())
+    }
+
+    pub async fn list_chat_author_metadata(
+        client: &Client,
+        user_ids: &[Uuid],
+    ) -> Result<Vec<ChatAuthorMetadata>> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = client
+            .query(
+                "SELECT u.id,
+                        u.username,
+                        t.is_alive,
+                        t.growth_points
+                 FROM users u
+                 LEFT JOIN bonsai_trees t ON t.user_id = u.id
+                 WHERE u.id = ANY($1)",
+                &[&user_ids],
+            )
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ChatAuthorMetadata {
+                user_id: row.get("id"),
+                username: row.get("username"),
+                bonsai_is_alive: row.get("is_alive"),
+                bonsai_growth_points: row.get("growth_points"),
+            })
+            .collect())
     }
 
     pub async fn list_all_country_map(client: &Client) -> Result<HashMap<Uuid, String>> {
@@ -255,7 +293,7 @@ impl User {
         Ok(row.get("settings"))
     }
 
-    async fn update_settings(client: &Client, user_id: Uuid, settings: &Value) -> Result<()> {
+    pub async fn update_settings(client: &Client, user_id: Uuid, settings: &Value) -> Result<()> {
         let updated = client
             .execute(
                 "UPDATE users
@@ -269,6 +307,14 @@ impl User {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ChatAuthorMetadata {
+    pub user_id: Uuid,
+    pub username: String,
+    pub bonsai_is_alive: Option<bool>,
+    pub bonsai_growth_points: Option<i32>,
 }
 
 fn extract_ignored_user_ids(settings: &Value) -> Vec<Uuid> {
@@ -353,6 +399,13 @@ pub fn extract_enable_background_color(settings: &Value) -> bool {
 pub fn extract_show_dashboard_header(settings: &Value) -> bool {
     settings
         .get(SHOW_DASHBOARD_HEADER_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+pub fn extract_show_dashboard_room_showcases(settings: &Value) -> bool {
+    settings
+        .get(SHOW_DASHBOARD_ROOM_SHOWCASES_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }

@@ -117,7 +117,7 @@ struct DrawContext<'a> {
     nonogram_state: &'a crate::app::games::nonogram::state::State,
     solitaire_state: &'a crate::app::games::solitaire::state::State,
     minesweeper_state: &'a crate::app::games::minesweeper::state::State,
-    blackjack_state: &'a crate::app::rooms::blackjack::state::State,
+    blackjack_state: Option<&'a crate::app::rooms::blackjack::state::State>,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
@@ -204,6 +204,13 @@ impl App {
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
         );
+        let show_dashboard_room_showcases = if self.show_settings {
+            self.settings_modal_state
+                .draft()
+                .show_dashboard_room_showcases
+        } else {
+            self.profile_state.profile().show_dashboard_room_showcases
+        };
         let show_games_sidebar = games_sidebar_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_games_sidebar,
@@ -231,6 +238,7 @@ impl App {
         let message_reactions = self.chat.message_reactions();
         let dashboard_active_room = self.dashboard_active_room_id();
         let dashboard_strip_pins = self.dashboard_strip_pins();
+        let rooms_blackjack_snapshots = self.blackjack_table_manager.table_snapshots();
         let dashboard_messages = dashboard_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -243,6 +251,10 @@ impl App {
             show_header: show_dashboard_header,
             favorites_strip: dashboard_strip_pins.as_deref(),
             pinned_messages: self.chat.pinned_messages(),
+            show_room_showcases: show_dashboard_room_showcases,
+            rooms_snapshot: &self.rooms_snapshot,
+            blackjack_snapshots: &rooms_blackjack_snapshots,
+            blackjack_prefix_armed: self.dashboard_blackjack_prefix_armed,
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
@@ -332,13 +344,13 @@ impl App {
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
-        let rooms_blackjack_snapshots = self.blackjack_table_manager.table_snapshots();
         let rooms_chat_view =
             self.rooms_active_room
                 .as_ref()
                 .map(|room| chat::ui::EmbeddedRoomChatView {
                     title: "Chat",
                     messages: self.chat.messages_for_room(room.chat_room_id),
+                    overlay: self.chat.overlay(),
                     rows_cache: &mut self.rooms_chat_rows_cache,
                     usernames: chat_usernames,
                     countries: chat_countries,
@@ -396,7 +408,7 @@ impl App {
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
-                        blackjack_state: &self.blackjack_state,
+                        blackjack_state: self.blackjack_state.as_ref(),
                         dartboard_state: self.dartboard_state.as_ref(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
@@ -611,11 +623,8 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
-                    blackjack_state: ctx.blackjack_state,
-                    is_admin: ctx.is_admin,
                     leaderboard: ctx.leaderboard,
                     show_sidebar: ctx.show_games_sidebar,
-                    usernames: ctx.rooms_usernames,
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
@@ -791,6 +800,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Style::default().fg(theme::TEXT_MUTED()),
     ));
 
+    if screen == Screen::Rooms {
+        append_rooms_title_extras(&mut spans, ctx);
+    }
+
     if screen == Screen::Artboard {
         spans.push(Span::styled(
             "by github.com/mevanlc ",
@@ -828,6 +841,51 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     Line::from(spans)
+}
+
+fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let amber = Style::default().fg(theme::AMBER());
+    let bright = Style::default().fg(theme::TEXT_BRIGHT());
+
+    if let Some(room) = ctx.rooms_active_room {
+        let Some(blackjack_state) = ctx.blackjack_state else {
+            return;
+        };
+        let snapshot = blackjack_state.snapshot();
+        let seated = snapshot
+            .seats
+            .iter()
+            .filter(|s| s.user_id.is_some())
+            .count();
+        let max = snapshot.seats.len();
+        let seat_label = match blackjack_state.seat_index() {
+            Some(i) => format!("seat {}", i + 1),
+            None => "viewer".to_string(),
+        };
+
+        spans.push(Span::styled("· ", dim));
+        spans.push(Span::styled(room.display_name.clone(), bright));
+        spans.push(Span::styled(" · ", dim));
+        spans.push(Span::styled(format!("{seated}/{max} seated"), dim));
+        spans.push(Span::styled(" · ", dim));
+        spans.push(Span::styled(seat_label, dim));
+        spans.push(Span::styled(" · ", dim));
+        spans.push(Span::styled("Bal ", dim));
+        spans.push(Span::styled(format!("{} ", snapshot.balance), amber));
+    } else {
+        let real_count = ctx.rooms_snapshot.rooms.len();
+        let open = ctx
+            .rooms_snapshot
+            .rooms
+            .iter()
+            .filter(|r| r.status == "open")
+            .count();
+        spans.push(Span::styled("· ", dim));
+        spans.push(Span::styled(format!("{real_count} live"), dim));
+        spans.push(Span::styled(" · ", dim));
+        spans.push(Span::styled(format!("{open} open "), dim));
+    }
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {

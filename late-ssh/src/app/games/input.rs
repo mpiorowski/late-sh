@@ -1,10 +1,9 @@
 use crate::app::state::{
-    App, GAME_SELECTION_2048, GAME_SELECTION_BLACKJACK, GAME_SELECTION_MINESWEEPER,
-    GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
-    GAME_SELECTION_TETRIS,
+    App, GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
+    GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
 };
 
-const LOBBY_GAME_COUNT: usize = 7;
+const LOBBY_GAME_COUNT: usize = 6;
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.is_playing_game {
@@ -48,20 +47,6 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return true;
             }
             return super::solitaire::input::handle_key(&mut app.solitaire_state, byte);
-        } else if app.game_selection == GAME_SELECTION_BLACKJACK {
-            let action = if byte == b'q' || byte == b'Q' {
-                crate::app::rooms::blackjack::input::handle_key(&mut app.blackjack_state, 0x1B)
-            } else {
-                crate::app::rooms::blackjack::input::handle_key(&mut app.blackjack_state, byte)
-            };
-            match action {
-                crate::app::rooms::blackjack::input::InputAction::Ignored => return false,
-                crate::app::rooms::blackjack::input::InputAction::Handled => return true,
-                crate::app::rooms::blackjack::input::InputAction::Leave => {
-                    app.is_playing_game = false;
-                    return true;
-                }
-            }
         }
         return false;
     }
@@ -85,7 +70,6 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                     && app.nonogram_state.has_puzzles())
                 || app.game_selection == GAME_SELECTION_MINESWEEPER
                 || app.game_selection == GAME_SELECTION_SOLITAIRE
-                || (app.game_selection == GAME_SELECTION_BLACKJACK && app.is_admin)
             {
                 app.is_playing_game = true;
             }
