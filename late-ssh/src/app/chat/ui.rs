@@ -36,6 +36,13 @@ fn custom_badge_for_username(username: &str) -> Option<&'static str> {
     }
 }
 
+fn is_bot_author(username: &str) -> bool {
+    matches!(
+        username.trim().to_ascii_lowercase().as_str(),
+        "bot" | "graybeard" | "dealer"
+    )
+}
+
 // ── Dashboard chat card ─────────────────────────────────────
 
 pub struct DashboardChatView<'a> {
@@ -494,7 +501,7 @@ fn ensure_chat_rows_cache(
             format_username_with_country(msg.user_id, raw_author, ctx.countries)
         };
         let contributor_badge = custom_badge_for_username(raw_author).unwrap_or_default();
-        let is_bot = raw_author == "bot" || raw_author == "graybeard";
+        let is_bot = is_bot_author(raw_author);
         let badge = if !is_bot {
             ctx.badges.get(&msg.user_id).copied()
         } else {
@@ -1532,6 +1539,15 @@ mod tests {
     #[test]
     fn short_user_id_handles_nil() {
         assert_eq!(short_user_id(Uuid::nil()), "00000000");
+    }
+
+    #[test]
+    fn is_bot_author_matches_all_ghost_users() {
+        assert!(is_bot_author("bot"));
+        assert!(is_bot_author("graybeard"));
+        assert!(is_bot_author("dealer"));
+        assert!(is_bot_author(" Dealer "));
+        assert!(!is_bot_author("mat"));
     }
 
     #[test]

@@ -1,11 +1,11 @@
 use std::{collections::BTreeSet, time::SystemTime};
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 use super::{

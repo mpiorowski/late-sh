@@ -745,7 +745,11 @@ impl GhostService {
             return Ok(());
         }
 
-        let (history_str, usernames) = self.build_chat_history(&messages).await?;
+        let (history_str, mut usernames) = self.build_chat_history(&messages).await?;
+        if !usernames.contains_key(&trigger.user_id) {
+            let client = self.db.get().await?;
+            usernames.extend(User::list_usernames_by_ids(&client, &[trigger.user_id]).await?);
+        }
         let player = mention_target_for_user(
             usernames.get(&trigger.user_id).map(String::as_str),
             trigger.user_id,
@@ -1089,13 +1093,17 @@ fn sanitize_generated_reply(reply: &str, username: Option<&str>) -> Option<Strin
 }
 
 fn mention_target_for_user(username: Option<&str>, user_id: Uuid) -> String {
-    let handle = username
+    let handle = mention_handle_for_user(username, user_id);
+    format!("@{handle}")
+}
+
+fn mention_handle_for_user(username: Option<&str>, user_id: Uuid) -> String {
+    username
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(sanitize_mention_handle)
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| short_user_id(user_id));
-    format!("@{handle}")
+        .unwrap_or_else(|| short_user_id(user_id))
 }
 
 fn sanitize_mention_handle(input: &str) -> String {
@@ -1403,5 +1411,14 @@ mod tests {
         let user_id = Uuid::from_u128(0x0123_4567_89ab_cdef_1111_2222_3333_4444);
         assert_eq!(mention_target_for_user(Some(""), user_id), "@01234567");
         assert_eq!(mention_target_for_user(Some("!!!"), user_id), "@01234567");
+    }
+
+    #[test]
+    fn mention_target_for_user_prefers_sanitized_current_username() {
+        let user_id = Uuid::from_u128(0x0123_4567_89ab_cdef_1111_2222_3333_4444);
+        assert_eq!(
+            mention_target_for_user(Some(" current-user "), user_id),
+            "@current-user"
+        );
     }
 }

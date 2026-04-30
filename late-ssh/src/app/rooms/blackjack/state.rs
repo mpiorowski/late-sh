@@ -127,6 +127,7 @@ pub enum SeatAction {
     Hit,
     Stand,
     MissedDeal,
+    MissedAction,
 }
 
 pub fn settle(player: &[PlayingCard], dealer: &[PlayingCard]) -> Outcome {
@@ -345,6 +346,12 @@ impl State {
         }
         let current = self.selected_chip_index as isize;
         self.selected_chip_index = (current + delta).rem_euclid(len) as usize;
+    }
+
+    pub fn touch_activity(&self) {
+        if self.is_seated() {
+            self.svc.touch_activity_task(self.user_id);
+        }
     }
 
     pub fn selected_chip_value(&self) -> i64 {
