@@ -19,8 +19,11 @@ use crate::app::{
     },
 };
 
-const BETTING_LOCK_CAP_SECS: u64 = 60;
+const BETTING_LOCK_CAP_SECS: u64 = 30;
 const MAX_MISSED_DEALS: u8 = 3;
+const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
+const DEALER_CARD_DELAY_MS: u64 = 1100;
+const SETTLEMENT_MIN_VIEW_MS: u64 = 1500;
 
 #[derive(Clone)]
 pub struct BlackjackService {
@@ -133,7 +136,6 @@ enum SeatFailure {
     TableFull,
     NotSeated,
     CannotLeaveWithBet,
-    BlockedUsername,
 }
 
 impl SeatFailure {
@@ -145,7 +147,6 @@ impl SeatFailure {
             SeatFailure::CannotLeaveWithBet => {
                 "finish the round before leaving your seat".to_string()
             }
-            SeatFailure::BlockedUsername => "imred cannot sit at this table".to_string(),
         }
     }
 }
@@ -155,6 +156,19 @@ struct BetSuccess {
     settlements: Vec<Settlement>,
     betting_countdown_id: Option<u64>,
     action_countdown_id: Option<u64>,
+    dealer_turn_id: Option<u64>,
+}
+
+struct InactivityKick {
+    left_seats: Vec<(Uuid, usize)>,
+    settlements: Vec<Settlement>,
+    dealer_turn_id: Option<u64>,
+}
+
+struct DealerStep {
+    done: bool,
+    settlements: Vec<Settlement>,
+    left_seats: Vec<(Uuid, usize)>,
 }
 
 impl BlackjackService {
@@ -232,22 +246,19 @@ impl BlackjackService {
 
     async fn sit(&self, user_id: Uuid) -> Result<usize, SeatFailure> {
         let player = self.player_directory.player_info(user_id).await.ok();
-        if player
-            .as_ref()
-            .is_some_and(|player| blocked_seat_username(&player.username))
-        {
-            return Err(SeatFailure::BlockedUsername);
-        }
-
         let seat_index = {
             let mut table = self.table.lock().await;
             let seat_index = table.sit(user_id)?;
+            let activity_generation = table.record_activity(user_id);
             if let Some(player) = player {
                 table.set_player_info(user_id, player);
             }
             table.status_message =
                 format!("Seat {} joined. {}", seat_index + 1, table.betting_prompt());
             self.publish_snapshot_locked(&table);
+            if let Some(activity_generation) = activity_generation {
+                self.schedule_inactivity_kick(user_id, activity_generation);
+            }
             seat_index
         };
 
@@ -281,6 +292,19 @@ impl BlackjackService {
         Ok(seat_index)
     }
 
+    pub fn touch_activity_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let activity_generation = {
+                let mut table = svc.table.lock().await;
+                table.record_activity(user_id)
+            };
+            if let Some(activity_generation) = activity_generation {
+                svc.schedule_inactivity_kick(user_id, activity_generation);
+            }
+        });
+    }
+
     pub fn throw_chip_task(&self, user_id: Uuid, chip: i64) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -294,9 +318,16 @@ impl BlackjackService {
     }
 
     async fn throw_chip(&self, user_id: Uuid, chip: i64) -> Result<(), StakeFailure> {
-        let mut table = self.table.lock().await;
-        table.throw_chip(user_id, chip)?;
-        self.publish_snapshot_locked(&table);
+        let activity_generation = {
+            let mut table = self.table.lock().await;
+            table.throw_chip(user_id, chip)?;
+            let activity_generation = table.record_activity(user_id);
+            self.publish_snapshot_locked(&table);
+            activity_generation
+        };
+        if let Some(activity_generation) = activity_generation {
+            self.schedule_inactivity_kick(user_id, activity_generation);
+        }
         Ok(())
     }
 
@@ -313,9 +344,16 @@ impl BlackjackService {
     }
 
     async fn pull_stake_chip(&self, user_id: Uuid) -> Result<(), StakeFailure> {
-        let mut table = self.table.lock().await;
-        table.pull_stake_chip(user_id)?;
-        self.publish_snapshot_locked(&table);
+        let activity_generation = {
+            let mut table = self.table.lock().await;
+            table.pull_stake_chip(user_id)?;
+            let activity_generation = table.record_activity(user_id);
+            self.publish_snapshot_locked(&table);
+            activity_generation
+        };
+        if let Some(activity_generation) = activity_generation {
+            self.schedule_inactivity_kick(user_id, activity_generation);
+        }
         Ok(())
     }
 
@@ -332,9 +370,16 @@ impl BlackjackService {
     }
 
     async fn clear_stake(&self, user_id: Uuid) -> Result<(), StakeFailure> {
-        let mut table = self.table.lock().await;
-        table.clear_stake(user_id)?;
-        self.publish_snapshot_locked(&table);
+        let activity_generation = {
+            let mut table = self.table.lock().await;
+            table.clear_stake(user_id)?;
+            let activity_generation = table.record_activity(user_id);
+            self.publish_snapshot_locked(&table);
+            activity_generation
+        };
+        if let Some(activity_generation) = activity_generation {
+            self.schedule_inactivity_kick(user_id, activity_generation);
+        }
         Ok(())
     }
 
@@ -348,6 +393,9 @@ impl BlackjackService {
                     }
                     if let Some(countdown_id) = success.action_countdown_id {
                         svc.schedule_action_timeout(countdown_id);
+                    }
+                    if let Some(dealer_turn_id) = success.dealer_turn_id {
+                        svc.schedule_dealer_turn(dealer_turn_id);
                     }
                     if let Err(e) = svc.persist_settlements(success.settlements).await {
                         tracing::error!(error = ?e, %user_id, "blackjack submit_stake settlement failed");
@@ -405,6 +453,9 @@ impl BlackjackService {
                     if let Some(countdown_id) = success.action_countdown_id {
                         svc.schedule_action_timeout(countdown_id);
                     }
+                    if let Some(dealer_turn_id) = success.dealer_turn_id {
+                        svc.schedule_dealer_turn(dealer_turn_id);
+                    }
                     if let Err(e) = svc.persist_settlements(success.settlements).await {
                         tracing::error!(error = ?e, %user_id, amount, "blackjack place_bet settlement failed");
                         Err("internal error".to_string())
@@ -428,7 +479,7 @@ impl BlackjackService {
     }
 
     async fn place_bet(&self, user_id: Uuid, amount: i64) -> Result<BetSuccess, BetFailure> {
-        {
+        let activity_generation = {
             let mut table = self.table.lock().await;
             let Some(seat_index) = table.user_seat_index(user_id) else {
                 return Err(BetFailure::NotSeated);
@@ -445,7 +496,12 @@ impl BlackjackService {
             table.seats[seat_index].pending_bet = Some(bet);
             table.seats[seat_index].stake_chips.clear();
             table.status_message = format!("Seat {} is placing {amount} chips...", seat_index + 1);
+            let activity_generation = table.record_activity(user_id);
             self.publish_snapshot_locked(&table);
+            activity_generation
+        };
+        if let Some(activity_generation) = activity_generation {
+            self.schedule_inactivity_kick(user_id, activity_generation);
         }
 
         let new_balance = match self.chip_svc.debit_bet(user_id, amount).await {
@@ -482,25 +538,32 @@ impl BlackjackService {
                 table.seats[seat_index].last_action = Some(SeatAction::Bet);
                 table.seats[seat_index].missed_deals = 0;
                 table.update_player_balance(user_id, new_balance);
+                let activity_generation = table.record_activity(user_id);
 
                 let mut settlements = Vec::new();
                 let mut action_countdown_id = None;
+                let mut dealer_turn_id = None;
                 let betting_countdown_id = if table.all_seated_bets_ready() {
                     settlements = table
                         .start_round()
                         .map_err(|e| BetFailure::Internal(anyhow::anyhow!("{e:?}")))?;
                     action_countdown_id = table.start_action_countdown_if_needed();
+                    dealer_turn_id = table.schedule_dealer_turn_if_needed();
                     None
                 } else {
                     Some(table.ensure_betting_countdown())
                 };
                 table.status_message = table.countdown_status();
                 self.publish_snapshot_locked(&table);
+                if let Some(activity_generation) = activity_generation {
+                    self.schedule_inactivity_kick(user_id, activity_generation);
+                }
                 return Ok(BetSuccess {
                     new_balance,
                     settlements,
                     betting_countdown_id,
                     action_countdown_id,
+                    dealer_turn_id,
                 });
             }
             self.publish_snapshot_locked(&table);
@@ -511,6 +574,7 @@ impl BlackjackService {
             settlements: Vec::new(),
             betting_countdown_id: None,
             action_countdown_id: None,
+            dealer_turn_id: None,
         })
     }
 
@@ -530,7 +594,7 @@ impl BlackjackService {
     }
 
     async fn hit(&self, user_id: Uuid) -> Result<(), ActionFailure> {
-        let settlements = {
+        let (settlements, activity_generation, dealer_turn_id) = {
             let mut table = self.table.lock().await;
             let Some(seat_index) = table.user_seat_index(user_id) else {
                 return Err(ActionFailure::NotSeated);
@@ -539,9 +603,17 @@ impl BlackjackService {
                 return Err(ActionFailure::InvalidPhase("you cannot hit right now"));
             }
             let settlements = table.hit_seat(seat_index)?;
+            let activity_generation = table.record_activity(user_id);
+            let dealer_turn_id = table.schedule_dealer_turn_if_needed();
             self.publish_snapshot_locked(&table);
-            settlements
+            (settlements, activity_generation, dealer_turn_id)
         };
+        if let Some(activity_generation) = activity_generation {
+            self.schedule_inactivity_kick(user_id, activity_generation);
+        }
+        if let Some(dealer_turn_id) = dealer_turn_id {
+            self.schedule_dealer_turn(dealer_turn_id);
+        }
 
         if !settlements.is_empty() {
             self.persist_settlements(settlements)
@@ -568,7 +640,7 @@ impl BlackjackService {
     }
 
     async fn stand(&self, user_id: Uuid) -> Result<(), ActionFailure> {
-        let settlements = {
+        let (settlements, activity_generation, dealer_turn_id) = {
             let mut table = self.table.lock().await;
             let Some(seat_index) = table.user_seat_index(user_id) else {
                 return Err(ActionFailure::NotSeated);
@@ -577,9 +649,17 @@ impl BlackjackService {
                 return Err(ActionFailure::InvalidPhase("you cannot stand right now"));
             }
             let settlements = table.stand_seat(seat_index)?;
+            let activity_generation = table.record_activity(user_id);
+            let dealer_turn_id = table.schedule_dealer_turn_if_needed();
             self.publish_snapshot_locked(&table);
-            settlements
+            (settlements, activity_generation, dealer_turn_id)
         };
+        if let Some(activity_generation) = activity_generation {
+            self.schedule_inactivity_kick(user_id, activity_generation);
+        }
+        if let Some(dealer_turn_id) = dealer_turn_id {
+            self.schedule_dealer_turn(dealer_turn_id);
+        }
 
         if !settlements.is_empty() {
             self.persist_settlements(settlements)
@@ -595,14 +675,18 @@ impl BlackjackService {
         tokio::spawn(async move {
             match svc.deal(user_id).await {
                 Ok(settlements) => {
-                    let action_countdown_id = {
+                    let (action_countdown_id, dealer_turn_id) = {
                         let mut table = svc.table.lock().await;
                         let action_countdown_id = table.start_action_countdown_if_needed();
+                        let dealer_turn_id = table.schedule_dealer_turn_if_needed();
                         svc.publish_snapshot_locked(&table);
-                        action_countdown_id
+                        (action_countdown_id, dealer_turn_id)
                     };
                     if let Some(countdown_id) = action_countdown_id {
                         svc.schedule_action_timeout(countdown_id);
+                    }
+                    if let Some(dealer_turn_id) = dealer_turn_id {
+                        svc.schedule_dealer_turn(dealer_turn_id);
                     }
                     if let Err(e) = svc.persist_settlements(settlements).await {
                         tracing::error!(error = ?e, %user_id, "blackjack deal settlement failed");
@@ -634,7 +718,11 @@ impl BlackjackService {
             return Err(ActionFailure::InvalidPhase("hand is already in progress"));
         }
         let settlements = table.start_round()?;
+        let activity_generation = table.record_activity(user_id);
         self.publish_snapshot_locked(&table);
+        if let Some(activity_generation) = activity_generation {
+            self.schedule_inactivity_kick(user_id, activity_generation);
+        }
         Ok(settlements)
     }
 
@@ -661,10 +749,46 @@ impl BlackjackService {
         if table.phase != Phase::Settling {
             return Err(ActionFailure::InvalidPhase("hand is still in progress"));
         }
+        if !table.settlement_min_view_elapsed() {
+            return Err(ActionFailure::InvalidPhase("round result is still showing"));
+        }
         let status = table.betting_prompt_with_timer();
         table.reset_to_betting(&status);
+        let activity_generation = table.record_activity(user_id);
         self.publish_snapshot_locked(&table);
+        if let Some(activity_generation) = activity_generation {
+            self.schedule_inactivity_kick(user_id, activity_generation);
+        }
         Ok(())
+    }
+
+    fn schedule_inactivity_kick(&self, user_id: Uuid, activity_generation: u64) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS)).await;
+
+            let kick = {
+                let mut table = svc.table.lock().await;
+                let Some(kick) = table.kick_inactive_user(user_id, activity_generation) else {
+                    return;
+                };
+                svc.publish_snapshot_locked(&table);
+                kick
+            };
+
+            if let Some(dealer_turn_id) = kick.dealer_turn_id {
+                svc.schedule_dealer_turn(dealer_turn_id);
+            }
+            for (left_user_id, seat_index) in &kick.left_seats {
+                let _ = svc.event_tx.send(BlackjackEvent::SeatLeft {
+                    user_id: *left_user_id,
+                    seat_index: *seat_index,
+                });
+            }
+            if let Err(e) = svc.persist_settlements(kick.settlements).await {
+                tracing::error!(error = ?e, %user_id, "blackjack inactivity-kick settlement failed");
+            }
+        });
     }
 
     fn schedule_auto_deal(&self, countdown_id: u64) {
@@ -673,7 +797,7 @@ impl BlackjackService {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
 
-                let (settlements, action_countdown_id) = {
+                let (settlements, action_countdown_id, dealer_turn_id) = {
                     let mut table = svc.table.lock().await;
                     if !table.countdown_matches(countdown_id) {
                         return;
@@ -695,8 +819,9 @@ impl BlackjackService {
                     match table.start_round_from_countdown(countdown_id) {
                         Ok(settlements) => {
                             let action_countdown_id = table.start_action_countdown_if_needed();
+                            let dealer_turn_id = table.schedule_dealer_turn_if_needed();
                             svc.publish_snapshot_locked(&table);
-                            (settlements, action_countdown_id)
+                            (settlements, action_countdown_id, dealer_turn_id)
                         }
                         Err(failure) => {
                             table.clear_betting_countdown();
@@ -709,6 +834,9 @@ impl BlackjackService {
 
                 if let Some(countdown_id) = action_countdown_id {
                     svc.schedule_action_timeout(countdown_id);
+                }
+                if let Some(dealer_turn_id) = dealer_turn_id {
+                    svc.schedule_dealer_turn(dealer_turn_id);
                 }
                 if let Err(e) = svc.persist_settlements(settlements).await {
                     tracing::error!(error = ?e, "blackjack auto-deal settlement failed");
@@ -724,7 +852,7 @@ impl BlackjackService {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
 
-                let settlements = {
+                let (settlements, dealer_turn_id) = {
                     let mut table = svc.table.lock().await;
                     if !table.action_countdown_matches(countdown_id) {
                         return;
@@ -736,14 +864,49 @@ impl BlackjackService {
                     }
 
                     let settlements = table.auto_stand_remaining();
+                    let dealer_turn_id = table.schedule_dealer_turn_if_needed();
                     svc.publish_snapshot_locked(&table);
-                    settlements
+                    (settlements, dealer_turn_id)
                 };
 
+                if let Some(dealer_turn_id) = dealer_turn_id {
+                    svc.schedule_dealer_turn(dealer_turn_id);
+                }
                 if let Err(e) = svc.persist_settlements(settlements).await {
                     tracing::error!(error = ?e, "blackjack action-timeout settlement failed");
                 }
                 return;
+            }
+        });
+    }
+
+    fn schedule_dealer_turn(&self, dealer_turn_id: u64) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(DEALER_CARD_DELAY_MS)).await;
+
+                let step = {
+                    let mut table = svc.table.lock().await;
+                    let Some(step) = table.dealer_step(dealer_turn_id) else {
+                        return;
+                    };
+                    svc.publish_snapshot_locked(&table);
+                    step
+                };
+
+                if step.done {
+                    for (left_user_id, seat_index) in &step.left_seats {
+                        let _ = svc.event_tx.send(BlackjackEvent::SeatLeft {
+                            user_id: *left_user_id,
+                            seat_index: *seat_index,
+                        });
+                    }
+                    if let Err(e) = svc.persist_settlements(step.settlements).await {
+                        tracing::error!(error = ?e, "blackjack dealer-turn settlement failed");
+                    }
+                    return;
+                }
             }
         });
     }
@@ -779,10 +942,6 @@ impl BlackjackService {
     }
 }
 
-fn blocked_seat_username(username: &str) -> bool {
-    username.trim().eq_ignore_ascii_case("imred")
-}
-
 struct SharedTableState {
     settings: BlackjackTableSettings,
     shoe: Shoe,
@@ -793,6 +952,9 @@ struct SharedTableState {
     betting_countdown_id: u64,
     action_deadline: Option<Instant>,
     action_countdown_id: u64,
+    dealer_turn_id: u64,
+    dealer_turn_scheduled: bool,
+    settled_at: Option<Instant>,
     status_message: String,
 }
 
@@ -809,6 +971,15 @@ struct SeatState {
     last_action: Option<SeatAction>,
     last_net_change: i64,
     missed_deals: u8,
+    last_activity: Instant,
+    activity_generation: u64,
+    deferred_leave_reason: Option<DeferredLeaveReason>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeferredLeaveReason {
+    Idle,
+    MissedAction,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -833,6 +1004,9 @@ impl SeatState {
             last_action: None,
             last_net_change: 0,
             missed_deals: 0,
+            last_activity: Instant::now(),
+            activity_generation: 0,
+            deferred_leave_reason: None,
         }
     }
 
@@ -912,6 +1086,34 @@ fn format_auto_left_notice(seat_indices: &[usize]) -> String {
     format!("{noun} {seats} missed {MAX_MISSED_DEALS} deals and left.")
 }
 
+fn format_idle_left_notice(seat_indices: &[usize]) -> String {
+    let seats = seat_indices
+        .iter()
+        .map(|index| (index + 1).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let noun = if seat_indices.len() == 1 {
+        "Seat"
+    } else {
+        "Seats"
+    };
+    format!("{noun} {seats} idle for 5m and left.")
+}
+
+fn format_missed_action_left_notice(seat_indices: &[usize]) -> String {
+    let seats = seat_indices
+        .iter()
+        .map(|index| (index + 1).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let noun = if seat_indices.len() == 1 {
+        "Seat"
+    } else {
+        "Seats"
+    };
+    format!("{noun} {seats} missed the action timer and left.")
+}
+
 impl SharedTableState {
     fn new(settings: BlackjackTableSettings) -> Self {
         Self {
@@ -924,6 +1126,9 @@ impl SharedTableState {
             betting_countdown_id: 0,
             action_deadline: None,
             action_countdown_id: 0,
+            dealer_turn_id: 0,
+            dealer_turn_scheduled: false,
+            settled_at: None,
             status_message: "Sit to join, or watch the table.".to_string(),
         }
     }
@@ -1019,6 +1224,7 @@ impl SharedTableState {
             self.clear_action_countdown();
             return None;
         }
+        self.settled_at = None;
         self.action_countdown_id = self.action_countdown_id.wrapping_add(1);
         self.action_deadline =
             Some(Instant::now() + Duration::from_secs(self.settings.action_timeout_secs()));
@@ -1049,6 +1255,71 @@ impl SharedTableState {
             Some(secs) => format!("Players hit or stand. Auto-stand in {secs}s."),
             None => "Players hit or stand.".to_string(),
         }
+    }
+
+    fn begin_dealer_turn(&mut self) {
+        self.clear_action_countdown();
+        self.phase = Phase::DealerTurn;
+        self.settled_at = None;
+        self.dealer_turn_id = self.dealer_turn_id.wrapping_add(1);
+        self.dealer_turn_scheduled = false;
+        self.status_message = "Dealer reveals the hole card.".to_string();
+    }
+
+    fn schedule_dealer_turn_if_needed(&mut self) -> Option<u64> {
+        if self.phase == Phase::DealerTurn && !self.dealer_turn_scheduled {
+            self.dealer_turn_scheduled = true;
+            Some(self.dealer_turn_id)
+        } else {
+            None
+        }
+    }
+
+    fn dealer_step(&mut self, dealer_turn_id: u64) -> Option<DealerStep> {
+        if self.phase != Phase::DealerTurn || self.dealer_turn_id != dealer_turn_id {
+            return None;
+        }
+
+        if dealer_must_hit(&self.dealer_hand) {
+            self.dealer_hand.push(self.shoe.draw());
+            let dealer_score = score(&self.dealer_hand);
+            self.status_message = format!("Dealer draws. Total {}.", dealer_score.total);
+            return Some(DealerStep {
+                done: false,
+                settlements: Vec::new(),
+                left_seats: Vec::new(),
+            });
+        }
+
+        Some(self.finish_dealer_turn())
+    }
+
+    fn finish_dealer_turn(&mut self) -> DealerStep {
+        let mut settlements = Vec::new();
+        for index in 0..self.seats.len() {
+            if self.seats[index].has_unresolved_bet() {
+                let outcome = settle(&self.seats[index].hand, &self.dealer_hand);
+                if let Some(settlement) = self.finish_seat(index, outcome) {
+                    settlements.push(settlement);
+                }
+            }
+        }
+        self.phase = Phase::Settling;
+        self.settled_at = Some(Instant::now());
+        self.dealer_turn_scheduled = false;
+        self.status_message = "Round settled. Press Space or Enter for next hand.".to_string();
+        let left_seats = self.remove_deferred_leave_seats();
+        DealerStep {
+            done: true,
+            settlements,
+            left_seats,
+        }
+    }
+
+    fn settlement_min_view_elapsed(&self) -> bool {
+        self.settled_at.is_none_or(|settled_at| {
+            settled_at.elapsed() >= Duration::from_millis(SETTLEMENT_MIN_VIEW_MS)
+        })
     }
 
     fn betting_prompt(&self) -> String {
@@ -1184,6 +1455,106 @@ impl SharedTableState {
         self.start_round()
     }
 
+    fn record_activity(&mut self, user_id: Uuid) -> Option<u64> {
+        let seat_index = self.user_seat_index(user_id)?;
+        let seat = &mut self.seats[seat_index];
+        seat.last_activity = Instant::now();
+        seat.activity_generation = seat.activity_generation.wrapping_add(1);
+        Some(seat.activity_generation)
+    }
+
+    fn kick_inactive_user(
+        &mut self,
+        user_id: Uuid,
+        activity_generation: u64,
+    ) -> Option<InactivityKick> {
+        let seat_index = self.user_seat_index(user_id)?;
+        let seat = &self.seats[seat_index];
+        if seat.activity_generation != activity_generation
+            || seat.last_activity.elapsed() < Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS)
+            || seat.pending_bet.is_some()
+        {
+            return None;
+        }
+
+        if self.phase == Phase::PlayerTurn && self.seats[seat_index].has_unresolved_bet() {
+            if !self.seats[seat_index].stood {
+                self.seats[seat_index].stood = true;
+                self.seats[seat_index].last_action = Some(SeatAction::Stand);
+            }
+            self.seats[seat_index].deferred_leave_reason = Some(DeferredLeaveReason::Idle);
+            self.status_message =
+                format!("Seat {} was idle for 5m and auto-stood.", seat_index + 1);
+            let settlements = self.advance_or_finish_round();
+            let dealer_turn_id = self.schedule_dealer_turn_if_needed();
+            return Some(InactivityKick {
+                left_seats: self.remove_deferred_leave_seats(),
+                settlements,
+                dealer_turn_id,
+            });
+        }
+
+        if self.seats[seat_index].bet.is_some()
+            && !matches!(self.phase, Phase::Settling | Phase::DealerTurn)
+        {
+            return None;
+        }
+        if self.phase == Phase::DealerTurn && self.seats[seat_index].bet.is_some() {
+            self.seats[seat_index].deferred_leave_reason = Some(DeferredLeaveReason::Idle);
+            self.status_message = format!(
+                "Seat {} was idle for 5m and will leave after settlement.",
+                seat_index + 1
+            );
+            return Some(InactivityKick {
+                left_seats: Vec::new(),
+                settlements: Vec::new(),
+                dealer_turn_id: None,
+            });
+        }
+
+        self.seats[seat_index] = SeatState::empty();
+        self.status_message = format_idle_left_notice(&[seat_index]);
+        Some(InactivityKick {
+            left_seats: vec![(user_id, seat_index)],
+            settlements: Vec::new(),
+            dealer_turn_id: None,
+        })
+    }
+
+    fn remove_deferred_leave_seats(&mut self) -> Vec<(Uuid, usize)> {
+        let mut left_seats = Vec::new();
+        let mut idle_seats = Vec::new();
+        let mut missed_action_seats = Vec::new();
+        for (index, seat) in self.seats.iter_mut().enumerate() {
+            if let Some(reason) = seat.deferred_leave_reason
+                && (seat.last_outcome.is_some() || self.phase == Phase::Settling)
+                && let Some(user_id) = seat.user_id
+            {
+                match reason {
+                    DeferredLeaveReason::Idle => idle_seats.push(index),
+                    DeferredLeaveReason::MissedAction => missed_action_seats.push(index),
+                }
+                *seat = SeatState::empty();
+                left_seats.push((user_id, index));
+            }
+        }
+        if !idle_seats.is_empty() {
+            self.status_message = format!(
+                "{} {}",
+                self.status_message,
+                format_idle_left_notice(&idle_seats)
+            );
+        }
+        if !missed_action_seats.is_empty() {
+            self.status_message = format!(
+                "{} {}",
+                self.status_message,
+                format_missed_action_left_notice(&missed_action_seats)
+            );
+        }
+        left_seats
+    }
+
     fn record_missed_deals(&mut self) -> Vec<usize> {
         let mut auto_left_seats = Vec::new();
         for (index, seat) in self.seats.iter_mut().enumerate() {
@@ -1235,13 +1606,26 @@ impl SharedTableState {
         }
 
         let dealer_blackjack = is_natural_blackjack(&self.dealer_hand);
+        if dealer_blackjack {
+            self.begin_dealer_turn();
+            self.status_message = "Dealer reveals blackjack.".to_string();
+            if !auto_left_seats.is_empty() {
+                self.status_message = format!(
+                    "{} {}",
+                    self.status_message,
+                    format_auto_left_notice(&auto_left_seats)
+                );
+            }
+            return Ok(Vec::new());
+        }
+
         let mut settlements = Vec::new();
         for index in 0..self.seats.len() {
             if self.seats[index].bet.is_none() {
                 continue;
             }
             let player_blackjack = is_natural_blackjack(&self.seats[index].hand);
-            if player_blackjack || dealer_blackjack {
+            if player_blackjack {
                 let outcome = settle(&self.seats[index].hand, &self.dealer_hand);
                 if let Some(settlement) = self.finish_seat(index, outcome) {
                     settlements.push(settlement);
@@ -1251,9 +1635,11 @@ impl SharedTableState {
 
         if self.has_playable_seats() {
             self.phase = Phase::PlayerTurn;
+            self.settled_at = None;
             self.status_message = "Players hit or stand.".to_string();
         } else {
             self.phase = Phase::Settling;
+            self.settled_at = Some(Instant::now());
             self.clear_action_countdown();
             self.status_message = "Round settled. Press Space or Enter for next hand.".to_string();
         }
@@ -1303,36 +1689,27 @@ impl SharedTableState {
     fn advance_or_finish_round(&mut self) -> Vec<Settlement> {
         if self.has_playable_seats() {
             self.phase = Phase::PlayerTurn;
+            self.settled_at = None;
             self.status_message = "Waiting for remaining seats.".to_string();
             return Vec::new();
         }
 
         self.clear_action_countdown();
-        self.phase = Phase::DealerTurn;
-        self.status_message = "Dealer's turn.".to_string();
-        while dealer_must_hit(&self.dealer_hand) {
-            self.dealer_hand.push(self.shoe.draw());
+        if !self.seats.iter().any(SeatState::has_unresolved_bet) {
+            let step = self.finish_dealer_turn();
+            return step.settlements;
         }
 
-        let mut settlements = Vec::new();
-        for index in 0..self.seats.len() {
-            if self.seats[index].has_unresolved_bet() {
-                let outcome = settle(&self.seats[index].hand, &self.dealer_hand);
-                if let Some(settlement) = self.finish_seat(index, outcome) {
-                    settlements.push(settlement);
-                }
-            }
-        }
-        self.phase = Phase::Settling;
-        self.status_message = "Round settled. Press Space or Enter for next hand.".to_string();
-        settlements
+        self.begin_dealer_turn();
+        Vec::new()
     }
 
     fn auto_stand_remaining(&mut self) -> Vec<Settlement> {
         for seat in &mut self.seats {
             if seat.has_unresolved_bet() && !seat.stood {
                 seat.stood = true;
-                seat.last_action = Some(SeatAction::Stand);
+                seat.last_action = Some(SeatAction::MissedAction);
+                seat.deferred_leave_reason = Some(DeferredLeaveReason::MissedAction);
             }
         }
         self.advance_or_finish_round()
@@ -1363,6 +1740,7 @@ impl SharedTableState {
     fn reset_to_betting(&mut self, status: &str) {
         self.dealer_hand.clear();
         self.phase = Phase::Betting;
+        self.settled_at = None;
         self.clear_betting_countdown();
         self.clear_action_countdown();
         for seat in &mut self.seats {
@@ -1409,17 +1787,18 @@ impl SharedTableState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::games::cards::{CardRank, CardSuit, PlayingCard};
     use crate::app::rooms::blackjack::state::MIN_BET;
 
     fn user_id() -> Uuid {
         Uuid::now_v7()
     }
 
-    #[test]
-    fn imred_cannot_sit() {
-        assert!(blocked_seat_username("imred"));
-        assert!(blocked_seat_username(" ImRed "));
-        assert!(!blocked_seat_username("notimred"));
+    fn card(rank: CardRank) -> PlayingCard {
+        PlayingCard {
+            rank,
+            suit: CardSuit::Spades,
+        }
     }
 
     #[test]
@@ -1504,7 +1883,10 @@ mod tests {
         assert_eq!(table.dealer_hand.len(), 2);
         assert_eq!(table.seats[seat_a].hand.len(), 2);
         assert_eq!(table.seats[seat_b].hand.len(), 2);
-        assert!(matches!(table.phase, Phase::PlayerTurn | Phase::Settling));
+        assert!(matches!(
+            table.phase,
+            Phase::PlayerTurn | Phase::DealerTurn | Phase::Settling
+        ));
     }
 
     #[test]
@@ -1525,6 +1907,88 @@ mod tests {
         assert_eq!(table.seats[seat_a].last_action, Some(SeatAction::Stand));
         assert!(!table.seats[seat_b].stood);
         assert_eq!(table.phase, Phase::PlayerTurn);
+    }
+
+    #[test]
+    fn dealer_turn_draws_one_card_per_step_before_settlement() {
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        let user_id = user_id();
+        let seat_index = table.sit(user_id).expect("seat should be open");
+        table.seats[seat_index].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.seats[seat_index].hand = vec![card(CardRank::Number(10)), card(CardRank::Number(7))];
+        table.dealer_hand = vec![card(CardRank::Number(10)), card(CardRank::Number(6))];
+        table.phase = Phase::PlayerTurn;
+
+        let settlements = table.stand_seat(seat_index).expect("seat can stand");
+        let dealer_turn_id = table
+            .schedule_dealer_turn_if_needed()
+            .expect("dealer turn should be scheduled");
+
+        assert!(settlements.is_empty());
+        assert_eq!(table.phase, Phase::DealerTurn);
+        assert_eq!(table.dealer_hand.len(), 2);
+
+        let step = table
+            .dealer_step(dealer_turn_id)
+            .expect("dealer step should match current turn");
+
+        assert!(!step.done);
+        assert!(step.settlements.is_empty());
+        assert_eq!(table.phase, Phase::DealerTurn);
+        assert_eq!(table.dealer_hand.len(), 3);
+        assert_eq!(table.seats[seat_index].last_outcome, None);
+
+        let mut final_step = None;
+        for _ in 0..10 {
+            let step = table
+                .dealer_step(dealer_turn_id)
+                .expect("dealer turn should still be current");
+            if step.done {
+                final_step = Some(step);
+                break;
+            }
+        }
+        let final_step = final_step.expect("dealer should eventually settle");
+
+        assert_eq!(table.phase, Phase::Settling);
+        assert_eq!(final_step.settlements.len(), 1);
+        assert!(table.seats[seat_index].last_outcome.is_some());
+    }
+
+    #[test]
+    fn action_timeout_removes_unacted_seats_after_settlement() {
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        let user_id = user_id();
+        let seat_index = table.sit(user_id).expect("seat should be open");
+        table.seats[seat_index].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.seats[seat_index].hand = vec![card(CardRank::Number(10)), card(CardRank::Number(7))];
+        table.dealer_hand = vec![card(CardRank::Number(10)), card(CardRank::Queen)];
+        table.phase = Phase::PlayerTurn;
+
+        let settlements = table.auto_stand_remaining();
+        let dealer_turn_id = table
+            .schedule_dealer_turn_if_needed()
+            .expect("dealer turn should be scheduled");
+
+        assert!(settlements.is_empty());
+        assert_eq!(
+            table.seats[seat_index].last_action,
+            Some(SeatAction::MissedAction)
+        );
+        assert_eq!(table.phase, Phase::DealerTurn);
+
+        let step = table
+            .dealer_step(dealer_turn_id)
+            .expect("dealer step should match current turn");
+
+        assert!(step.done);
+        assert_eq!(step.left_seats, vec![(user_id, seat_index)]);
+        assert_eq!(table.user_seat_index(user_id), None);
+        assert!(
+            table
+                .status_message
+                .contains("Seat 1 missed the action timer and left.")
+        );
     }
 
     #[test]
@@ -1556,6 +2020,49 @@ mod tests {
                 .status_message
                 .contains("Seat 2 missed 3 deals and left.")
         );
+    }
+
+    #[test]
+    fn seated_player_auto_leaves_after_five_minutes_idle() {
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        let user_id = user_id();
+        let seat_index = table.sit(user_id).expect("seat should be open");
+        let activity_generation = table.record_activity(user_id).expect("seat exists");
+
+        table.seats[seat_index].last_activity =
+            Instant::now() - Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS + 1);
+        let kick = table
+            .kick_inactive_user(user_id, activity_generation)
+            .expect("idle seat should be kicked");
+
+        assert_eq!(kick.left_seats, vec![(user_id, seat_index)]);
+        assert!(kick.settlements.is_empty());
+        assert_eq!(table.user_seat_index(user_id), None);
+        assert!(
+            table
+                .status_message
+                .contains("Seat 1 idle for 5m and left.")
+        );
+    }
+
+    #[test]
+    fn seated_player_activity_generation_blocks_stale_idle_kick() {
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        let user_id = user_id();
+        let seat_index = table.sit(user_id).expect("seat should be open");
+        let stale_generation = table.record_activity(user_id).expect("seat exists");
+        let fresh_generation = table.record_activity(user_id).expect("seat exists");
+
+        table.seats[seat_index].last_activity =
+            Instant::now() - Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS + 1);
+
+        assert!(
+            table
+                .kick_inactive_user(user_id, stale_generation)
+                .is_none()
+        );
+        assert_eq!(table.user_seat_index(user_id), Some(seat_index));
+        assert_ne!(stale_generation, fresh_generation);
     }
 
     #[test]

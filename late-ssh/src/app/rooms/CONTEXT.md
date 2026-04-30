@@ -76,22 +76,22 @@
 - `BlackjackPlayerDirectory` reads `late_core::models::blackjack::BlackjackPlayer` so seats can carry `BlackjackPlayerInfo { user_id, username, balance }`.
 - Player info is loaded from DB on sit. Accepted bets and settlements update the seated player's balance in-place; if no player info was hydrated, the service may synthesize a fallback username of `player`. Rendering should read `BlackjackSeat.player`; do not add per-render DB/chip lookups.
 - There are four seats. Entering a room starts as a viewer. `s` or `Enter` sits in the first open seat.
-- A hardcoded username block rejects seating for `imred`.
 - `l` leaves a seat when safe. Locked/pending bets block leaving during active phases, but settled players may leave during `Phase::Settling`.
 - Seated players build a shared visible stake through service-owned `SeatState.stake_chips`.
 - Chip selection is client-local (`selected_chip_index`). Thrown stake chips are service-owned and appear in every subscriber's `BlackjackSeat.stake_chips`.
 - Betting keys: `[`/`a` selects previous chip, `]`/`d` selects next chip, Space throws the selected chip, Backspace pulls one chip, `c`/Ctrl+W clears, `Enter`/`s` submits.
 - Table stake settings are `10`, `50`, `100`, or `500` chips. `min_bet` is the stake and `max_bet` is `stake * 10`.
 - Table pace settings (`Quick`, `Standard`, `Chill`) control the player action timeout only: 2m, 5m, or 10m.
-- The first confirmed bet starts a fixed 60s betting cap (`BETTING_LOCK_CAP_SECS`). It does not restart on later bets. If all seated players have locked bets, the round deals immediately.
+- The first confirmed bet starts a fixed 30s betting cap (`BETTING_LOCK_CAP_SECS`). It does not restart on later bets. If all seated players have locked bets, the round deals immediately.
 - Pending async chip debits can delay auto-deal; the service waits until no pending bets remain.
 - During `PlayerTurn`, all betting seats can hit/stand their own hands in parallel. Dealer resolution runs after every unresolved hand has stood, busted, or naturally settled.
-- Action timeout auto-stands remaining hands when the pace-specific deadline expires.
+- Action timeout auto-stands remaining hands when the pace-specific deadline expires, then removes those non-acting seats after settlement.
 - A seated player who misses 3 deals without a locked bet is removed from the table.
+- A seated player who sends no active-room input for 5 minutes is removed from the table; active-room keys, arrows, and scrolls refresh this room timer while seated.
 - Settlements use `ChipService`: zero-credit losses call `restore_floor`, payouts call `credit_payout`, and `BlackjackEvent::HandSettled` updates client balances.
 - House rules: 6-deck shoe, reshuffle at 52-card penetration, dealer stands on soft 17, natural blackjack requires exactly two cards, and blackjack pays 3:2.
 - `Phase::BetPending` exists in the shared enum and input/UI paths, but current pending debit state is expressed per seat as `SeatPhase::BetPending`; the service does not currently transition the whole table into `Phase::BetPending`.
-- `BlackjackService::deal_task` exists as a manual deal API, but active room input does not currently route a key to it. Normal play deals by all seated players locking bets or by the 60s betting cap.
+- `BlackjackService::deal_task` exists as a manual deal API, but active room input does not currently route a key to it. Normal play deals by all seated players locking bets or by the 30s betting cap.
 
 ## Blackjack UI Invariants
 - `blackjack/ui.rs` chooses render tier from area dimensions:

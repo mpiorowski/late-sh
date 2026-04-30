@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{
@@ -21,6 +23,7 @@ pub const BLACKJACK_TARGET: u8 = 21;
 pub const DEALER_STAND_ON: u8 = 17;
 pub const SHOE_DECKS: usize = 6;
 pub const SHOE_PENETRATION: usize = 52;
+const SETTLEMENT_MIN_VIEW_MS: u64 = 1500;
 
 pub const DEALER_STANDS_ON_SOFT_17: bool = true;
 
@@ -127,6 +130,7 @@ pub enum SeatAction {
     Hit,
     Stand,
     MissedDeal,
+    MissedAction,
 }
 
 pub fn settle(player: &[PlayingCard], dealer: &[PlayingCard]) -> Outcome {
@@ -296,6 +300,7 @@ pub struct State {
     pub(crate) snapshot: BlackjackSnapshot,
     pub(crate) private_notice: Option<String>,
     pending_request_id: Option<Uuid>,
+    settling_seen_at: Option<Instant>,
     svc: BlackjackService,
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_rx: broadcast::Receiver<BlackjackEvent>,
@@ -305,6 +310,11 @@ impl State {
     pub fn new(svc: BlackjackService, user_id: Uuid, balance: i64) -> Self {
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
+        let settling_seen_at = if snapshot.phase == Phase::Settling {
+            Some(Instant::now())
+        } else {
+            None
+        };
         let event_rx = svc.subscribe_events();
         Self {
             user_id,
@@ -313,6 +323,7 @@ impl State {
             snapshot,
             private_notice: None,
             pending_request_id: None,
+            settling_seen_at,
             svc,
             snapshot_rx,
             event_rx,
@@ -321,7 +332,13 @@ impl State {
 
     pub fn tick(&mut self) {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
+            let previous_phase = self.snapshot.phase;
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+            if self.snapshot.phase == Phase::Settling && previous_phase != Phase::Settling {
+                self.settling_seen_at = Some(Instant::now());
+            } else if self.snapshot.phase != Phase::Settling {
+                self.settling_seen_at = None;
+            }
         }
 
         loop {
@@ -345,6 +362,12 @@ impl State {
         }
         let current = self.selected_chip_index as isize;
         self.selected_chip_index = (current + delta).rem_euclid(len) as usize;
+    }
+
+    pub fn touch_activity(&self) {
+        if self.is_seated() {
+            self.svc.touch_activity_task(self.user_id);
+        }
     }
 
     pub fn selected_chip_value(&self) -> i64 {
@@ -437,7 +460,16 @@ impl State {
     }
 
     pub fn next_hand(&mut self) {
+        if !self.settlement_min_view_elapsed() {
+            return;
+        }
         self.svc.next_hand_task(self.user_id);
+    }
+
+    pub fn settlement_min_view_elapsed(&self) -> bool {
+        self.settling_seen_at.is_none_or(|settling_seen_at| {
+            settling_seen_at.elapsed() >= Duration::from_millis(SETTLEMENT_MIN_VIEW_MS)
+        })
     }
 
     pub fn current_bet_amount(&self) -> Option<i64> {

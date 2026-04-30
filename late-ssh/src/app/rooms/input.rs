@@ -497,6 +497,7 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
     };
     let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
+    touch_active_room_activity(app, game_kind);
 
     if byte == 0x1B
         && app
@@ -540,15 +541,31 @@ fn handle_active_room_arrow(app: &mut App, key: u8) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
     };
-    crate::app::chat::input::handle_message_arrow_in_room(app, room.chat_room_id, key)
+    let game_kind = room.game_kind;
+    let chat_room_id = room.chat_room_id;
+    touch_active_room_activity(app, game_kind);
+    crate::app::chat::input::handle_message_arrow_in_room(app, chat_room_id, key)
 }
 
 fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
     };
-    crate::app::chat::input::handle_scroll_in_room(app, room.chat_room_id, delta);
+    let game_kind = room.game_kind;
+    let chat_room_id = room.chat_room_id;
+    touch_active_room_activity(app, game_kind);
+    crate::app::chat::input::handle_scroll_in_room(app, chat_room_id, delta);
     true
+}
+
+fn touch_active_room_activity(app: &mut App, game_kind: crate::app::rooms::svc::GameKind) {
+    match game_kind {
+        crate::app::rooms::svc::GameKind::Blackjack => {
+            if let Some(blackjack_state) = &app.blackjack_state {
+                blackjack_state.touch_activity();
+            }
+        }
+    }
 }
 
 fn active_room_page_step(app: &App) -> isize {

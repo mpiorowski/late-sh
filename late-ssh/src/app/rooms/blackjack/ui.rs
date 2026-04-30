@@ -629,6 +629,7 @@ fn seat_notice_label(seat: &BlackjackSeat) -> Option<(&'static str, ratatui::sty
         SeatAction::Hit => ("HIT", theme::AMBER()),
         SeatAction::Stand => ("STAND", theme::TEXT_BRIGHT()),
         SeatAction::MissedDeal => ("MISSED", theme::TEXT_DIM()),
+        SeatAction::MissedAction => ("TIMEOUT", theme::ERROR()),
     })
 }
 
@@ -647,6 +648,7 @@ fn seat_notice_subtitle(seat: &BlackjackSeat) -> Option<String> {
             seat.score.map(|score| format!("tot {}", score.total))
         }
         SeatAction::MissedDeal => Some("no bet".to_string()),
+        SeatAction::MissedAction => Some("no action".to_string()),
         SeatAction::Sit => None,
     }
 }
@@ -891,7 +893,7 @@ fn draw_keys_bar(
     if area.height == 0 {
         return;
     }
-    let line = key_line(snapshot.phase, user_seat_index.is_some(), user_is_active);
+    let line = key_line(snapshot, user_seat_index.is_some(), user_is_active);
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
@@ -958,7 +960,7 @@ fn draw_table_compact(
             theme::AMBER(),
         ),
         Line::from(""),
-        key_line(snapshot.phase, is_seated, user_is_active),
+        key_line(snapshot, is_seated, user_is_active),
     ];
 
     let inner = draw_game_frame(frame, area, "Blackjack", info_lines, show_sidebar);
@@ -1013,14 +1015,14 @@ fn draw_table_compact(
 
 // ──────────────── Shared helpers ────────────────
 
-fn key_line(phase: Phase, is_seated: bool, is_active: bool) -> Line<'static> {
+fn key_line(snapshot: &BlackjackSnapshot, is_seated: bool, is_active: bool) -> Line<'static> {
     if !is_seated {
         return key_hint("s/Enter sit · Esc back", "");
     }
-    match phase {
+    match snapshot.phase {
         Phase::Betting => key_hint(
-            "[ ] chip · Space throw · Backspace pull · Enter/S lock · L leave · Esc back",
-            "",
+            &format!("[ ] chip {}", selected_chip_amount(snapshot)),
+            "· Space throw · Backspace pull · Enter/S lock · L leave · Esc back",
         ),
         Phase::BetPending => key_hint("Esc back", ""),
         Phase::PlayerTurn if is_active => {
@@ -1144,6 +1146,7 @@ fn render_seat_hands_compact(
                     Some(SeatAction::Hit) => " hit",
                     Some(SeatAction::Stand) => " stand",
                     Some(SeatAction::MissedDeal) => " missed",
+                    Some(SeatAction::MissedAction) => " timeout",
                     None => "",
                 },
             };
