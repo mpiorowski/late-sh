@@ -120,7 +120,9 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 
 fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     let rooms = dashboard_blackjack_rooms(view.rooms_snapshot);
-    if view.show_room_showcases && let Some(grid_height) = blackjack_grid_height(area) {
+    if view.show_room_showcases
+        && let Some(grid_height) = blackjack_grid_height(area)
+    {
         let split =
             Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
         draw_blackjack_grid(
@@ -186,36 +188,109 @@ fn draw_blackjack_grid(
     ])
     .split(area);
 
+    // 7-track horizontal layout: vert | col1 | vert | col2 | vert | col3 | vert
     let cols = Layout::horizontal([
-        Constraint::Ratio(1, 3),
-        Constraint::Ratio(1, 3),
-        Constraint::Ratio(1, 3),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
     ])
     .split(chunks[0]);
 
-    let loading = rooms.is_empty();
-    for slot in 0..BLACKJACK_GRID_COLUMNS {
-        let room = rooms.get(slot).copied();
-        draw_blackjack_slot(
-            frame,
-            cols[slot],
-            slot,
-            room,
-            snapshots,
-            prefix_armed,
-            loading,
-        );
+    let border_style = Style::default().fg(theme::BORDER_DIM());
+    for &vert_idx in &[0usize, 2, 4, 6] {
+        let lines = vec![Line::from("│"), Line::from("│"), Line::from("│")];
+        frame.render_widget(Paragraph::new(lines).style(border_style), cols[vert_idx]);
     }
 
-    // Single dim rule across the whole strip, separating it from chat below.
-    let rule_width = chunks[1].width as usize;
-    let rule = "─".repeat(rule_width);
+    let slot_areas = [cols[1], cols[3], cols[5]];
+    let loading = rooms.is_empty();
+    for (slot, area) in slot_areas.iter().enumerate().take(BLACKJACK_GRID_COLUMNS) {
+        let room = rooms.get(slot).copied();
+        // 1-char left/right padding inside each column.
+        let padded = if area.width >= 4 {
+            Rect {
+                x: area.x + 1,
+                width: area.width - 2,
+                ..*area
+            }
+        } else {
+            *area
+        };
+        draw_blackjack_slot(frame, padded, slot, room, snapshots, prefix_armed, loading);
+    }
+
+    let rule_area = chunks[1];
+    let junctions = [
+        (cols[0].x.saturating_sub(rule_area.x) as usize, '└'),
+        (cols[2].x.saturating_sub(rule_area.x) as usize, '┴'),
+        (cols[4].x.saturating_sub(rule_area.x) as usize, '┴'),
+        (cols[6].x.saturating_sub(rule_area.x) as usize, '┘'),
+    ];
+    draw_blackjack_bottom_rule(frame, rule_area, &junctions, prefix_armed);
+}
+
+fn draw_blackjack_bottom_rule(
+    frame: &mut Frame,
+    area: Rect,
+    junctions: &[(usize, char)],
+    prefix_armed: bool,
+) {
+    let total_w = area.width as usize;
+    if total_w == 0 {
+        return;
+    }
+
+    let hint_text = if prefix_armed {
+        " press 1/2/3 "
+    } else {
+        " b + 1/2/3 to join "
+    };
+    let hint_chars: Vec<char> = hint_text.chars().collect();
+    let hint_w = hint_chars.len();
+
+    let make_rule_char = |i: usize| -> char {
+        junctions
+            .iter()
+            .find_map(|(off, ch)| if *off == i { Some(*ch) } else { None })
+            .unwrap_or('─')
+    };
+
+    let border_style = Style::default().fg(theme::BORDER_DIM());
+
+    // No room for hint — render plain rule (still with junctions).
+    if hint_w + 4 > total_w {
+        let rule: String = (0..total_w).map(make_rule_char).collect();
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(rule, border_style))),
+            area,
+        );
+        return;
+    }
+
+    let hint_start = (total_w - hint_w) / 2;
+    let hint_end = hint_start + hint_w;
+    let left: String = (0..hint_start).map(make_rule_char).collect();
+    let right: String = (hint_end..total_w).map(make_rule_char).collect();
+
+    let hint_style = if prefix_armed {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            rule,
-            Style::default().fg(theme::BORDER_DIM()),
-        ))),
-        chunks[1],
+        Paragraph::new(Line::from(vec![
+            Span::styled(left, border_style),
+            Span::styled(hint_text.to_string(), hint_style),
+            Span::styled(right, border_style),
+        ])),
+        area,
     );
 }
 
