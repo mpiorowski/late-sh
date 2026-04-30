@@ -990,12 +990,7 @@ impl GhostService {
                 )
                 .await?;
             } else {
-                client
-                    .execute(
-                        "UPDATE users SET settings = $1, updated = current_timestamp WHERE id = $2",
-                        &[&settings, &existing.id],
-                    )
-                    .await?;
+                User::update_settings(&client, existing.id, &settings).await?;
             }
             existing
         } else {

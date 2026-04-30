@@ -249,48 +249,18 @@ async fn count_open_rooms_created_by(
     user_id: Uuid,
     game_kind: GameKind,
 ) -> anyhow::Result<i64> {
-    let game_kind = game_kind.as_str();
-    let row = client
-        .query_one(
-            "SELECT COUNT(*)::bigint AS count
-             FROM game_rooms
-             WHERE created_by = $1
-               AND game_kind = $2
-               AND status <> 'closed'",
-            &[&user_id, &game_kind],
-        )
-        .await?;
-    Ok(row.get("count"))
+    GameRoom::count_open_created_by(client, user_id, game_kind).await
 }
 
 async fn close_inactive_rooms(
     client: &tokio_postgres::Client,
     ttl: Duration,
 ) -> anyhow::Result<u64> {
-    let ttl_seconds = ttl.as_secs() as i64;
-    let updated = client
-        .execute(
-            "UPDATE game_rooms
-             SET status = $1,
-                 updated = current_timestamp
-             WHERE status <> $1
-               AND updated < current_timestamp - ($2::bigint * interval '1 second')",
-            &[&GameRoom::STATUS_CLOSED, &ttl_seconds],
-        )
-        .await?;
-    Ok(updated)
+    GameRoom::close_inactive(client, ttl).await
 }
 
 async fn touch_room_activity(client: &tokio_postgres::Client, room_id: Uuid) -> anyhow::Result<()> {
-    client
-        .execute(
-            "UPDATE game_rooms
-             SET updated = current_timestamp
-             WHERE id = $1
-               AND status <> $2",
-            &[&room_id, &GameRoom::STATUS_CLOSED],
-        )
-        .await?;
+    GameRoom::touch_activity(client, room_id).await?;
     Ok(())
 }
 
