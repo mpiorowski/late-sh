@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
@@ -237,6 +238,25 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&THEME_ID_KEY, &theme_id, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    pub async fn set_moderator(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        is_moderator: bool,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET is_moderator = $1, updated = current_timestamp
+                 WHERE id = $2",
+                &[&is_moderator, &user_id],
             )
             .await?;
         if updated == 0 {

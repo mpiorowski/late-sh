@@ -11,6 +11,8 @@ use late_core::models::{
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::{ChatEvent, ChatService};
 use late_ssh::authz::Permissions;
+use late_ssh::moderation::command::ServerUserAction;
+use late_ssh::moderation::event::ModerationEvent;
 use late_ssh::session::{SessionMessage, SessionRegistry};
 use late_ssh::state::{ActiveSession, ActiveUser};
 use std::collections::HashMap;
@@ -1688,6 +1690,7 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
     )
     .with_session_registry(registry);
     let mut events = service.subscribe_events();
+    let mut moderation_events = service.subscribe_moderation_events();
 
     let request_id = Uuid::now_v7();
     service.run_mod_command_task(
@@ -1722,6 +1725,28 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
     match message {
         SessionMessage::Terminate { reason } => assert_eq!(reason, "server ban"),
         other => panic!("expected terminate message, got {other:?}"),
+    }
+    let moderation_event = timeout(Duration::from_secs(2), moderation_events.recv())
+        .await
+        .expect("moderation event timeout")
+        .expect("moderation event");
+    match moderation_event {
+        ModerationEvent::ServerUserAction {
+            actor_user_id,
+            target_user_id,
+            target_username,
+            action,
+            reason,
+            terminated_sessions,
+        } => {
+            assert_eq!(actor_user_id, actor.id);
+            assert_eq!(target_user_id, target.id);
+            assert_eq!(target_username, "server_ban_target");
+            assert_eq!(action, ServerUserAction::Ban);
+            assert_eq!(reason, "test ban");
+            assert_eq!(terminated_sessions, 1);
+        }
+        other => panic!("expected server user moderation event, got {other:?}"),
     }
 
     let ban = ServerBan::find_active_for_user_id(&client, target.id)

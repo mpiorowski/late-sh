@@ -34,7 +34,7 @@ pub(crate) enum ModCommand {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RoomModAction {
+pub enum RoomModAction {
     Kick,
     Ban,
     Unban,
@@ -51,7 +51,7 @@ impl RoomModAction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ServerUserAction {
+pub enum ServerUserAction {
     Kick,
     Ban,
     Unban,
@@ -84,7 +84,7 @@ impl ServerUserAction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ArtboardAction {
+pub enum ArtboardAction {
     Ban,
     Unban,
 }
@@ -106,7 +106,7 @@ impl ArtboardAction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RoleAction {
+pub enum RoleAction {
     GrantMod,
     RevokeMod,
 }

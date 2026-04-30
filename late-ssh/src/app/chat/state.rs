@@ -21,6 +21,7 @@ use crate::app::common::overlay::Overlay;
 use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
 use crate::authz::Permissions;
+use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
 use crate::state::{ActiveUser, ActiveUsers};
 
 use super::{
@@ -83,6 +84,7 @@ pub struct ChatState {
     active_users: Option<ActiveUsers>,
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
+    moderation_event_rx: tokio::sync::broadcast::Receiver<ModerationEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
     pinned_messages: Vec<ChatMessage>,
     general_room_id: Option<Uuid>,
@@ -164,6 +166,7 @@ impl ChatState {
         showcase_service: showcase::svc::ShowcaseService,
     ) -> Self {
         let event_rx = service.subscribe_events();
+        let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
         let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
         let (room_tx, room_rx) = watch::channel(None);
@@ -177,6 +180,7 @@ impl ChatState {
             active_users,
             snapshot_rx,
             event_rx,
+            moderation_event_rx,
             rooms: Vec::new(),
             pinned_messages: Vec::new(),
             general_room_id: None,
@@ -392,16 +396,6 @@ impl ChatState {
 
     pub(crate) fn submit_mod_command(&mut self, command: String) -> Uuid {
         let request_id = Uuid::now_v7();
-        if let Some((success, lines)) =
-            local_mod_command_output(&command, self.permissions, self.active_users.as_ref())
-        {
-            self.pending_mod_outputs.push_back(ModCommandOutput {
-                request_id,
-                lines,
-                success,
-            });
-            return request_id;
-        }
         self.service
             .run_mod_command_task(self.user_id, self.permissions, request_id, command);
         request_id
@@ -1272,10 +1266,15 @@ impl ChatState {
         self.drain_snapshot();
         self.drain_pinned_messages();
         let banner = self.drain_events();
+        let moderation_banner = self.drain_moderation_events();
         let news_banner = self.news.tick();
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
-        banner.or(news_banner).or(notif_banner).or(showcase_banner)
+        moderation_banner
+            .or(banner)
+            .or(news_banner)
+            .or(notif_banner)
+            .or(showcase_banner)
     }
 
     pub fn select_news(&mut self) {
@@ -1856,6 +1855,22 @@ impl ChatState {
         banner
     }
 
+    fn drain_moderation_events(&mut self) -> Option<Banner> {
+        let mut banner = None;
+        loop {
+            let event = match self.moderation_event_rx.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
+
+            if let Some(message) = moderation_server_toast(&event) {
+                banner = Some(Banner::success(&message));
+            }
+        }
+        banner
+    }
+
     fn push_message(&mut self, message: ChatMessage) {
         let in_dm_room = self
             .rooms
@@ -2127,6 +2142,23 @@ fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>
         .unwrap_or_else(|| "DM".to_string())
 }
 
+fn moderation_server_toast(event: &ModerationEvent) -> Option<String> {
+    let ModerationEvent::ServerUserAction {
+        target_username,
+        action,
+        ..
+    } = event
+    else {
+        return None;
+    };
+
+    match action {
+        ServerUserAction::Kick => Some(format!("@{target_username} was kicked from the server")),
+        ServerUserAction::Ban => Some(format!("@{target_username} was banned from the server")),
+        ServerUserAction::Unban => None,
+    }
+}
+
 /// Parse `/dm @username` or `/dm username` from the composer text.
 /// Returns the target username if the input matches.
 fn parse_dm_command(input: &str) -> Option<&str> {
@@ -2314,90 +2346,6 @@ fn format_active_user_lines(active_users: Option<&ActiveUsers>) -> Vec<String> {
             }
         })
         .collect()
-}
-
-fn local_mod_command_output(
-    command: &str,
-    permissions: Permissions,
-    active_users: Option<&ActiveUsers>,
-) -> Option<(bool, Vec<String>)> {
-    let command = normalize_modal_mod_command(command);
-    let mut parts = command.split_whitespace();
-    if parts.next()? != "sessions" {
-        return None;
-    }
-    if !permissions.can_access_mod_surface() {
-        return Some((false, vec!["error: Moderator or admin only".to_string()]));
-    }
-    let username = parts.next().map(|value| value.trim_start_matches('@'));
-    if parts.next().is_some() {
-        return Some((false, vec!["error: usage: sessions [@name]".to_string()]));
-    }
-    Some((true, format_mod_session_lines(active_users, username)))
-}
-
-fn normalize_modal_mod_command(command: &str) -> &str {
-    let command = command.trim();
-    if command == "/mod" {
-        ""
-    } else {
-        command
-            .strip_prefix("/mod ")
-            .map(str::trim)
-            .unwrap_or(command)
-    }
-}
-
-fn format_mod_session_lines(
-    active_users: Option<&ActiveUsers>,
-    username: Option<&str>,
-) -> Vec<String> {
-    let Some(active_users) = active_users else {
-        return vec!["active session list unavailable".to_string()];
-    };
-
-    let username = username.map(|value| value.to_ascii_lowercase());
-    let guard = active_users.lock_recover();
-    let mut users: Vec<&ActiveUser> = guard
-        .values()
-        .filter(|user| {
-            username
-                .as_deref()
-                .map(|needle| user.username.to_ascii_lowercase() == needle)
-                .unwrap_or(true)
-        })
-        .collect();
-    users.sort_by_key(|user| user.username.to_ascii_lowercase());
-
-    if users.is_empty() {
-        if let Some(username) = username {
-            return vec![format!("no active sessions for @{username}")];
-        }
-        return vec!["no active sessions".to_string()];
-    }
-
-    users
-        .into_iter()
-        .map(|user| {
-            format!(
-                "@{} sessions={} online_for={}",
-                user.username,
-                user.connection_count,
-                format_elapsed(user.last_login_at.elapsed())
-            )
-        })
-        .collect()
-}
-
-fn format_elapsed(elapsed: std::time::Duration) -> String {
-    let seconds = elapsed.as_secs();
-    if seconds < 60 {
-        format!("{seconds}s")
-    } else if seconds < 60 * 60 {
-        format!("{}m", seconds / 60)
-    } else {
-        format!("{}h", seconds / 3600)
-    }
 }
 
 fn wrapped_index(current: isize, delta: isize, len: usize) -> usize {
@@ -2774,6 +2722,61 @@ mod tests {
     fn news_marker_detection_matches_announcement_messages() {
         assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
         assert!(news_reply_preview_text("regular chat message").is_none());
+    }
+
+    #[test]
+    fn moderation_server_toast_formats_kicks_and_bans() {
+        let base_user_id = Uuid::now_v7();
+        let kick = ModerationEvent::ServerUserAction {
+            actor_user_id: Uuid::now_v7(),
+            target_user_id: base_user_id,
+            target_username: "alice".to_string(),
+            action: ServerUserAction::Kick,
+            reason: "bye".to_string(),
+            terminated_sessions: 1,
+        };
+        let ban = ModerationEvent::ServerUserAction {
+            actor_user_id: Uuid::now_v7(),
+            target_user_id: base_user_id,
+            target_username: "bob".to_string(),
+            action: ServerUserAction::Ban,
+            reason: "spam".to_string(),
+            terminated_sessions: 2,
+        };
+
+        assert_eq!(
+            moderation_server_toast(&kick),
+            Some("@alice was kicked from the server".to_string())
+        );
+        assert_eq!(
+            moderation_server_toast(&ban),
+            Some("@bob was banned from the server".to_string())
+        );
+    }
+
+    #[test]
+    fn moderation_server_toast_ignores_unbans_and_non_server_events() {
+        let target_user_id = Uuid::now_v7();
+        let unban = ModerationEvent::ServerUserAction {
+            actor_user_id: Uuid::now_v7(),
+            target_user_id,
+            target_username: "alice".to_string(),
+            action: ServerUserAction::Unban,
+            reason: String::new(),
+            terminated_sessions: 0,
+        };
+        let room = ModerationEvent::RoomAction {
+            actor_user_id: Uuid::now_v7(),
+            target_user_id,
+            room_id: Uuid::now_v7(),
+            room_slug: "general".to_string(),
+            action: crate::moderation::command::RoomModAction::Kick,
+            reason: String::new(),
+            notified_sessions: 0,
+        };
+
+        assert_eq!(moderation_server_toast(&unban), None);
+        assert_eq!(moderation_server_toast(&room), None);
     }
 
     // --- parse_dm_command ---
@@ -3257,54 +3260,6 @@ mod tests {
             format_active_user_lines(None),
             vec!["Active user list unavailable".to_string()]
         );
-    }
-
-    #[test]
-    fn local_sessions_mod_command_lists_active_users() {
-        let active_users = std::sync::Arc::new(std::sync::Mutex::new(HashMap::from([
-            (
-                Uuid::now_v7(),
-                ActiveUser {
-                    username: "zoe".to_string(),
-                    fingerprint: None,
-                    peer_ip: None,
-                    sessions: Vec::new(),
-                    connection_count: 2,
-                    last_login_at: std::time::Instant::now(),
-                },
-            ),
-            (
-                Uuid::now_v7(),
-                ActiveUser {
-                    username: "alice".to_string(),
-                    fingerprint: None,
-                    peer_ip: None,
-                    sessions: Vec::new(),
-                    connection_count: 1,
-                    last_login_at: std::time::Instant::now(),
-                },
-            ),
-        ])));
-
-        let (success, lines) = local_mod_command_output(
-            "/mod sessions @zoe",
-            Permissions::new(false, true),
-            Some(&active_users),
-        )
-        .expect("local sessions command");
-
-        assert!(success);
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].starts_with("@zoe sessions=2 online_for="));
-    }
-
-    #[test]
-    fn local_sessions_mod_command_rejects_non_staff() {
-        let (success, lines) = local_mod_command_output("sessions", Permissions::default(), None)
-            .expect("local sessions command");
-
-        assert!(!success);
-        assert_eq!(lines, vec!["error: Moderator or admin only".to_string()]);
     }
 
     // --- adjacent_message_id (delete-and-advance) ---
