@@ -6,8 +6,8 @@
 //! it with `tokio_tungstenite::connect_async` to actually open the WS.
 
 use late_core::tunnel_protocol::{
-    HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT, HEADER_ROWS, HEADER_SECRET,
-    HEADER_SESSION_ID, HEADER_TERM, HEADER_USERNAME,
+    HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT_REASON, HEADER_ROWS,
+    HEADER_SECRET, HEADER_SESSION_ID, HEADER_TERM, HEADER_USERNAME, HEADER_VIA,
 };
 use std::net::IpAddr;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -32,10 +32,8 @@ pub struct HandshakeContext {
     pub cols: u16,
     /// PTY row count at handshake time.
     pub rows: u16,
-    /// `true` when this WS dial is reopening the same user-SSH session
-    /// after a backend close. Logged for correlation by late-ssh; no
-    /// behavioral branch on the backend.
-    pub reconnect: bool,
+    /// Close code that triggered this redial. Absent on the first dial.
+    pub reconnect_reason: Option<u16>,
     /// UUIDv7 minted by the bastion per shell channel; stable across
     /// reconnects so logs/metrics on either end can correlate the
     /// underlying user session.
@@ -63,8 +61,9 @@ pub fn build_request(
     headers.insert(HEADER_TERM, header_value(&ctx.term)?);
     headers.insert(HEADER_COLS, header_value(&ctx.cols.to_string())?);
     headers.insert(HEADER_ROWS, header_value(&ctx.rows.to_string())?);
-    if ctx.reconnect {
-        headers.insert(HEADER_RECONNECT, HeaderValue::from_static("1"));
+    headers.insert(HEADER_VIA, HeaderValue::from_static("bastion"));
+    if let Some(reason) = ctx.reconnect_reason {
+        headers.insert(HEADER_RECONNECT_REASON, header_value(&reason.to_string())?);
     }
     headers.insert(HEADER_SESSION_ID, header_value(&ctx.session_id)?);
     Ok(req)
@@ -86,7 +85,7 @@ mod tests {
             term: "xterm-256color".to_string(),
             cols: 120,
             rows: 40,
-            reconnect: false,
+            reconnect_reason: None,
             session_id: "01HX7Q4N4S2NS9X9".to_string(),
         }
     }
@@ -102,17 +101,18 @@ mod tests {
         assert_eq!(h.get(HEADER_TERM).unwrap(), "xterm-256color");
         assert_eq!(h.get(HEADER_COLS).unwrap(), "120");
         assert_eq!(h.get(HEADER_ROWS).unwrap(), "40");
+        assert_eq!(h.get(HEADER_VIA).unwrap(), "bastion");
         assert_eq!(h.get(HEADER_SESSION_ID).unwrap(), "01HX7Q4N4S2NS9X9");
-        // X-Late-Reconnect is intentionally absent on first dial.
-        assert!(h.get(HEADER_RECONNECT).is_none());
+        // X-Late-Reconnect-Reason is intentionally absent on first dial.
+        assert!(h.get(HEADER_RECONNECT_REASON).is_none());
     }
 
     #[test]
-    fn sets_reconnect_header_when_flagged() {
+    fn sets_reconnect_reason_header_when_redialing() {
         let mut c = ctx();
-        c.reconnect = true;
+        c.reconnect_reason = Some(4100);
         let req = build_request("ws://backend:4001/tunnel", "hunter2", &c).unwrap();
-        assert_eq!(req.headers().get(HEADER_RECONNECT).unwrap(), "1");
+        assert_eq!(req.headers().get(HEADER_RECONNECT_REASON).unwrap(), "4100");
     }
 
     #[test]

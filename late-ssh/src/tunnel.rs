@@ -14,10 +14,10 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    Extension, Router,
+    Router,
     extract::{
         ConnectInfo, State as AxumState, WebSocketUpgrade,
-        ws::{CloseFrame, Message, WebSocket, close_code},
+        ws::{Message, WebSocket},
     },
     http::{HeaderMap, StatusCode},
     middleware,
@@ -54,8 +54,8 @@ const WS_OUT_BUFFER: usize = 8;
 // backend reference the same constants. Re-exported here so existing
 // imports (`late_ssh::tunnel::HEADER_*`) keep working.
 pub use late_core::tunnel_protocol::{
-    HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT, HEADER_ROWS, HEADER_SECRET,
-    HEADER_SESSION_ID, HEADER_TERM, HEADER_USERNAME,
+    HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT_REASON, HEADER_ROWS,
+    HEADER_SECRET, HEADER_SESSION_ID, HEADER_TERM, HEADER_USERNAME, HEADER_VIA,
 };
 
 /// Validated handshake. Phase 2c will hand this to the session bootstrap.
@@ -67,7 +67,7 @@ pub struct TunnelHandshake {
     pub term: String,
     pub cols: u16,
     pub rows: u16,
-    pub reconnect: bool,
+    pub reconnect_reason: Option<u16>,
     pub session_id: Option<String>,
 }
 
@@ -142,7 +142,10 @@ pub fn validate_handshake(
         .parse()
         .map_err(|_| HandshakeReject::BadHeader(HEADER_ROWS))?;
 
-    let reconnect = matches!(header_str(headers, HEADER_RECONNECT), Some("1"));
+    let reconnect_reason = header_str(headers, HEADER_RECONNECT_REASON)
+        .map(str::parse::<u16>)
+        .transpose()
+        .map_err(|_| HandshakeReject::BadHeader(HEADER_RECONNECT_REASON))?;
     let session_id = header_str(headers, HEADER_SESSION_ID).map(str::to_string);
 
     Ok(TunnelHandshake {
@@ -152,7 +155,7 @@ pub fn validate_handshake(
         term,
         cols,
         rows,
-        reconnect,
+        reconnect_reason,
         session_id,
     })
 }
@@ -193,14 +196,9 @@ pub async fn run_tunnel_server_with_listener(
 ) -> Result<()> {
     let shutdown = shutdown.unwrap_or_default();
 
-    // The same token is shared two ways:
-    //   - axum's `with_graceful_shutdown` to stop accepting new connections,
-    //   - per-session `handle_session` task via Extension, so an
-    //     in-flight WS can emit a 1000 close before the process exits.
     let app = Router::new()
         .route("/tunnel", get(tunnel_handler))
         .layer(middleware::from_fn(http_telemetry_middleware))
-        .layer(Extension(shutdown.clone()))
         .with_state(state);
 
     axum::serve(
@@ -270,7 +268,6 @@ async fn tunnel_handler(
     ws: WebSocketUpgrade,
     AxumState(state): AxumState<State>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
-    Extension(shutdown): Extension<CancellationToken>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let handshake = match validate_handshake(
@@ -403,15 +400,13 @@ async fn tunnel_handler(
         term = %handshake.term,
         cols = handshake.cols,
         rows = handshake.rows,
-        reconnect = handshake.reconnect,
+        reconnect_reason = ?handshake.reconnect_reason,
         session_id = ?handshake.session_id,
         is_new_user,
         "tunnel handshake accepted; running session"
     );
 
-    ws.on_upgrade(move |socket| {
-        handle_session(socket, handshake, user, is_new_user, state, guard, shutdown)
-    })
+    ws.on_upgrade(move |socket| handle_session(socket, handshake, user, is_new_user, state, guard))
 }
 
 async fn handle_session(
@@ -421,7 +416,6 @@ async fn handle_session(
     is_new_user: bool,
     state: State,
     _guard: TunnelSessionGuard,
-    shutdown: CancellationToken,
 ) {
     let frame_drop_log_every = state.config.frame_drop_log_every;
     let activity_feed_rx = Some(state.activity_feed.subscribe());
@@ -439,6 +433,7 @@ async fn handle_session(
             session_token,
             session_rx: None,
             activity_feed_rx,
+            reconnect_reason: handshake.reconnect_reason,
         },
     )
     .await;
@@ -490,12 +485,10 @@ async fn handle_session(
         .await;
 
     let signal = Arc::new(RenderSignal::new());
-    // The receive loop also needs `out_tx` to push a drain Close on
-    // shutdown, so hand a clone to the render loop's frame sink.
     let render = tokio::spawn(run_session(
         Arc::clone(&app),
         input_rx,
-        WsFrameSink::new(out_tx.clone()),
+        WsFrameSink::new(out_tx),
         frame_drop_log_every,
         Arc::clone(&signal),
     ));
@@ -512,29 +505,12 @@ async fn handle_session(
     }
     signal.notify.notify_one();
 
-    // Receive loop: input bytes (binary), resize control frames (text),
-    // clean close from the client, AND server-drain cancellation. The
-    // drain arm emits an explicit close 1000 so the bastion's reconnect
-    // dispatcher can distinguish a graceful upgrade from a transport
-    // error and reconnect silently.
+    // Receive loop: input bytes (binary), resize control frames (text), and
+    // clean close from the client. Existing tunnel sessions intentionally
+    // keep running after the acceptor begins graceful shutdown.
     loop {
         tokio::select! {
             biased;
-            _ = shutdown.cancelled() => {
-                tracing::info!(
-                    peer_ip = %handshake.peer_ip,
-                    username = %handshake.username,
-                    "tunnel server draining; emitting close 1000"
-                );
-                let frame = CloseFrame {
-                    code: close_code::NORMAL,
-                    reason: "server drain".into(),
-                };
-                // Best-effort: writer task may already be gone if the
-                // peer or render loop closed first. Either way we exit.
-                let _ = out_tx.send(Message::Close(Some(frame))).await;
-                break;
-            }
             next = ws_stream.next() => {
                 let Some(msg) = next else { break; };
                 let msg = match msg {
@@ -606,6 +582,7 @@ async fn handle_session(
     // it and exits.
     {
         let mut app_guard = app.lock().await;
+        // Peer already closed; no backend close-code signal remains to send.
         app_guard.running = false;
     }
     signal.notify.notify_one();
@@ -655,14 +632,14 @@ mod tests {
         assert_eq!(result.username, "alice");
         assert_eq!(result.cols, 120);
         assert_eq!(result.rows, 40);
-        assert!(!result.reconnect);
+        assert_eq!(result.reconnect_reason, None);
         assert!(result.session_id.is_none());
     }
 
     #[test]
-    fn parses_optional_reconnect_and_session_id() {
+    fn parses_optional_reconnect_reason_and_session_id() {
         let mut h = full_headers();
-        h.insert(HEADER_RECONNECT, HeaderValue::from_static("1"));
+        h.insert(HEADER_RECONNECT_REASON, HeaderValue::from_static("4100"));
         h.insert(
             HEADER_SESSION_ID,
             HeaderValue::from_static("01HX7Q4N4S2NS9X9"),
@@ -670,8 +647,18 @@ mod tests {
         let trusted = cidrs(&["10.42.0.0/16"]);
         let result =
             validate_handshake(&h, "10.42.0.5".parse().unwrap(), &trusted, "hunter2").unwrap();
-        assert!(result.reconnect);
+        assert_eq!(result.reconnect_reason, Some(4100));
         assert_eq!(result.session_id.as_deref(), Some("01HX7Q4N4S2NS9X9"));
+    }
+
+    #[test]
+    fn invalid_reconnect_reason_is_bad_header() {
+        let mut h = full_headers();
+        h.insert(HEADER_RECONNECT_REASON, HeaderValue::from_static("again"));
+        let trusted = cidrs(&["10.42.0.0/16"]);
+        let err =
+            validate_handshake(&h, "10.42.0.5".parse().unwrap(), &trusted, "hunter2").unwrap_err();
+        assert_eq!(err, HandshakeReject::BadHeader(HEADER_RECONNECT_REASON));
     }
 
     #[test]

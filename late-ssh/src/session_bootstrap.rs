@@ -46,6 +46,7 @@ pub struct SessionBootstrapInputs {
     /// caller subscribes so it can drop the receiver cleanly on
     /// connection teardown without the helper holding state.
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    pub reconnect_reason: Option<u16>,
 }
 
 /// Load user-state from the DB and assemble a fully-formed
@@ -62,6 +63,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_rx,
         activity_feed_rx,
+        reconnect_reason,
     } = inputs;
 
     let user_id = user.id;
@@ -209,5 +211,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_theme_id: late_ssh_theme_id(&user.settings),
 
         is_draining: state.is_draining.clone(),
+        reconnect_reason,
     }
 }

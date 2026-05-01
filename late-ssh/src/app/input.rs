@@ -935,6 +935,10 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
 }
 
 fn dispatch_escape(app: &mut App) {
+    if app.reconnect_notice.is_some() {
+        app.dismiss_reconnect_notice();
+        return;
+    }
     if app.show_quit_confirm {
         quit_confirm::input::handle_escape(app);
         return;
@@ -1384,7 +1388,7 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
             app.show_quit_confirm = true;
         }
         quit_confirm::input::QuitAction::QuitNow => {
-            app.running = false;
+            app.request_close(late_core::tunnel_protocol::TUNNEL_CLOSE_SESSION_ENDED);
         }
     }
 }

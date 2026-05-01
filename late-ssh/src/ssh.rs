@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::user::{User, UserParams, extract_theme_id};
-use late_core::tunnel_protocol::SshInputEvent;
+use late_core::tunnel_protocol::{SshInputEvent, TUNNEL_CLOSE_SESSION_ENDED};
 use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::*;
@@ -534,6 +534,7 @@ impl russh::server::Handler for ClientHandler {
                 session_token,
                 session_rx: Some(session_rx),
                 activity_feed_rx: self.activity_feed_rx.take(),
+                reconnect_reason: None,
             },
         )
         .await;
@@ -720,6 +721,7 @@ impl russh::server::Handler for ClientHandler {
         tracing::debug!(?channel, "client sent channel EOF");
         if let Some(app) = self.app.as_ref() {
             let mut app = app.lock().await;
+            // Peer already closed; no backend close-code signal remains to send.
             app.running = false;
         }
         Ok(())
@@ -734,6 +736,7 @@ impl russh::server::Handler for ClientHandler {
         tracing::debug!(?channel, "client closed channel");
         if let Some(app) = self.app.as_ref() {
             let mut app = app.lock().await;
+            // Peer already closed; no backend close-code signal remains to send.
             app.running = false;
         }
         Ok(())
@@ -828,14 +831,15 @@ pub(crate) async fn run_session<S: FrameSink>(
                 previous_render = Some(Instant::now());
                 if should_quit {
                     tracing::debug!("app requested quit, closing connection");
-                    clean_disconnect(&sink).await;
+                    let close_code = app.lock().await.close_code();
+                    clean_disconnect(&sink, close_code).await;
                     break;
                 }
             }
             Err(err) => {
                 tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
                 let _ = sink.send_frame(App::leave_alt_screen()).await;
-                sink.eof_close().await;
+                sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED).await;
                 break;
             }
         }
@@ -980,10 +984,12 @@ async fn render_once<S: FrameSink>(
     Ok(false)
 }
 
-async fn clean_disconnect<S: FrameSink>(sink: &S) {
+async fn clean_disconnect<S: FrameSink>(sink: &S, close_code: u16) {
     let _ = sink.send_frame(App::leave_alt_screen()).await;
-    let _ = sink.send_frame(EXIT_MESSAGE.as_bytes().to_vec()).await;
-    sink.eof_close().await;
+    if close_code == TUNNEL_CLOSE_SESSION_ENDED {
+        let _ = sink.send_frame(EXIT_MESSAGE.as_bytes().to_vec()).await;
+    }
+    sink.eof_close(close_code).await;
 }
 
 // Updated helper to take State

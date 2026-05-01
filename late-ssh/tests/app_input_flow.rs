@@ -14,6 +14,7 @@ use late_core::models::{
     user::User,
 };
 use late_core::test_utils::create_test_user;
+use late_core::tunnel_protocol::{TUNNEL_CLOSE_RECONNECT_REQUESTED, TUNNEL_CLOSE_SESSION_ENDED};
 use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;
@@ -70,6 +71,48 @@ async fn q_opens_quit_confirm_and_escape_dismisses_it() {
         !frame.contains("Clicked by mistake, right?"),
         "expected quit confirm to dismiss after Esc; frame={frame:?}"
     );
+}
+
+#[tokio::test]
+async fn draining_quit_confirm_can_request_upgrade_reconnect() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "quit-confirm-draining-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "quit-confirm-draining-flow-it");
+    app.set_draining_for_tests(true);
+
+    app.handle_input(b"q");
+    wait_for_render_contains(&mut app, " Update? ").await;
+    wait_for_render_contains(&mut app, "r to reconnect to the updated late.sh!").await;
+
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("r to reconnect to the updated late.sh!"),
+        "expected upgrade confirm to dismiss after Esc; frame={frame:?}"
+    );
+
+    app.handle_input(b"q");
+    app.handle_input(b"r");
+    assert_eq!(app.close_code_for_tests(), TUNNEL_CLOSE_RECONNECT_REQUESTED);
+    assert!(!app.is_running());
+}
+
+#[tokio::test]
+async fn draining_quit_confirm_q_still_disconnects_terminally() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "quit-confirm-draining-q-it").await;
+    let mut app = make_app(
+        test_db.db.clone(),
+        user.id,
+        "quit-confirm-draining-q-flow-it",
+    );
+    app.set_draining_for_tests(true);
+
+    app.handle_input(b"q");
+    app.handle_input(b"q");
+    assert_eq!(app.close_code_for_tests(), TUNNEL_CLOSE_SESSION_ENDED);
+    assert!(!app.is_running());
 }
 
 #[tokio::test]

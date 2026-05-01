@@ -21,8 +21,13 @@ pub const HEADER_PEER_IP: &str = "x-late-peer-ip";
 pub const HEADER_TERM: &str = "x-late-term";
 pub const HEADER_COLS: &str = "x-late-cols";
 pub const HEADER_ROWS: &str = "x-late-rows";
-pub const HEADER_RECONNECT: &str = "x-late-reconnect";
 pub const HEADER_SESSION_ID: &str = "x-late-session-id";
+pub const HEADER_VIA: &str = "x-late-via";
+pub const HEADER_RECONNECT_REASON: &str = "x-late-reconnect-reason";
+
+pub const TUNNEL_CLOSE_SESSION_ENDED: u16 = 4000;
+pub const TUNNEL_CLOSE_RECONNECT_REQUESTED: u16 = 4100;
+pub const TUNNEL_CLOSE_ABNORMAL: u16 = 1006;
 
 /// Text-frame control message. Tagged on `t` so adding new variants is
 /// non-breaking as long as both ends are tolerant of unknown tags.

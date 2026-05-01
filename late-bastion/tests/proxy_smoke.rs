@@ -15,8 +15,8 @@
 //!     frame on the backend.
 //!
 //! Phase 4 additions (`ScriptedBackend`):
-//!   - On retryable WS close (1000), the bastion redials with the same
-//!     `X-Late-Session-Id` and `X-Late-Reconnect: 1`.
+//!   - On retryable WS close (4100), the bastion redials with the same
+//!     `X-Late-Session-Id` and `X-Late-Reconnect-Reason: 4100`.
 //!   - On terminal WS close (4001), the bastion ends the session
 //!     without further dial attempts.
 //!   - On HTTP 4xx upgrade rejection (401), same: terminal, no redial.
@@ -28,8 +28,8 @@ use late_bastion::config::Config;
 use late_bastion::ssh::{Server, load_or_generate_key};
 use late_core::shutdown::CancellationToken;
 use late_core::tunnel_protocol::{
-    ControlFrame, HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT, HEADER_ROWS,
-    HEADER_SECRET, HEADER_SESSION_ID, HEADER_TERM,
+    ControlFrame, HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT_REASON,
+    HEADER_ROWS, HEADER_SECRET, HEADER_SESSION_ID, HEADER_TERM,
 };
 use russh::client::{self as russh_client, Handler as ClientHandler};
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, signature::rand_core::UnwrapErr};
@@ -613,8 +613,11 @@ async fn bastion_preserves_data_resize_data_order() {
 enum Behavior {
     /// Complete the WS upgrade, then immediately send a Close frame with
     /// the given code and exit. Used to exercise both retryable
-    /// (1000/1001/1006) and terminal (4001/4002/4003) dispatch paths.
+    /// (4100-4199) and terminal dispatch paths.
     CloseWithCode(u16, &'static str),
+    /// Complete the WS upgrade, then drop the transport without sending a
+    /// WebSocket Close frame. Used to exercise the 1006-equivalent path.
+    DropTransport,
     /// Reject the WS upgrade with the given HTTP status. Used to
     /// exercise the dial-error classifier (4xx → terminal, 5xx → retry).
     HttpReject(StatusCode),
@@ -632,11 +635,11 @@ enum Behavior {
 /// Mock backend that handles a *sequence* of connection attempts. Each
 /// accepted TCP gets the next `Behavior` from the script; once the
 /// script is exhausted, additional accepts (which we don't want to see
-/// in terminal-close tests) get a default "Close 1000" so the bastion
+/// in terminal-close tests) get a default terminal close so the bastion
 /// would-loop is observable without hanging.
 ///
 /// All captured handshake headers go onto a single mpsc in accept order,
-/// so a test can both (a) verify the second handshake's `reconnect=1`
+/// so a test can both (a) verify the second handshake's reconnect reason
 /// header and (b) detect unwanted extra dials via `try_recv` timeout.
 struct ScriptedBackend {
     addr: SocketAddr,
@@ -768,6 +771,12 @@ async fn handle_scripted(tcp: TcpStream, behavior: Behavior, tx: mpsc::Sender<He
             let _ = sink.send(WsMessage::Close(Some(frame))).await;
             let _ = sink.close().await;
         }
+        Behavior::DropTransport => {
+            let Some(ws) = accept_capture(tcp, &tx).await else {
+                return;
+            };
+            drop(ws);
+        }
         Behavior::AcceptAndHold => {
             let Some(ws) = accept_capture(tcp, &tx).await else {
                 return;
@@ -831,11 +840,11 @@ async fn open_user_session(
 }
 
 #[tokio::test]
-async fn bastion_redials_after_retryable_close_with_reconnect_header() {
-    // First connection: backend closes 1000 → bastion should retry.
+async fn bastion_redials_after_retryable_close_with_reconnect_reason_header() {
+    // First connection: backend closes 4100 → bastion should retry.
     // Second connection: backend holds → bastion proceeds normally.
     let mut backend = ScriptedBackend::spawn(vec![
-        Behavior::CloseWithCode(1000, "drain"),
+        Behavior::CloseWithCode(4100, "upgrade requested"),
         Behavior::AcceptAndHold,
     ])
     .await
@@ -845,7 +854,7 @@ async fn bastion_redials_after_retryable_close_with_reconnect_header() {
 
     let (_session, _channel) = open_user_session(bastion.addr).await;
 
-    // First handshake: fresh dial, no reconnect header.
+    // First handshake: fresh dial, no reconnect reason header.
     let h1 = backend
         .next_handshake()
         .await
@@ -857,20 +866,20 @@ async fn bastion_redials_after_retryable_close_with_reconnect_header() {
         .unwrap()
         .to_string();
     assert!(
-        h1.get(HEADER_RECONNECT).is_none(),
-        "first dial should not carry X-Late-Reconnect"
+        h1.get(HEADER_RECONNECT_REASON).is_none(),
+        "first dial should not carry X-Late-Reconnect-Reason"
     );
 
-    // Second handshake: same session_id, X-Late-Reconnect=1.
+    // Second handshake: same session_id, X-Late-Reconnect-Reason=4100.
     let h2 = backend
         .next_handshake()
         .await
         .expect("redial never arrived");
     assert_eq!(
-        h2.get(HEADER_RECONNECT)
-            .expect("reconnect header on second dial"),
-        "1",
-        "redial should set X-Late-Reconnect=1"
+        h2.get(HEADER_RECONNECT_REASON)
+            .expect("reconnect reason header on second dial"),
+        "4100",
+        "redial should set X-Late-Reconnect-Reason=4100"
     );
     assert_eq!(
         h2.get(HEADER_SESSION_ID).unwrap().to_str().unwrap(),
@@ -929,8 +938,8 @@ async fn bastion_redials_when_backend_goes_silent() {
         .await
         .expect("first handshake never arrived");
     assert!(
-        h1.get(HEADER_RECONNECT).is_none(),
-        "first dial should not carry X-Late-Reconnect"
+        h1.get(HEADER_RECONNECT_REASON).is_none(),
+        "first dial should not carry X-Late-Reconnect-Reason"
     );
 
     // After silence trip + redial, expect a second handshake within a
@@ -940,10 +949,10 @@ async fn bastion_redials_when_backend_goes_silent() {
         .await
         .expect("redial after silence trip never arrived");
     assert_eq!(
-        h2.get(HEADER_RECONNECT)
-            .expect("reconnect header on redial"),
-        "1",
-        "silence-triggered redial should set X-Late-Reconnect=1"
+        h2.get(HEADER_RECONNECT_REASON)
+            .expect("reconnect reason header on redial"),
+        "1006",
+        "silence-triggered redial should set X-Late-Reconnect-Reason=1006"
     );
 
     backend.shutdown();
@@ -953,7 +962,7 @@ async fn bastion_redials_when_backend_goes_silent() {
 #[tokio::test]
 async fn bastion_writes_reconnect_message_during_long_outage() {
     // Trajectory:
-    //   1. First WS upgrade succeeds; backend immediately closes 1000.
+    //   1. First WS upgrade succeeds; backend drops the transport.
     //      Pump fails fast; bastion enters its second 'session iter
     //      (is_redial = true).
     //   2. Mock backend rejects the next four dials with HTTP 503;
@@ -962,7 +971,7 @@ async fn bastion_writes_reconnect_message_during_long_outage() {
     //      reconnect message to the user's SSH stream.
     //   3. Fifth dial accepts and holds; recovery complete.
     let backend = ScriptedBackend::spawn(vec![
-        Behavior::CloseWithCode(1000, "drain"),
+        Behavior::DropTransport,
         Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
         Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
         Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
@@ -1019,6 +1028,38 @@ async fn bastion_writes_reconnect_message_during_long_outage() {
         text.contains("\x1b[2J"),
         "expected screen clear; got: {text:?}"
     );
+
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_suppresses_reconnect_message_for_user_requested_redial() {
+    let backend = ScriptedBackend::spawn(vec![
+        Behavior::CloseWithCode(4100, "upgrade requested"),
+        Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
+        Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
+        Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
+        Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
+        Behavior::AcceptAndHold,
+    ])
+    .await
+    .expect("backend");
+
+    let bastion = TestBastion::spawn(backend.ws_url()).await.expect("bastion");
+    let (_session, channel) = open_user_session(bastion.addr).await;
+
+    let stream = channel.into_stream();
+    let (mut reader, _writer) = tokio::io::split(stream);
+    let mut buf = [0u8; 1024];
+    match timeout(Duration::from_secs(2), reader.read(&mut buf)).await {
+        Err(_) => {}
+        Ok(Ok(0)) => panic!("ssh stream EOF while waiting for silence"),
+        Ok(Ok(n)) => panic!(
+            "expected no bastion reconnect message for 4100 redial; got {:?}",
+            String::from_utf8_lossy(&buf[..n])
+        ),
+        Ok(Err(err)) => panic!("ssh read failed: {err:?}"),
+    }
 
     bastion.shutdown();
 }

@@ -268,6 +268,7 @@ pub fn make_app_with_chat_service(
         activity_feed_rx: None,
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        reconnect_reason: None,
         initial_theme_id: "contrast".to_string(),
     })
     .expect("app");
@@ -373,6 +374,7 @@ pub fn make_app_with_paired_client(
         activity_feed_rx: None,
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        reconnect_reason: None,
         initial_theme_id: "contrast".to_string(),
     })
     .expect("app");

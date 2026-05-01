@@ -28,7 +28,6 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 const TEST_SECRET: &str = "test-secret";
 
@@ -300,7 +299,7 @@ async fn tunnel_returns_429_when_per_ip_conn_limit_reached() {
 }
 
 #[tokio::test]
-async fn tunnel_drain_emits_close_1000() {
+async fn tunnel_drain_leaves_existing_session_open() {
     let (addr, _state, shutdown, server) = spawn_tunnel(loopback_cidr()).await;
 
     let req = make_request(addr, "drain-user");
@@ -320,27 +319,30 @@ async fn tunnel_drain_emits_close_1000() {
 
     shutdown.cancel();
 
-    // The receive loop's biased cancellation arm queues a 1000 Close;
-    // the writer task forwards it. Anything queued behind us in the
-    // mpsc (residual render frames) arrives first, so drain Binary
-    // until we see the Close.
-    let close_frame = loop {
-        let msg = timeout(Duration::from_secs(5), ws.next())
-            .await
-            .expect("close timeout")
-            .expect("stream ended")
-            .expect("ws error");
-        match msg {
-            Message::Binary(_) => continue,
-            Message::Close(Some(frame)) => break frame,
-            Message::Close(None) => panic!("expected Close with code, got Close(None)"),
-            other => panic!("expected Binary or Close, got {other:?}"),
+    // Existing tunnel sessions ride out graceful shutdown. Drain anything
+    // already queued, but fail if the backend emits an explicit Close.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
         }
-    };
-    assert_eq!(close_frame.code, CloseCode::Normal);
+        match timeout(deadline - now, ws.next()).await {
+            Ok(Some(Ok(Message::Binary(_)))) => continue,
+            Ok(Some(Ok(Message::Close(frame)))) => {
+                panic!("did not expect drain close frame; got {frame:?}");
+            }
+            Ok(Some(Ok(other))) => panic!("expected Binary or timeout, got {other:?}"),
+            Ok(Some(Err(err))) => panic!("ws error after drain: {err:?}"),
+            Ok(None) => panic!("stream ended after drain"),
+            Err(_) => break,
+        }
+    }
+
+    let _ = ws.close(None).await;
 
     // Server task should wind down on its own once the cancellation
-    // propagates through axum's graceful shutdown.
+    // propagates through axum's graceful shutdown and the client closes.
     let _ = timeout(Duration::from_secs(5), server)
         .await
         .expect("server didn't exit after drain");

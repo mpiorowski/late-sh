@@ -5,10 +5,10 @@ use late_core::MutexRecover;
 use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use late_core::models::leaderboard::LeaderboardData;
@@ -21,7 +21,7 @@ use super::{
         theme,
     },
     dashboard, help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
-    state::{App, NotificationMode},
+    state::{App, NotificationMode, ReconnectNoticeKind},
     visualizer::Visualizer,
 };
 use crate::session::ClientAudioState;
@@ -145,6 +145,7 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
+    reconnect_notice: Option<ReconnectNoticeKind>,
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
     show_cli_install_modal: bool,
@@ -424,6 +425,7 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
+                        reconnect_notice: self.reconnect_notice,
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         show_cli_install_modal: self.show_cli_install_modal,
@@ -565,6 +567,9 @@ impl App {
                 let hint_paragraph = ratatui::widgets::Paragraph::new(hint).centered();
                 frame.render_widget(hint_paragraph, hint_area);
             }
+            if let Some(kind) = ctx.reconnect_notice {
+                draw_reconnect_notice(frame, area, kind);
+            }
             return;
         }
 
@@ -666,9 +671,8 @@ impl App {
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {
-                message:
-                    "⚠️ Server updating! Press 'q' to quit, then reconnect to join the new pod."
-                        .to_string(),
+                message: "ℹ️  Update available! Press q then r to get the late-est features!"
+                    .to_string(),
                 kind: BannerKind::Error,
                 created_at: std::time::Instant::now(),
             })
@@ -718,7 +722,11 @@ impl App {
         }
 
         if ctx.show_quit_confirm {
-            quit_confirm::ui::draw(frame, inner);
+            quit_confirm::ui::draw(frame, inner, ctx.is_draining);
+        }
+
+        if let Some(kind) = ctx.reconnect_notice {
+            draw_reconnect_notice(frame, inner, kind);
         }
 
         if ctx.show_web_chat_qr
@@ -742,6 +750,72 @@ impl App {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
     }
+}
+
+fn draw_reconnect_notice(frame: &mut Frame, area: Rect, kind: ReconnectNoticeKind) {
+    let popup = centered_rect(60, 9, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Reconnected! ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let body = match kind {
+        ReconnectNoticeKind::Updated => vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "Welcome to the updated late.sh! Enjoy.",
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )),
+        ],
+        ReconnectNoticeKind::Transport => vec![
+            Line::from(Span::styled(
+                "You were reconnected to late.sh due to either",
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )),
+            Line::from(Span::styled(
+                "a software update or a network problem.",
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )),
+            Line::from(Span::styled(
+                "Either way, welcome back!",
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            )),
+        ],
+    };
+
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    frame.render_widget(Paragraph::new(body).centered(), layout[1]);
+
+    let footer = Line::from(vec![
+        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+    ])
+    .right_aligned();
+    frame.render_widget(Paragraph::new(footer), layout[2]);
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
+        .flex(Flex::Center)
+        .split(area);
+    let horizontal = Layout::horizontal([Constraint::Length(width.min(area.width))])
+        .flex(Flex::Center)
+        .split(vertical[0]);
+    horizontal[0]
 }
 
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {

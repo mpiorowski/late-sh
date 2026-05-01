@@ -248,7 +248,7 @@ impl russh::server::Handler for ClientHandler {
             term,
             cols: self.cols,
             rows: self.rows,
-            reconnect: false,
+            reconnect_reason: None,
             session_id: Uuid::now_v7().to_string(),
         };
 

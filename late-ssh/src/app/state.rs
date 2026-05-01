@@ -3,7 +3,14 @@ use crossterm::{
     cursor,
     terminal::{self, ClearType},
 };
-use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame};
+use late_core::{
+    MutexRecover,
+    api_types::NowPlaying,
+    audio::VizFrame,
+    tunnel_protocol::{
+        TUNNEL_CLOSE_ABNORMAL, TUNNEL_CLOSE_RECONNECT_REQUESTED, TUNNEL_CLOSE_SESSION_ENDED,
+    },
+};
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::{
     collections::VecDeque,
@@ -45,6 +52,12 @@ pub(crate) enum NotificationMode {
     Both,
     Osc777,
     Osc9,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReconnectNoticeKind {
+    Updated,
+    Transport,
 }
 
 pub(crate) const GAME_SELECTION_2048: usize = 0;
@@ -166,6 +179,7 @@ pub struct SessionConfig {
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub reconnect_reason: Option<u16>,
 }
 
 /// Main application state
@@ -311,6 +325,8 @@ pub struct App {
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) requested_close_code: u16,
+    pub(crate) reconnect_notice: Option<ReconnectNoticeKind>,
 
     /// Emoji + Nerd Font picker
     pub(crate) icon_picker_open: bool,
@@ -323,11 +339,37 @@ impl App {
         self.running
     }
 
+    pub(crate) fn close_code(&self) -> u16 {
+        self.requested_close_code
+    }
+
+    pub(crate) fn request_close(&mut self, close_code: u16) {
+        self.requested_close_code = close_code;
+        self.running = false;
+    }
+
+    pub(crate) fn is_draining(&self) -> bool {
+        self.is_draining.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn dismiss_reconnect_notice(&mut self) {
+        self.reconnect_notice = None;
+    }
+
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.show_settings = false;
         self.show_quit_confirm = false;
         self.show_bonsai_modal = false;
+    }
+
+    pub fn set_draining_for_tests(&mut self, draining: bool) {
+        self.is_draining
+            .store(draining, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn close_code_for_tests(&self) -> u16 {
+        self.requested_close_code
     }
 
     /// Resolves which room the dashboard's chat card should display, given
@@ -638,6 +680,11 @@ impl App {
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        let reconnect_notice = match config.reconnect_reason {
+            Some(TUNNEL_CLOSE_RECONNECT_REQUESTED) => Some(ReconnectNoticeKind::Updated),
+            Some(TUNNEL_CLOSE_ABNORMAL) => Some(ReconnectNoticeKind::Transport),
+            _ => None,
+        };
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
             ..Profile::default()
@@ -653,6 +700,7 @@ impl App {
         );
         let mut app = Self {
             running: true,
+            requested_close_code: TUNNEL_CLOSE_SESSION_ENDED,
             size: (cols, rows),
             screen: Screen::Dashboard,
             banner: None,
@@ -754,6 +802,7 @@ impl App {
             pending_terminal_commands: Vec::new(),
             last_notify_at: None,
             is_draining: config.is_draining,
+            reconnect_notice,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,

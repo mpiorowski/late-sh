@@ -15,16 +15,17 @@
 //! `ChannelTx` writer; we drop the channel's read half entirely so
 //! russh's internal data queue stays empty and never stalls.
 //!
-//! Reconnect: on a retryable WS close (1000/1001/1006) or a
-//! transient dial error (TCP I/O, HTTP 5xx), we redial with
-//! exponential backoff and a 30-second total budget. Terminal close
-//! codes (4000–4003) and HTTP 4xx responses end the session.
+//! Reconnect: on an abnormal transport drop (1006-equivalent), a
+//! late-private retryable WS close (4100-4199), or a transient dial error
+//! (TCP I/O, HTTP 5xx), we redial with exponential backoff and a
+//! 30-second total budget. Terminal close codes and HTTP 4xx responses end
+//! the session.
 //!
 //! See `devdocs/LATE-CONNECTION-BASTION.md` §4–§5.
 
 use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
-use late_core::tunnel_protocol::{ControlFrame, SshInputEvent};
+use late_core::tunnel_protocol::{ControlFrame, SshInputEvent, TUNNEL_CLOSE_ABNORMAL};
 use russh::Channel;
 use russh::server::Msg;
 use std::pin::Pin;
@@ -129,8 +130,8 @@ fn classify_dial_err(err: &tungstenite::Error) -> DialOutcome {
 enum PumpOutcome {
     /// User-side SSH channel closed (EOF or read error). Done.
     SshClosed,
-    /// WS closed for a reason that warrants reconnecting.
-    Retryable,
+    /// WS closed or transport failed for a reason that warrants reconnecting.
+    Retryable(u16),
     /// WS closed for a reason that means the user's SSH session
     /// should end (banned, kicked, protocol error, …).
     Terminal,
@@ -138,21 +139,18 @@ enum PumpOutcome {
 
 fn classify_close_code(code: u16) -> PumpOutcome {
     // Per devdocs/LATE-CONNECTION-BASTION.md §4 close-codes table.
-    //   1000 — graceful drain (SIGTERM); reconnect.
-    //   1001/1006 — going-away / abnormal; reconnect.
-    //   4000 — backend ended the session (user quit, render error).
-    //   4001/4002/4003 — kicked / banned / protocol error.
-    // Anything in the 4xxx range is a deliberate signal from the
-    // backend to stop; reconnecting would either loop on the same
-    // condition or surprise the user who just quit.
     match code {
-        1000 | 1001 | 1006 => PumpOutcome::Retryable,
-        4000..=4003 => PumpOutcome::Terminal,
+        TUNNEL_CLOSE_ABNORMAL => PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL),
+        4100..=4199 => PumpOutcome::Retryable(code),
         // Conservative default: an unknown code is more likely a
         // misbehaving backend than a transient blip. End the session
         // so we don't retry into a loop on a code we don't understand.
         _ => PumpOutcome::Terminal,
     }
+}
+
+fn suppress_plaintext_reconnect_message(reason: Option<u16>) -> bool {
+    matches!(reason, Some(4100..=4199))
 }
 
 /// Exponential backoff bounded by a wall-clock budget.
@@ -197,8 +195,8 @@ impl ReconnectBackoff {
 /// `ws_url` is the full backend URL (e.g.
 /// `ws://service-ssh-internal:4001/tunnel`). `secret` is the value
 /// for `X-Late-Secret`. `ctx` carries the per-session handshake fields;
-/// `ctx.session_id` is reused across redials, and `ctx.reconnect` is
-/// flipped to `true` on every dial after the first.
+/// `ctx.session_id` is reused across redials, and `ctx.reconnect_reason`
+/// is set to the close code that triggered each redial.
 pub async fn run_session(
     channel: Channel<Msg>,
     ws_url: String,
@@ -252,7 +250,7 @@ pub async fn run_session(
                     tracing::info!(
                         session_id = %session_id,
                         status = %response.status(),
-                        reconnect = ctx.reconnect,
+                        reconnect_reason = ?ctx.reconnect_reason,
                         "tunnel ws upgraded"
                     );
                     break 'dial ws.split();
@@ -272,7 +270,8 @@ pub async fn run_session(
                         // but only for *re*dials, not for the initial
                         // dial (where there's no prior TUI to clear
                         // and no continuity to explain).
-                        if is_redial {
+                        if is_redial && !suppress_plaintext_reconnect_message(ctx.reconnect_reason)
+                        {
                             let elapsed = backoff.started.elapsed();
                             if !wrote_initial_message && elapsed >= INITIAL_MESSAGE_DELAY {
                                 let payload = format!("{TERMINAL_RESET}{RECONNECTING_MSG}");
@@ -303,7 +302,6 @@ pub async fn run_session(
                             "tunnel dial retryable; sleeping"
                         );
                         tokio::time::sleep(delay).await;
-                        ctx.reconnect = true;
                     }
                 },
             }
@@ -338,7 +336,7 @@ pub async fn run_session(
                                 .await
                             {
                                 tracing::debug!(error = ?e, session_id = %session_id, "ws send (binary) failed; treating as retryable");
-                                break PumpOutcome::Retryable;
+                                break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
                             }
                         }
                         SshInputEvent::Resize { cols, rows } => {
@@ -356,7 +354,7 @@ pub async fn run_session(
                             };
                             if let Err(e) = ws_sink.send(WsMessage::Text(frame.into())).await {
                                 tracing::debug!(error = ?e, session_id = %session_id, "ws send (resize) failed; treating as retryable");
-                                break PumpOutcome::Retryable;
+                                break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
                             }
                         }
                     }
@@ -374,7 +372,7 @@ pub async fn run_session(
                         None => {
                             tracing::debug!(session_id = %session_id, "ws stream ended without close frame");
                             // 1006-equivalent: transport dropped us.
-                            break PumpOutcome::Retryable;
+                            break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
                         }
                         Some(Ok(WsMessage::Binary(bytes))) => {
                             if let Err(e) = ssh_writer.write_all(&bytes).await {
@@ -386,8 +384,7 @@ pub async fn run_session(
                             let code = frame.as_ref().map(|f| u16::from(f.code));
                             let outcome = match code {
                                 Some(c) => classify_close_code(c),
-                                // Bare close without a code: treat as 1000-equivalent.
-                                None => PumpOutcome::Retryable,
+                                None => PumpOutcome::Terminal,
                             };
                             tracing::info!(
                                 session_id = %session_id,
@@ -408,7 +405,7 @@ pub async fn run_session(
                         }
                         Some(Err(e)) => {
                             tracing::debug!(error = ?e, session_id = %session_id, "ws recv error; treating as retryable");
-                            break PumpOutcome::Retryable;
+                            break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
                         }
                     }
                 }
@@ -421,11 +418,11 @@ pub async fn run_session(
                             silence_ms = last_inbound.elapsed().as_millis() as u64,
                             "tunnel ws silent past threshold; treating as dead backend"
                         );
-                        break PumpOutcome::Retryable;
+                        break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
                     }
                     if let Err(e) = ws_sink.send(WsMessage::Ping(Default::default())).await {
                         tracing::debug!(error = ?e, session_id = %session_id, "ws send (ping) failed; treating as retryable");
-                        break PumpOutcome::Retryable;
+                        break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
                     }
                 }
             }
@@ -443,8 +440,8 @@ pub async fn run_session(
             PumpOutcome::Terminal => {
                 return finish(ssh_writer, &session_id, "ws terminal close").await;
             }
-            PumpOutcome::Retryable => {
-                ctx.reconnect = true;
+            PumpOutcome::Retryable(reason) => {
+                ctx.reconnect_reason = Some(reason);
                 is_redial = true;
                 continue 'session;
             }
@@ -518,12 +515,16 @@ mod tests {
 
     #[test]
     fn close_code_classifier_matches_design() {
-        // Retryable: graceful or transport.
-        assert_eq!(classify_close_code(1000), PumpOutcome::Retryable);
-        assert_eq!(classify_close_code(1001), PumpOutcome::Retryable);
-        assert_eq!(classify_close_code(1006), PumpOutcome::Retryable);
+        assert_eq!(
+            classify_close_code(TUNNEL_CLOSE_ABNORMAL),
+            PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL)
+        );
+        assert_eq!(classify_close_code(4100), PumpOutcome::Retryable(4100));
+        assert_eq!(classify_close_code(4199), PumpOutcome::Retryable(4199));
 
-        // Terminal: backend told us to give up.
+        // Terminal: backend told us to give up, or emitted an unknown signal.
+        assert_eq!(classify_close_code(1000), PumpOutcome::Terminal);
+        assert_eq!(classify_close_code(1001), PumpOutcome::Terminal);
         assert_eq!(classify_close_code(4000), PumpOutcome::Terminal);
         assert_eq!(classify_close_code(4001), PumpOutcome::Terminal);
         assert_eq!(classify_close_code(4002), PumpOutcome::Terminal);

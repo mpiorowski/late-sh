@@ -22,13 +22,6 @@ use tokio::time::timeout;
 /// `clean_disconnect` used inline before the seam refactor.
 const FRAME_SEND_TIMEOUT: Duration = Duration::from_millis(50);
 
-/// WS close code emitted when the backend ends a session itself —
-/// user-initiated quit (`q,q`) or a render-loop error. The bastion
-/// classifies this as terminal and stops reconnecting. Distinct from
-/// 1000 (used by `/tunnel`'s drain path), which IS retryable. See
-/// `devdocs/LATE-CONNECTION-BASTION.md` §4 close-codes table.
-const CLOSE_SESSION_ENDED: u16 = 4000;
-
 /// Transport surface used by `run_session`'s render loop.
 ///
 /// Implementors handle a single user session. `send_frame` is called once
@@ -42,7 +35,7 @@ pub trait FrameSink: Send + Sync {
     fn send_frame(&self, bytes: Vec<u8>) -> impl Future<Output = anyhow::Result<bool>> + Send;
 
     /// Best-effort EOF + close. Never errors; the session is going away.
-    fn eof_close(&self) -> impl Future<Output = ()> + Send;
+    fn eof_close(&self, close_code: u16) -> impl Future<Output = ()> + Send;
 }
 
 /// `FrameSink` over a russh server `Handle` + `ChannelId` pair. Owns its
@@ -69,7 +62,7 @@ impl FrameSink for RusshFrameSink {
         }
     }
 
-    async fn eof_close(&self) {
+    async fn eof_close(&self, _close_code: u16) {
         let _ = self.handle.eof(self.channel_id).await;
         let _ = self.handle.close(self.channel_id).await;
     }
@@ -108,9 +101,9 @@ impl FrameSink for WsFrameSink {
         }
     }
 
-    async fn eof_close(&self) {
+    async fn eof_close(&self, close_code: u16) {
         let frame = CloseFrame {
-            code: CLOSE_SESSION_ENDED,
+            code: close_code,
             reason: "session ended".into(),
         };
         let _ = self.tx.send(Message::Close(Some(frame))).await;
@@ -120,6 +113,9 @@ impl FrameSink for WsFrameSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use late_core::tunnel_protocol::{
+        TUNNEL_CLOSE_RECONNECT_REQUESTED, TUNNEL_CLOSE_SESSION_ENDED,
+    };
 
     #[tokio::test]
     async fn ws_sink_sends_binary_frame() {
@@ -159,10 +155,27 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(2);
         let sink = WsFrameSink::new(tx);
 
-        sink.eof_close().await;
+        sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED).await;
 
         match rx.recv().await {
-            Some(Message::Close(Some(frame))) => assert_eq!(frame.code, CLOSE_SESSION_ENDED),
+            Some(Message::Close(Some(frame))) => {
+                assert_eq!(frame.code, TUNNEL_CLOSE_SESSION_ENDED);
+            }
+            other => panic!("expected Close, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ws_sink_eof_close_uses_requested_code() {
+        let (tx, mut rx) = mpsc::channel(2);
+        let sink = WsFrameSink::new(tx);
+
+        sink.eof_close(TUNNEL_CLOSE_RECONNECT_REQUESTED).await;
+
+        match rx.recv().await {
+            Some(Message::Close(Some(frame))) => {
+                assert_eq!(frame.code, TUNNEL_CLOSE_RECONNECT_REQUESTED);
+            }
             other => panic!("expected Close, got {other:?}"),
         }
     }
