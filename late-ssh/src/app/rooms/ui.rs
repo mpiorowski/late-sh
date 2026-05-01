@@ -756,9 +756,28 @@ fn draw_active_room(
     .split(area);
 
     draw_game_area(frame, layout[0], room, blackjack_state, usernames);
+    draw_active_room_spacer(frame, layout[1]);
     if let Some(chat) = active_room_chat {
         crate::app::chat::ui::draw_embedded_room_chat(frame, layout[2], chat);
     }
+}
+
+fn draw_active_room_spacer(frame: &mut Frame, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("`", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(
+                " toggle dashboard/game",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]))
+        .alignment(Alignment::Right),
+        area,
+    );
 }
 
 fn preferred_game_height(room: &RoomListItem, area: Rect) -> u16 {

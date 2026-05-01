@@ -1,5 +1,5 @@
 use crate::app::{
-    common::primitives::Banner,
+    common::primitives::{Banner, Screen},
     input::{MouseEventKind, ParsedInput, sanitize_paste_markers},
     rooms::{
         blackjack::settings::{BlackjackTableSettings, PACE_OPTIONS, STAKE_OPTIONS},
@@ -486,6 +486,7 @@ pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListIt
             app.chip_balance,
         ));
     }
+    app.rooms_last_active_room_id = Some(room.id);
     app.rooms_active_room = Some(room);
     app.rooms_add_form_open = false;
     true
@@ -498,6 +499,11 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
     let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
     touch_active_room_activity(app, game_kind);
+
+    if byte == b'`' {
+        app.set_screen(Screen::Dashboard);
+        return true;
+    }
 
     if byte == 0x1B
         && app

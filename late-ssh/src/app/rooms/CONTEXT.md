@@ -67,6 +67,7 @@
 - The strip takes the first three Blackjack rooms from `RoomsSnapshot`.
 - Slot keying is a two-key prefix: `b1`, `b2`, `b3`. The input path only arms `b` when room showcases are enabled and at least one Blackjack room exists.
 - `dashboard/input.rs::enter_blackjack_room_slot` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and Blackjack runtime setup are shared with the directory path.
+- Backtick toggles Dashboard <-> last active game room. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves it against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
 
 ## Blackjack Table Runtime
 - `BlackjackTableManager` is process-local. It lazily maps each entered `GameRoom.id` to a `BlackjackService`.
@@ -80,11 +81,13 @@
 - Seated players build a shared visible stake through service-owned `SeatState.stake_chips`.
 - Chip selection is client-local (`selected_chip_index`). Thrown stake chips are service-owned and appear in every subscriber's `BlackjackSeat.stake_chips`.
 - Betting keys: `[`/`a` selects previous chip, `]`/`d` selects next chip, Space throws the selected chip, Backspace pulls one chip, `c`/Ctrl+W clears, `Enter`/`s` submits.
+- Player action keys: `h`/Space hits, `s` stands, and `d`/`D` doubles down when eligible.
 - Table stake settings are `10`, `50`, `100`, or `500` chips. `min_bet` is the stake and `max_bet` is `stake * 10`.
 - Table pace settings (`Quick`, `Standard`, `Chill`) control the player action timeout only: 2m, 5m, or 10m.
 - The first confirmed bet starts a fixed 30s betting cap (`BETTING_LOCK_CAP_SECS`). It does not restart on later bets. If all seated players have locked bets, the round deals immediately.
 - Pending async chip debits can delay auto-deal; the service waits until no pending bets remain.
-- During `PlayerTurn`, all betting seats can hit/stand their own hands in parallel. Dealer resolution runs after every unresolved hand has stood, busted, or naturally settled.
+- During `PlayerTurn`, all betting seats can hit/stand/double their own hands in parallel. Dealer resolution runs after every unresolved hand has stood, busted, or naturally settled.
+- Double down is allowed only on an active two-card hand with a locked bet and enough chip balance for one extra wager equal to the original bet. The service marks the seat `SeatPhase::ActionPending` while the extra chip debit is pending, then doubles the recorded bet, draws exactly one card, and auto-stands or bust-settles the hand. Double-down settlement uses the doubled bet amount.
 - Action timeout auto-stands remaining hands when the pace-specific deadline expires, then removes those non-acting seats after settlement.
 - A seated player who misses 3 deals without a locked bet is removed from the table.
 - A seated player who sends no active-room input for 5 minutes is removed from the table; active-room keys, arrows, and scrolls refresh this room timer while seated.
