@@ -1,5 +1,6 @@
+use crate::app::state::DashboardGameToggleTarget;
 use crate::app::{
-    common::primitives::Banner,
+    common::primitives::{Banner, Screen},
     input::{MouseEventKind, ParsedInput, sanitize_paste_markers},
     rooms::{
         blackjack::settings::{BlackjackTableSettings, PACE_OPTIONS, STAKE_OPTIONS},
@@ -477,18 +478,30 @@ pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListIt
     app.chat.request_room_tail(room.chat_room_id);
     if matches!(room.game_kind, crate::app::rooms::svc::GameKind::Blackjack) {
         app.rooms_service.touch_room_task(room.id);
-        let svc = app
-            .blackjack_table_manager
-            .get_or_create(room.id, room.blackjack_settings.clone());
-        app.blackjack_state = Some(crate::app::rooms::blackjack::state::State::new(
-            svc,
-            app.user_id,
-            app.chip_balance,
-        ));
+        if !can_reuse_blackjack_state(app, room.id) {
+            let svc = app
+                .blackjack_table_manager
+                .get_or_create(room.id, room.blackjack_settings.clone());
+            app.blackjack_state = Some(crate::app::rooms::blackjack::state::State::new(
+                svc,
+                app.user_id,
+                app.chip_balance,
+            ));
+        }
     }
+    app.rooms_last_active_room_id = Some(room.id);
+    app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
     app.rooms_active_room = Some(room);
     app.rooms_add_form_open = false;
     true
+}
+
+fn can_reuse_blackjack_state(app: &App, room_id: uuid::Uuid) -> bool {
+    app.blackjack_state.is_some()
+        && app
+            .rooms_active_room
+            .as_ref()
+            .is_some_and(|active_room| active_room.id == room_id)
 }
 
 fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
@@ -498,6 +511,12 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
     let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
     touch_active_room_activity(app, game_kind);
+
+    if byte == b'`' {
+        app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
+        app.set_screen(Screen::Dashboard);
+        return true;
+    }
 
     if byte == 0x1B
         && app

@@ -627,6 +627,7 @@ fn seat_notice_label(seat: &BlackjackSeat) -> Option<(&'static str, ratatui::sty
         SeatAction::Sit => ("SIT", theme::SUCCESS()),
         SeatAction::Bet => ("BET", theme::AMBER()),
         SeatAction::Hit => ("HIT", theme::AMBER()),
+        SeatAction::Double => ("DOUBLE", theme::AMBER()),
         SeatAction::Stand => ("STAND", theme::TEXT_BRIGHT()),
         SeatAction::MissedDeal => ("MISSED", theme::TEXT_DIM()),
         SeatAction::MissedAction => ("TIMEOUT", theme::ERROR()),
@@ -644,7 +645,7 @@ fn seat_notice_subtitle(seat: &BlackjackSeat) -> Option<String> {
 
     match seat.last_action? {
         SeatAction::Bet => seat.bet_amount.map(|bet| format!("bet {bet}")),
-        SeatAction::Hit | SeatAction::Stand => {
+        SeatAction::Hit | SeatAction::Double | SeatAction::Stand => {
             seat.score.map(|score| format!("tot {}", score.total))
         }
         SeatAction::MissedDeal => Some("no bet".to_string()),
@@ -785,6 +786,10 @@ fn seat_status_line(seat: &BlackjackSeat, phase: Phase, is_you: bool) -> Line<'s
                     .add_modifier(Modifier::BOLD),
             ))
         }
+        (Some(_), _, SeatPhase::ActionPending) => Line::from(Span::styled(
+            "doubling…",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
         (Some(_), Some(score), SeatPhase::Stood) => Line::from(Span::styled(
             format!("stood {}", score.total),
             Style::default().fg(theme::TEXT()),
@@ -1022,12 +1027,13 @@ fn key_line(snapshot: &BlackjackSnapshot, is_seated: bool, is_active: bool) -> L
     match snapshot.phase {
         Phase::Betting => key_hint(
             &format!("[ ] chip {}", selected_chip_amount(snapshot)),
-            "· Space throw · Backspace pull · Enter/S lock · L leave · Esc back",
+            " · Space throw · Backspace pull · Enter/S lock · L leave · Esc back",
         ),
         Phase::BetPending => key_hint("Esc back", ""),
-        Phase::PlayerTurn if is_active => {
-            key_hint("H/Space hit · S stand · L leave · Esc auto-stand", "")
-        }
+        Phase::PlayerTurn if is_active => key_hint(
+            "H/Space hit · D double · S stand · L leave · Esc auto-stand",
+            "",
+        ),
         Phase::PlayerTurn => key_hint("watching others · L leave seat · Esc back", ""),
         Phase::DealerTurn => key_hint("dealer resolving…", ""),
         Phase::Settling => key_hint("Space/Enter next hand · L leave · Esc back", ""),
@@ -1144,6 +1150,7 @@ fn render_seat_hands_compact(
                     Some(SeatAction::Sit) => " sit",
                     Some(SeatAction::Bet) => " bet",
                     Some(SeatAction::Hit) => " hit",
+                    Some(SeatAction::Double) => " double",
                     Some(SeatAction::Stand) => " stand",
                     Some(SeatAction::MissedDeal) => " missed",
                     Some(SeatAction::MissedAction) => " timeout",

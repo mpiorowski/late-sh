@@ -1551,6 +1551,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
+            app.rooms_active_room = None;
             app.set_screen(Screen::Rooms);
             true
         }
