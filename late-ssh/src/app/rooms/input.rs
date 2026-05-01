@@ -506,7 +506,7 @@ fn enter_selected_room(app: &mut App) {
 }
 
 pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListItem) -> bool {
-    if !can_enter_room(app.is_admin, app.is_mod) {
+    if !can_enter_room(app.is_admin, app.is_moderator) {
         app.banner = Some(Banner::error("Rooms are locked for now."));
         return false;
     }
@@ -647,8 +647,8 @@ fn can_delete_room(is_admin: bool) -> bool {
     is_admin
 }
 
-fn can_enter_room(is_admin: bool, is_mod: bool) -> bool {
-    let _ = (is_admin, is_mod);
+fn can_enter_room(is_admin: bool, is_moderator: bool) -> bool {
+    let _ = (is_admin, is_moderator);
     true
 }
 
@@ -669,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn room_entry_allows_admins_and_mods() {
+    fn room_entry_allows_all_users() {
         assert!(can_enter_room(true, false));
         assert!(can_enter_room(false, true));
         assert!(can_enter_room(true, true));

@@ -33,8 +33,18 @@ use tokio::sync::{Semaphore, broadcast, watch};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
+pub struct ActiveSession {
+    pub token: String,
+    pub fingerprint: Option<String>,
+    pub peer_ip: Option<IpAddr>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ActiveUser {
     pub username: String,
+    pub fingerprint: Option<String>,
+    pub peer_ip: Option<IpAddr>,
+    pub sessions: Vec<ActiveSession>,
     pub connection_count: usize,
     pub last_login_at: Instant,
 }

@@ -30,6 +30,10 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        for output in self.chat.take_mod_outputs() {
+            self.mod_modal_state
+                .append_result(output.success, output.lines);
+        }
         self.sync_visible_chat_room();
         if self.chat.pending_chat_screen_switch {
             self.chat.pending_chat_screen_switch = false;
@@ -68,8 +72,33 @@ impl App {
                     self.push_browser_frame(viz);
                     updated = true;
                 }
+                SessionMessage::Terminate { reason } => {
+                    tracing::info!(reason, "session terminated by control message");
+                    self.running = false;
+                }
+                SessionMessage::ArtboardBanChanged { banned, expires_at } => {
+                    self.set_artboard_banned(banned, expires_at);
+                    updated = true;
+                }
+                SessionMessage::PermissionsChanged { permissions } => {
+                    self.set_permissions(permissions);
+                    updated = true;
+                }
+                SessionMessage::RoomRemoved {
+                    room_id,
+                    slug,
+                    message,
+                } => {
+                    self.chat.remove_room_for_moderation(room_id);
+                    self.chat.request_list();
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&format!(
+                        "{message}: #{slug}"
+                    )));
+                    updated = true;
+                }
             }
         }
+        self.expire_artboard_ban_if_needed();
 
         if self.screen == Screen::Games
             && self.is_playing_game

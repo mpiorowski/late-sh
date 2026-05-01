@@ -8,7 +8,10 @@ services:
     ports:
       - "${LATE_SSH_PORT}:${LATE_SSH_PORT}"
       - "${LATE_API_PORT}:${LATE_API_PORT}"
-    env_file: .env
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
     volumes:
       - .:/app
       - cargo-registry-ssh:/usr/local/cargo/registry
@@ -30,7 +33,10 @@ services:
     container_name: ${INSTANCE}-web
     ports:
       - "${LATE_WEB_PORT}:${LATE_WEB_PORT}"
-    env_file: .env
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
     volumes:
       - .:/app
       - cargo-registry-web:/usr/local/cargo/registry

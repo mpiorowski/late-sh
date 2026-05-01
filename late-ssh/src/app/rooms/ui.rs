@@ -33,7 +33,7 @@ pub struct RoomsPageView<'a> {
     pub active_room_game: Option<&'a dyn ActiveRoomBackend>,
     pub room_game_registry: &'a RoomGameRegistry,
     pub is_admin: bool,
-    pub is_mod: bool,
+    pub is_moderator: bool,
     pub filter: RoomsFilter,
     pub search_active: bool,
     pub search_query: &'a str,
@@ -623,7 +623,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
         spans.push(hint_pair("d", "delete"));
     }
 
-    if view.is_admin || view.is_mod {
+    if view.is_admin || view.is_moderator {
         spans.push(Span::raw(" · "));
         spans.push(hint_pair("Esc", "back"));
     }

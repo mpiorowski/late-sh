@@ -1,7 +1,11 @@
 use anyhow::{Context, Result};
 use getrandom::SysRng;
 use late_core::MutexRecover;
-use late_core::models::user::{User, UserParams, extract_theme_id};
+use late_core::models::{
+    artboard_ban::ArtboardBan,
+    server_ban::ServerBan,
+    user::{User, UserParams, extract_theme_id},
+};
 use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::*;
@@ -24,8 +28,9 @@ use crate::app::{
     common::theme,
     state::{App, SessionConfig},
 };
+use crate::authz::Permissions as AuthzPermissions;
 use crate::metrics;
-use crate::state::{ActivityEvent, State};
+use crate::state::{ActiveSession, ActivityEvent, State};
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 const PROXY_V1_MAX_LEN: usize = 108;
@@ -410,6 +415,9 @@ impl Drop for ClientHandler {
             let mut active_users = self.state.active_users.lock_recover();
 
             if let Some(active) = active_users.get_mut(&user.id) {
+                if let Some(token) = self.session_token.as_ref() {
+                    active.sessions.retain(|session| session.token != *token);
+                }
                 if active.connection_count <= 1 {
                     active_users.remove(&user.id);
                 } else {
@@ -451,6 +459,28 @@ impl ClientHandler {
         self.session_rx = Some(session_rx);
         Ok(session_token)
     }
+
+    fn track_active_session_token(&self, session_token: &str) {
+        let Some(user) = self.user.as_ref() else {
+            return;
+        };
+        let mut active_users = self.state.active_users.lock_recover();
+        let Some(active) = active_users.get_mut(&user.id) else {
+            return;
+        };
+        if active
+            .sessions
+            .iter()
+            .any(|session| session.token == session_token)
+        {
+            return;
+        }
+        active.sessions.push(ActiveSession {
+            token: session_token.to_string(),
+            fingerprint: Some(user.fingerprint.clone()),
+            peer_ip: self.peer_ip,
+        });
+    }
 }
 
 impl russh::server::Handler for ClientHandler {
@@ -473,6 +503,54 @@ impl russh::server::Handler for ClientHandler {
             return Ok(reject_publickey_only());
         }
         let fingerprint = key.fingerprint(keys::HashAlg::Sha256).to_string();
+        let client = match self.state.db.get().await {
+            Ok(client) => client,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+                return Ok(reject_publickey_only());
+            }
+        };
+        match has_active_server_ban_before_user_lookup(&client, &fingerprint, self.peer_ip).await {
+            Ok(true) => {
+                tracing::warn!(
+                    fingerprint = %fingerprint,
+                    peer_ip = ?self.peer_ip,
+                    "active server ban rejected SSH auth"
+                );
+                return Ok(reject_publickey_only());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+                return Ok(reject_publickey_only());
+            }
+        }
+        match User::find_by_fingerprint(&client, &fingerprint).await {
+            Ok(Some(existing_user)) => {
+                match ServerBan::find_active_for_user_id(&client, existing_user.id).await {
+                    Ok(Some(_)) => {
+                        tracing::warn!(
+                            username = %existing_user.username,
+                            fingerprint = %fingerprint,
+                            peer_ip = ?self.peer_ip,
+                            "active server ban rejected SSH auth"
+                        );
+                        return Ok(reject_publickey_only());
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+                        return Ok(reject_publickey_only());
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to look up user before ban check, rejecting auth");
+                return Ok(reject_publickey_only());
+            }
+        }
+        drop(client);
         let (user, is_new_user) =
             match crate::ssh::ensure_user(&self.state, login_username, &fingerprint).await {
                 Ok(pair) => pair,
@@ -488,12 +566,17 @@ impl russh::server::Handler for ClientHandler {
             if let Some(active) = active_users.get_mut(&user.id) {
                 active.connection_count += 1;
                 active.username = user.username.clone();
+                active.fingerprint = Some(fingerprint.clone());
+                active.peer_ip = self.peer_ip;
                 active.last_login_at = std::time::Instant::now();
             } else {
                 active_users.insert(
                     user.id,
                     crate::state::ActiveUser {
                         username: user.username.clone(),
+                        fingerprint: Some(fingerprint.clone()),
+                        peer_ip: self.peer_ip,
+                        sessions: Vec::new(),
                         connection_count: 1,
                         last_login_at: std::time::Instant::now(),
                     },
@@ -570,6 +653,7 @@ impl russh::server::Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         tracing::debug!(term, col_width, row_height, "pty requested");
         let session_token = self.ensure_cli_session().await?;
+        self.track_active_session_token(&session_token);
         let session_rx = self
             .session_rx
             .take()
@@ -693,6 +777,19 @@ impl russh::server::Handler for ClientHandler {
                 0
             }
         };
+        let artboard_ban = match self.state.db.get().await {
+            Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
+                Ok(ban) => ban,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to check artboard ban status");
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to get db client for artboard ban check");
+                None
+            }
+        };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
         let app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
@@ -746,8 +843,12 @@ impl russh::server::Handler for ClientHandler {
             active_users: Some(self.state.active_users.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             user_id,
-            is_admin: user.is_admin || self.state.config.force_admin,
-            is_mod: user.is_mod,
+            permissions: AuthzPermissions::new(
+                user.is_admin || self.state.config.force_admin,
+                user.is_moderator,
+            ),
+            artboard_banned: artboard_ban.is_some(),
+            artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
             // Voting
             my_vote,
@@ -1230,6 +1331,52 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
     Ok((user, is_new_user))
 }
 
+#[cfg(test)]
+async fn has_active_server_ban(
+    client: &tokio_postgres::Client,
+    user: &User,
+    fingerprint: &str,
+    peer_ip: Option<IpAddr>,
+) -> Result<bool> {
+    if ServerBan::find_active_for_user_id(client, user.id)
+        .await?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    if ServerBan::find_active_for_fingerprint(client, fingerprint)
+        .await?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    let Some(peer_ip) = peer_ip else {
+        return Ok(false);
+    };
+    Ok(
+        ServerBan::find_active_for_ip_address(client, &peer_ip.to_string())
+            .await?
+            .is_some(),
+    )
+}
+
+async fn has_active_server_ban_before_user_lookup(
+    client: &tokio_postgres::Client,
+    fingerprint: &str,
+    peer_ip: Option<IpAddr>,
+) -> Result<bool> {
+    if let Some(peer_ip) = peer_ip
+        && ServerBan::find_active_for_ip_address(client, &peer_ip.to_string())
+            .await?
+            .is_some()
+    {
+        return Ok(true);
+    }
+    Ok(ServerBan::find_active_for_fingerprint(client, fingerprint)
+        .await?
+        .is_some())
+}
+
 fn late_ssh_theme_id(settings: &Value) -> String {
     extract_theme_id(settings).unwrap_or_else(|| theme::DEFAULT_ID.to_string())
 }
@@ -1244,6 +1391,10 @@ fn reject_publickey_only() -> Auth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use late_core::{
+        models::server_ban::{ServerBan, ServerBanActivation},
+        test_utils::{create_test_user, test_db},
+    };
     use std::str::FromStr;
 
     #[test]
@@ -1261,6 +1412,105 @@ mod tests {
             }
             _ => panic!("expected reject auth"),
         }
+    }
+
+    #[tokio::test]
+    async fn has_active_server_ban_matches_user_fingerprint_and_ip() {
+        let test_db = test_db().await;
+        let client = test_db.db.get().await.expect("db client");
+        let actor = create_test_user(&test_db.db, "ban_actor").await;
+        let target = create_test_user(&test_db.db, "ban_target").await;
+        let fingerprint_target = create_test_user(&test_db.db, "ban_fp_target").await;
+        let ip_target = create_test_user(&test_db.db, "ban_ip_target").await;
+        let banned_ip = IpAddr::from_str("203.0.113.10").expect("test ip");
+
+        assert!(
+            !has_active_server_ban(&client, &target, &target.fingerprint, None)
+                .await
+                .expect("ban lookup")
+        );
+
+        ServerBan::activate(
+            &client,
+            ServerBanActivation {
+                target_user_id: target.id,
+                fingerprint: Some(&target.fingerprint),
+                ip_address: None,
+                snapshot_username: Some(&target.username),
+                actor_user_id: actor.id,
+                reason: "test ban",
+                expires_at: None,
+            },
+        )
+        .await
+        .expect("activate server ban");
+
+        assert!(
+            has_active_server_ban(&client, &target, &target.fingerprint, None)
+                .await
+                .expect("ban lookup")
+        );
+
+        assert!(
+            !has_active_server_ban(
+                &client,
+                &fingerprint_target,
+                &fingerprint_target.fingerprint,
+                None
+            )
+            .await
+            .expect("pre-fingerprint ban lookup")
+        );
+        ServerBan::activate(
+            &client,
+            ServerBanActivation {
+                target_user_id: fingerprint_target.id,
+                fingerprint: Some(&fingerprint_target.fingerprint),
+                ip_address: None,
+                snapshot_username: Some(&fingerprint_target.username),
+                actor_user_id: actor.id,
+                reason: "test fingerprint ban",
+                expires_at: None,
+            },
+        )
+        .await
+        .expect("activate fingerprint ban");
+        assert!(
+            has_active_server_ban(
+                &client,
+                &fingerprint_target,
+                &fingerprint_target.fingerprint,
+                None
+            )
+            .await
+            .expect("fingerprint ban lookup")
+        );
+
+        assert!(
+            !has_active_server_ban(&client, &ip_target, &ip_target.fingerprint, Some(banned_ip))
+                .await
+                .expect("pre-ip ban lookup")
+        );
+        let banned_ip_text = banned_ip.to_string();
+        ServerBan::activate(
+            &client,
+            ServerBanActivation {
+                target_user_id: ip_target.id,
+                fingerprint: Some(&ip_target.fingerprint),
+                ip_address: Some(&banned_ip_text),
+                snapshot_username: Some(&ip_target.username),
+                actor_user_id: actor.id,
+                reason: "test ip ban",
+                expires_at: None,
+            },
+        )
+        .await
+        .expect("activate ip ban");
+        assert!(
+            has_active_server_ban(&client, &ip_target, &ip_target.fingerprint, Some(banned_ip))
+                .await
+                .expect("ip ban lookup")
+        );
     }
 
     #[test]
