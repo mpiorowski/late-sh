@@ -8,7 +8,7 @@ CARGO_TARGET_DIR ?= /app/target
 
 # --- SSH ---
 LATE_FORCE_ADMIN ?= 1
-LATE_SSH_PORT ?= 2225                                       # SSH server listen port
+LATE_SSH_PORT ?= 2222                                       # SSH server listen port
 LATE_API_PORT ?= 4000                                       # HTTP API listen port
 LATE_SSH_OPEN ?= 1                                          # Allow connections without auth (1=open, 0=require key)
 LATE_SSH_KEY_PATH ?= /app/server_key                        # Path to Ed25519 host key inside container

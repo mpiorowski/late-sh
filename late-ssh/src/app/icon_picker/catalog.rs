@@ -42,6 +42,9 @@ const COMMON_EMOJI: &[&str] = &[
     "🚀", "🤔", "🫠", "🌱", "🤖", "🔧", "💎", "⭐", "🎯",
 ];
 
+
+
+// TODO: use kaomoji.json instead of hardcoding it here
 const COMMON_KAOMOJI: &[(&str, &str)] = &[
     ("(* ^ ω ^)", "happy smile"),
     ("*⸜( •ᴗ• )⸝*", "cheer yay"),
