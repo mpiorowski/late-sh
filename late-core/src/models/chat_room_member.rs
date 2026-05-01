@@ -61,6 +61,24 @@ impl ChatRoomMember {
         Ok(row.get(0))
     }
 
+    pub async fn join_user_by_fingerprint(
+        client: &Client,
+        room_id: Uuid,
+        fingerprint: &str,
+    ) -> Result<u64> {
+        let count = client
+            .execute(
+                "INSERT INTO chat_room_members (room_id, user_id)
+                 SELECT $1, id
+                 FROM users
+                 WHERE fingerprint = $2
+                 ON CONFLICT (room_id, user_id) DO NOTHING",
+                &[&room_id, &fingerprint],
+            )
+            .await?;
+        Ok(count)
+    }
+
     pub async fn mark_read_now(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<u64> {
         let count = client
             .execute(

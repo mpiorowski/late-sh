@@ -626,7 +626,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
+    if matches!(ctx.screen, Screen::Chat | Screen::Dashboard | Screen::Rooms)
+        && app.chat.has_overlay()
+    {
         handle_overlay_input(app, &event);
         return;
     }
@@ -986,13 +988,15 @@ fn dispatch_escape(app: &mut App) {
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
-    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+    if matches!(ctx.screen, Screen::Chat | Screen::Dashboard | Screen::Rooms)
         && app.chat.is_reaction_leader_active()
     {
         app.chat.cancel_reaction_leader();
         return;
     }
-    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
+    if matches!(ctx.screen, Screen::Chat | Screen::Dashboard | Screen::Rooms)
+        && app.chat.has_overlay()
+    {
         app.chat.close_overlay();
         return;
     }
@@ -1109,6 +1113,11 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
             }
         }
         Screen::Chat => chat::input::handle_scroll(app, delta),
+        Screen::Rooms => {
+            if let Some(room) = app.rooms_active_room.as_ref() {
+                chat::input::handle_scroll_in_room(app, room.chat_room_id, delta);
+            }
+        }
         Screen::Artboard => {}
         _ => {}
     }
@@ -1422,9 +1431,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    // When the dashboard's `g` favorite-jump prefix is armed, digits 1-9
-    // belong to the jump (`g3` → favorite slot 3), not the global screen
+    // When a dashboard two-key prefix is armed, slot digits belong to the
+    // prefix (`g3` favorite jump, `b3` blackjack room), not the global screen
     // switcher. Let them fall through to dashboard::input::handle_key.
+    if ctx.screen == Screen::Dashboard
+        && app.dashboard_blackjack_prefix_armed
+        && dashboard::input::blackjack_slot_for_key(byte).is_some()
+    {
+        return false;
+    }
+
     if (b'1'..=b'9').contains(&byte)
         && ctx.screen == Screen::Dashboard
         && app.dashboard_g_prefix_armed
@@ -1584,8 +1600,8 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
 
 fn try_open_icon_picker(app: &mut App) {
     let ctx = InputContext::from_app(app);
-    // Only the chat composer (dashboard and chat screens) can receive icons.
-    if ctx.screen != Screen::Dashboard && ctx.screen != Screen::Chat {
+    // Only chat composers can receive icons.
+    if !matches!(ctx.screen, Screen::Dashboard | Screen::Chat | Screen::Rooms) {
         return;
     }
     if !ctx.chat_composing {
@@ -1596,6 +1612,10 @@ fn try_open_icon_picker(app: &mut App) {
         if ctx.screen == Screen::Dashboard {
             if let Some(room_id) = app.dashboard_active_room_id() {
                 app.chat.start_composing_in_room(room_id);
+            }
+        } else if ctx.screen == Screen::Rooms {
+            if let Some(room) = app.rooms_active_room.as_ref() {
+                app.chat.start_composing_in_room(room.chat_room_id);
             }
         } else {
             app.chat.start_composing();

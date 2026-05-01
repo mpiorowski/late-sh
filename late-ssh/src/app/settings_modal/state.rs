@@ -44,6 +44,7 @@ pub enum Row {
     Theme,
     BackgroundColor,
     DashboardHeader,
+    DashboardRoomShowcases,
     RightSidebar,
     GamesSidebar,
     Country,
@@ -57,7 +58,7 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 18] = [
+    pub const ALL: [Row; 19] = [
         Row::Username,
         Row::Ide,
         Row::Terminal,
@@ -66,6 +67,7 @@ impl Row {
         Row::Theme,
         Row::BackgroundColor,
         Row::DashboardHeader,
+        Row::DashboardRoomShowcases,
         Row::RightSidebar,
         Row::GamesSidebar,
         Row::Country,
@@ -1064,6 +1066,10 @@ impl SettingsModalState {
                 self.draft.show_dashboard_header ^= true;
                 true
             }
+            Row::DashboardRoomShowcases => {
+                self.draft.show_dashboard_room_showcases ^= true;
+                true
+            }
             Row::RightSidebar => {
                 self.draft.show_right_sidebar ^= true;
                 true
@@ -1131,6 +1137,7 @@ impl SettingsModalState {
                 ),
                 enable_background_color: self.draft.enable_background_color,
                 show_dashboard_header: self.draft.show_dashboard_header,
+                show_dashboard_room_showcases: self.draft.show_dashboard_room_showcases,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 show_games_sidebar: self.draft.show_games_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,

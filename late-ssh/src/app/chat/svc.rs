@@ -497,34 +497,21 @@ impl ChatService {
             return Ok((HashMap::new(), HashMap::new()));
         }
 
-        let rows = client
-            .query(
-                "SELECT u.id,
-                        u.username,
-                        t.is_alive,
-                        t.growth_points
-                 FROM users u
-                 LEFT JOIN bonsai_trees t ON t.user_id = u.id
-                 WHERE u.id = ANY($1)",
-                &[&user_ids],
-            )
-            .await?;
+        let metadata = User::list_chat_author_metadata(client, user_ids).await?;
 
-        let mut usernames = HashMap::with_capacity(rows.len());
+        let mut usernames = HashMap::with_capacity(metadata.len());
         let mut bonsai_glyphs = HashMap::new();
-        for row in rows {
-            let user_id: Uuid = row.get("id");
-            let username: String = row.get("username");
-            if !username.trim().is_empty() {
-                usernames.insert(user_id, username);
+        for item in metadata {
+            if !item.username.trim().is_empty() {
+                usernames.insert(item.user_id, item.username);
             }
 
-            let is_alive: Option<bool> = row.get("is_alive");
-            let growth_points: Option<i32> = row.get("growth_points");
-            if let (Some(is_alive), Some(growth_points)) = (is_alive, growth_points) {
+            if let (Some(is_alive), Some(growth_points)) =
+                (item.bonsai_is_alive, item.bonsai_growth_points)
+            {
                 let glyph = stage_for(is_alive, growth_points).glyph();
                 if !glyph.is_empty() {
-                    bonsai_glyphs.insert(user_id, glyph.to_string());
+                    bonsai_glyphs.insert(item.user_id, glyph.to_string());
                 }
             }
         }
@@ -535,40 +522,16 @@ impl ChatService {
     async fn list_all_discover_rooms(
         client: &tokio_postgres::Client,
     ) -> Result<Vec<DiscoverRoomItem>> {
-        let rows = client
-            .query(
-                "SELECT r.id,
-                        r.slug,
-                        COUNT(DISTINCT m.user_id)::bigint AS member_count,
-                        COUNT(DISTINCT msg.id)::bigint AS message_count,
-                        MAX(msg.created) AS last_message_at
-                 FROM chat_rooms r
-                 LEFT JOIN chat_room_members m ON m.room_id = r.id
-                 LEFT JOIN chat_messages msg ON msg.room_id = r.id
-                 WHERE r.kind = 'topic'
-                   AND r.visibility = 'public'
-                   AND r.permanent = false
-                 GROUP BY r.id, r.slug
-                 ORDER BY
-                    COALESCE(MAX(msg.created), r.created) DESC,
-                    message_count DESC,
-                    member_count DESC,
-                    r.slug ASC",
-                &[],
-            )
-            .await?;
+        let rows = ChatRoom::list_discover_public_topic_rooms(client).await?;
 
         Ok(rows
             .into_iter()
-            .filter_map(|row| {
-                let slug: Option<String> = row.get("slug");
-                slug.map(|slug| DiscoverRoomItem {
-                    room_id: row.get("id"),
-                    slug,
-                    member_count: row.get("member_count"),
-                    message_count: row.get("message_count"),
-                    last_message_at: row.get("last_message_at"),
-                })
+            .map(|row| DiscoverRoomItem {
+                room_id: row.room_id,
+                slug: row.slug,
+                member_count: row.member_count,
+                message_count: row.message_count,
+                last_message_at: row.last_message_at,
             })
             .collect())
     }
@@ -1448,44 +1411,22 @@ impl ChatService {
 
     async fn list_public_rooms(&self) -> Result<(String, Vec<String>)> {
         let client = self.db.get().await?;
-        let rows = client
-            .query(
-                "SELECT r.kind,
-                        r.slug,
-                        r.language_code,
-                        COUNT(m.user_id)::bigint AS member_count
-                 FROM chat_rooms r
-                 LEFT JOIN chat_room_members m ON m.room_id = r.id
-                 WHERE r.kind = 'topic'
-                   AND r.visibility = 'public'
-                   AND r.permanent = false
-                 GROUP BY r.id, r.kind, r.slug, r.language_code, r.created
-                 ORDER BY
-                    member_count DESC,
-                    COALESCE(r.slug, COALESCE(r.language_code, '')) ASC,
-                    r.created ASC,
-                    r.id ASC",
-                &[],
-            )
-            .await?;
+        let rows = ChatRoom::list_public_topic_room_summaries(&client).await?;
 
         let rooms: Vec<String> = rows
             .into_iter()
             .map(|row| {
-                let kind: String = row.get("kind");
-                let slug: Option<String> = row.get("slug");
-                let language_code: Option<String> = row.get("language_code");
-                let member_count: i64 = row.get("member_count");
-                let label = slug
+                let label = row
+                    .slug
                     .map(|slug| format!("#{slug}"))
-                    .or_else(|| language_code.map(|code| format!("language:{code}")))
-                    .unwrap_or(kind);
-                let noun = if member_count == 1 {
+                    .or_else(|| row.language_code.map(|code| format!("language:{code}")))
+                    .unwrap_or(row.kind);
+                let noun = if row.member_count == 1 {
                     "member"
                 } else {
                     "members"
                 };
-                format!("{label} ({member_count} {noun})")
+                format!("{label} ({} {noun})", row.member_count)
             })
             .collect();
         let rooms = if rooms.is_empty() {
@@ -1681,13 +1622,11 @@ impl ChatService {
     async fn open_public_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
         let client = self.db.get().await?;
         let room = ChatRoom::get_or_create_public_room(&client, slug).await?;
-        ChatRoom::set_auto_join(&client, room.id, true).await?;
-        let users_added = ChatRoom::add_all_users(&client, room.id).await?;
+        ChatRoom::set_auto_join(&client, room.id, false).await?;
         tracing::info!(
             slug = %slug,
             room_id = %room.id,
-            users_added,
-            "public room opened and auto-join enabled"
+            "public room opened"
         );
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)

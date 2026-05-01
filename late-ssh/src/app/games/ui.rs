@@ -11,9 +11,8 @@ use ratatui::{
 use crate::app::{
     common::theme,
     state::{
-        GAME_SELECTION_2048, GAME_SELECTION_BLACKJACK, GAME_SELECTION_MINESWEEPER,
-        GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
-        GAME_SELECTION_TETRIS,
+        GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
+        GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
     },
 };
 use late_core::models::leaderboard::{BadgeTier, LeaderboardData};
@@ -172,11 +171,8 @@ pub struct GamesHubView<'a> {
     pub nonogram_state: &'a super::nonogram::state::State,
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
-    pub blackjack_state: &'a crate::app::rooms::blackjack::state::State,
-    pub is_admin: bool,
     pub leaderboard: &'a Arc<LeaderboardData>,
     pub show_sidebar: bool,
-    pub usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
 }
 
 pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
@@ -208,15 +204,6 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             return;
         } else if view.game_selection == GAME_SELECTION_SOLITAIRE {
             super::solitaire::ui::draw_game(frame, area, view.solitaire_state, view.show_sidebar);
-            return;
-        } else if view.game_selection == GAME_SELECTION_BLACKJACK && view.is_admin {
-            crate::app::rooms::blackjack::ui::draw_game(
-                frame,
-                area,
-                view.blackjack_state,
-                view.show_sidebar,
-                view.usernames,
-            );
             return;
         }
     }
@@ -336,18 +323,6 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
                 r#"     ╚══════╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚══════╝"#,
             ],
             "Classic Klondike, dealt fresh every day.",
-            "     ",
-        ),
-        GAME_SELECTION_BLACKJACK => (
-            vec![
-                r#"     ██████╗ ██╗      █████╗  ██████╗██╗  ██╗     ██╗ █████╗  ██████╗██╗  ██╗"#,
-                r#"     ██╔══██╗██║     ██╔══██╗██╔════╝██║ ██╔╝     ██║██╔══██╗██╔════╝██║ ██╔╝"#,
-                r#"     ██████╔╝██║     ███████║██║     █████╔╝      ██║███████║██║     █████╔╝ "#,
-                r#"     ██╔══██╗██║     ██╔══██║██║     ██╔═██╗ ██   ██║██╔══██║██║     ██╔═██╗ "#,
-                r#"     ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗╚█████╔╝██║  ██║╚██████╗██║  ██╗"#,
-                r#"     ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝ ╚════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝"#,
-            ],
-            "Hit or stand against the house. Chips on the line every hand.",
             "     ",
         ),
         _ => (
@@ -544,47 +519,11 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
     push_game_section(&mut lines, "─── Multiplayer ───");
     lines.push(Line::from(""));
 
-    if view.is_admin {
-        draw_game_entry(
-            &mut lines,
-            &mut selected_line,
-            selection,
-            GameEntry {
-                idx: GAME_SELECTION_BLACKJACK,
-                name: "Blackjack",
-                descriptions: &["Hit or stand against the house. Shared chips table."],
-                selected_style: Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-                normal_style: Style::default().fg(theme::TEXT()),
-                description_style: Style::default().fg(theme::TEXT_DIM()),
-                status: Some((
-                    format!("Balance {}", view.blackjack_state.balance),
-                    Style::default().fg(theme::SUCCESS()),
-                )),
-            },
-        );
-    } else {
-        draw_game_entry(
-            &mut lines,
-            &mut selected_line,
-            selection,
-            GameEntry {
-                idx: GAME_SELECTION_BLACKJACK,
-                name: "Blackjack",
-                descriptions: &["Hit or stand against the house. Shared chips table."],
-                selected_style: Style::default().fg(theme::TEXT_MUTED()),
-                normal_style: Style::default().fg(theme::TEXT_MUTED()),
-                description_style: Style::default().fg(theme::TEXT_MUTED()),
-                status: Some((
-                    "Admin Only".to_string(),
-                    Style::default().fg(theme::TEXT_DIM()),
-                )),
-            },
-        );
-    }
-
     for (name, desc) in [
+        (
+            "Blackjack",
+            "Live blackjack tables moved to Rooms, with chat and spectators.",
+        ),
         ("Texas Hold'em", "The ultimate late-night poker table."),
         (
             "Bridge",

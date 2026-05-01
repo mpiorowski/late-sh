@@ -31,7 +31,7 @@ pub struct RoomsPageView<'a> {
     pub snapshot: &'a RoomsSnapshot,
     pub selected_index: usize,
     pub active_room: Option<&'a RoomListItem>,
-    pub blackjack_state: &'a BlackjackState,
+    pub blackjack_state: Option<&'a BlackjackState>,
     pub is_admin: bool,
     pub is_moderator: bool,
     pub filter: RoomsFilter,
@@ -49,27 +49,24 @@ enum Row<'a> {
 }
 
 pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_>) {
-    let block = Block::default()
-        .title(rooms_title(&view))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 8 || inner.width < 36 {
-        frame.render_widget(Paragraph::new("Terminal too small for Rooms"), inner);
+    if area.height < 8 || area.width < 36 {
+        frame.render_widget(Paragraph::new("Terminal too small for Rooms"), area);
         return;
     }
 
     if let Some(room) = view.active_room {
-        draw_active_room(
-            frame,
-            inner,
-            room,
-            view.blackjack_state,
-            view.usernames,
-            view.active_room_chat.take(),
-        );
+        if let Some(blackjack_state) = view.blackjack_state {
+            draw_active_room(
+                frame,
+                area,
+                room,
+                blackjack_state,
+                view.usernames,
+                view.active_room_chat.take(),
+            );
+        } else {
+            frame.render_widget(Paragraph::new("Loading table..."), area);
+        }
         return;
     }
 
@@ -79,12 +76,12 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_
         Constraint::Min(3),    // list
         Constraint::Length(1), // footer hints
     ])
-    .split(inner);
+    .split(area);
 
     draw_filter_bar(frame, layout[0], &view);
 
     let rows = build_rows(&view);
-    if inner.width >= NARROW_WIDTH {
+    if area.width >= NARROW_WIDTH {
         draw_room_list_wide(frame, layout[2], &view, &rows);
     } else {
         draw_room_list_narrow(frame, layout[2], &view, &rows);
@@ -93,26 +90,8 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_
     draw_footer(frame, layout[3], &view);
 
     if view.add_form_open {
-        draw_create_blackjack_modal(frame, inner, &view);
+        draw_create_blackjack_modal(frame, area, &view);
     }
-}
-
-fn rooms_title(view: &RoomsPageView<'_>) -> String {
-    if let Some(room) = view.active_room {
-        return format!(
-            " {} · {} · Esc back ",
-            room.display_name,
-            game_kind_label(room.game_kind)
-        );
-    }
-    let real_count = view.snapshot.rooms.len();
-    let open = view
-        .snapshot
-        .rooms
-        .iter()
-        .filter(|r| r.status == "open")
-        .count();
-    format!(" Rooms · {} live · {} open ", real_count, open)
 }
 
 fn build_rows<'a>(view: &'a RoomsPageView<'a>) -> Vec<Row<'a>> {
@@ -452,7 +431,7 @@ fn header_line() -> Line<'static> {
         Span::styled(format!("{:<28}", "Name"), style),
         Span::styled(format!("{:<12}", "Game"), style),
         Span::styled(format!("{:<8}", "Seats"), style),
-        Span::styled(format!("{:<14}", "Pace"), style),
+        Span::styled(format!("{:<18}", "Pace"), style),
         Span::styled(format!("{:<10}", "Stakes"), style),
         Span::styled("Status", style),
     ])
@@ -497,7 +476,7 @@ fn real_row_wide<'a>(room: &'a RoomListItem, selected: bool, view: &RoomsPageVie
             Style::default().fg(theme::AMBER()),
         ),
         Span::styled(format!("{:<8}", seats_label(room, meta.seats, view)), dim),
-        Span::styled(format!("{:<14}", room.blackjack_settings.pace_label()), dim),
+        Span::styled(format!("{:<18}", room.blackjack_settings.pace_label()), dim),
         Span::styled(
             format!("{:<10}", room.blackjack_settings.stake_label()),
             dim,
@@ -703,6 +682,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
     if view.is_admin {
         spans.push(Span::raw(" · "));
         spans.push(hint_pair("n", "new"));
+        spans.push(Span::raw(" · "));
+        spans.push(hint_pair("d", "delete"));
     }
 
     if view.is_admin || view.is_moderator {
@@ -766,19 +747,34 @@ fn draw_active_room(
     usernames: &std::collections::HashMap<uuid::Uuid, String>,
     active_room_chat: Option<EmbeddedRoomChatView<'_>>,
 ) {
+    let game_height = preferred_game_height(room, area);
     let layout = Layout::vertical([
-        Constraint::Percentage(70),
+        Constraint::Length(game_height),
         Constraint::Length(1),
-        Constraint::Percentage(30),
+        Constraint::Min(5),
     ])
     .split(area);
 
     draw_game_area(frame, layout[0], room, blackjack_state, usernames);
     if let Some(chat) = active_room_chat {
         crate::app::chat::ui::draw_embedded_room_chat(frame, layout[2], chat);
-    } else {
-        draw_chat_placeholder(frame, layout[2], room);
     }
+}
+
+fn preferred_game_height(room: &RoomListItem, area: Rect) -> u16 {
+    let chat_min: u16 = 8;
+    let max_game = area.height.saturating_sub(chat_min + 1);
+    let preferred = match room.game_kind {
+        crate::app::rooms::svc::GameKind::Blackjack => {
+            let fancy = crate::app::rooms::blackjack::ui::fancy_game_height(area);
+            if fancy > 0 {
+                fancy
+            } else {
+                area.height.saturating_mul(7) / 10
+            }
+        }
+    };
+    preferred.min(max_game).max(1)
 }
 
 fn draw_game_area(
@@ -799,25 +795,4 @@ fn draw_game_area(
             );
         }
     }
-}
-
-fn draw_chat_placeholder(frame: &mut Frame, area: Rect, room: &RoomListItem) {
-    let block = Block::default()
-        .title(" Chat ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let lines = vec![
-        Line::from(Span::styled(
-            "Room chat will render here.",
-            Style::default().fg(theme::TEXT_MUTED()),
-        )),
-        Line::from(Span::styled(
-            room.chat_room_id.to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(lines), inner);
 }

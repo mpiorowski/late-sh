@@ -76,6 +76,10 @@ pub(crate) enum RoomSlot {
     Showcase,
 }
 
+pub(super) fn is_chat_list_room(room: &ChatRoom) -> bool {
+    room.kind != "game"
+}
+
 pub struct ChatState {
     pub(crate) service: ChatService,
     user_id: Uuid,
@@ -313,12 +317,19 @@ impl ChatState {
         }
 
         if let Some(selected_id) = self.selected_room_id
-            && self.rooms.iter().any(|(room, _)| room.id == selected_id)
+            && self
+                .rooms
+                .iter()
+                .any(|(room, _)| room.id == selected_id && is_chat_list_room(room))
         {
             return;
         }
 
-        self.selected_room_id = Some(self.rooms[0].0.id);
+        self.selected_room_id = self
+            .rooms
+            .iter()
+            .find(|(room, _)| is_chat_list_room(room))
+            .map(|(room, _)| room.id);
     }
 
     pub fn mark_room_read(&mut self, room_id: Uuid) {
@@ -686,6 +697,7 @@ impl ChatState {
         use crate::app::settings_modal::state::RoomOption;
         self.rooms
             .iter()
+            .filter(|(room, _)| is_chat_list_room(room))
             .map(|(room, _)| {
                 let label = if room.kind == "dm" {
                     self.dm_display_name(room)
@@ -763,6 +775,13 @@ impl ChatState {
                 changed
             }
             RoomSlot::Room(next_id) => {
+                if !self
+                    .rooms
+                    .iter()
+                    .any(|(room, _)| room.id == next_id && is_chat_list_room(room))
+                {
+                    return false;
+                }
                 let changed = self.news_selected
                     || self.notifications_selected
                     || self.discover_selected
@@ -2080,14 +2099,15 @@ fn visual_order_for_rooms(
     for slug in &core_order {
         if let Some((room, _)) = rooms
             .iter()
-            .find(|(r, _)| r.permanent && r.slug.as_deref() == Some(slug))
+            .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
     // Any other permanent rooms not in the hardcoded list
     for (room, _) in rooms {
-        if room.kind != "dm"
+        if is_chat_list_room(room)
+            && room.kind != "dm"
             && room.permanent
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
         {
@@ -2103,7 +2123,9 @@ fn visual_order_for_rooms(
     // Public rooms (non-DM, non-permanent, alpha by slug)
     let mut public: Vec<_> = rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
+        .filter(|(r, _)| {
+            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "public"
+        })
         .collect();
     public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
@@ -2111,7 +2133,9 @@ fn visual_order_for_rooms(
     // Private rooms (visibility=private, alpha by slug)
     let mut private: Vec<_> = rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
+        .filter(|(r, _)| {
+            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "private"
+        })
         .collect();
     private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
@@ -2899,6 +2923,7 @@ mod tests {
         let public_alpha = Uuid::from_u128(20);
         let public_zeta = Uuid::from_u128(21);
         let private_beta = Uuid::from_u128(30);
+        let game_table = Uuid::from_u128(40);
         let dm_bob = make_dm(bob, me);
         let dm_alice = make_dm(me, alice);
 
@@ -2908,6 +2933,7 @@ mod tests {
 
         let rooms = vec![
             make_room(public_zeta, "topic", "public", false, Some("zeta")),
+            make_room(game_table, "game", "public", false, Some("bj-abc123")),
             make_room(general, "general", "public", true, Some("general")),
             (dm_bob.clone(), Vec::new()),
             make_room(private_beta, "topic", "private", false, Some("beta")),

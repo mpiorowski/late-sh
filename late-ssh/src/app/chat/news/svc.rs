@@ -168,9 +168,7 @@ impl ArticleService {
         actor_user_id: Option<Uuid>,
     ) -> Result<()> {
         let db_client = self.db.get().await?;
-        let rows = db_client.query("SELECT id FROM users", &[]).await?;
-        for row in rows {
-            let user_id: Uuid = row.get("id");
+        for user_id in User::list_ids(&db_client).await? {
             let unread_count = ArticleFeedRead::unread_count_for_user(&db_client, user_id).await?;
             let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
             self.publish_event(ArticleEvent::UnreadCountUpdated {

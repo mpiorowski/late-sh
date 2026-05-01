@@ -106,14 +106,18 @@ impl App {
         {
             self.tetris_state.tick();
         }
-        self.blackjack_state.tick();
+        if let Some(blackjack_state) = &mut self.blackjack_state {
+            blackjack_state.tick();
+        }
         if let Some(b) = self.tick_rooms() {
             self.banner = Some(b);
         }
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
         }
-        self.chip_balance = self.blackjack_state.balance;
+        if let Some(blackjack_state) = &self.blackjack_state {
+            self.chip_balance = blackjack_state.balance;
+        }
 
         // Leaderboard
         if let Some(rx) = &mut self.leaderboard_rx
@@ -121,11 +125,14 @@ impl App {
         {
             self.leaderboard = rx.borrow_and_update().clone();
             if let Some(&balance) = self.leaderboard.user_chips.get(&self.user_id)
-                && self.blackjack_state.snapshot.phase
-                    == crate::app::rooms::blackjack::state::Phase::Betting
+                && self.blackjack_state.as_ref().is_none_or(|state| {
+                    state.snapshot.phase == crate::app::rooms::blackjack::state::Phase::Betting
+                })
             {
                 self.chip_balance = balance;
-                self.blackjack_state.balance = balance;
+                if let Some(blackjack_state) = &mut self.blackjack_state {
+                    blackjack_state.balance = balance;
+                }
             }
         }
 
