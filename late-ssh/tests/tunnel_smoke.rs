@@ -21,6 +21,7 @@ use late_ssh::tunnel::{
     HEADER_USERNAME, run_tunnel_server_with_listener,
 };
 use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -300,7 +301,7 @@ async fn tunnel_returns_429_when_per_ip_conn_limit_reached() {
 
 #[tokio::test]
 async fn tunnel_drain_leaves_existing_session_open() {
-    let (addr, _state, shutdown, server) = spawn_tunnel(loopback_cidr()).await;
+    let (addr, state, shutdown, server) = spawn_tunnel(loopback_cidr()).await;
 
     let req = make_request(addr, "drain-user");
     let (mut ws, response) = tokio_tungstenite::connect_async(req)
@@ -317,7 +318,7 @@ async fn tunnel_drain_leaves_existing_session_open() {
         .expect("stream ended")
         .expect("ws error");
 
-    shutdown.cancel();
+    state.is_draining.store(true, Ordering::Release);
 
     // Existing tunnel sessions ride out graceful shutdown. Drain anything
     // already queued, but fail if the backend emits an explicit Close.
@@ -339,8 +340,28 @@ async fn tunnel_drain_leaves_existing_session_open() {
         }
     }
 
-    let _ = ws.close(None).await;
+    assert_eq!(
+        raw_upgrade_status(addr, &[]).await,
+        503,
+        "new tunnel handshakes should receive 503 while draining"
+    );
+    assert_eq!(state.tunnel_sessions.active_count(), 1);
+    assert!(
+        timeout(
+            Duration::from_millis(100),
+            state.tunnel_sessions.wait_empty()
+        )
+        .await
+        .is_err(),
+        "active tunnel session should hold the drain waiter open"
+    );
 
+    let _ = ws.close(None).await;
+    timeout(Duration::from_secs(5), state.tunnel_sessions.wait_empty())
+        .await
+        .expect("tunnel session did not drain after client close");
+
+    shutdown.cancel();
     // Server task should wind down on its own once the cancellation
     // propagates through axum's graceful shutdown and the client closes.
     let _ = timeout(Duration::from_secs(5), server)

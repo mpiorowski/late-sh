@@ -35,15 +35,25 @@ pub fn draw(frame: &mut Frame, area: Rect, is_draining: bool) {
     ])
     .split(inner);
 
-    let prompt_text = if is_draining {
-        "r to reconnect to the updated late.sh!"
+    let prompt = if is_draining {
+        Line::from(vec![
+            Span::styled(
+                "r",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " to reconnect to the updated late.sh!",
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+        ])
     } else {
-        "Clicked by mistake, right?"
+        Line::from(Span::styled(
+            "Clicked by mistake, right?",
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ))
     };
-    let prompt = Line::from(Span::styled(
-        prompt_text,
-        Style::default().fg(theme::TEXT_BRIGHT()),
-    ));
     frame.render_widget(Paragraph::new(prompt).centered(), layout[1]);
 
     let footer_cols = Layout::horizontal([

@@ -25,10 +25,13 @@ use late_core::{api_types::NowPlaying, db::Db, rate_limit::IpRateLimiter};
 use std::{
     collections::HashMap,
     net::IpAddr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::Instant,
 };
-use tokio::sync::{Semaphore, broadcast, watch};
+use tokio::sync::{Notify, Semaphore, broadcast, watch};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -39,6 +42,64 @@ pub struct ActiveUser {
 }
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
+
+#[derive(Clone, Default)]
+pub struct TunnelSessions {
+    active: Arc<AtomicUsize>,
+    notify: Arc<Notify>,
+}
+
+impl TunnelSessions {
+    pub fn enter_if_accepting(&self, is_draining: &AtomicBool) -> Option<TunnelSessionPermit> {
+        if is_draining.load(Ordering::Acquire) {
+            return None;
+        }
+
+        self.active.fetch_add(1, Ordering::AcqRel);
+
+        if is_draining.load(Ordering::Acquire) {
+            self.active.fetch_sub(1, Ordering::AcqRel);
+            self.notify.notify_waiters();
+            return None;
+        }
+
+        Some(TunnelSessionPermit {
+            sessions: self.clone(),
+        })
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.active.load(Ordering::Acquire)
+    }
+
+    pub async fn wait_empty(&self) {
+        loop {
+            if self.active_count() == 0 {
+                return;
+            }
+
+            let notified = self.notify.notified();
+
+            if self.active_count() == 0 {
+                return;
+            }
+
+            notified.await;
+        }
+    }
+}
+
+pub struct TunnelSessionPermit {
+    sessions: TunnelSessions,
+}
+
+impl Drop for TunnelSessionPermit {
+    fn drop(&mut self) {
+        if self.sessions.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.sessions.notify.notify_waiters();
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ActivityEvent {
@@ -84,4 +145,5 @@ pub struct State {
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
+    pub tunnel_sessions: TunnelSessions,
 }

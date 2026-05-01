@@ -24,7 +24,7 @@ use late_ssh::{
     config::Config,
     session::SessionRegistry,
     ssh,
-    state::{ActivityEvent, State},
+    state::{ActivityEvent, State, TunnelSessions},
     tunnel,
 };
 use tokio::{
@@ -60,6 +60,12 @@ async fn finish_ssh_drain(
             *fatal_error = Some(anyhow::Error::new(err).context("ssh task panicked"));
         }
     }
+}
+
+async fn finish_tunnel_drain(tunnel_sessions: &TunnelSessions) {
+    tracing::info!("waiting for active tunnel sessions to drain...");
+    tunnel_sessions.wait_empty().await;
+    tracing::info!("tunnel sessions finished draining");
 }
 
 async fn flush_dartboard_snapshot(state: &State, fatal_error: &mut Option<anyhow::Error>) {
@@ -250,6 +256,7 @@ async fn main() -> anyhow::Result<()> {
         ssh_attempt_limiter,
         ws_pair_limiter,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        tunnel_sessions: TunnelSessions::default(),
     };
 
     let session_shutdown = CancellationToken::new();
@@ -440,6 +447,7 @@ async fn main() -> anyhow::Result<()> {
     if should_finish_ssh_drain {
         finish_ssh_drain(&mut ssh_task, &mut fatal_error).await;
     }
+    finish_tunnel_drain(&state.tunnel_sessions).await;
     flush_dartboard_snapshot(&state, &mut fatal_error).await;
     session_shutdown.cancel();
 

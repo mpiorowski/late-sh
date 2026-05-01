@@ -43,7 +43,7 @@ use crate::metrics;
 use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
 use crate::session_io::WsFrameSink;
 use crate::ssh::{INPUT_QUEUE_CAP, RenderSignal, ensure_user, run_session};
-use crate::state::{ActiveUser, ActivityEvent, State};
+use crate::state::{ActiveUser, ActivityEvent, State, TunnelSessionPermit};
 
 /// Bound on the writer-task mpsc that feeds `WsFrameSink`. Backpressure
 /// past this is surfaced to the render loop as `Ok(false)` (drop +
@@ -270,6 +270,14 @@ async fn tunnel_handler(
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    if state.is_draining.load(Ordering::Acquire) {
+        tracing::info!(
+            peer_ip = %peer_addr.ip(),
+            "tunnel rejected: backend is draining"
+        );
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+
     let handshake = match validate_handshake(
         &headers,
         peer_addr.ip(),
@@ -361,6 +369,14 @@ async fn tunnel_handler(
             }
         };
 
+    let Some(tunnel_permit) = state.tunnel_sessions.enter_if_accepting(&state.is_draining) else {
+        tracing::info!(
+            peer_ip = %handshake.peer_ip,
+            "tunnel rejected: backend began draining during handshake"
+        );
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+
     // Register in `active_users` and bump the active-session metric.
     // Mirrors the auth_publickey block in the russh path.
     {
@@ -406,7 +422,17 @@ async fn tunnel_handler(
         "tunnel handshake accepted; running session"
     );
 
-    ws.on_upgrade(move |socket| handle_session(socket, handshake, user, is_new_user, state, guard))
+    ws.on_upgrade(move |socket| {
+        handle_session(
+            socket,
+            handshake,
+            user,
+            is_new_user,
+            state,
+            guard,
+            tunnel_permit,
+        )
+    })
 }
 
 async fn handle_session(
@@ -416,6 +442,7 @@ async fn handle_session(
     is_new_user: bool,
     state: State,
     _guard: TunnelSessionGuard,
+    _tunnel_permit: TunnelSessionPermit,
 ) {
     let frame_drop_log_every = state.config.frame_drop_log_every;
     let activity_feed_rx = Some(state.activity_feed.subscribe());

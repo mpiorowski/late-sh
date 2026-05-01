@@ -169,6 +169,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ssh_attempt_limiter,
         ws_pair_limiter,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        tunnel_sessions: late_ssh::state::TunnelSessions::default(),
     }
 }
 

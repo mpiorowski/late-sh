@@ -935,10 +935,6 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
 }
 
 fn dispatch_escape(app: &mut App) {
-    if app.reconnect_notice.is_some() {
-        app.dismiss_reconnect_notice();
-        return;
-    }
     if app.show_quit_confirm {
         quit_confirm::input::handle_escape(app);
         return;

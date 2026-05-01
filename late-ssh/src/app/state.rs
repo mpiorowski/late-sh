@@ -16,7 +16,7 @@ use std::{
     collections::VecDeque,
     io::{self, Write},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -30,7 +30,7 @@ use crate::{
         chat::news::svc::ArticleService,
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
-        common::primitives::{Banner, Screen},
+        common::primitives::{Banner, BannerKind, Screen},
         help_modal, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal,
@@ -58,6 +58,44 @@ pub(crate) enum NotificationMode {
 pub(crate) enum ReconnectNoticeKind {
     Updated,
     Transport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReconnectNotice {
+    kind: ReconnectNoticeKind,
+    created_at: Instant,
+}
+
+impl ReconnectNotice {
+    const DISPLAY_DURATION: Duration = Duration::from_secs(6);
+
+    pub(crate) fn new(kind: ReconnectNoticeKind) -> Self {
+        Self {
+            kind,
+            created_at: Instant::now(),
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.created_at.elapsed() < Self::DISPLAY_DURATION
+    }
+
+    pub(crate) fn as_banner(&self) -> Banner {
+        Banner {
+            message: self.message().to_string(),
+            kind: BannerKind::Success,
+            created_at: self.created_at,
+        }
+    }
+
+    fn message(&self) -> &'static str {
+        match self.kind {
+            ReconnectNoticeKind::Updated => "Welcome to the updated late.sh! Enjoy.",
+            ReconnectNoticeKind::Transport => {
+                "Reconnected after an update or network problem. Welcome back!"
+            }
+        }
+    }
 }
 
 pub(crate) const GAME_SELECTION_2048: usize = 0;
@@ -326,7 +364,7 @@ pub struct App {
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub(crate) requested_close_code: u16,
-    pub(crate) reconnect_notice: Option<ReconnectNoticeKind>,
+    pub(crate) reconnect_notice: Option<ReconnectNotice>,
 
     /// Emoji + Nerd Font picker
     pub(crate) icon_picker_open: bool,
@@ -350,10 +388,6 @@ impl App {
 
     pub(crate) fn is_draining(&self) -> bool {
         self.is_draining.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    pub(crate) fn dismiss_reconnect_notice(&mut self) {
-        self.reconnect_notice = None;
     }
 
     pub fn skip_splash_for_tests(&mut self) {
@@ -681,8 +715,12 @@ impl App {
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
         let reconnect_notice = match config.reconnect_reason {
-            Some(TUNNEL_CLOSE_RECONNECT_REQUESTED) => Some(ReconnectNoticeKind::Updated),
-            Some(TUNNEL_CLOSE_ABNORMAL) => Some(ReconnectNoticeKind::Transport),
+            Some(TUNNEL_CLOSE_RECONNECT_REQUESTED) => {
+                Some(ReconnectNotice::new(ReconnectNoticeKind::Updated))
+            }
+            Some(TUNNEL_CLOSE_ABNORMAL) => {
+                Some(ReconnectNotice::new(ReconnectNoticeKind::Transport))
+            }
             _ => None,
         };
         let initial_profile = Profile {
@@ -1073,6 +1111,25 @@ mod tests {
             NotificationMode::from_format(Some("garbage")),
             NotificationMode::Both
         );
+    }
+
+    #[test]
+    fn reconnect_notice_renders_as_six_second_success_banner() {
+        let notice = ReconnectNotice::new(ReconnectNoticeKind::Transport);
+        let banner = notice.as_banner();
+
+        assert!(notice.is_active());
+        assert_eq!(
+            banner.message,
+            "Reconnected after an update or network problem. Welcome back!"
+        );
+        assert!(matches!(banner.kind, BannerKind::Success));
+
+        let expired = ReconnectNotice {
+            kind: ReconnectNoticeKind::Updated,
+            created_at: Instant::now() - Duration::from_secs(7),
+        };
+        assert!(!expired.is_active());
     }
 
     #[test]
