@@ -304,7 +304,12 @@ fn draw_blackjack_bottom_rule(
         Paragraph::new(Line::from(vec![
             Span::styled(left, border_style),
             Span::raw(outer_space.clone()),
-            Span::styled(body, Style::default().fg(theme::CHAT_BODY())),
+            Span::styled(
+                body,
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(outer_space),
             Span::styled(right, border_style),
         ])),
