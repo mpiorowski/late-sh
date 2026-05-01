@@ -65,7 +65,9 @@ impl ProfileState {
                 let profile = snapshot.profile.clone();
                 drop(snapshot);
                 if let Some(mut profile) = profile {
-                    let normalized = theme::normalize_id(profile.theme_id.as_deref().unwrap_or(""));
+                    let fallback = self.theme_id().to_string();
+                    let normalized =
+                        theme::normalize_id(profile.theme_id.as_deref().unwrap_or(&fallback));
                     profile.theme_id = Some(normalized.to_string());
                     self.profile = profile;
                 }

@@ -14,9 +14,22 @@ impl App {
     }
 
     fn clamp_rooms_selection(&mut self) {
-        self.rooms_selected_index = self
-            .rooms_selected_index
-            .min(self.rooms_snapshot.rooms.len());
+        let count = self.visible_real_rooms_count();
+        if count == 0 {
+            self.rooms_selected_index = 0;
+        } else {
+            self.rooms_selected_index = self.rooms_selected_index.min(count - 1);
+        }
+    }
+
+    fn visible_real_rooms_count(&self) -> usize {
+        let q = self.rooms_search_query.trim().to_lowercase();
+        self.rooms_snapshot
+            .rooms
+            .iter()
+            .filter(|room| self.rooms_filter.matches_real(room.game_kind))
+            .filter(|room| q.is_empty() || room.display_name.to_lowercase().contains(&q))
+            .count()
     }
 
     fn refresh_active_room(&mut self) {
@@ -47,6 +60,12 @@ impl App {
                             display_name
                         )));
                     }
+                    RoomsEvent::Deleted {
+                        user_id,
+                        display_name,
+                    } if user_id == self.user_id => {
+                        banner = Some(Banner::success(&format!("Deleted table: {}", display_name)));
+                    }
                     RoomsEvent::Error {
                         user_id,
                         game_kind,
@@ -63,6 +82,16 @@ impl App {
                             game_kind_label(game_kind),
                             table,
                             message
+                        )));
+                    }
+                    RoomsEvent::DeleteError {
+                        user_id,
+                        display_name,
+                        message,
+                    } if user_id == self.user_id => {
+                        banner = Some(Banner::error(&format!(
+                            "Failed to delete table {}: {}",
+                            display_name, message
                         )));
                     }
                     _ => {}

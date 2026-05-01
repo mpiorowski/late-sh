@@ -10,6 +10,7 @@ use crate::app::common::{markdown::render_body_to_lines, theme};
 
 use super::{
     data::country_label,
+    gem::{GemPosition, GemState, MoveDirection},
     state::{BIO_MAX_LEN, PickerKind, Row, SettingsModalState, Tab, ThemeTreeRow},
 };
 
@@ -41,13 +42,14 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     ])
     .split(inner);
 
-    draw_tabs(frame, layout[1], state.selected_tab());
+    draw_tabs(frame, layout[1], state);
 
     match state.selected_tab() {
         Tab::Settings => draw_settings_tab(frame, layout[3], state),
         Tab::Themes => draw_themes_tab(frame, layout[3], state),
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
         Tab::Favorites => draw_favorites_tab(frame, layout[3], state),
+        Tab::Special => draw_special_tab(frame, layout[3], state),
     }
 
     draw_footer(frame, layout[4], state.selected_tab(), state.editing_bio());
@@ -57,9 +59,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     }
 }
 
-fn draw_tabs(frame: &mut Frame, area: Rect, selected: Tab) {
+fn draw_tabs(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let selected = state.selected_tab();
     let mut spans = vec![Span::raw("  ")];
-    for tab in Tab::ALL {
+    for tab in state.visible_tabs() {
         let active = tab == selected;
         let style = if active {
             Style::default()
@@ -127,6 +130,16 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
+        (Tab::Special, _) => {
+            spans.extend([
+                Span::styled("←→ ↵", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+            ]);
+        }
         (Tab::Favorites, _) => {
             spans.extend([
                 Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
@@ -161,7 +174,11 @@ fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[0],
     );
 
-    let active_id = state.draft().theme_id.as_deref().unwrap_or("late");
+    let active_id = state
+        .draft()
+        .theme_id
+        .as_deref()
+        .unwrap_or(theme::DEFAULT_ID);
     let active_preview = theme::preview_for_id(active_id);
     let summary = Line::from(vec![
         Span::raw("  "),
@@ -331,11 +348,16 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     let sections = Layout::vertical([
         Constraint::Length(1), // Identity heading
         Constraint::Length(1), // Username row
+        Constraint::Length(1), // IDE row
+        Constraint::Length(1), // Terminal row
+        Constraint::Length(1), // OS row
+        Constraint::Length(1), // Languages row
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Appearance heading
         Constraint::Length(1), // Theme
         Constraint::Length(1), // Background
         Constraint::Length(1), // Stream + vote
+        Constraint::Length(1), // Room showcase
         Constraint::Length(1), // Right sidebar
         Constraint::Length(1), // Games sidebar
         Constraint::Length(1), // breathing room
@@ -377,8 +399,52 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         )),
         sections[1],
     );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Ide,
+            width,
+            "IDE",
+            system_field_value(state, Row::Ide, state.draft().ide.clone()),
+        )),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Terminal,
+            width,
+            "Terminal",
+            system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
+        )),
+        sections[3],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Os,
+            width,
+            "OS",
+            system_field_value(state, Row::Os, state.draft().os.clone()),
+        )),
+        sections[4],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Langs,
+            width,
+            "Langs",
+            system_field_value(
+                state,
+                Row::Langs,
+                (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
+            ),
+        )),
+        sections[5],
+    );
 
-    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[3]);
+    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[7]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -386,12 +452,18 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             width,
             "Theme",
             value_span(
-                theme::label_for_id(state.draft().theme_id.as_deref().unwrap_or("late"))
-                    .to_string(),
+                theme::label_for_id(
+                    state
+                        .draft()
+                        .theme_id
+                        .as_deref()
+                        .unwrap_or(theme::DEFAULT_ID),
+                )
+                .to_string(),
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[4],
+        sections[8],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -401,7 +473,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Background",
             toggle_span(state.draft().enable_background_color),
         )),
-        sections[5],
+        sections[9],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -411,7 +483,17 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Stream + vote",
             toggle_span(state.draft().show_dashboard_header),
         )),
-        sections[6],
+        sections[10],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::DashboardRoomShowcases,
+            width,
+            "Room showcase",
+            toggle_span(state.draft().show_dashboard_room_showcases),
+        )),
+        sections[11],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -421,7 +503,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Right sidebar",
             toggle_span(state.draft().show_right_sidebar),
         )),
-        sections[7],
+        sections[12],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -431,10 +513,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Games sidebar",
             toggle_span(state.draft().show_games_sidebar),
         )),
-        sections[8],
+        sections[13],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Location")), sections[10]);
+    frame.render_widget(Paragraph::new(section_heading("Location")), sections[15]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -443,7 +525,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Country",
             value_with_picker_hint(country_label(state.draft().country.as_deref())),
         )),
-        sections[11],
+        sections[16],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -459,12 +541,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                     .unwrap_or_else(|| "not set".to_string()),
             ),
         )),
-        sections[12],
+        sections[17],
     );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[14],
+        sections[19],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -474,7 +556,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[15],
+        sections[20],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -484,7 +566,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[16],
+        sections[21],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -494,7 +576,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[17],
+        sections[22],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -504,7 +586,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[18],
+        sections[23],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -521,7 +603,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[19],
+        sections[24],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -534,8 +616,297 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[20],
+        sections[25],
     );
+}
+
+fn draw_special_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    // Reserve a 7-line strip at the bottom: 6 for the shining grand gem
+    // (5-line body + 1 row of sparkles above) and 1 row of padding off the
+    // dialog's bottom border.
+    const GEM_STRIP_HEIGHT: u16 = 7;
+    let gem_strip_height = GEM_STRIP_HEIGHT.min(area.height.saturating_sub(4));
+
+    let sections = Layout::vertical([
+        Constraint::Length(1),                // heading
+        Constraint::Length(1),                // hint
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // toggle row
+        Constraint::Min(0),                   // flex spacer
+        Constraint::Length(gem_strip_height), // gem
+    ])
+    .split(area);
+
+    frame.render_widget(Paragraph::new(section_heading("Special")), sections[0]);
+
+    let hint = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "Power-user toggles unlocked by completing your profile.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(hint), sections[1]);
+
+    let width = area.width as usize;
+    let label = "Show settings on connect";
+    let value = toggle_span(state.draft().show_settings_on_connect);
+
+    let prefix_style = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .bg(theme::BG_SELECTION())
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default()
+        .fg(theme::TEXT_BRIGHT())
+        .bg(theme::BG_SELECTION())
+        .add_modifier(Modifier::BOLD);
+    let value_style = value.style.bg(theme::BG_SELECTION());
+    let trailing_style = Style::default().bg(theme::BG_SELECTION());
+
+    let prefix = " › ".to_string();
+    let label_text = format!("{label:<26}");
+    let mut used = prefix.chars().count() + label_text.chars().count() + value.text.chars().count();
+    if used > width {
+        used = width;
+    }
+    let trailing = " ".repeat(width.saturating_sub(used));
+
+    let line = Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(label_text, label_style),
+        Span::styled(value.text, value_style),
+        Span::styled(trailing, trailing_style),
+    ]);
+    frame.render_widget(Paragraph::new(line), sections[3]);
+
+    if gem_strip_height > 0 {
+        // Pad 2 cols off each side and lift the gem 1 row off the bottom
+        // border so it doesn't crowd the dialog frame.
+        const PAD_X: u16 = 2;
+        const PAD_BOTTOM: u16 = 1;
+        let strip = sections[5];
+        let pad_x = PAD_X.min(strip.width / 2);
+        let pad_bottom = PAD_BOTTOM.min(strip.height);
+        let gem_area = Rect::new(
+            strip.x + pad_x,
+            strip.y,
+            strip.width.saturating_sub(pad_x * 2),
+            strip.height.saturating_sub(pad_bottom),
+        );
+        if gem_area.width > 0 && gem_area.height > 0 {
+            draw_gem(frame, gem_area, state.gem());
+        } else {
+            state.gem().hit_area.set(None);
+        }
+    } else {
+        state.gem().hit_area.set(None);
+    }
+}
+
+/// Layout note: `area` is the 6-line strip reserved at the bottom of the
+/// Special tab. The small gem hugs a corner; the grand gem is centered.
+/// The gem's screen-coordinate rect is stashed back on `gem.hit_area` so the
+/// input handler can do mouse hit testing.
+fn draw_gem(frame: &mut Frame, area: Rect, gem: &GemState) {
+    if gem.evolved() {
+        draw_grand_gem(frame, area, gem);
+    } else {
+        draw_small_gem(frame, area, gem);
+    }
+}
+
+fn draw_small_gem(frame: &mut Frame, area: Rect, gem: &GemState) {
+    const SMALL_W: u16 = 3;
+    const SMALL_H: u16 = 3;
+    if area.width < SMALL_W || area.height < SMALL_H {
+        gem.hit_area.set(None);
+        return;
+    }
+    let style = Style::default().fg(gem.color());
+    let mid = match gem.brand() {
+        0 => "\\ /".to_string(),
+        n => format!("\\{}/", n),
+    };
+    let rows = ["___", mid.as_str(), " ' "];
+
+    let x = match gem.position() {
+        GemPosition::Left => area.x,
+        GemPosition::Right => area.x + area.width.saturating_sub(SMALL_W),
+    };
+    let y_start = area.y + area.height.saturating_sub(SMALL_H);
+
+    for (i, row) in rows.iter().enumerate() {
+        let row_rect = Rect::new(x, y_start + i as u16, SMALL_W, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(row.to_string(), style))),
+            row_rect,
+        );
+    }
+
+    if let Some(direction) = gem.last_move() {
+        draw_speed_trail(frame, area, x, y_start, direction, style);
+    }
+
+    gem.hit_area
+        .set(Some(Rect::new(x, y_start, SMALL_W, SMALL_H)));
+}
+
+/// Speed-trail wisps. Rendered on the gem's middle and bottom rows,
+/// extending away from the gem in the direction it just came from.
+fn draw_speed_trail(
+    frame: &mut Frame,
+    area: Rect,
+    gem_x: u16,
+    gem_y_start: u16,
+    direction: MoveDirection,
+    style: Style,
+) {
+    // The two rows of trail ASCII, side-aligned with the gem so position
+    // math stays in one place. Each pair is `(mid_row, bottom_row)`.
+    let (mid, bottom) = match direction {
+        MoveDirection::Leftward => ("  .:`  .:    .", "   ':.. ':..  ':..  ':..  :..  ..  .   ."),
+        MoveDirection::Rightward => (
+            ".    :.  `:.  ",
+            "   .   .  ..  ..:  ..:'  ..:'  ..:' ..:'    ",
+        ),
+    };
+
+    let mid_y = gem_y_start + 1;
+    let bottom_y = gem_y_start + 2;
+
+    let area_left = area.x;
+    let area_right = area.x + area.width;
+
+    for (text, y) in [(mid, mid_y), (bottom, bottom_y)] {
+        let len = text.chars().count() as u16;
+        let (x, render_text): (u16, String) = match direction {
+            MoveDirection::Leftward => {
+                // Trail starts immediately to the right of the gem; clip
+                // anything that would spill past the area's right edge.
+                let start = gem_x + 3;
+                let available = area_right.saturating_sub(start);
+                let clipped: String = text.chars().take(available as usize).collect();
+                (start, clipped)
+            }
+            MoveDirection::Rightward => {
+                // Trail ends immediately before the gem; clip from the
+                // front if the area can't fit the full length.
+                let want_start = gem_x.saturating_sub(len);
+                let start = want_start.max(area_left);
+                let drop = (start - want_start) as usize;
+                let clipped: String = text.chars().skip(drop).collect();
+                (start, clipped)
+            }
+        };
+        if render_text.is_empty() {
+            continue;
+        }
+        let width = render_text.chars().count() as u16;
+        let rect = Rect::new(x, y, width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(render_text, style))),
+            rect,
+        );
+    }
+}
+
+fn draw_grand_gem(frame: &mut Frame, area: Rect, gem: &GemState) {
+    // Each row is a list of (text, kind). `Kind::Gem` styles with the gem
+    // color; `Kind::Shine` styles with the shine color. Splitting by kind
+    // lets the two colors live on the same cell row.
+    #[derive(Clone, Copy)]
+    enum Kind {
+        Gem,
+        Shine,
+    }
+
+    let body: [&[(&str, Kind)]; 5] = [
+        &[("    _________", Kind::Gem)],
+        &[("   /_|_____|_\\", Kind::Gem)],
+        &[("   '. \\   / .'", Kind::Gem)],
+        &[("     '.\\ /.'", Kind::Gem)],
+        &[("       '.'", Kind::Gem)],
+    ];
+    // Sparkle decorations layered on top when shining. Indices align with
+    // the body rows; the extra row ABOVE the body is `shine_top`. Each
+    // shining row carries 3 leading spaces so the shine's footprint is
+    // symmetric around the body (the natural layout adds 3 chars on the
+    // right but only replaces a leading space on the left); that way plain
+    // `max_width` centering keeps the body columns stable across shining
+    // and non-shining renders.
+    let shine_top: &[(&str, Kind)] = &[("     .  `  '  `  .", Kind::Shine)];
+    let shine_overlay: [&[(&str, Kind)]; 5] = [
+        &[
+            ("    `  ", Kind::Shine),
+            ("_________", Kind::Gem),
+            ("  `", Kind::Shine),
+        ],
+        &[
+            ("   _  ", Kind::Shine),
+            ("/_|_____|_\\", Kind::Gem),
+            ("  _", Kind::Shine),
+        ],
+        // Body row 2 — unchanged content, just shifted right with the rest.
+        &[("      '. \\   / .'", Kind::Gem)],
+        &[
+            ("     `  ", Kind::Shine),
+            ("'.\\ /.'", Kind::Gem),
+            ("  `", Kind::Shine),
+        ],
+        // Body row 4 — unchanged content, shifted with the rest.
+        &[("          '.'", Kind::Gem)],
+    ];
+
+    let shining = gem.shining();
+    let (rows, total_height): (Vec<&[(&str, Kind)]>, u16) = if shining {
+        let mut v: Vec<&[(&str, Kind)]> = Vec::with_capacity(6);
+        v.push(shine_top);
+        for row in &shine_overlay {
+            v.push(*row);
+        }
+        (v, 6)
+    } else {
+        (body.to_vec(), 5)
+    };
+
+    if area.height < total_height {
+        gem.hit_area.set(None);
+        return;
+    }
+
+    let row_widths: Vec<u16> = rows
+        .iter()
+        .map(|row| row.iter().map(|(s, _)| s.chars().count() as u16).sum())
+        .collect();
+    let max_width = row_widths.iter().copied().max().unwrap_or(0);
+    if area.width < max_width {
+        gem.hit_area.set(None);
+        return;
+    }
+
+    let x_origin = area.x + (area.width.saturating_sub(max_width)) / 2;
+    let y_origin = area.y + area.height.saturating_sub(total_height);
+    let gem_style = Style::default().fg(gem.color());
+    let shine_style = Style::default().fg(gem.shine_color());
+
+    for (i, row) in rows.iter().enumerate() {
+        let row_width: u16 = row.iter().map(|(s, _)| s.chars().count() as u16).sum();
+        let row_rect = Rect::new(x_origin, y_origin + i as u16, row_width, 1);
+        let spans: Vec<Span<'_>> = row
+            .iter()
+            .map(|(text, kind)| {
+                let style = match kind {
+                    Kind::Gem => gem_style,
+                    Kind::Shine => shine_style,
+                };
+                Span::styled((*text).to_string(), style)
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(Line::from(spans)), row_rect);
+    }
+
+    gem.hit_area
+        .set(Some(Rect::new(x_origin, y_origin, max_width, total_height)));
 }
 
 fn notify_format_label(format: Option<&str>) -> &'static str {
@@ -857,6 +1228,39 @@ fn value_span(text: impl Into<String>, color: ratatui::style::Color) -> ValueSpa
     }
 }
 
+fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String>) -> ValueSpan {
+    if state.editing_system_row(row) {
+        let typed = state.system_input().lines().join("");
+        if typed.is_empty() {
+            if row == Row::Langs {
+                value_span("rust, go, typescript…", theme::AMBER())
+            } else {
+                value_span("typing…", theme::AMBER())
+            }
+        } else {
+            value_span(format!("{}█", typed), theme::AMBER())
+        }
+    } else {
+        match value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) => value_span(value.to_string(), theme::TEXT_BRIGHT()),
+            None if row == Row::Langs => value_span("comma sep…", theme::TEXT_FAINT()),
+            None => value_span("not set", theme::TEXT_FAINT()),
+        }
+    }
+}
+
+fn format_lang_tags(langs: &[String]) -> String {
+    langs
+        .iter()
+        .map(|lang| format!("#{lang}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn toggle_span(enabled: bool) -> ValueSpan {
     if enabled {
         ValueSpan {
@@ -887,7 +1291,10 @@ fn row_line(
     label: &str,
     value: ValueSpan,
 ) -> Line<'static> {
-    let selected = state.selected_row() == row && !state.editing_username() && !state.editing_bio();
+    let selected = state.selected_row() == row
+        && !state.editing_username()
+        && state.editing_system_field().is_none()
+        && !state.editing_bio();
 
     let marker = if selected { "›" } else { " " };
     let prefix_style = if selected {

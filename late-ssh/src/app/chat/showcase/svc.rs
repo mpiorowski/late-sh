@@ -343,9 +343,7 @@ impl ShowcaseService {
         actor_user_id: Option<Uuid>,
     ) -> Result<()> {
         let client = self.db.get().await?;
-        let rows = client.query("SELECT id FROM users", &[]).await?;
-        for row in rows {
-            let user_id: Uuid = row.get("id");
+        for user_id in User::list_ids(&client).await? {
             let unread_count = ShowcaseFeedRead::unread_count_for_user(&client, user_id).await?;
             let last_read_at = ShowcaseFeedRead::last_read_at(&client, user_id).await?;
             self.publish_event(ShowcaseEvent::UnreadCountUpdated {

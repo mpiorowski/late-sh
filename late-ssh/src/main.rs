@@ -4,6 +4,9 @@ use std::{
     time::Duration,
 };
 
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use anyhow::Context;
 use late_core::{
     api_types::NowPlaying, db::Db, icecast, models::chat_room::ChatRoom, rate_limit::IpRateLimiter,
@@ -128,14 +131,12 @@ async fn main() -> anyhow::Result<()> {
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
     rooms_service.refresh_task();
+    rooms_service.cleanup_inactive_tables_task();
     let blackjack_table_manager =
-        late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(chip_service.clone());
-    let (blackjack_event_tx, _) =
-        broadcast::channel::<late_ssh::app::rooms::blackjack::svc::BlackjackEvent>(64);
-    let blackjack_service = late_ssh::app::rooms::blackjack::svc::BlackjackService::new(
-        chip_service.clone(),
-        blackjack_event_tx,
-    );
+        late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(
+            chip_service.clone(),
+            late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
+        );
     let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
         db.clone(),
         activity_tx.clone(),
@@ -188,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         chat_service.clone(),
         ai_service.clone(),
+        blackjack_table_manager.clone(),
         active_users.clone(),
         activity_tx.clone(),
     );
@@ -226,7 +228,6 @@ async fn main() -> anyhow::Result<()> {
         chip_service,
         rooms_service,
         blackjack_table_manager,
-        blackjack_service,
         dartboard_server,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),

@@ -155,6 +155,32 @@ async fn shift_tab_cycles_screens_backwards() {
 }
 
 #[tokio::test]
+async fn tab_cycles_screens_forward_through_rooms() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "screen-tab-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    let mut app = make_app(test_db.db.clone(), user.id, "screen-tab-flow-it");
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Chat ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " The Arcade ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Rooms ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+}
+
+#[tokio::test]
 async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "artboard-view-it").await;
@@ -494,6 +520,11 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
         "f leader reaction to persist",
     )
     .await;
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("Type a message · j/k select"),
+        "message selection should clear after reacting: {plain:?}"
+    );
 }
 
 #[tokio::test]
@@ -590,6 +621,93 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
         "extended f leader reaction to persist",
     )
     .await;
+}
+
+#[tokio::test]
+async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-owners-viewer").await;
+    let author = create_test_user(&test_db.db, "f-owners-author").await;
+    let thumbs_1 = create_test_user(&test_db.db, "f-owners-thumbs-1").await;
+    let thumbs_2 = create_test_user(&test_db.db, "f-owners-thumbs-2").await;
+    let thumbs_3 = create_test_user(&test_db.db, "f-owners-thumbs-3").await;
+    let thumbs_4 = create_test_user(&test_db.db, "f-owners-thumbs-4").await;
+    let thumbs_5 = create_test_user(&test_db.db, "f-owners-thumbs-5").await;
+    let thumbs_6 = create_test_user(&test_db.db, "f-owners-thumbs-6").await;
+    let thinking = create_test_user(&test_db.db, "f-owners-thinking").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    for user in [
+        &viewer, &author, &thumbs_1, &thumbs_2, &thumbs_3, &thumbs_4, &thumbs_5, &thumbs_6,
+        &thinking,
+    ] {
+        ChatRoomMember::join(&client, general.id, user.id)
+            .await
+            .expect("join user");
+    }
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: author.id,
+            body: "owner reaction target".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+    for user in [
+        &thumbs_1, &thumbs_2, &thumbs_3, &thumbs_4, &thumbs_5, &thumbs_6,
+    ] {
+        ChatMessageReaction::toggle(&client, message.id, user.id, 1)
+            .await
+            .expect("thumb reaction");
+    }
+    ChatMessageReaction::toggle(&client, message.id, thinking.id, 8)
+        .await
+        .expect("thinking reaction");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-owners-flow-it");
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, "owner reaction target").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "1 👍").await;
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, " Reactions ").await;
+    wait_for_render_contains(&mut app, "👍 6 reactions").await;
+    wait_for_render_contains(&mut app, "[+2 more]").await;
+    wait_for_render_contains(&mut app, "@f-owners-thinking").await;
+    let plain = render_plain(&mut app);
+    assert!(
+        !plain.contains("1 👍"),
+        "reaction picker should be dismissed under owner modal: {plain:?}"
+    );
+
+    app.handle_input(b"\r");
+    assert_render_not_contains_for(&mut app, " Reactions ", Duration::from_millis(250)).await;
+    let plain = render_plain(&mut app);
+    assert!(
+        !plain.contains("1 👍"),
+        "reaction picker should stay dismissed after Enter closes modal: {plain:?}"
+    );
+
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "1 👍").await;
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, " Reactions ").await;
+    app.handle_input(b"f");
+    assert_render_not_contains_for(&mut app, " Reactions ", Duration::from_millis(250)).await;
+
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "1 👍").await;
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, " Reactions ").await;
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_render_not_contains_for(&mut app, " Reactions ", Duration::from_millis(250)).await;
 }
 
 #[tokio::test]

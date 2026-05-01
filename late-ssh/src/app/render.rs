@@ -96,16 +96,28 @@ struct DrawContext<'a> {
     is_playing_game: bool,
     rooms_add_form_open: bool,
     rooms_display_name_input: &'a str,
+    rooms_create_focus_index: usize,
+    rooms_create_pace_index: usize,
+    rooms_create_stake_index: usize,
     rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
     rooms_selected_index: usize,
     rooms_active_room: Option<&'a crate::app::rooms::svc::RoomListItem>,
+    rooms_filter: crate::app::rooms::filter::RoomsFilter,
+    rooms_search_active: bool,
+    rooms_search_query: &'a str,
+    rooms_usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
+    rooms_blackjack_snapshots: &'a std::collections::HashMap<
+        uuid::Uuid,
+        crate::app::rooms::blackjack::state::BlackjackSnapshot,
+    >,
+    rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::games::tetris::state::State,
     sudoku_state: &'a crate::app::games::sudoku::state::State,
     nonogram_state: &'a crate::app::games::nonogram::state::State,
     solitaire_state: &'a crate::app::games::solitaire::state::State,
     minesweeper_state: &'a crate::app::games::minesweeper::state::State,
-    blackjack_state: &'a crate::app::rooms::blackjack::state::State,
+    blackjack_state: Option<&'a crate::app::rooms::blackjack::state::State>,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
@@ -135,6 +147,7 @@ struct DrawContext<'a> {
     splash_hint: &'a str,
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
+    show_cli_install_modal: bool,
     is_draining: bool,
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
@@ -191,6 +204,13 @@ impl App {
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
         );
+        let show_dashboard_room_showcases = if self.show_settings {
+            self.settings_modal_state
+                .draft()
+                .show_dashboard_room_showcases
+        } else {
+            self.profile_state.profile().show_dashboard_room_showcases
+        };
         let show_games_sidebar = games_sidebar_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_games_sidebar,
@@ -218,6 +238,7 @@ impl App {
         let message_reactions = self.chat.message_reactions();
         let dashboard_active_room = self.dashboard_active_room_id();
         let dashboard_strip_pins = self.dashboard_strip_pins();
+        let rooms_blackjack_snapshots = self.blackjack_table_manager.table_snapshots();
         let dashboard_messages = dashboard_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -229,6 +250,11 @@ impl App {
             my_vote: vote_my_vote,
             show_header: show_dashboard_header,
             favorites_strip: dashboard_strip_pins.as_deref(),
+            pinned_messages: self.chat.pinned_messages(),
+            show_room_showcases: show_dashboard_room_showcases,
+            rooms_snapshot: &self.rooms_snapshot,
+            blackjack_snapshots: &rooms_blackjack_snapshots,
+            blackjack_prefix_armed: self.dashboard_blackjack_prefix_armed,
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
@@ -239,6 +265,7 @@ impl App {
                 message_reactions,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
+                highlighted_message_id: self.chat.highlighted_message_id,
                 reaction_picker_active: self.chat.is_reaction_leader_active(),
                 composer: self.chat.composer(),
                 composing: self.chat.composing,
@@ -258,6 +285,7 @@ impl App {
         let discover_view = chat::discover::ui::DiscoverListView {
             items: self.chat.discover.all_items(),
             selected_index: self.chat.discover.selected_index(),
+            loading: self.chat.discover.is_loading(),
         };
         let notifications_view = chat::notifications::ui::NotificationListView {
             items: self.chat.notifications.all_items(),
@@ -316,6 +344,31 @@ impl App {
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
+        let rooms_chat_view =
+            self.rooms_active_room
+                .as_ref()
+                .map(|room| chat::ui::EmbeddedRoomChatView {
+                    title: "Chat",
+                    messages: self.chat.messages_for_room(room.chat_room_id),
+                    overlay: self.chat.overlay(),
+                    rows_cache: &mut self.rooms_chat_rows_cache,
+                    usernames: chat_usernames,
+                    countries: chat_countries,
+                    badges: &chat_badges,
+                    message_reactions,
+                    current_user_id: self.user_id,
+                    selected_message_id: self.chat.selected_message_id,
+                    highlighted_message_id: self.chat.highlighted_message_id,
+                    reaction_picker_active: self.chat.is_reaction_leader_active(),
+                    composer: self.chat.composer(),
+                    composing: self.chat.composing,
+                    mention_matches: &self.chat.mention_ac.matches,
+                    mention_selected: self.chat.mention_ac.selected,
+                    mention_active: self.chat.mention_ac.active,
+                    reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                    is_editing: self.chat.edited_message_id.is_some(),
+                    bonsai_glyphs,
+                });
         let online_count = self
             .active_users
             .as_ref()
@@ -337,16 +390,25 @@ impl App {
                         is_playing_game: self.is_playing_game,
                         rooms_add_form_open: self.rooms_add_form_open,
                         rooms_display_name_input: self.rooms_display_name_input.as_str(),
+                        rooms_create_focus_index: self.rooms_create_focus_index,
+                        rooms_create_pace_index: self.rooms_create_pace_index,
+                        rooms_create_stake_index: self.rooms_create_stake_index,
                         rooms_snapshot: &self.rooms_snapshot,
                         rooms_selected_index: self.rooms_selected_index,
                         rooms_active_room: self.rooms_active_room.as_ref(),
+                        rooms_filter: self.rooms_filter,
+                        rooms_search_active: self.rooms_search_active,
+                        rooms_search_query: self.rooms_search_query.as_str(),
+                        rooms_usernames: chat_usernames,
+                        rooms_blackjack_snapshots: &rooms_blackjack_snapshots,
+                        rooms_chat_view,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         sudoku_state: &self.sudoku_state,
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
-                        blackjack_state: &self.blackjack_state,
+                        blackjack_state: self.blackjack_state.as_ref(),
                         dartboard_state: self.dartboard_state.as_ref(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
@@ -376,6 +438,7 @@ impl App {
                         splash_hint: &self.splash_hint,
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
+                        show_cli_install_modal: self.show_cli_install_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
@@ -560,8 +623,6 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
-                    blackjack_state: ctx.blackjack_state,
-                    is_admin: ctx.is_admin,
                     leaderboard: ctx.leaderboard,
                     show_sidebar: ctx.show_games_sidebar,
                 },
@@ -569,15 +630,24 @@ impl App {
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
                 frame,
                 content_area,
-                &crate::app::rooms::ui::RoomsPageView {
+                crate::app::rooms::ui::RoomsPageView {
                     add_form_open: ctx.rooms_add_form_open,
                     display_name: ctx.rooms_display_name_input,
+                    create_focus_index: ctx.rooms_create_focus_index,
+                    create_pace_index: ctx.rooms_create_pace_index,
+                    create_stake_index: ctx.rooms_create_stake_index,
                     snapshot: ctx.rooms_snapshot,
                     selected_index: ctx.rooms_selected_index,
                     active_room: ctx.rooms_active_room,
                     blackjack_state: ctx.blackjack_state,
                     is_admin: ctx.is_admin,
                     is_mod: ctx.is_mod,
+                    filter: ctx.rooms_filter,
+                    search_active: ctx.rooms_search_active,
+                    search_query: ctx.rooms_search_query,
+                    usernames: ctx.rooms_usernames,
+                    blackjack_snapshots: ctx.rooms_blackjack_snapshots,
+                    active_room_chat: ctx.rooms_chat_view,
                 },
             ),
         }
@@ -671,6 +741,10 @@ impl App {
             super::common::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
         }
 
+        if ctx.show_cli_install_modal {
+            super::common::cli_install::draw(frame, inner);
+        }
+
         if ctx.icon_picker_open
             && let Some(catalog) = ctx.icon_catalog
         {
@@ -726,6 +800,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Style::default().fg(theme::TEXT_MUTED()),
     ));
 
+    if screen == Screen::Rooms {
+        append_rooms_title_extras(&mut spans, ctx);
+    }
+
     if screen == Screen::Artboard {
         spans.push(Span::styled(
             "by github.com/mevanlc ",
@@ -763,6 +841,51 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     Line::from(spans)
+}
+
+fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let amber = Style::default().fg(theme::AMBER());
+    let bright = Style::default().fg(theme::TEXT_BRIGHT());
+
+    if let Some(room) = ctx.rooms_active_room {
+        let Some(blackjack_state) = ctx.blackjack_state else {
+            return;
+        };
+        let snapshot = blackjack_state.snapshot();
+        let seated = snapshot
+            .seats
+            .iter()
+            .filter(|s| s.user_id.is_some())
+            .count();
+        let max = snapshot.seats.len();
+        let seat_label = match blackjack_state.seat_index() {
+            Some(i) => format!("seat {}", i + 1),
+            None => "viewer".to_string(),
+        };
+
+        spans.push(Span::styled("· ", dim));
+        spans.push(Span::styled(room.display_name.clone(), bright));
+        spans.push(Span::styled(" · ", dim));
+        spans.push(Span::styled(format!("{seated}/{max} seated"), dim));
+        spans.push(Span::styled(" · ", dim));
+        spans.push(Span::styled(seat_label, dim));
+        spans.push(Span::styled(" · ", dim));
+        spans.push(Span::styled("Bal ", dim));
+        spans.push(Span::styled(format!("{} ", snapshot.balance), amber));
+    } else {
+        let real_count = ctx.rooms_snapshot.rooms.len();
+        let open = ctx
+            .rooms_snapshot
+            .rooms
+            .iter()
+            .filter(|r| r.status == "open")
+            .count();
+        spans.push(Span::styled("· ", dim));
+        spans.push(Span::styled(format!("{real_count} live"), dim));
+        spans.push(Span::styled(" · ", dim));
+        spans.push(Span::styled(format!("{open} open "), dim));
+    }
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {

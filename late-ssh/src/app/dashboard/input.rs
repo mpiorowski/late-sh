@@ -1,4 +1,10 @@
-use crate::app::{chat, state::App, vote};
+use crate::app::{
+    chat,
+    common::{cli_install, primitives::Screen},
+    rooms::svc::GameKind,
+    state::App,
+    vote,
+};
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     let Some(room_id) = app.dashboard_active_room_id() else {
@@ -8,6 +14,15 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
+    if app.dashboard_blackjack_prefix_armed {
+        app.dashboard_blackjack_prefix_armed = false;
+        if let Some(slot) = blackjack_slot_for_key(byte) {
+            return enter_blackjack_room_slot(app, slot);
+        }
+        // Any non-slot key disarms and continues through normal handling so
+        // the second keystroke still does what the user typed.
+    }
+
     // Dashboard favorite controls — all no-ops at <2 pins and fall
     // through as message-action input in that case.
     //   `[` / `]`   cycle prev / next through pinned favorites
@@ -31,6 +46,14 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
+    if byte == b'b'
+        && app.profile_state.profile().show_dashboard_room_showcases
+        && dashboard_blackjack_room_count(app) > 0
+    {
+        app.dashboard_blackjack_prefix_armed = true;
+        return true;
+    }
+
     if byte == b'[' {
         app.cycle_dashboard_favorite(-1);
         app.sync_visible_chat_room();
@@ -44,6 +67,14 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if byte == b',' {
         app.toggle_dashboard_last_favorite();
         app.sync_visible_chat_room();
+        return true;
+    }
+    if byte == b'B' {
+        open_cli_install_modal(app);
+        return true;
+    }
+    if byte == b'P' {
+        open_browser_pairing_qr(app);
         return true;
     }
 
@@ -67,14 +98,10 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    // Enter is dashboard-specific: copy the CLI install command. Must be
-    // checked before delegating because chat compose also binds Enter.
-    if matches!(byte, b'\r' | b'\n') {
-        app.pending_clipboard =
-            Some("curl -fsSL https://cli.late.sh/install.sh | bash".to_string());
-        app.banner = Some(crate::app::common::primitives::Banner::success(
-            "CLI install command copied!",
-        ));
+    if matches!(byte, b'\r' | b'\n')
+        && let Some(room_id) = active_room_id
+        && app.chat.try_jump_to_selected_reply_target_in_room(room_id)
+    {
         return true;
     }
 
@@ -82,4 +109,53 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return false;
     };
     chat::input::handle_message_action_in_room(app, room_id, byte)
+}
+
+pub(crate) fn open_cli_install_modal(app: &mut App) {
+    app.pending_clipboard = Some(cli_install::INSTALL_COMMAND.to_string());
+    app.show_web_chat_qr = false;
+    app.web_chat_qr_url = None;
+    app.show_cli_install_modal = true;
+}
+
+pub(crate) fn open_browser_pairing_qr(app: &mut App) {
+    app.pending_clipboard = Some(app.connect_url.clone());
+    app.web_chat_qr_url = Some(app.connect_url.clone());
+    app.show_cli_install_modal = false;
+    app.show_web_chat_qr = true;
+}
+
+fn dashboard_blackjack_room_count(app: &App) -> usize {
+    app.rooms_snapshot
+        .rooms
+        .iter()
+        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
+        .count()
+}
+
+fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
+    let Some(room) = app
+        .rooms_snapshot
+        .rooms
+        .iter()
+        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
+        .nth(slot)
+        .cloned()
+    else {
+        return false;
+    };
+
+    if crate::app::rooms::input::enter_room(app, room) {
+        app.set_screen(Screen::Rooms);
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn blackjack_slot_for_key(byte: u8) -> Option<usize> {
+    match byte {
+        b'1'..=b'3' => Some((byte - b'1') as usize),
+        _ => None,
+    }
 }

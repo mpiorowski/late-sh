@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-28 (Rooms moderator entry)
+- Last updated: 2026-04-30 (Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, News, The Arcade, Rooms, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time global chat (regular SSH chat messages support a small Markdown subset: headings, bold, italic, inline code, blockquotes, and simple `- ` list items; messages also carry simple per-user numeric reactions `1..8` rendered as footer chips beneath the message block; `---NEWS---` cards still use their dedicated renderer), link and YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games (2048, Sudoku, Nonograms, Minesweeper, Solitaire, legacy admin-gated Arcade Blackjack), a dedicated Rooms screen for persistent game-backed rooms, plus a dedicated shared multi-user ASCII artboard screen. Rooms currently supports listing Blackjack tables from `game_rooms`; admins can create them, admins/mods can enter them as table viewers, sit in one of four Blackjack seats, place per-seat bets concurrently, and auto-deal the round five seconds after the most recent confirmed bet via an in-memory `BlackjackService` lazily bound by `BlackjackTableManager`; the bottom chat pane is still a placeholder. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` now opens a quit-confirm modal; pressing `q` again exits and `Esc` dismisses it. `@bot` mention replies now receive compact context about online non-bot members in the active room (username plus optional bio/country/timezone, capped and truncated for prompt size).
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, and a shared multi-user ASCII Artboard. Detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -244,9 +244,8 @@ flowchart LR
 - `ProfileService` (in `app/profile/svc.rs`) exposes per-user `watch` snapshots backed by service-owned maps (`subscribe_snapshot(user_id)`).
 - `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, streak leaders, per-user streak map (used for chat badges and profile achievements), all-time high scores (Tetris + 2048), and chip leaders (top balances).
 - `ChipService` (in `app/games/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` grants the daily 500-chip stipend on login, `grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips on daily puzzle completion. All 4 daily game services hold a `ChipService` clone and call it in `record_win_task()`.
-- `RoomsService` (in `app/rooms/svc.rs`) owns persistent game-room creation/listing over `game_rooms` + associated `chat_rooms`, publishes `RoomsSnapshot` via `watch`, and emits `RoomsEvent` for create success/failure so session state can show banners.
-- `BlackjackTableManager` (in `app/rooms/blackjack/manager.rs`) owns the process-local runtime registry `HashMap<GameRoom.id, BlackjackService>`. Entering a Blackjack room lazily calls `get_or_create(room.id)`; room creation itself only persists the room row.
-- `BlackjackService` (in `app/rooms/blackjack/svc.rs`) owns one Blackjack table in-memory, publishes `BlackjackSnapshot` via `watch`, and emits per-user `BlackjackEvent` messages via `broadcast`. The SSH app's blackjack state is a thin client wrapper, not the game authority.
+- `RoomsService` (in `app/rooms/svc.rs`) owns persistent game-room creation/listing/deletion over `game_rooms` + associated `chat_rooms`, publishes `RoomsSnapshot` via `watch`, and emits `RoomsEvent` success/failure banners.
+- `BlackjackTableManager` / `BlackjackService` own process-local per-room Blackjack runtime state. Detailed Rooms/Blackjack contracts live in `late-ssh/src/app/rooms/CONTEXT.md`.
 - Events remain `broadcast` for all subscribers; targeted variants carry `user_id` and are filtered in UI state.
 
 ### 2.5 TUI Rendering and State Architecture (Sync vs Async Boundary)
@@ -440,182 +439,17 @@ Current invariants:
 
 ### 2.10 Artboard (Shared ASCII Canvas) [STABLE]
 
-`Artboard` is the user-facing name. The code and upstream crates still use `dartboard` heavily (`src/dartboard.rs`, `app/artboard/svc.rs`, `dartboard_core`, `dartboard_local`, `dartboard_editor`, `dartboard_tui`). When searching the repo, use both terms.
+The Artboard is a shared, persistent, multiplayer ASCII canvas on its own top-level screen (`5`, or cycle with `Tab` / `Shift+Tab`). User-facing docs say `Artboard`; code and upstream crates still use `dartboard` heavily, so search both terms.
 
-#### High-level model
+Detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`, including lifecycle, `late-ssh/src/dartboard.rs` persistence, provenance, keybindings, archive snapshots, tests, and fragile invariants.
 
-- The artboard is a shared, persistent, multiplayer ASCII canvas on its own top-level app screen (`4`, or cycle with `Tab` / `Shift+Tab`).
-- The server owns one in-proc `dartboard_local::ServerHandle` for the whole `late-ssh` process.
-- The canonical canvas size is `384 x 192` (`late-ssh/src/dartboard.rs`).
-- A user does **not** connect to the shared board at SSH login. They only consume a peer/color slot after opening the Artboard screen.
-- Entering the Artboard screen opens in `view` mode; `i` / `Enter` switches into `active` edit mode.
-- Leaving the Artboard screen drops that session's `LocalClient` and frees the slot immediately.
-
-```mermaid
-flowchart LR
-    Nav["Screen 5 / Tab"] --> Page["App::set_screen(Screen::Artboard)"]
-    Page --> Enter["App::enter_dartboard()"]
-    Enter --> Svc["DartboardService::new()"]
-    Svc --> Client["dartboard_local::LocalClient<br/>per session"]
-    Client <-->|CanvasOp / ServerMsg| Server["Shared ServerHandle<br/>process-wide"]
-    Server --> Snap["watch::Receiver<DartboardSnapshot>"]
-    Server --> Events["broadcast::Receiver<DartboardEvent>"]
-    Snap --> State["artboard::state::State"]
-    Events --> State
-    State --> UI["artboard::ui + render loop"]
-    Server --> Persist["Postgres snapshot persistence"]
-```
-
-#### Runtime split: authoritative shared state vs local editor state
-
-Only canvas mutations are shared. Editor affordances stay local to the current SSH session.
-
-**Shared / authoritative**
-- Canvas contents
-- Peer list
-- Assigned user color
-- Sequence number / ack progress
-- Connect rejection state
-- Per-cell authorship (provenance) — map of `Pos -> username`, kept in `late-ssh/src/app/artboard/provenance.rs`. Surfaces through the ownership overlay and the Info sidebar's `Owner` / `Cell` rows.
-
-**Local / session-private**
-- Cursor and viewport origin
-- Active selection anchor
-- Floating brush / floating selection preview
-- Swatch strip contents + pin state
-- Selected paint color from the 16-color local palette (`Ctrl+U` / `Ctrl+Y`)
-- Temporary sampled glyph brush
-- Help overlay tab + scroll
-- Glyph picker search state
-- Private notice text
-
-This split is intentional: the multiplayer protocol syncs `CanvasOp`s, not full editor sessions. Two users can have completely different local selections/swatches while painting into the same shared board.
-
-#### Connection and service lifecycle
-
-1. `late-ssh/src/main.rs` loads the last persisted artboard snapshot from Postgres on server boot, then spawns the persistent in-proc dartboard server.
-2. `SessionConfig` carries the shared `dartboard_server` handle and shared provenance store into each SSH app instance.
-3. `App::set_screen(Screen::Artboard)` lazily calls `App::enter_dartboard()`, creating a per-user `DartboardService` and `artboard::state::State`, and switching the terminal cursor to steady underline.
-4. `DartboardService` calls `ServerHandle::try_connect_local(...)`. On success it spawns a dedicated OS thread that:
-   - polls a local command channel every ~16ms
-   - submits `CanvasOp`s to the shared server
-   - drains `ServerMsg`s into a `watch` snapshot plus `broadcast` event stream
-   - resolves broadcast writers to usernames and updates the shared provenance map
-5. `App::tick()` calls `dartboard_state.tick()` when present, which refreshes the local snapshot, updates cursor clamping, and surfaces rejection/lag notices.
-6. `App::leave_dartboard()` drops the local state and restores the normal block cursor.
-
-Important operational note:
-- Connection overflow is handled at connect time. The upstream server enforces a hard player cap (`dartboard_local::MAX_PLAYERS`); an overflow session gets `connect_rejected` instead of a live board connection.
-
-#### Persistence model
-
-- Runtime helper: `late-ssh/src/dartboard.rs`
-- Snapshot row model: `late_core::models::artboard::Snapshot`
-- Board key: `Snapshot::MAIN_BOARD_KEY`
-
-Persistence behavior:
-- The shared server boots from the last saved snapshot if one exists; otherwise it starts with a blank `384 x 192` canvas.
-- Canvas saves are coalesced and persisted in the background every 5 minutes while dirty.
-- A server-side UTC rollover task wakes at each UTC day boundary, archives one daily snapshot under `daily:YYYY-MM-DD`, keeps only the newest 7 daily rows, and retries the same pending rollover on failure instead of advancing the date.
-- On UTC month rollover, the archived prior-day daily snapshot is also saved as `monthly:YYYY-MM`, then the live `main` board is blanked in-memory and persisted back as a fresh empty board.
-- Provenance is persisted alongside the canvas in `artboard_snapshots.provenance` as JSONB. The minimal schema is username-based (`Pos -> username`), not stable user UUIDs.
-- Shutdown/drain explicitly flushes the latest in-memory artboard snapshot before process exit.
-- Tests cover both periodic persistence and explicit flush-on-demand (`late-ssh/tests/games/artboard.rs`).
-
-#### Interaction model
-
-The artboard is keyboard-first, but it is not "just type into a grid". It layers a local editor model on top of the shared canvas and now has two interaction modes:
-
-- `view` mode: inspect the board, move the cursor/viewport, and keep global page switching (`1-5`, `Tab`, `Shift+Tab`) available.
-- `active` mode: edit the board. Single-key global shortcuts are suppressed so typing goes to the canvas/editor.
-- `snapshot` view: read-only historical daily/monthly archive view. `g` in Artboard view mode opens the snapshot browser; `j/k` or arrows move, `Enter` selects, the top row returns to the live board, and `g` exits an active historical snapshot back to live.
-- The public web gallery for Artboard snapshots is `https://late.sh/gallery`. It is read-only: `late-web` reads `artboard_snapshots` directly from Postgres, lists `main`, `daily:*`, and `monthly:*`, renders one selected saved snapshot, and shows hovered cell coordinates / author from persisted provenance. The `main` gallery entry is the latest saved DB snapshot, not a live in-memory `ServerHandle` stream, so it can lag active drawing by the persistence interval.
-
-```text
-type chars -> draw directly
-select region -> copy/cut -> swatch
-activate swatch -> floating brush
-Enter / ^V -> stamp brush
-^⇧+arrows -> stroke floating brush
-Esc -> dismiss brush/floating first, then clear selection
-```
-
-Key behaviors:
-- Artboard opens in `view` mode.
-- In `view` mode, arrows/Home/End/PageUp/PageDown move around the board without entering draw mode.
-- `i` or `Enter` enters `active` mode.
-- `g` in `view` mode opens daily/monthly snapshots; selected archives cannot enter `active` mode.
-- Plain typing draws directly at the cursor.
-- Typing space erases at the cursor.
-- `Shift+arrows` starts/extends a selection.
-- Mouse drag participates in the same editor selection/pointer model.
-- `Ctrl+C` / `Ctrl+X` copy or cut the current selection into the swatch strip.
-- Clicking a swatch body, or using `Ctrl+A / Ctrl+S / Ctrl+D / Ctrl+F / Ctrl+G`, activates swatch slots `1..5` as a floating brush.
-- Activating the currently active swatch again toggles floating-brush transparency.
-- `Enter` or `Ctrl+V` stamps the active floating brush without dismissing it.
-- `Ctrl+Shift+arrows` strokes a floating brush from the keyboard.
-- `Ctrl+U` / `Ctrl+Y` cycle previous/next paint color in a local 16-color palette. This affects subsequent typed glyphs, paste, glyph picker insertion, swatch stamping, and floating previews, but does not change the peer-list assigned color.
-- `Ctrl+]` opens the glyph picker for emoji / Unicode glyph insertion.
-- Double-clicking an existing non-space cell samples it into a temporary one-glyph brush.
-- `Ctrl+P` toggles the help overlay.
-- `Ctrl+\` toggles the ownership overlay. When on, cells render as per-author initials tinted by a deterministic username color derived from the provenance map.
-- Selection-local shape ops now stop at `Ctrl+T` (flip selection corner), `Ctrl+B` (draw border), and `Ctrl+Space` (smart-fill). The older `Ctrl+H/J/K/L` and `Ctrl+I/O` push/pull chords are intentionally unbound; `Ctrl+U/Y` now cycle paint color.
-- The Info sidebar always shows `Owner` and `Cell` for the current cursor/hover subject. The overlay only changes canvas rendering.
-- `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in `active` mode, and only falls back to `view` mode once there is no local editor state left to dismiss.
-
-Mouse-specific extras:
-- Click swatch pin icon to pin/unpin a swatch.
-- `Ctrl+click` a swatch body clears that swatch slot.
-- Mouse wheel pans the viewport when the pointer is over the canvas.
-- Mouse wheel over the info overlay is intentionally swallowed so it does not pan the board underneath.
-
-#### Keyboard reference
-
-| Action | Keys / Mouse | Notes |
-| --- | --- | --- |
-| Open Artboard | `5`, `Tab`, `Shift+Tab` | Dedicated top-level screen; entering it also connects a local client |
-| Move around in view mode | `←↑↓→`, `Home`, `End`, `PgUp`, `PgDn`, mouse wheel | Lets users inspect/pan without entering draw mode |
-| Enter active mode | `i`, `Enter` | Switches the screen from inspect to edit |
-| Snapshot browser | `g` | View daily/monthly archives read-only; `j/k` or arrows navigate, `Enter` selects, top row returns live |
-| Draw / erase in active mode | `<type>`, `Space`, `Backspace`, `Delete` | Plain typing edits the shared canvas |
-| Paint color | `Ctrl+U`, `Ctrl+Y` | Previous/next local paint color; printable glyphs remain drawable |
-| Select | `Shift+arrows`, mouse drag | Local selection only |
-| Selection shape ops | `Ctrl+T`, `Ctrl+B`, `Ctrl+Space` | Flip corner, draw border, or smart-fill the current selection |
-| Copy / cut to swatch | `Ctrl+C`, `Ctrl+X` | Fills swatch strip; does not sync to peers |
-| Activate swatch brush | click swatch, `Ctrl+A/S/D/F/G` | Slots `1..5` on the home row |
-| Stamp floating brush | `Enter`, `Ctrl+V` | Brush stays active |
-| Stroke floating brush | `Ctrl+Shift+arrows` | Repeated stamps while moving |
-| Toggle brush transparency | activate same swatch again | Floating preview shows transparency state |
-| Glyph picker | `Ctrl+]` | Searchable emoji / Unicode picker |
-| Help | `Ctrl+P` | Four-tab overlay (Overview / Drawing / Brushes / Session), authored in-project under `artboard/data.rs`. `Tab` / `Shift+Tab` switches tabs, `j` / `k` / arrows scroll. |
-| Ownership overlay | `Ctrl+\` | Recolors cells by author initials; `Owner` / `Cell` rows stay visible in the Info sidebar either way. Backed by `provenance.rs`. |
-| Return to view mode | `Esc` | Also closes help / glyph-picker before exiting edit mode |
-| Leave Artboard page | `1-5`, `Tab`, `Shift+Tab` | Available from `view` mode |
-
-#### UI and integration notes
-
-- Artboard now lives under `late-ssh/src/app/artboard/`, not `app/games/artboard/`.
-- The Artboard screen has its own renderer and does **not** use the generic game frame/sidebar layout used by the arcade games.
-- The screen chrome exposes `view` vs `active` mode explicitly in both the frame title and the Artboard info sidebar.
-- The artboard info sidebar shows cursor position, `Owner`, `Cell`, pan availability, selected paint color + palette row, brush status, current selection size, and connected peers.
-- The Artboard help overlay mirrors the global help modal style: single-row tabs, TitleCase labels, Amber active chip, `Tab` / `Shift+Tab` switches tabs, `j` / `k` / arrows scroll. Copy lives in `artboard/data.rs` (not pulled from upstream keymap).
-- The global help modal also has an `Artboard` tab. Its copy lives in `late-ssh/src/app/help_modal/data.rs` and is included in `bot_app_context()`, so `@bot` can answer common Artboard questions including daily/monthly snapshots and the web gallery URL.
-- Tab-switching keybindings were unified across modals: both the global help modal and the settings modal use `Tab` / `Shift+Tab` as the canonical tab switcher; arrow/hl routing was dropped from the help modals.
-- In `view` mode, global page switching stays live; in `active` mode, single-key global shortcuts are intentionally suppressed so the editor owns typing.
-- The global app quit-confirm still exists, but `Esc` is reserved for backing Artboard from overlay -> view mode before any screen change.
-#### Key files
-
-- `late-ssh/src/dartboard.rs` — process-wide server + persistence wrapper
-- `late-ssh/src/app/artboard/svc.rs` — per-session client/service bridge
-- `late-ssh/src/app/artboard/state.rs` — local editor/session state
-- `late-ssh/src/app/artboard/input.rs` — keyboard/mouse routing for active mode
-- `late-ssh/src/app/artboard/page.rs` — dedicated-screen routing for view vs active mode
-- `late-ssh/src/app/artboard/ui.rs` — canvas/sidebar/help/swatch rendering
-- `late-ssh/src/app/artboard/data.rs` — hand-authored help text for the 4 help tabs
-- `late-ssh/src/app/artboard/provenance.rs` — per-cell authorship map + ownership overlay source of truth
-- `late-ssh/tests/games/artboard.rs` — service + persistence integration tests
-- `late-web/src/pages/gallery/` — read-only public gallery for saved Artboard snapshots
-- `late-ssh/src/app/input.rs`, `late-ssh/src/app/tick.rs`, `late-ssh/src/app/render.rs` — SSH app integration points
+Root-level facts:
+- The server owns one in-process `dartboard_local::ServerHandle` for the whole `late-ssh` process.
+- The canonical canvas size is `384 x 192`.
+- Users connect to the shared board only after opening Artboard; leaving drops that session's `LocalClient` and frees the slot.
+- Artboard opens in `view` mode; `i` / `Enter` switches into active edit mode.
+- Canvas and provenance are saved together in `artboard_snapshots`; daily/monthly archives are exposed by the read-only web gallery at `/gallery`.
+- The gallery reads saved DB snapshots, not live server memory, so `main` can lag active drawing by the persistence interval.
 
 ---
 
@@ -642,17 +476,19 @@ late-sh/
 │   │   ├── main.rs             # Starts SSH + API + background loops
 │   │   ├── ssh.rs              # russh server + render loop
 │   │   ├── api.rs              # /api/* + /api/ws/pair
+│   │   ├── dartboard.rs        # Shared Artboard server/persistence wrapper; see app/artboard/CONTEXT.md
 │   │   ├── session.rs          # SessionRegistry + PairedClientRegistry
 │   │   ├── state.rs            # Shared app state, activity, presence
 │   │   └── app/
 │   │       ├── ai/             # AI services: bot/graybeard + summarization
+│   │       ├── artboard/       # Shared ASCII Artboard; see app/artboard/CONTEXT.md
 │   │       ├── bonsai/         # Persistent bonsai tree state, service, and UI
-│   │       ├── chat/           # Rooms, messages, mentions, and embedded news feed
+│   │       ├── chat/           # Chat implementation; see app/chat/CONTEXT.md
 │   │       ├── dashboard/      # Landing screen layout + shortcuts
 │   │       ├── games/          # Arcade hub, leaderboards, and game subdomains
 │   │       ├── icon_picker/    # Ctrl+] emoji + nerd font overlay (chat composer only)
 │   │       ├── profile/        # Username/profile settings and stats
-│   │       ├── rooms/          # Persistent game-room directory + room-backed Blackjack runtime
+│   │       ├── rooms/          # Persistent game-room directory; see app/rooms/CONTEXT.md
 │   │       └── vote/           # Genre vote state, service, and Liquidsoap control
 │   ├── assets/nonograms/       # Prebuilt puzzle packs
 │   └── tests/                  # Integration/smoke tests grouped by feature
@@ -701,7 +537,8 @@ late-sh/
 - All other routes → redirect to `/`
 
 **Service stream contracts (internal):**
-- `VoteService::subscribe_state()` (in `app::vote::svc`), `ChatService::subscribe_state()` (in `app::chat::svc`), `ArticleService::subscribe_snapshot()` (in `app::chat::news::svc`), `NotificationService::subscribe_snapshot()` (in `app::chat::notification_svc`) → shared `watch::Receiver<...Snapshot>` (durable latest state)
+- `VoteService::subscribe_state()` (in `app::vote::svc`) → shared `watch::Receiver<VoteSnapshot>` (durable latest state)
+- Chat service/news/notifications/showcase stream contracts live in `late-ssh/src/app/chat/CONTEXT.md`.
 - `ProfileService::subscribe_snapshot(user_id)` → per-user `watch::Receiver<...Snapshot>` (durable latest state)
 - `ProfileService::prune_user_snapshot_channel(user_id)` → explicit cleanup hook called from UI state `Drop`; removes idle per-user snapshot senders
 - `LeaderboardService::subscribe()` → `watch::Receiver<Arc<LeaderboardData>>` (shared, refreshed every 30s from DB; contains today's champions, streak leaders, per-user streak map for badge computation)
@@ -713,7 +550,7 @@ late-sh/
 - **Open access:** `LATE_SSH_OPEN=true` enables auth, but only public-key auth is accepted; password and keyboard-interactive are always rejected
 - **User scoping:** Votes are scoped to `user_id` (FK to `users.id`)
 - **Chat scoping:** Rooms visible via membership (`ChatRoom::list_for_user`, `ChatRoomMember`)
-- **Auto-join:** Public rooms with `auto_join=true` are seeded for a user only when the user record is first created; reconnecting does not re-add rooms the user already left. Permanent/admin room creation still bulk-adds all existing users when the room is created/promoted.
+- **Auto-join:** Public rooms with `auto_join=true` are seeded for a user only when the user record is first created; reconnecting does not re-add rooms the user already left. The regular `/public #room` user command creates/opens an opt-in room only for the caller (`auto_join=false`, no bulk member add). Permanent/admin room creation still bulk-adds all existing users when the room is created/promoted.
 - **Multi-tenant isolation:** All user data queries filter by `user_id`; no cross-user reads
 
 ### 4.3 Data model and key enums
@@ -726,7 +563,7 @@ late-sh/
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
-| ChatMessage | `chat_messages` | `body` 1-2000 chars |
+| ChatMessage | `chat_messages` | `body` 1-2000 chars, nullable `reply_to_message_id` self-FK for reply jumps |
 | Article | `articles` | `url` UNIQUE, `user_id` FK |
 | ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
@@ -743,11 +580,12 @@ late-sh/
 | Showcase | `showcases` | `user_id` FK; `title` 1-120, `url` 1-2000, `description` 1-800, `tags` TEXT[] (lowercased, ≤8). Listed newest-first, edit/delete restricted to author or admin |
 | ShowcaseFeedRead | `showcase_feed_reads` | `user_id` PK/FK, `last_read_at` timestamp cursor for per-user Showcase unread counts |
 | GameRoom | `game_rooms` | Generic game-room registry. `id` UUIDv7, `chat_room_id` UNIQUE FK to `chat_rooms`, `game_kind` TEXT, `slug` UNIQUE, `display_name` non-empty, `status` IN (`open`, `in_round`, `paused`, `closed`), `settings` JSONB, optional `created_by`. `GameKind` is a Rust enum over text, not a Postgres enum. |
+| ArtboardSnapshot | `artboard_snapshots` | `board_key` UNIQUE (`main`, `daily:YYYY-MM-DD`, `monthly:YYYY-MM`), `canvas` JSONB, `provenance` JSONB. Runtime contracts live in `late-ssh/src/app/artboard/CONTEXT.md`. |
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
 - `Screen`: `Dashboard`, `Chat`, `Games`, `Rooms`, `Artboard` (cycle: `Dashboard -> Chat -> Games -> Rooms -> Artboard -> Dashboard`; News, Mentions, Discover, and Showcase are synthetic room-like entries within Chat, not separate screens. News, Mentions, and Showcase each carry persisted unread state; Showcase is a user-authored project showcase backed by the `showcases` table.)
-- `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair)
+- `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 - `GameKind`: Rust enum in `late-core::models::game_room`; currently `Blackjack`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
 
@@ -782,12 +620,7 @@ late-sh/
 ## 6. Current Work [VOLATILE]
 
 In progress:
-- Rooms is now the primary multiplayer table-game entry point (`Screen::Rooms`, key `4`).
-- `RoomsService` can create persistent Blackjack tables in `game_rooms` while also creating/associating a `chat_rooms(kind='game')` row in one SQL CTE. Room creation publishes a snapshot refresh plus `RoomsEvent` success/error.
-- Rooms page supports selecting rows, admin-only room creation, admin/mod room entry, and returning to the list with `Esc`. Active room mode is a dedicated input-capture surface: after modals and global `Ctrl-O`, events are consumed by the game/room and do not leak to app-wide hotkeys (`w`, `P`, `?`, `1-5`, `Tab`, etc.).
-- `BlackjackTableManager` lazily maps each entered Blackjack `GameRoom.id` to its own runtime `BlackjackService`. Server restart drops runtime table state; entering an existing room creates a fresh service for Blackjack. Future games that need durability (Chess/Battleship/etc.) should restore from game-specific persisted state inside their manager.
-- Active Blackjack room top half renders the real Blackjack UI. Entering a room makes the user a viewer; pressing `s`/Enter takes the first open seat, up to four seats. Seated players type a bet and press Enter; every confirmed bet restarts a 5-second betting window, so other seated players can still place bets concurrently until the auto-deal fires. After the deal, all betting seats can hit/stand their own hands in parallel; the dealer resolves once every betting hand has stood, busted, or naturally settled. `l` leaves the seat when safe, and `Esc` leaves the room/view. The bottom chat half is still a placeholder showing the associated `chat_room_id`.
-- Blackjack gameplay now supports multi-seat bets, per-seat hands, parallel player actions, dealer resolution, and per-user chip settlement. Next active task: AFK/disconnect handling and real room-scoped chat rendering.
+- **Rooms/Blackjack:** Active multiplayer table-game work is documented in `late-ssh/src/app/rooms/CONTEXT.md`. Root context keeps only project-wide contracts; local context owns directory, service, Blackjack runtime, rendering, dashboard slot, and known-gap details.
 
 Future:
 - **Nonograms (v2)**: Replace random generation with pixel-art-to-nonogram pipeline or bulk-curate from webpbn.com.
@@ -795,13 +628,14 @@ Future:
 
 ## 7. Future Work & Roadmap [VOLATILE]
 
-1. Chat upgrades: DMs/private rooms, invites/moderation, better backlog pagination
+1. Chat upgrades: better backlog pagination, moderation polish, and richer matchmaking hooks
 
 Known gaps/risks:
 - Online/listener metrics are app-level presence (`active_users`, includes @bot and @graybeard), not true Icecast listener analytics
 - Time remaining is approximate (up to 5s polling delay on track change)
 - No external metrics or alerting system
 - **Single-replica assumption:** Several structures are purely in-memory and not shared across processes (see multi-replica notes below)
+- **SSH ingress reload risk:** `ssh late.sh` currently reaches `late-ssh` through RKE2 ingress-nginx TCP passthrough (`infra/ssh-tcp.tf`, port `22 -> service-ssh-sv:2222::PROXY`). Long-lived SSH sessions can be dropped after any ingress-nginx config reload because old workers are terminated after `worker_shutdown_timeout` (observed 2026-04-29 after cert-manager renewed `service-web-tls`: reload at `19:56:37Z`, mass SSH/WS disconnect at `20:00:38Z`, matching the 240s timeout). Future infra improvement: stop routing SSH through ingress-nginx; use a dedicated TCP LoadBalancer/NodePort/host proxy for SSH so HTTP/TLS reloads cannot kill SSH sessions. Short-term mitigation: increase ingress-nginx `worker-shutdown-timeout`, but that only delays the disconnect.
 - **Stateful VT parsing in `late-ssh/src/app/input.rs`:** SSH input now runs through a persistent `vte::Parser`, so CSI/SS3 sequences and bracketed paste survive split russh reads instead of assuming the whole escape sequence lands in one chunk. That removes the old split-paste failure where `[200~` / `[201~` residue or embedded newlines could leak through as live keystrokes. The app still keeps two pragmatic layers on top: `is_likely_paste` heuristically treats large printable unmarked chunks as paste for terminals without bracketed paste, and `sanitize_paste_markers`/`strip_paste_markers` still scrub stored residue defensively when copying URLs from older polluted state. Standalone `Esc` is resolved on a short tick delay so split escape sequences are not mistaken for cancel keys.
 
 Roadmap ideas:
@@ -819,7 +653,7 @@ Roadmap ideas:
 - ~~2048~~ ✓ ~~Sudoku~~ ✓ ~~Nonograms~~ ✓ ~~Solitaire~~ ✓
 
 **Table Games (active buildout):**
-- **Blackjack:** Persistent rooms, per-room runtime services, four table seats, per-seat hands/bets, parallel hit/stand actions, auto-deal countdown, and chip settlement are live in the Rooms screen. Service owns one table's truth; clients subscribe to snapshots/events. Still missing AFK/disconnect handling and real room-scoped chat rendering.
+- **Blackjack:** Persistent rooms, per-room runtime services, embedded room chat, and chip settlement are live in the Rooms screen. Detailed runtime behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`. Still missing AFK/disconnect handling.
 - **Texas Hold'em Poker (PvP):** The ultimate late-night clubhouse game. Table-scoped chat, robust turn state.
 
 **Async 1v1:**
@@ -900,13 +734,9 @@ An always-running game where every connected SSH session is automatically a part
 - Events (coffee breaks, AMAs, mini coding jams)
 - Personalization (accent color, favorite vibe, custom tagline)
 
-### Global-cache for cross-user chat data (future)
+### Chat implementation
 
-`ChatService::start_user_refresh_task` polls `list_chat_rooms` every 10s per SSH session. That method currently mixes per-user reads (rooms, unread counts, selected-room tail, ignore list) with two genuinely global reads: `User::list_all_username_map` (mention autocomplete) and `Tree::list_all` (bonsai glyphs for other users' chat lines). With N online users, both global queries run N times every 10s for identical results.
-
-Pattern to steal: `LeaderboardService` — singleton background task refreshes a shared `watch::Receiver<Arc<_>>` on a fixed interval; per-user code reads the cache instead of hitting DB. Applied here, a new `ChatGlobalsService` (or similar) would publish `{ all_usernames, bonsai_glyphs }` every 10s, `list_chat_rooms` would consume the cache, and the per-user query list would shrink to only the genuinely per-user joins.
-
-Not urgent at today's user count — the per-user refresh remains load-bearing for dropped-broadcast-event recovery (lagged `MessageCreated`/`MessageEdited`), so the task itself stays either way; only the two global queries move out.
+Chat-specific refresh/tail loading, commands, rendering, keybindings, synthetic entries, performance notes, and gotchas live in `late-ssh/src/app/chat/CONTEXT.md`.
 
 ### Multi-replica readiness (future)
 
@@ -957,46 +787,8 @@ Currently the SSH app assumes a single process. These in-memory structures would
 4. Side effects: TUI `m`, `+`, and `-` send `toggle_mute`, `volume_up`, and `volume_down` back over the same WS to only the paired client for that token.
 5. Failure: If the paired client disconnects, visualizer decays (rms * 0.96 per tick) and paired state disappears. If SSH disconnects, the session token unregisters on drop.
 
-**Chat send flow:**
-1. Trigger: User presses Enter in composer with non-empty text (supports multiline via `Alt+Enter` or `Ctrl+J`). If `edited_message_id` is set, the same submit path fires `edit_message_task` instead of `send_message_task`, so edit rides on the composer exactly like a fresh send.
-2. Processing: `ChatService::send_message_task` spawned with `request_id` → DB insert → `MessageCreated` broadcast → `SendSucceeded` targeted to sender. Edits emit `MessageEdited` (full `ChatMessage` payload + real `target_user_ids`) plus a per-sender `EditSucceeded`/`EditFailed` ack.
-3. Side effects: All sessions receive `MessageCreated`/`MessageEdited` and apply the delta to their local `rooms[room_id]` vec (no DB refetch). Messages containing `@username` show a golden `│` gutter on the left for the mentioned user.
-4. Failure: Non-member send → `SendFailed` event with message. DB error → `SendFailed`. Empty edit body → `EditFailed`.
-5. News articles post their "new article" announcement into #general by resolving the general room id inline in `ArticleService` and calling `send_message_task` like any other composer submit — there is no general-specific send wrapper.
-
-**Chat ignore flow:**
-1. Trigger: User submits `/ignore @user` or `/unignore @user` in the composer
-2. Processing: `ChatService::ignore_user_task` / `unignore_user_task` resolves the username via `User::find_by_username`, then calls `User::add_ignored_user_id` / `remove_ignored_user_id` (settings JSONB write keyed on `target.id`, not the username string)
-3. Side effects: Service emits `ChatEvent::IgnoreListUpdated { user_id, ignored_user_ids, message }`. `ChatState` updates its local `HashSet<Uuid>`, calls `refilter_local_messages()` to drop already-stored messages from any newly-ignored author across every non-DM room in place (no DB refetch), and shows a success banner.
-4. Exemptions: DM rooms are never filtered — leaving the DM room is the way to dismiss it. `push_message` skips the ignore check for DM rooms so 1:1 messages always land.
-5. Display path: `ChatState::ignore_list_lines()` resolves stored UUIDs back to `@username` via the snapshot's full `usernames` map (`User::list_all_username_map`), falling back to `@<unknown:…>` when a user isn't in the cache.
-6. Failure: `IgnoreFailed { user_id, message }` for self-target, unknown username, already-ignored, or not-currently-ignored — surfaced as a red banner.
-
-**Chat roster/help overlay flow:**
-1. Trigger: User submits `/help`, `/active`, `/members`, or `/list` in the composer
-2. Processing: `ChatState::submit_composer()` intercepts these before any message send. `/help` opens a static overlay, `/active` snapshots the shared in-memory `active_users` registry, `/members` spawns `ChatService::list_room_members_task` for the selected room, and `/list` spawns `ChatService::list_public_rooms_task`.
-3. Side effects: `/active` renders usernames in an overlay immediately and annotates repeated SSH sessions as `(<n> sessions)`. `/members` resolves `chat_room_members` to `users.username` and opens a room-member overlay when the async event arrives. `/list` opens a simple public-room overlay with member counts.
-4. Guardrail: `/members` still requires a real selected room; DMs are allowed and render a generic `DM Members` title.
-5. Failure: Missing room selection or DB/service errors surface as chat banners via `RoomMembersListFailed` / `PublicRoomsListFailed`.
-
-**Chat reply flow:**
-1. Trigger: User selects a message (`j`/`k`) and presses `r`
-2. Processing: `ChatState::begin_reply_to_selected_in_room(room_id)` captures the target author plus a short preview, enters compose mode, and shows a reply-specific composer title. Callers resolve the target room themselves (chat screen passes `selected_room_id`, dashboard passes `App::dashboard_active_room_id()` — which honors pinned favorites, see below); there is no implicit-room wrapper.
-3. Side effects: Submit prepends a quoted first line (`> @user: preview`) to the stored message body; rendering peels that first line back out and draws it as faint reply context above the new body
-4. Failure: No selected message → `r` is a no-op
-
-**Dashboard favorites quick-switch:**
-1. Trigger: User pins rooms via Settings → Favorites tab, stored in `users.settings.favorite_room_ids` (ordered JSONB UUID array). `Profile.favorite_room_ids` reads/writes it through `ProfileParams`.
-2. Resolver: `App::dashboard_active_room_id()` picks the dashboard chat card's room — 0 pins → `#general`, 1 pin → that pin (falls back to general if the user has since left it), 2+ pins → `favorites[dashboard_favorite_index]`. Every dashboard-scoped input path (arrows, `i` compose, `c` copy, scroll, icon picker) calls this resolver instead of `general_room_id()`.
-3. Strip: `App::dashboard_strip_pins()` returns `Some(pills)` only when ≥2 resolvable pins exist, and `draw_favorites_strip` renders a 1-row pill strip above the chat card. Hidden in 0/1-pin cases and when dashboard height <6.
-4. Keybinds (dashboard only): `[` / `]` cycle, `,` jumps to previously-active pin (Vim `C-^` style), `g<digit>` jumps to slot 1..9. The `g` prefix is session-local state on `App`; `handle_global_key` short-circuits digits 1-9 on dashboard while armed so the global screen switcher (`1`=Dashboard, `3`=Games, …) doesn't steal them.
-5. Membership churn: `SettingsModalState::open_from_profile` drops favorites whose room isn't in the current `available_rooms` catalog, so ghosts never linger in the UI. The resolver also falls back to general if a stored pin is no longer joined. Index is session-local (not persisted) and clamped on every read.
-
-**Chat @mention autocomplete:**
-1. Trigger: User types `@` in composer (at start or after space)
-2. Processing: `ChatState::update_autocomplete()` filters `all_usernames` (loaded from `users` via `ChatSnapshot`) case-insensitively by the query after `@`
-3. Interaction: Arrow keys navigate matches, Tab/Enter confirms (inserts `@username `), Esc dismisses popup without leaving compose mode
-4. Rendering: `draw_mention_autocomplete()` renders a popup above the composer with up to 8 filtered matches; confirm must also move `composer_cursor` to the end of the inserted mention including the trailing space
+**Chat flows:**
+Chat send/edit/delete, ignore, roster/help overlays, replies, dashboard favorites, autocomplete, synthetic entries, and chat rendering flows live in `late-ssh/src/app/chat/CONTEXT.md`.
 
 **Vote round switch:**
 1. Trigger: VoteService background tick (5s) detects switch interval (default 60 min) elapsed since last switch
@@ -1006,27 +798,13 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 ### 8.4 Easy-to-break gotchas
 
-- **Ignore is keyed by user id, not username:** `users.settings.ignored_user_ids` stores UUIDs, so a `/ignore @alice` survives @alice renaming herself to @alice2. Storing usernames there would silently break on rename and could re-attach a stale ignore to a different person if usernames are ever reused.
-- **Ignore re-filter is local-only:** `ChatEvent::IgnoreListUpdated` triggers an in-place retain across every non-DM room — no `request_list()` refetch. Side effect: `unignore` does **not** retroactively re-fetch already-dropped messages; they reappear on the next natural snapshot/refresh.
-- **Dashboard shares one chat store with the chat page:** #general lives inside `ChatState.rooms` like every other room; the dashboard card just looks it up by `general_room_id`. There is no parallel `general_messages` vec. Every member-room stays warm from broadcasts regardless of selection — `push_message` only gates the "mark-as-read" side effect on whether the user is actually viewing the room. **Message operations on `ChatState` are room-explicit**: the canonical methods are `select_message_in_room`, `begin_reply_to_selected_in_room`, `begin_edit_selected_in_room`, `delete_selected_message_in_room`, `start_composing_in_room`, all taking a concrete `Uuid`. There are no implicit-room variants — callers resolve the target room at the boundary. Wire new message actions *once* in three places and they work on both dashboard and chat page automatically: (a) `chat::input::handle_message_action_in_room(app, room_id, byte)` for the keybinding, (b) the room-explicit `ChatState` helpers (`find_message_in_room`, `replace_message`, `remove_message`, etc.) for state mutation, (c) `chat::ui::draw_composer_block` / `ComposerBlockView` for any new composer state label (reply, edit, …). Chat-screen entry points (`handle_message_action`, `handle_message_arrow`, `handle_scroll`) are thin wrappers that resolve `selected_room_id` at the top and delegate to the `_in_room` variant; dashboard input passes `App::dashboard_active_room_id()` directly (which equals `general_room_id()` when no favorites are pinned, otherwise the active favorite — see the "Dashboard favorites quick-switch" flow). The composer also pins its own `composer_room_id` in `start_composing_in_room` so submit never falls back to `selected_room_id` — switching rooms mid-compose can't redirect an in-flight message.
-- **Message reactions are per-user and footer-scoped:** `chat_message_reactions` stores at most one numeric reaction (`1..8`) per `(message_id, user_id)`; `f` then `1..8` reacts to the selected message. Rendering keeps reactions inside the selected message block as footer chips below the body, so grouped messages still read top-to-bottom with reactions "between" adjacent messages rather than in the composer or sidebar.
-- **Snapshot merge for empty rooms:** `ChatState::merge_rooms` preserves cached messages when snapshot arrives with empty message list for a room - prevents flash-clear on out-of-order snapshots
-- **Unread count merge:** `merge_unread_counts` tracks `pending_read_rooms` to suppress stale unread counts after marking read (avoids flicker)
+- **Rooms/Blackjack invariants live locally:** directory filters/placeholders, Blackjack render tiers, service-owned stake chips, seat player hydration, dashboard Blackjack slots, and active-room chat routing are documented in `late-ssh/src/app/rooms/CONTEXT.md`.
+- **Chat invariants live locally:** room ordering, composer targets, replies, reactions, pins, ignores, snapshots/tails, row caches, synthetic entries, and chat keybindings are documented in `late-ssh/src/app/chat/CONTEXT.md`.
+- **Artboard invariants live locally:** dartboard lifecycle, persistence/archives, provenance, active-vs-view input routing, swatches, glyph picker, and gallery lag caveats are documented in `late-ssh/src/app/artboard/CONTEXT.md`.
 - **Render loop missed ticks:** 66ms interval with `MissedTickBehavior::Skip` - if a frame takes too long, next ticks are skipped rather than queued (prevents snowball lag)
 - **SSH data timeout:** `handle.data` has 50ms timeout to avoid blocking render loop on backpressure
 - **SSH send failure is terminal for render task:** if `handle.data` returns `Err` (closed/broken channel), `render_once` now returns an error so the render loop stops and closes channel once, instead of logging warnings every 66ms forever
-- **Message ordering:** Full history is `ORDER BY created DESC, id DESC` (newest first), delta sync is `(created, id) > cursor ASC` - mixing these up breaks chat display. Chat rendering reverses messages to oldest-first for row-based display, with newest at the bottom.
-- **Chat message navigation is selection-first:** `selected_message_id` is the source of truth on both the dashboard general card and the chat screen (they share one storage). Mouse wheel, arrows, paging, and `j/k` all move selection; when no message is selected, the viewport falls back to newest-at-bottom.
-- **Chat display names are intentionally plain:** transcript author labels, DM labels, and member labels render the stored username without a leading `@` and without an appended country badge. `@` still exists in composer mentions, mention autocomplete, and command syntax (`/dm @user`, `/ignore @user`, etc.), so display formatting and mention syntax are deliberately different.
-- **Chat wrapping is word-aware:** Shared wrapping prefers breaking on whitespace for regular messages, reply quote lines, small-subset Markdown chat blocks (paragraphs, headings, quotes, `- ` list items), news-card text, and the composer. Hard splits are only valid for single words longer than the available width.
-- **Chat room list order is UI-defined:** The chat sidebar order is hardcoded as `core` (`general`, `announcements`, `suggestions`, any other permanent rooms, then synthetic `news`, `mentions`, `showcase`, `discover`) → `public` → `private` → `dm`, with divider rows rendered in the UI. Public/private sections now map directly to DB `visibility = 'public' | 'private'` for non-permanent, non-DM rooms. The synthetic `news` row carries its own unread badge sourced from `article_feed_reads`, the synthetic `showcase` row carries an unread badge sourced from `showcase_feed_reads` and marks newly-seen entries with `*` for the current visit, and the synthetic `discover` row lists public topic rooms the current user has not joined yet (member/message counts + Enter-to-join).
-- **Transcript render cost is cache-sensitive:** every member room keeps a warm tail (broadcast-driven, hard-capped at 1000 messages per room). The chat UI caches wrapped transcript rows for the dashboard general card and the active room; invalidation must track width, message content/order, usernames, badges, and bonsai glyphs. Only the selected room and general are fetched from DB on snapshot refresh — other rooms warm up from broadcasts and pull a one-shot backfill via `request_list` on first open per session.
-- **Composer render cost is cache-sensitive:** The chat composer caches wrapped `ComposerRow`s in `ChatState`; any change to composer text or width must invalidate that cache before render/cursor-up/down.
-- **Icon picker is chat-composer-only:** `Ctrl+]` (byte `0x1D`) opens `app::icon_picker` as a modal overlay, lazy-loads the catalog on first open (two sections each for Emoji and Nerd Font — no Unicode tab, no `unicode_names2` dep), and auto-starts `ChatState::start_composing` if the user isn't already composing. Selected icons are only ever pushed into `app.chat.composer`; Profile and news composers are intentionally not targets. The picker intercepts all input via an early return in `handle_parsed_input`, so while it is open nothing else on screen receives keys.
-- **@mention detection:** Uses simple `@username` substring match in message body. The `all_usernames` field on `ChatSnapshot` is loaded from `users` every refresh (10s) via `User::list_all_usernames` — includes all users, not just online ones.
-- **Reply persistence is currently body-encoded:** There is no reply DB column yet. Replies are stored as a quoted first line in `body` and rendered back out in the TUI. If/when true threaded metadata is added, both send and render paths need coordinated migration.
-- **All services are singletons** shared across SSH sessions. `ProfileService` snapshots are per-user channels keyed by `user_id`; events still require `user_id` filtering in UI state. Per-user background refresh tasks are spawned on session init and aborted on `Drop`, and profile snapshot channels are pruned when receivers go away.
-- **Chat room `updated` timestamp:** Intentionally NOT used for room ordering to keep stable sort - rooms ordered by type (general → language → private → dm)
+- **All services are singletons** shared across SSH sessions. `ProfileService` snapshots are per-user channels keyed by `user_id`; events still require `user_id` filtering in UI state. Profile snapshots include the `Profile` projection plus a read-only `bonsai_trees` row when one exists, so viewing a profile can render bonsai without creating/mutating another user's tree. Per-user background refresh tasks are spawned on session init and aborted on `Drop`, and profile snapshot channels are pruned when receivers go away.
 - **Web Audio `createMediaElementSource` is one-shot:** Can only be called once per `<audio>` element. AudioContext + source node must be created once and reused across play/pause cycles. Disconnect suspends the context (`audioCtx.suspend()`), replay resumes it — never close and recreate.
 - **Browser audio pairing status must not be stomped by WS:** WS `onclose`/`onerror` must check `status !== 'playing'` before setting `'disconnected'`, otherwise a WS drop kills the "streaming" UI while audio is still playing fine
 - **Paired-client control routing is latest-wins per token:** `PairedClientRegistry` stores one outbound sender/state entry per session token. If multiple browser/CLI clients pair against the same token, the most recent registration owns control/state until it disconnects.
@@ -1047,69 +825,20 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - **Bonsai growth stages:** living stages use a simple 100-point ladder capped at 700 growth points: Seed 0-99, Sprout 100-199, Sapling 200-299, Young 300-399, Mature 400-499, Ancient 500-599, Blossom 600-700.
 - **Bonsai care modal owns pruning:** global `w` opens the care modal (`w care` is rendered on the Bonsai sidebar border). Inside the modal, `w` waters/replants, `p` hard-prunes the whole tree (-100 growth, rerolls seed, resets today's wrong-branch cuts), `hjkl`/arrows move a spatial pruning cursor, `x` cuts only when the cursor is on a generated wrong branch, `s` copies the ASCII snippet, and `?` opens the Bonsai help section. A wrong cut costs -10 growth immediately. Completing all daily wrong-branch cuts preserves the current shape; it no longer rerolls seed.
 - **Bonsai seed math is stable, order-sensitive:** `seed % style_count` picks the Japanese style, `(seed / style_count) % shape_count` picks the hand-tuned silhouette within that style, `(seed / (style_count * shape_count)) % 3` picks the texture form (default / airy / dense). Reordering match arms in `tree_ascii` or inserting a new style mid-list silently remaps every existing user's tree to a different silhouette. Append new styles at the end and bump the stage's `high_stage_style_count` / `high_stage_shape_count`.
+- **Bonsai music sway works in tight cards:** `render_tree_art_lines()` applies beat-driven horizontal sway through a small viewport helper, so the 24-column right sidebar can crop shifted canopy lines instead of clamping the motion away. The care modal and sidebar share this renderer.
 - **Help modal (`?`) intercepts all input:** When `show_help` is true, the input handler dismisses the modal on any keypress before any other input processing. This includes `?` itself (toggle off) and `Esc`.
 - **Desktop notifications bypass the frame diff:** OSC 777 (kitty/Ghostty/rxvt-unicode/foot/wezterm/konsole/mlterm) and OSC 9 (iTerm2) payloads are written to `App::pending_terminal_commands`, not into the ratatui frame. `late-ssh::ssh::render_once` drains that buffer **after** pushing the frame diff and sends each payload as a separate `handle.data` call. Writing them inline with `write!(self.shared, …)` would slip them into the diff and get re-emitted on every redraw. Same rule applies to OSC 52 clipboard copies. The session emits an XTVERSION probe (`CSI > q`) alongside the other alt-screen setup bytes and narrows `App::notification_mode` (`Both` → `Osc777` | `Osc9`) from the DCS reply (`ESC P > | <name>(<version>) ST`) — kitty/wezterm/ghostty/foot/konsole/rxvt-unicode/mlterm land on `Osc777`, iTerm2 on `Osc9`, and unknown/non-responding terminals stay on `Both` (prior behavior). Replies are spliced out of the raw byte stream **before** the splash short-circuit so the leading `ESC` doesn't dismiss the splash (`input::extract_xtversion_replies`); the `vte::Parser` DCS path (`hook`/`put`/`unhook`) catches the same reply again after splash and `App::set_terminal_version` is idempotent, so the double-path is intentional.
 - **Notification pipeline is kind-tagged and throttled server-side:** `ChatState::pending_notifications` holds `PendingNotification { kind: &'static str, title, body }` entries drained each render. `render.rs` picks the first pending whose `kind` is in `users.settings.notify_kinds` and honors the shared `notify_cooldown_mins` via `App::last_notify_at`. Adding a new kind means: (1) add a matching toggle row in the settings modal UI/state, (2) enqueue it from the relevant event handler, and (3) update the render-side matcher/tests that assume the current `"dms" | "mentions" | "game_events"` set. No tmux DCS wrapping — tmux is explicitly unsupported.
 - **Profile notifications default to all-off:** Migration 026 merges profile fields into `users.settings` with `notify_kinds = []` and `notify_cooldown_mins = 0`. `render.rs` only fires if the kind string is present in the user's array, so a brand-new account is silent until they opt in through the settings modal. A focus-tracking `"unfocused"` policy used to exist (DEC mode 1004) but was removed — `notify_kinds` is the whole model now.
-- **`Profile` is a view, not a table:** Migration 026 dropped the `profiles` table — username + notify settings + theme now live on `users` (column + `settings` JSONB). `late_core::models::profile::Profile` is a projection loaded via `Profile::load(client, user_id)` and saved via `Profile::update(client, user_id, params)`, which merges into `settings` with `settings || jsonb_build_object(...)` to preserve unrelated keys (theme_id, ignored_user_ids) under concurrent writes.
+- **`Profile` is a view, not a table:** Migration 026 dropped the `profiles` table — username + notify settings + theme now live on `users` (column + `settings` JSONB). `late_core::models::profile::Profile` is a projection loaded via `Profile::load(client, user_id)` and saved via `Profile::update(client, user_id, params)`, which merges into `settings` with `settings || jsonb_build_object(...)` to preserve unrelated keys (theme_id, ignored_user_ids) under concurrent writes. Profile also exposes JSON-backed system fields (`ide`, `terminal`, `os`) plus language tags (`langs`, normalized to up to eight `#tag` values) and `users.created` as `created_at`; the read-only profile modal renders right-side `bonsa` and `late.fetch` boxes when the modal is wide enough.
 
 ---
 
 ## 8.5 Input Lag Investigation (~60 concurrent users) [VOLATILE]
 
-Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI (chat composer, screen switches). Findings from two independent code reads, grouped and deduplicated below. Ordered by likely impact. This section now mixes landed fixes and still-open follow-ups — keep it current as work lands.
+Repo-level finding: input now lands in a per-session queue and the render loop wakes on input, so ordinary keystrokes no longer wait on the app mutex before being queued. Remaining broad risk is render cost under high fan-out because `render_once` still holds the app lock across synchronous `app.tick()` + `app.render()`.
 
-### A. Render lock blocks input (mostly addressed for keystrokes)
-- `render_once` still holds the lock across the whole synchronous `app.tick()` + `app.render()` (full ratatui draw + diff).
-- With 60 sessions × 15 FPS = ~900 frame builds/sec sharing tokio worker threads, even modestly expensive frames push input latency into the felt range.
-- **Cadence gap closed (§2.6):** the render loop now wakes on input via `RenderSignal` within ~15ms instead of waiting up to 66ms for the next world tick. This removes the "input lands right after a world tick → 60ms dead zone" case entirely. Typical input-to-frame latency is now bounded by the mutex contention tail, not the world-tick cadence.
-- **Keystroke path fixed:** `data()` now pushes raw bytes into a per-session `mpsc::UnboundedSender<Vec<u8>>`; the render task drains that queue immediately before `app.tick()` / `app.render()`. Ordinary SSH input no longer waits on the render mutex.
-- **Still open — render cost:** expensive frames still hold the app mutex longer, which affects resize handling and increases time-to-paint, but no longer blocks the `data()` ingress path itself.
-
-### B. Chat row cache is expensive even on hits
-- `ensure_chat_rows_cache` (`late-ssh/src/app/chat/ui.rs:324`) calls `chat_rows_fingerprint` (`late-ssh/src/app/chat/ui.rs:297`) every render. The fingerprint hashes message id, user_id, created, **body string**, plus username/badge/glyph lookups for every visible message.
-- With `HISTORY_LIMIT = 1000` (`late-ssh/src/app/chat/svc.rs:22`), the active room's full transcript can be re-hashed up to 15 times/sec per session — a steady CPU floor even when nothing changed.
-- **Direction:** cap visible messages much lower (200 is plenty for a TUI viewport), and/or maintain the fingerprint incrementally (`(last_msg_id, last_msg_updated_at, len, badge_version, glyph_version)`) instead of full re-hash.
-
-### C. `ChatSnapshot` is a single global watch channel + per-user payload → quadratic clone storm
-- `ChatService` holds **one** `watch::Sender<ChatSnapshot>` (`late-ssh/src/app/chat/svc.rs:155`). Every session's refresh task publishes its own per-user snapshot into it (`late-ssh/src/app/chat/svc.rs:240`), ~6 publishes/sec at 60 users.
-- `drain_snapshot` (`late-ssh/src/app/chat/state.rs:1128`) clones the **entire** snapshot first, then discards it if `snapshot.user_id != self.user_id`. 59/60 of those clones are pure waste.
-- The cloned payload is huge: rooms `Vec<(ChatRoom, Vec<ChatMessage>)>` (general up to 1000 msgs + selected room up to 1000), `usernames` HashMap, `bonsai_glyphs` HashMap, `all_usernames` Vec.
-- The clone runs under the per-session render mutex, so it directly extends item A's lock-hold time.
-- **Cheap interim:** peek `borrow().user_id` first, only clone if it matches the receiver.
-- **Real fix:** the `ChatGlobalsService` split already proposed in §7 — global maps in their own `watch<Arc<…>>`, per-user state in per-user channels (mirror `ProfileService`'s per-user-keyed senders).
-
-### D. Per-user 10s refresh does heavy work for everyone, every cycle
-- `list_chat_rooms` (`late-ssh/src/app/chat/svc.rs:179`) runs every 10s per session and unconditionally fetches:
-  - room membership + unread counts (`svc.rs:181`, `svc.rs:182`)
-  - up to 1000 messages for the active room
-  - up to 1000 messages for `#general` — **even when the user isn't on the dashboard**
-  - up to 1000 messages for joined pinned favorites so dashboard quick-switch rooms are always fully hydrated on snapshot load
-  - all usernames (`svc.rs:209`) — global, identical for everyone
-  - all bonsai trees (`svc.rs:213`) — global, identical for everyone
-  - per-user ignored list
-- At 60 users that's ~120 list_recent calls / 10s shipping ~12k+ rows/sec from PG just for the warm-tail refresh.
-- **Constraint learned from dashboard favorites:** do **not** optimize this by guessing hydration from local room state like `messages.is_empty()`. Non-active rooms can receive live `MessageCreated` / `DeltaSynced` events before their historical backlog is ever fetched, so "non-empty" does not mean "fully hydrated". Any future perf cut must preserve a real snapshot/backlog contract for rooms the UI can immediately show (today: active room, `#general`, joined pinned favorites).
-- **Direction:** drop `HISTORY_LIMIT` to ~200 (no human reads back 1000), let general's tail be cached once in `ChatService` (broadcasts already keep it warm), and if needed split "initial/UI-visible preload set" from the steady-state 10s refresh scope. Reduce query volume without reintroducing local-state hydration heuristics.
-- Refresh task itself stays — it's load-bearing for dropped-broadcast recovery (lagged `MessageCreated`/`MessageEdited`); only the global queries and the volume move out.
-
-### E. Unread-count query may get painful as message volume grows
-- `ChatRoomMember::unread_counts_for_user` (`late-core/src/models/chat_room_member.rs:99`) LEFT-JOINs `chat_messages` and counts every row newer than `last_read_at` for every membership row. Index `idx_chat_messages_room_created` on `(room_id, created DESC, id DESC)` exists, so plans should use it, but the query still scans all unread rows per room.
-- Not the primary suspect at 60 users today, but worth `EXPLAIN ANALYZE` once message volume grows. Could also be replaced by a maintained counter if it shows up in profiles.
-
-### F. Snapshot merge clones inactive rooms' history vectors
-- `merge_rooms` (`late-ssh/src/app/chat/state.rs:1394`) preserves cached messages on snapshots that arrive with empty per-room vecs by **cloning the previous Vec<ChatMessage>** for each such room. Prevents the flash-clear race, but means every refresh copies large per-room message vecs around instead of doing a lightweight metadata update.
-- **Direction:** carry per-room metadata (id, name, kind, member info, unread count) separately from the message tail, and only swap the message tail when the snapshot actually carries one for that room.
-
-### Suggested order
-1. **A** (input/render lock split) and **B** (cache fingerprint cap/incremental) — pure local changes, immediate user-felt latency win.
-2. **C-cheap** (peek user_id before clone) — one-line patch, biggest CPU cut of the bunch.
-3. **D** (drop HISTORY_LIMIT, stop refetching general per-user) — small change, kills the bulk of PG churn.
-4. **C-real** + **F** (`ChatGlobalsService` split, per-room metadata vs. tail separation) — bigger refactor, removes the N² shape entirely.
-5. **E** if it shows up in PG profiles after the above.
-
-### Out of scope of this investigation
-- Paired-client viz WS path is local per-token (`mpsc::channel(64)`) and not the suspect. The visualizer-driven full ratatui redrawing is part of A's per-tick cost, not a separate bottleneck.
+Chat-specific row-cache, snapshot, unread-count, and scoped-loading performance notes live in `late-ssh/src/app/chat/CONTEXT.md`.
 
 ---
 
@@ -1130,11 +859,7 @@ Vote::upsert(&client, user_id, "lofi").await?;
 let (lofi, classic, ambient, focus, jazz) = Vote::tally(&client).await?;
 
 // === Chat ===
-let rooms = ChatRoom::list_for_user(&client, user_id).await?;
-ChatRoomMember::auto_join_public_rooms(&client, user_id).await?;
-ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
-let unread = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
-let messages = ChatMessage::list_recent(&client, room_id, 50).await?;
+// See late-ssh/src/app/chat/CONTEXT.md for ChatService and model examples.
 
 // === Services (subscribe pattern) ===
 let vote_rx = vote_service.subscribe_state();   // watch::Receiver<VoteSnapshot>
@@ -1186,14 +911,6 @@ sh scripts/seed_chat_rooms.sh
 sh scripts/seed_chat_messages.sh
 sh scripts/seed_notes.sh
 
-# Inspect chat messages
-PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d postgres -c "
-SELECT r.slug, u.username, m.body, m.created
-FROM chat_messages m
-JOIN chat_rooms r ON r.id = m.room_id
-JOIN users u ON u.id = m.user_id
-ORDER BY m.created DESC
-LIMIT 20;"
 ```
 
 ### 10.2.1 Production DB access
@@ -1222,15 +939,6 @@ kubectl get secret -n default <db-secret> -o jsonpath='{.data.dbname}' | base64 
 kubectl exec -n default <postgres-pod> -- \
   env PGPASSWORD='<password>' \
   psql -h <rw-service> -U <db-user> -d <db-name> -c "select 1;"
-```
-
-Useful example: chat rooms use `slug`, not `name`.
-
-```bash
-kubectl exec -n default <postgres-pod> -- \
-  env PGPASSWORD='<password>' \
-  psql -h <rw-service> -U <db-user> -d <db-name> -c \
-  "select id, kind, visibility, slug, permanent from chat_rooms where lower(coalesce(slug, '')) = 'suggestions';"
 ```
 
 Notes:
@@ -1269,9 +977,9 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen (`/dm @user`, `/public #room`, `/private #room`, `/invite @user`, `/members`, `/leave`, `/active`, `/list`, `/ignore [@user]`, `/unignore [@user]`, `/music`, `/settings`, `/help`) with grouped room sections and synthetic `news`, `mentions`, `showcase`, and `discover` entries in the room list. Admin-only room management commands include `/create-room #room`, `/delete-room #room`, and `/fill-room #room`; `/fill-room` works only for public rooms, bulk-adds all users, and flips the room to `auto_join = true` for future joins. `showcase` lets users post project links (title + url + tags + description), carries unread badges, and marks unread entries with `*` for the current visit; j/k navigates, Enter copies the URL, `i` opens a 4-field composer, `e` edits your own entry, `d` deletes your own (admins can delete any). `discover` shows public rooms you have not joined yet with member/message counts; Enter joins the selected room. `/public #room` opens or creates an opt-in public room and joins only the caller. |
-| **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`), daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`), and legacy admin-gated Blackjack. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Rooms** | 4 | Active | Dedicated room directory screen for shared multiplayer table games. Current implementation persists `game_rooms`, lets admins create Blackjack tables, lets admins/mods enter a table as viewers, sit in one of four Blackjack seats, place per-seat bets concurrently, auto-deals five seconds after the most recent confirmed bet, and lazily binds each entered Blackjack room to its own `BlackjackService` through `BlackjackTableManager`. Non-admin non-mod users can view the list but cannot create or enter rooms; mods can enter/play but cannot create rooms. Active Rooms mode captures input like a dedicated game screen; only global `Ctrl-O` reaches settings. Top half renders Blackjack; bottom half is a room-chat placeholder using the associated `chat_room_id`. |
+| **Chat** | 2 | Active | Full room-list chat screen with DMs, public/private rooms, mentions, News, Showcase, and Discover synthetic entries. Detailed commands, keybindings, service flow, and gotchas live in `late-ssh/src/app/chat/CONTEXT.md`. |
+| **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`) and daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`). Blackjack lives in Rooms. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
+| **Rooms** | 4 | Active | Persistent game-room directory plus active Blackjack table/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
 | **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 
 ### Layout
@@ -1330,11 +1038,9 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
-| `j` / `k` / arrows | Dashboard | Scroll chat |
-| `p` | Dashboard chat selection | Open selected user's read-only profile modal |
-| `r` | Dashboard chat selection | Reply to selected general chat message |
-| `e` | Dashboard / Chat (own message selected) | Edit selected message — same composer, different title |
-| `d` | Dashboard / Chat (own message selected) | Delete selected message |
+| `P` | Dashboard | Show browser-pairing QR (copies pairing URL) |
+| `B` | Dashboard | Open CLI install/build-source modal |
+| Dashboard chat keys | Dashboard | See `late-ssh/src/app/chat/CONTEXT.md`. |
 | `Enter` | Games lobby | Launch selected game |
 | `Esc` | Active game | Exit back to Arcade lobby |
 | `h` / `j` / `k` / `l` / arrows | 2048 | Move tiles |
@@ -1362,54 +1068,16 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `n` | Nonograms | Generate a fresh personal puzzle for the current size |
 | `[` / `]` | Nonograms | Switch puzzle size pack |
 | `Esc` | Nonograms | Exit back to Arcade lobby |
-| `h` / `l` | Chat | Switch room selection, including the synthetic `news`, `mentions`, `discover`, and `showcase` entries. Aliases: `Ctrl+N` next room, `Ctrl+P` previous room; room switching wraps around. |
-| `j` / `k` / arrows | Chat (`news` selected) | Navigate news list |
-| `i` | Chat (`news` selected) | Start composing/pasting URL |
-| `Enter` | Chat (`news` selected) | Copy selected link / submit URL |
-| `d` | Chat (`news` selected) | Delete own article |
-| `Esc` | Chat (`news` composing) | Cancel URL compose |
-| `j` / `k` / arrows | Chat (`showcase` selected) | Navigate showcase list |
-| `i` | Chat (`showcase` selected) | Open new showcase composer (title / url / tags / description) |
-| `e` | Chat (`showcase` selected) | Edit selected showcase (own only) |
-| `d` | Chat (`showcase` selected) | Delete selected showcase (own only; admins can delete any) |
-| `Enter` | Chat (`showcase` selected) | Copy selected URL |
-| `Tab` / `Shift+Tab` | Chat (`showcase` composing) | Cycle composer fields |
-| `Enter` | Chat (`showcase` composing) | Submit (in description, also submits — there is no Alt+Enter newline yet, use raw `\n`) |
-| `Esc` | Chat (`showcase` composing) | Cancel compose |
-| `i` / `Enter` | Dashboard | Start composing chat |
-| `j` / `k` | Chat | Move message selection newer/older |
-| `f` then `1`..`8` | Dashboard / Chat message selection | React to selected message |
-| `p` | Chat | Open selected user's read-only profile modal |
-| `r` | Chat | Reply to selected message |
-| `P` | Global | Show browser-pairing QR (copies pairing URL) |
-| `/help` | Chat composer | Open scrollable chat help overlay (commands + all chat keys) |
-| `/active` | Chat composer | List active SSH users from the in-memory session registry |
-| `/list` | Chat composer | List users in the selected non-auto-join ("private") room |
-| `/music` | Chat composer | Open music setup instructions in the same scrollable overlay flow as `/help` |
-| `/settings` | Chat composer | Open the settings modal |
-| `/ignore [@user]` | Chat composer | Mute a user, or list muted users when no arg |
-| `/unignore [@user]` | Chat composer | Remove a user from your ignore list |
-| `j` / `k` / arrows | Chat overlay (`/help`, ignore list) | Scroll overlay |
-| `Esc` / `q` | Chat overlay (`/help`, ignore list) | Close overlay |
+| Chat keys | Chat / Dashboard chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, and icon picker behavior. |
 | `Ctrl+O` | Global | Open the settings modal from anywhere, including active games |
-| `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
+| `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
-| `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/bio, cycle a setting, or open the country/timezone picker |
+| `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/system fields/bio, cycle a setting, or open the country/timezone picker |
 | `Alt+Enter` | Settings modal (bio editing) | Insert newline |
 | `?` | Settings modal | Open help modal on top |
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |
 | `Esc` / `q` | Read-only profile modal | Close |
 | `Esc` | Any modal | Close/cancel |
-| `c` | Dashboard / Chat message selection | Copy selected message |
-| `C` | Chat (not composing) | Open web chat QR (copies URL + shows it as fallback) |
-| `Ctrl+]` | Dashboard / Chat | Open icon picker (emoji + nerd font). Auto-starts the composer if not already composing. Inserts into the chat composer only. |
-| `↑` / `↓` / `j` / `k` | Icon picker | Move selection |
-| `Ctrl+U` / `Ctrl+D` | Icon picker | Half-page up / down |
-| `PageUp` / `PageDown` | Icon picker | Full-page jump |
-| `Enter` | Icon picker | Insert selected icon and close |
-| `Alt+Enter` | Icon picker | Insert selected icon and keep picker open |
-| click / wheel / dbl-click | Icon picker | Select row / scroll / insert + keep open |
-| `Esc` | Icon picker | Close without inserting |
 
 ### Keybinding change checklist
 

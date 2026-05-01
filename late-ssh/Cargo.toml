@@ -24,6 +24,9 @@ ipnet.workspace = true
 # Async Runtime
 tokio = { workspace = true }
 
+# Memory allocator
+tikv-jemallocator = "0.6"
+
 # Database
 tokio-postgres = { workspace = true }
 crossterm.workspace = true

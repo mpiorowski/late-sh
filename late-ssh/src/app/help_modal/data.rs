@@ -1,4 +1,4 @@
-use crate::app::ai::ghost::{GRAYBEARD_CHAT_INTERVAL, GRAYBEARD_MENTION_COOLDOWN};
+use crate::app::ai::ghost::GRAYBEARD_MENTION_COOLDOWN;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HelpTopic {
@@ -103,7 +103,7 @@ pub fn chat_help_lines() -> Vec<String> {
     [
         "Commands",
         "  /binds             open this guide",
-        "  /public #room      open or create a public room",
+        "  /public #room      open/create public room for everyone",
         "  /private #room     create a private room",
         "  /invite @user      add a user to the current room",
         "  /leave             leave the current room",
@@ -131,6 +131,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  p                  open selected user's profile",
         "  f then 1 / 2 / 3 / 4 / 5",
         "                     react to selected message on any layout",
+        "  Enter              jump to loaded original for selected reply",
         "  r                  reply to selected message",
         "  e                  edit selected message",
         "  d                  delete selected message",
@@ -228,7 +229,10 @@ fn overview_lines() -> Vec<String> {
         "  q                 open quit confirm (press q again to leave)",
         "  m                 mute paired client",
         "  + / -             paired client volume",
+        "",
+        "Dashboard",
         "  P                 show browser pairing QR",
+        "  B                 open CLI install / BUILD SOURCE modal",
         "",
         "Dashboard favorites",
         "  Pin rooms in Settings → Favorites so the dashboard's chat card",
@@ -414,7 +418,6 @@ fn artboard_help_lines() -> Vec<String> {
 }
 
 fn settings_help_lines() -> Vec<String> {
-    let graybeard_interval_min = GRAYBEARD_CHAT_INTERVAL.as_secs() / 60;
     let graybeard_mention_cooldown_sec = GRAYBEARD_MENTION_COOLDOWN.as_secs();
 
     vec![
@@ -463,8 +466,8 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "@graybeard".to_string(),
         "".to_string(),
-        format!("Lurks in #general every ~{graybeard_interval_min}min."),
         "Burned-out senior who still shows up to heckle modern software.".to_string(),
+        "Only replies when mentioned.".to_string(),
         format!("Replies on mention with a {graybeard_mention_cooldown_sec}s cooldown."),
     ]
 }
@@ -527,7 +530,7 @@ Don't trust the install script? Build from source:
 
 Option 2: Browser pairing
 
-Press `P` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
+On the Dashboard, press `P` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
 
 Both options give you:
   m = mute | +/- = volume | visualizer in the sidebar

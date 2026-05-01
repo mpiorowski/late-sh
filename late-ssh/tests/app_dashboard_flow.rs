@@ -25,11 +25,64 @@ async fn make_app_harness() -> (late_core::test_utils::TestDb, late_ssh::app::st
 }
 
 #[tokio::test]
-async fn enter_on_dashboard_shows_url_copied_banner() {
+async fn uppercase_b_on_dashboard_opens_cli_install_modal() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"\n");
-    wait_for_render_contains(&mut app, "CLI install command copied!").await;
+    app.handle_input(b"b");
+    assert!(
+        !render_plain(&mut app).contains("build from source"),
+        "lowercase b should not open the CLI install modal"
+    );
+
+    app.handle_input(b"B");
+    wait_for_render_contains(&mut app, "build from source").await;
+    wait_for_render_contains(&mut app, "curl -fsSL https://cli.late.sh/install.sh | bash").await;
+}
+
+#[tokio::test]
+async fn mouse_move_does_not_close_cli_install_modal() {
+    let (_test_db, mut app) = make_app_harness().await;
+
+    app.handle_input(b"B");
+    wait_for_render_contains(&mut app, "build from source").await;
+
+    app.handle_input(b"\x1b[<35;20;5M");
+    wait_for_render_contains(&mut app, "build from source").await;
+
+    app.handle_input(b"x");
+    assert!(!render_plain(&mut app).contains("build from source"));
+}
+
+#[tokio::test]
+async fn uppercase_p_only_opens_pairing_qr_on_dashboard() {
+    let (_test_db, mut app) = make_app_harness().await;
+
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Chat ").await;
+    app.handle_input(b"P");
+    assert!(
+        !render_plain(&mut app).contains("Scan to pair audio"),
+        "uppercase P should not open the pairing QR outside Dashboard"
+    );
+
+    app.handle_input(b"1");
+    wait_for_render_contains(&mut app, " Dashboard ").await;
+    app.handle_input(b"P");
+    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+}
+
+#[tokio::test]
+async fn mouse_move_does_not_close_pairing_qr() {
+    let (_test_db, mut app) = make_app_harness().await;
+
+    app.handle_input(b"P");
+    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+
+    app.handle_input(b"\x1b[<35;20;5M");
+    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+
+    app.handle_input(b"x");
+    assert!(!render_plain(&mut app).contains("Scan to pair audio"));
 }
 
 #[tokio::test]
@@ -213,6 +266,10 @@ async fn dashboard_lazy_primes_favorite_histories_without_opening_chat() {
             bio: String::new(),
             country: None,
             timezone: None,
+            ide: None,
+            terminal: None,
+            os: None,
+            langs: Vec::new(),
             notify_kinds: Vec::new(),
             notify_bell: false,
             notify_cooldown_mins: 0,
@@ -220,8 +277,10 @@ async fn dashboard_lazy_primes_favorite_histories_without_opening_chat() {
             theme_id: Some("late".to_string()),
             enable_background_color: false,
             show_dashboard_header: true,
+            show_dashboard_room_showcases: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            show_settings_on_connect: true,
             favorite_room_ids: vec![alpha.id, beta.id],
         },
     )
@@ -280,6 +339,10 @@ async fn dashboard_switching_to_favorite_clears_strip_unread_count() {
             bio: String::new(),
             country: None,
             timezone: None,
+            ide: None,
+            terminal: None,
+            os: None,
+            langs: Vec::new(),
             notify_kinds: Vec::new(),
             notify_bell: false,
             notify_cooldown_mins: 0,
@@ -287,8 +350,10 @@ async fn dashboard_switching_to_favorite_clears_strip_unread_count() {
             theme_id: Some("late".to_string()),
             enable_background_color: false,
             show_dashboard_header: true,
+            show_dashboard_room_showcases: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            show_settings_on_connect: true,
             favorite_room_ids: vec![alpha.id, beta.id],
         },
     )
@@ -380,6 +445,10 @@ async fn dashboard_favorites_strip_is_mouse_clickable() {
             bio: String::new(),
             country: None,
             timezone: None,
+            ide: None,
+            terminal: None,
+            os: None,
+            langs: Vec::new(),
             notify_kinds: Vec::new(),
             notify_bell: false,
             notify_cooldown_mins: 0,
@@ -387,8 +456,10 @@ async fn dashboard_favorites_strip_is_mouse_clickable() {
             theme_id: Some("late".to_string()),
             enable_background_color: false,
             show_dashboard_header: true,
+            show_dashboard_room_showcases: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
+            show_settings_on_connect: true,
             favorite_room_ids: vec![alpha.id, beta.id],
         },
     )

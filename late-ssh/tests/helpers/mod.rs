@@ -23,7 +23,7 @@ use late_ssh::app::games::tetris::svc::TetrisService;
 use late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
-use late_ssh::app::rooms::blackjack::svc::BlackjackService;
+use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
@@ -110,9 +110,9 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let tetris_service = TetrisService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
     let rooms_service = RoomsService::new(db.clone());
-    let blackjack_table_manager = BlackjackTableManager::new(chip_service.clone());
-    let (blackjack_event_tx, _) = broadcast::channel(64);
-    let blackjack_service = BlackjackService::new(chip_service.clone(), blackjack_event_tx);
+    let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
+    let blackjack_table_manager =
+        BlackjackTableManager::new(chip_service.clone(), blackjack_player_directory.clone());
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let nonogram_service =
         NonogramService::new(db.clone(), activity_tx.clone(), chip_service.clone());
@@ -147,7 +147,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         chip_service,
         rooms_service,
         blackjack_table_manager,
-        blackjack_service,
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
         leaderboard_service,
@@ -222,10 +221,9 @@ pub fn make_app_with_chat_service(
         ),
         initial_minesweeper_games: Vec::new(),
         rooms_service: RoomsService::new(db.clone()),
-        blackjack_table_manager: BlackjackTableManager::new(ChipService::new(db.clone())),
-        blackjack_service: BlackjackService::new(
+        blackjack_table_manager: BlackjackTableManager::new(
             ChipService::new(db.clone()),
-            broadcast::channel(64).0,
+            BlackjackPlayerDirectory::new(db.clone()),
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
@@ -254,7 +252,7 @@ pub fn make_app_with_chat_service(
         activity_feed_rx: None,
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        initial_theme_id: "late".to_string(),
+        initial_theme_id: "contrast".to_string(),
     })
     .expect("app");
     app.skip_splash_for_tests();
@@ -323,10 +321,9 @@ pub fn make_app_with_paired_client(
         ),
         initial_minesweeper_games: Vec::new(),
         rooms_service: RoomsService::new(db.clone()),
-        blackjack_table_manager: BlackjackTableManager::new(ChipService::new(db.clone())),
-        blackjack_service: BlackjackService::new(
+        blackjack_table_manager: BlackjackTableManager::new(
             ChipService::new(db.clone()),
-            broadcast::channel(64).0,
+            BlackjackPlayerDirectory::new(db.clone()),
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
@@ -355,7 +352,7 @@ pub fn make_app_with_paired_client(
         activity_feed_rx: None,
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        initial_theme_id: "late".to_string(),
+        initial_theme_id: "contrast".to_string(),
     })
     .expect("app");
     app.skip_splash_for_tests();

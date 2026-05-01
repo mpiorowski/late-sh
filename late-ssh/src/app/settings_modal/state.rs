@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::user::sanitize_username_input;
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -10,8 +10,10 @@ use crate::app::common::theme;
 use crate::app::profile::svc::ProfileService;
 
 use super::data::{CountryOption, filter_countries, filter_timezones};
+use super::gem::GemState;
 
 const USERNAME_MAX_LEN: usize = 12;
+const SYSTEM_FIELD_MAX_LEN: usize = 48;
 pub const BIO_MAX_LEN: usize = 500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,9 +37,14 @@ pub struct RoomOption {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Row {
     Username,
+    Ide,
+    Terminal,
+    Os,
+    Langs,
     Theme,
     BackgroundColor,
     DashboardHeader,
+    DashboardRoomShowcases,
     RightSidebar,
     GamesSidebar,
     Country,
@@ -51,11 +58,16 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 14] = [
+    pub const ALL: [Row; 19] = [
         Row::Username,
+        Row::Ide,
+        Row::Terminal,
+        Row::Os,
+        Row::Langs,
         Row::Theme,
         Row::BackgroundColor,
         Row::DashboardHeader,
+        Row::DashboardRoomShowcases,
         Row::RightSidebar,
         Row::GamesSidebar,
         Row::Country,
@@ -69,6 +81,46 @@ impl Row {
     ];
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SystemField {
+    Ide,
+    Terminal,
+    Os,
+    Langs,
+}
+
+impl SystemField {
+    pub(crate) fn from_row(row: Row) -> Option<Self> {
+        match row {
+            Row::Ide => Some(Self::Ide),
+            Row::Terminal => Some(Self::Terminal),
+            Row::Os => Some(Self::Os),
+            Row::Langs => Some(Self::Langs),
+            _ => None,
+        }
+    }
+
+    fn value(self, profile: &Profile) -> Option<String> {
+        match self {
+            Self::Ide => profile.ide.clone(),
+            Self::Terminal => profile.terminal.clone(),
+            Self::Os => profile.os.clone(),
+            Self::Langs => (!profile.langs.is_empty()).then(|| profile.langs.join(", ")),
+        }
+    }
+
+    fn set_value(self, profile: &mut Profile, text: String) {
+        match self {
+            Self::Ide => profile.ide = normalize_optional_text(&text),
+            Self::Terminal => profile.terminal = normalize_optional_text(&text),
+            Self::Os => profile.os = normalize_optional_text(&text),
+            Self::Langs => {
+                profile.langs = normalize_profile_tags([text.as_str()]);
+            }
+        }
+    }
+}
+
 /// Top-level tab in the settings modal. `Settings` holds every compact row
 /// (identity/appearance/location/notifications); `Themes` is a fast browser
 /// for the expanded theme catalog; `Bio` is a separate full-width pane with
@@ -80,10 +132,19 @@ pub enum Tab {
     Bio,
     Themes,
     Favorites,
+    /// Hidden until the user has filled out at least one of bio, country,
+    /// or timezone. Currently houses the "Show settings on connect" toggle.
+    Special,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Settings, Tab::Bio, Tab::Themes, Tab::Favorites];
+    pub const ALL: [Tab; 5] = [
+        Tab::Settings,
+        Tab::Bio,
+        Tab::Themes,
+        Tab::Favorites,
+        Tab::Special,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -91,6 +152,7 @@ impl Tab {
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Favorites => "Favorites",
+            Tab::Special => "Special",
         }
     }
 }
@@ -129,6 +191,8 @@ pub struct SettingsModalState {
     theme_collapsed_groups: u8,
     editing_username: bool,
     username_input: TextArea<'static>,
+    editing_system_field: Option<SystemField>,
+    system_input: TextArea<'static>,
     editing_bio: bool,
     bio_input: TextArea<'static>,
     picker: PickerState,
@@ -138,6 +202,9 @@ pub struct SettingsModalState {
     /// Cursor in the Favorites tab: 0..favorites.len() selects a favorite,
     /// the final slot (favorites.len()) selects the "Add favorite…" row.
     favorites_index: usize,
+    /// Per-session gem easter egg on the Special tab. Persists across modal
+    /// open/close cycles for the lifetime of the SSH session.
+    gem: GemState,
 }
 
 impl SettingsModalState {
@@ -155,12 +222,23 @@ impl SettingsModalState {
             theme_collapsed_groups: 0,
             editing_username: false,
             username_input: new_username_textarea(false),
+            editing_system_field: None,
+            system_input: new_short_textarea(false),
             editing_bio: false,
             bio_input: new_bio_textarea(false),
             picker: PickerState::default(),
             available_rooms: Vec::new(),
             favorites_index: 0,
+            gem: GemState::new(),
         }
+    }
+
+    pub fn gem(&self) -> &GemState {
+        &self.gem
+    }
+
+    pub fn gem_mut(&mut self) -> &mut GemState {
+        &mut self.gem
     }
 
     pub fn open_from_profile(
@@ -170,19 +248,15 @@ impl SettingsModalState {
         _modal_width: u16,
     ) {
         self.draft = profile.clone();
-        // Drop favorites the user is no longer a member of so the modal never
-        // shows ghost entries. Preserve order of the survivors.
-        let member_ids: std::collections::HashSet<Uuid> =
-            available_rooms.iter().map(|room| room.id).collect();
-        self.draft
-            .favorite_room_ids
-            .retain(|id| member_ids.contains(id));
+        prune_favorites_against_loaded_rooms(&mut self.draft.favorite_room_ids, &available_rooms);
         self.available_rooms = available_rooms;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.sync_theme_index_to_draft();
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
+        self.editing_system_field = None;
+        self.system_input = new_short_textarea(false);
         self.editing_bio = false;
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
@@ -195,17 +269,19 @@ impl SettingsModalState {
 
     /// Switch to the neighboring tab. Auto-saves + ends any in-flight bio
     /// edit when leaving the Bio tab so the preview reflects the draft.
+    /// Skips the Special tab while it's hidden (no bio/country/timezone).
     pub fn cycle_tab(&mut self, forward: bool) {
-        let idx = Tab::ALL
+        let visible = self.visible_tabs();
+        let idx = visible
             .iter()
             .position(|t| *t == self.selected_tab)
             .unwrap_or(0);
         let next_idx = if forward {
-            (idx + 1) % Tab::ALL.len()
+            (idx + 1) % visible.len()
         } else {
-            (idx + Tab::ALL.len() - 1) % Tab::ALL.len()
+            (idx + visible.len() - 1) % visible.len()
         };
-        let next = Tab::ALL[next_idx];
+        let next = visible[next_idx];
         if self.selected_tab == Tab::Bio && next != Tab::Bio && self.editing_bio {
             self.stop_bio_edit();
             self.save();
@@ -215,10 +291,49 @@ impl SettingsModalState {
             self.submit_username();
             self.save();
         }
+        if self.selected_tab == Tab::Settings && self.editing_system_field.is_some() {
+            self.submit_system_field();
+            self.save();
+        }
         if next == Tab::Themes {
             self.sync_theme_index_to_draft();
         }
         self.selected_tab = next;
+    }
+
+    /// Tabs to show in the tab strip in display order. The Special tab is
+    /// hidden until the user has filled out at least one of bio, country,
+    /// or timezone.
+    pub fn visible_tabs(&self) -> Vec<Tab> {
+        Tab::ALL
+            .iter()
+            .copied()
+            .filter(|tab| *tab != Tab::Special || self.special_tab_unlocked())
+            .collect()
+    }
+
+    pub fn special_tab_unlocked(&self) -> bool {
+        let bio_filled = !self.draft.bio.trim().is_empty();
+        let country_filled = self
+            .draft
+            .country
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        let timezone_filled = self
+            .draft
+            .timezone
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        bio_filled || country_filled || timezone_filled
+    }
+
+    /// Flip the "show settings on connect" toggle (the sole control on the
+    /// Special tab) and persist.
+    pub fn toggle_show_settings_on_connect(&mut self) {
+        self.draft.show_settings_on_connect ^= true;
+        self.save();
     }
 
     pub fn set_modal_width(&mut self, _modal_width: u16) {
@@ -337,7 +452,7 @@ impl SettingsModalState {
                 .theme_id
                 .as_deref()
                 .map(theme::normalize_id)
-                .unwrap_or("late");
+                .unwrap_or(theme::DEFAULT_ID);
             let changed = current != option.id;
             self.draft.theme_id = Some(option.id.to_string());
             self.keep_theme_cursor_visible();
@@ -443,6 +558,14 @@ impl SettingsModalState {
         self.editing_username
     }
 
+    pub fn editing_system_field(&self) -> Option<SystemField> {
+        self.editing_system_field
+    }
+
+    pub fn editing_system_row(&self, row: Row) -> bool {
+        self.editing_system_field == SystemField::from_row(row)
+    }
+
     pub fn editing_bio(&self) -> bool {
         self.editing_bio
     }
@@ -457,6 +580,22 @@ impl SettingsModalState {
 
     fn username_char_count(&self) -> usize {
         self.username_input
+            .lines()
+            .iter()
+            .map(|l| l.chars().count())
+            .sum()
+    }
+
+    pub fn system_input(&self) -> &TextArea<'static> {
+        &self.system_input
+    }
+
+    fn system_text(&self) -> String {
+        self.system_input.lines().join("")
+    }
+
+    fn system_char_count(&self) -> usize {
+        self.system_input
             .lines()
             .iter()
             .map(|l| l.chars().count())
@@ -598,6 +737,7 @@ impl SettingsModalState {
     }
 
     pub fn start_username_edit(&mut self) {
+        self.editing_system_field = None;
         self.editing_username = true;
         self.username_input = new_username_textarea(true);
         self.username_input.insert_str(&self.draft.username);
@@ -674,6 +814,89 @@ impl SettingsModalState {
     pub fn clear_username(&mut self) {
         let editing = self.editing_username;
         self.username_input = new_username_textarea(editing);
+    }
+
+    pub fn start_system_field_edit(&mut self, field: SystemField) {
+        self.editing_username = false;
+        self.editing_system_field = Some(field);
+        self.system_input = new_short_textarea(true);
+        if let Some(value) = field.value(&self.draft) {
+            self.system_input.insert_str(&value);
+        }
+    }
+
+    pub fn cancel_system_field_edit(&mut self) {
+        self.editing_system_field = None;
+        self.system_input = new_short_textarea(false);
+    }
+
+    pub fn submit_system_field(&mut self) {
+        let Some(field) = self.editing_system_field.take() else {
+            return;
+        };
+        let text = self.system_text();
+        self.system_input = new_short_textarea(false);
+        field.set_value(&mut self.draft, text);
+        self.save();
+    }
+
+    pub fn system_push(&mut self, ch: char) {
+        if self.system_char_count() < SYSTEM_FIELD_MAX_LEN {
+            self.system_input.insert_char(ch);
+        }
+    }
+
+    pub fn system_backspace(&mut self) {
+        self.system_input.delete_char();
+    }
+
+    pub fn system_delete_right(&mut self) {
+        self.system_input.delete_next_char();
+    }
+
+    pub fn system_delete_word_left(&mut self) {
+        self.system_input.delete_word();
+    }
+
+    pub fn system_delete_word_right(&mut self) {
+        self.system_input.delete_next_word();
+    }
+
+    pub fn system_cursor_left(&mut self) {
+        self.system_input.move_cursor(CursorMove::Back);
+    }
+
+    pub fn system_cursor_right(&mut self) {
+        self.system_input.move_cursor(CursorMove::Forward);
+    }
+
+    pub fn system_cursor_word_left(&mut self) {
+        self.system_input.move_cursor(CursorMove::WordBack);
+    }
+
+    pub fn system_cursor_word_right(&mut self) {
+        self.system_input.move_cursor(CursorMove::WordForward);
+    }
+
+    pub fn system_cursor_home(&mut self) {
+        self.system_input.move_cursor(CursorMove::Head);
+    }
+
+    pub fn system_cursor_end(&mut self) {
+        self.system_input.move_cursor(CursorMove::End);
+    }
+
+    pub fn system_paste(&mut self) {
+        let yank = self.system_input.yank_text();
+        insert_system_text_limited(&mut self.system_input, &yank);
+    }
+
+    pub fn system_undo(&mut self) {
+        self.system_input.undo();
+    }
+
+    pub fn clear_system_field(&mut self) {
+        self.system_input = new_short_textarea(self.editing_system_field.is_some());
     }
 
     pub fn start_bio_edit(&mut self) {
@@ -843,6 +1066,10 @@ impl SettingsModalState {
                 self.draft.show_dashboard_header ^= true;
                 true
             }
+            Row::DashboardRoomShowcases => {
+                self.draft.show_dashboard_room_showcases ^= true;
+                true
+            }
             Row::RightSidebar => {
                 self.draft.show_right_sidebar ^= true;
                 true
@@ -878,6 +1105,7 @@ impl SettingsModalState {
                 );
                 true
             }
+            Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
             _ => false,
         };
         if mutated {
@@ -893,6 +1121,10 @@ impl SettingsModalState {
                 bio: self.draft.bio.clone(),
                 country: self.draft.country.clone(),
                 timezone: self.draft.timezone.clone(),
+                ide: self.draft.ide.clone(),
+                terminal: self.draft.terminal.clone(),
+                os: self.draft.os.clone(),
+                langs: self.draft.langs.clone(),
                 notify_kinds: self.draft.notify_kinds.clone(),
                 notify_bell: self.draft.notify_bell,
                 notify_cooldown_mins: self.draft.notify_cooldown_mins,
@@ -901,12 +1133,14 @@ impl SettingsModalState {
                     self.draft
                         .theme_id
                         .clone()
-                        .unwrap_or_else(|| "late".to_string()),
+                        .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
                 ),
                 enable_background_color: self.draft.enable_background_color,
                 show_dashboard_header: self.draft.show_dashboard_header,
+                show_dashboard_room_showcases: self.draft.show_dashboard_room_showcases,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 show_games_sidebar: self.draft.show_games_sidebar,
+                show_settings_on_connect: self.draft.show_settings_on_connect,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
             },
         );
@@ -925,6 +1159,19 @@ fn cycle_notify_format(current: Option<&str>, forward: bool) -> &'static str {
         (idx + OPTIONS.len() - 1) % OPTIONS.len()
     };
     OPTIONS[next]
+}
+
+fn prune_favorites_against_loaded_rooms(favorite_room_ids: &mut Vec<Uuid>, rooms: &[RoomOption]) {
+    if rooms.is_empty() {
+        return;
+    }
+
+    // Drop favorites the user is no longer a member of so the modal never
+    // shows ghost entries. Preserve order of the survivors. An empty room
+    // catalog means chat membership has not loaded yet, not that every room
+    // was left.
+    let member_ids: std::collections::HashSet<Uuid> = rooms.iter().map(|room| room.id).collect();
+    favorite_room_ids.retain(|id| member_ids.contains(id));
 }
 
 fn toggle_kind(kinds: &mut Vec<String>, kind: &str) {
@@ -962,9 +1209,29 @@ fn username_char_count_for_input(input: &TextArea<'static>) -> usize {
     input.lines().iter().map(|l| l.chars().count()).sum()
 }
 
+fn system_char_count_for_input(input: &TextArea<'static>) -> usize {
+    input.lines().iter().map(|l| l.chars().count()).sum()
+}
+
+fn normalize_optional_text(text: &str) -> Option<String> {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
 fn insert_username_text_limited(input: &mut TextArea<'static>, text: &str) {
     for ch in text.chars() {
         if username_char_count_for_input(input) >= USERNAME_MAX_LEN {
+            break;
+        }
+        if !ch.is_control() && ch != '\n' && ch != '\r' {
+            input.insert_char(ch);
+        }
+    }
+}
+
+fn insert_system_text_limited(input: &mut TextArea<'static>, text: &str) {
+    for ch in text.chars() {
+        if system_char_count_for_input(input) >= SYSTEM_FIELD_MAX_LEN {
             break;
         }
         if !ch.is_control() && ch != '\n' && ch != '\r' {
@@ -1020,6 +1287,10 @@ fn set_bio_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
 }
 
 fn new_username_textarea(editing: bool) -> TextArea<'static> {
+    new_short_textarea(editing)
+}
+
+fn new_short_textarea(editing: bool) -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_cursor_line_style(Style::default());
     ta.set_wrap_mode(WrapMode::None);
@@ -1047,6 +1318,27 @@ mod tests {
 
         assert_eq!(input.lines().join(""), "abcdefghijkx");
         assert_eq!(username_char_count_for_input(&input), USERNAME_MAX_LEN);
+    }
+
+    #[test]
+    fn system_yank_respects_max_length() {
+        let mut input = new_short_textarea(true);
+        input.insert_str("a".repeat(SYSTEM_FIELD_MAX_LEN - 1));
+        input.set_yank_text("xyz");
+        let yank = input.yank_text();
+
+        insert_system_text_limited(&mut input, &yank);
+
+        assert_eq!(system_char_count_for_input(&input), SYSTEM_FIELD_MAX_LEN);
+    }
+
+    #[test]
+    fn normalize_optional_text_trims_and_collapses_blank() {
+        assert_eq!(
+            normalize_optional_text("  VS   Code  ").as_deref(),
+            Some("VS Code")
+        );
+        assert_eq!(normalize_optional_text("   "), None);
     }
 
     #[test]
@@ -1078,5 +1370,38 @@ mod tests {
         move_bio_cursor_to_end(&mut input);
 
         assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
+    }
+
+    #[test]
+    fn empty_room_catalog_preserves_favorites() {
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let mut favorites = vec![first, second];
+
+        prune_favorites_against_loaded_rooms(&mut favorites, &[]);
+
+        assert_eq!(favorites, vec![first, second]);
+    }
+
+    #[test]
+    fn loaded_room_catalog_prunes_unjoined_favorites() {
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let third = Uuid::from_u128(3);
+        let mut favorites = vec![first, second, third];
+        let rooms = vec![
+            RoomOption {
+                id: third,
+                label: "#third".to_string(),
+            },
+            RoomOption {
+                id: first,
+                label: "#first".to_string(),
+            },
+        ];
+
+        prune_favorites_against_loaded_rooms(&mut favorites, &rooms);
+
+        assert_eq!(favorites, vec![first, third]);
     }
 }

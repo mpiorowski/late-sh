@@ -1,5 +1,5 @@
-use late_core::models::chat_message::ChatMessage;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
+use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -17,12 +17,13 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
+    markdown::wrap_plain_line,
     overlay::{Overlay, draw_overlay},
     theme,
 };
 use late_core::models::leaderboard::BadgeTier;
 
-use super::state::{MentionMatch, ROOM_JUMP_KEYS, RoomSlot};
+use super::state::{MentionMatch, ROOM_JUMP_KEYS, RoomSlot, is_chat_list_room};
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -33,6 +34,13 @@ fn custom_badge_for_username(username: &str) -> Option<&'static str> {
         "kirii.md" => Some(" 🎨"),
         _ => None,
     }
+}
+
+fn is_bot_author(username: &str) -> bool {
+    matches!(
+        username.trim().to_ascii_lowercase().as_str(),
+        "bot" | "graybeard" | "dealer"
+    )
 }
 
 // ── Dashboard chat card ─────────────────────────────────────
@@ -47,6 +55,7 @@ pub struct DashboardChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
+    pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
@@ -180,6 +189,14 @@ fn reaction_picker_placeholder_lines(dim: Style) -> Vec<Line<'static>> {
         reaction_spans.push(Span::styled(" ", dim));
         reaction_spans.push(Span::styled(reaction_label(key), dim));
     }
+    reaction_spans.push(Span::styled("  ", dim));
+    reaction_spans.push(Span::styled(
+        "f",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    reaction_spans.push(Span::styled(" list", dim));
 
     vec![Line::from(reaction_spans)]
 }
@@ -203,7 +220,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static
         reaction_picker_placeholder_lines(dim)
     } else if view.selected_message {
         vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · i compose",
+            "f react · r reply · e edit · d delete · p profile · c copy · Enter jump to reply",
             dim,
         ))]
     } else {
@@ -313,7 +330,12 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 message_reactions: view.message_reactions,
             },
         );
-        lines = visible_chat_rows(view.rows_cache, view.selected_message_id, None, height);
+        lines = visible_chat_rows(
+            view.rows_cache,
+            view.selected_message_id,
+            view.highlighted_message_id,
+            height,
+        );
     }
 
     frame.render_widget(Paragraph::new(lines), messages_area);
@@ -338,6 +360,54 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
             },
         );
     }
+}
+
+pub(crate) fn dashboard_pinned_height(message_count: usize, available_height: u16) -> u16 {
+    if message_count == 0 {
+        return 0;
+    }
+    // +1 for the bottom border. Always leave 4 rows for chat below.
+    let desired = message_count.saturating_add(1) as u16;
+    desired.min(available_height.saturating_sub(4))
+}
+
+pub(crate) fn draw_dashboard_pinned_messages(
+    frame: &mut Frame,
+    area: Rect,
+    messages: &[ChatMessage],
+) {
+    if area.height == 0 || messages.is_empty() {
+        return;
+    }
+
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(theme::AMBER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let amber = Style::default().fg(theme::AMBER());
+    let body_style = Style::default().fg(theme::CHAT_BODY());
+    let body_width = inner.width.saturating_sub(2).max(1) as usize;
+    let lines: Vec<Line<'static>> = messages
+        .iter()
+        .map(|msg| {
+            let first_line = msg.body.split('\n').next().unwrap_or("");
+            let body_text = wrap_plain_line(first_line, body_width)
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            Line::from(vec![
+                Span::styled("▌ ", amber),
+                Span::styled(body_text, body_style),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────
@@ -431,7 +501,7 @@ fn ensure_chat_rows_cache(
             format_username_with_country(msg.user_id, raw_author, ctx.countries)
         };
         let contributor_badge = custom_badge_for_username(raw_author).unwrap_or_default();
-        let is_bot = raw_author == "bot" || raw_author == "graybeard";
+        let is_bot = is_bot_author(raw_author);
         let badge = if !is_bot {
             ctx.badges.get(&msg.user_id).copied()
         } else {
@@ -655,8 +725,10 @@ fn draw_mention_autocomplete(
         return;
     }
 
-    let visible = matches.len().min(8) as u16;
-    let width = 26u16.min(anchor.width);
+    let visible_count = matches.len().min(8);
+    let visible = visible_count as u16;
+    let is_commands = matches.first().is_some_and(|m| m.prefix == "/");
+    let width = if is_commands { 52 } else { 26 }.min(anchor.width);
     let height = visible + 2; // borders
     let x = anchor.x + 1;
     let y = anchor.y.saturating_sub(height);
@@ -664,14 +736,20 @@ fn draw_mention_autocomplete(
 
     frame.render_widget(Clear, popup);
 
+    let title = if is_commands {
+        " /commands "
+    } else {
+        " @mentions "
+    };
     let block = Block::default()
-        .title(" @mentions ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
     let items: Vec<Line> = matches
         .iter()
         .enumerate()
+        .skip(selected.saturating_sub(visible_count.saturating_sub(1)))
         .take(8)
         .map(|(i, m)| {
             let is_selected = i == selected;
@@ -683,7 +761,20 @@ fn draw_mention_autocomplete(
                 (false, false) => Style::default().fg(theme::TEXT_FAINT()),
             };
             let prefix = if is_selected { " > " } else { "   " };
-            Line::from(Span::styled(format!("{prefix}@{}", m.name), style))
+            let mut spans = vec![Span::styled(
+                format!("{prefix}{}{}", m.prefix, m.name),
+                style,
+            )];
+            if let Some(description) = m.description {
+                let name_width = m.prefix.len() + m.name.len();
+                let pad = " ".repeat(16usize.saturating_sub(name_width).max(2));
+                spans.push(Span::styled(pad, Style::default().fg(theme::TEXT_DIM())));
+                spans.push(Span::styled(
+                    description,
+                    Style::default().fg(theme::TEXT_DIM()),
+                ));
+            }
+            Line::from(spans)
         })
         .collect();
 
@@ -735,6 +826,104 @@ pub struct ChatRenderInput<'a> {
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
     pub showcase_state: Option<&'a super::showcase::state::State>,
     pub showcase_composing: bool,
+}
+
+pub struct EmbeddedRoomChatView<'a> {
+    pub title: &'a str,
+    pub messages: &'a [ChatMessage],
+    pub overlay: Option<&'a Overlay>,
+    pub rows_cache: &'a mut ChatRowsCache,
+    pub usernames: &'a HashMap<Uuid, String>,
+    pub countries: &'a HashMap<Uuid, String>,
+    pub badges: &'a HashMap<Uuid, BadgeTier>,
+    pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub current_user_id: Uuid,
+    pub selected_message_id: Option<Uuid>,
+    pub highlighted_message_id: Option<Uuid>,
+    pub reaction_picker_active: bool,
+    pub composer: &'a TextArea<'static>,
+    pub composing: bool,
+    pub mention_matches: &'a [MentionMatch],
+    pub mention_selected: usize,
+    pub mention_active: bool,
+    pub reply_author: Option<&'a str>,
+    pub is_editing: bool,
+    pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+}
+
+pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoomChatView<'_>) {
+    let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
+    let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
+        .max(composer_placeholder_lines(&ComposerBlockView {
+            composer: view.composer,
+            composing: view.composing,
+            selected_message: view.selected_message_id.is_some(),
+            reaction_picker_active: view.reaction_picker_active,
+            reply_author: view.reply_author,
+            is_editing: view.is_editing,
+            mention_active: view.mention_active,
+            mention_matches: view.mention_matches,
+            mention_selected: view.mention_selected,
+        }));
+    let composer_height = total_composer_lines.min(4) as u16 + 2;
+    let layout =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
+    let messages_area = layout[0];
+    let composer_area = layout[1];
+
+    let height = messages_area.height.saturating_sub(2).max(1) as usize;
+    let width = messages_area.width.saturating_sub(2).max(1) as usize;
+    ensure_chat_rows_cache(
+        view.rows_cache,
+        view.messages.iter().collect(),
+        width,
+        ChatRowsContext {
+            current_user_id: view.current_user_id,
+            usernames: view.usernames,
+            countries: view.countries,
+            badges: view.badges,
+            bonsai_glyphs: view.bonsai_glyphs,
+            message_reactions: view.message_reactions,
+        },
+    );
+    let mut lines = visible_chat_rows(
+        view.rows_cache,
+        view.selected_message_id,
+        view.highlighted_message_id,
+        height,
+    );
+    if lines.is_empty() {
+        lines = vec![Line::from(Span::styled(
+            "No messages yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))];
+    }
+
+    let messages_block = Block::default()
+        .title(format!(" {} ", view.title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()));
+    let messages_inner = messages_block.inner(messages_area);
+    frame.render_widget(Paragraph::new(lines).block(messages_block), messages_area);
+    if let Some(overlay) = view.overlay {
+        draw_overlay(frame, messages_inner, overlay);
+    }
+
+    draw_composer_block(
+        frame,
+        composer_area,
+        &ComposerBlockView {
+            composer: view.composer,
+            composing: view.composing,
+            selected_message: view.selected_message_id.is_some(),
+            reaction_picker_active: view.reaction_picker_active,
+            reply_author: view.reply_author,
+            is_editing: view.is_editing,
+            mention_active: view.mention_active,
+            mention_matches: view.mention_matches,
+            mention_selected: view.mention_selected,
+        },
+    );
 }
 
 struct RoomListRows {
@@ -803,7 +992,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         }
     };
 
-    let room_line = |room: &late_core::models::chat_room::ChatRoom,
+    let room_line = |room: &ChatRoom,
                      label: String,
                      is_selected: bool,
                      jump_key: Option<u8>|
@@ -847,7 +1036,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
     for slug in &core_order {
         if let Some((room, _)) = chat_rooms
             .iter()
-            .find(|(r, _)| r.permanent && r.slug.as_deref() == Some(slug))
+            .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
         {
             let is_selected = room_selected(room.id);
             push_row(
@@ -863,7 +1052,10 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         }
     }
     for (room, _) in chat_rooms.iter().filter(|(r, _)| {
-        r.kind != "dm" && r.permanent && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
+        is_chat_list_room(r)
+            && r.kind != "dm"
+            && r.permanent
+            && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
     }) {
         let is_selected = room_selected(room.id);
         let label = room
@@ -970,11 +1162,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         } else {
             Style::default().fg(theme::TEXT())
         };
-        let label = if !view.discover_view.items.is_empty() {
-            format!("{prefix}discover ({})", view.discover_view.items.len())
-        } else {
-            format!("{prefix}discover")
-        };
+        let label = format!("{prefix}discover");
         Line::from(Span::styled(label, style))
     };
     push_row(
@@ -985,7 +1173,9 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
 
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "public")
+        .filter(|(r, _)| {
+            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "public"
+        })
         .collect();
     public_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !public_rooms.is_empty() {
@@ -1013,7 +1203,9 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
 
     let mut private_rooms: Vec<_> = chat_rooms
         .iter()
-        .filter(|(r, _)| r.kind != "dm" && !r.permanent && r.visibility == "private")
+        .filter(|(r, _)| {
+            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "private"
+        })
         .collect();
     private_rooms.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
     if !private_rooms.is_empty() {
@@ -1169,7 +1361,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     } else {
         let selected_room = selected_room_id
             .and_then(|id| chat_rooms.iter().find(|(room, _)| room.id == id))
-            .or_else(|| chat_rooms.first());
+            .filter(|(room, _)| is_chat_list_room(room))
+            .or_else(|| chat_rooms.iter().find(|(room, _)| is_chat_list_room(room)));
 
         let (message_title, message_lines): (String, Vec<Line>) =
             if let Some((room, messages)) = selected_room {
@@ -1349,6 +1542,15 @@ mod tests {
     }
 
     #[test]
+    fn is_bot_author_matches_all_ghost_users() {
+        assert!(is_bot_author("bot"));
+        assert!(is_bot_author("graybeard"));
+        assert!(is_bot_author("dealer"));
+        assert!(is_bot_author(" Dealer "));
+        assert!(!is_bot_author("mat"));
+    }
+
+    #[test]
     fn effective_chat_scroll_keeps_selected_message_off_top_edge() {
         let scroll = effective_chat_scroll(40, 10, Some((24, 25)));
         assert_eq!(scroll, 8);
@@ -1400,6 +1602,7 @@ mod tests {
             discover_view: crate::app::chat::discover::ui::DiscoverListView {
                 items: &[],
                 selected_index: 0,
+                loading: false,
             },
             rows_cache,
             chat_rooms: rooms,
@@ -1497,6 +1700,28 @@ mod tests {
     }
 
     #[test]
+    fn visible_rows_paint_background_for_selected_highlighted_message() {
+        let message_id = Uuid::now_v7();
+        let mut cache = ChatRowsCache {
+            all_rows: vec![
+                Line::from(Span::raw("alice")),
+                Line::from(Span::raw("hello")),
+            ],
+            ..Default::default()
+        };
+        cache.selected_ranges.insert(message_id, (1, 2));
+        cache.highlighted_ranges.insert(message_id, (0, 2));
+
+        let rows = visible_chat_rows(&cache, Some(message_id), Some(message_id), 4);
+        assert!(
+            rows.iter()
+                .flat_map(|row| row.spans.iter())
+                .any(|span| span.style.bg == Some(theme::BG_SELECTION())),
+            "expected selected highlighted message to receive background"
+        );
+    }
+
+    #[test]
     fn composer_title_reply_state_degrades_through_name_only_and_label() {
         let ta = TextArea::default();
         let mut view = composer_view(&ta);
@@ -1585,6 +1810,10 @@ mod tests {
         assert!(
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
+        );
+        assert!(
+            row_1.contains("f list"),
+            "reaction owner hint missing from {row_1:?}",
         );
     }
 
@@ -1704,6 +1933,63 @@ mod tests {
                 RoomSlot::Discover,
             ]
         );
+    }
+
+    #[test]
+    fn room_list_rows_skip_game_rooms() {
+        let general = ChatRoom {
+            id: Uuid::now_v7(),
+            created: Utc::now(),
+            updated: Utc::now(),
+            kind: "general".to_string(),
+            visibility: "public".to_string(),
+            auto_join: true,
+            slug: Some("general".to_string()),
+            permanent: true,
+            language_code: None,
+            dm_user_a: None,
+            dm_user_b: None,
+        };
+        let game = ChatRoom {
+            id: Uuid::now_v7(),
+            created: Utc::now(),
+            updated: Utc::now(),
+            kind: "game".to_string(),
+            visibility: "public".to_string(),
+            auto_join: false,
+            slug: Some("bj-abc123".to_string()),
+            permanent: false,
+            language_code: None,
+            dm_user_a: None,
+            dm_user_b: None,
+        };
+        let rooms = vec![(general.clone(), Vec::new()), (game.clone(), Vec::new())];
+        let mut rows_cache = ChatRowsCache::default();
+        let usernames = HashMap::new();
+        let countries = HashMap::new();
+        let badges = HashMap::new();
+        let message_reactions = HashMap::new();
+        let unread_counts = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let composer = TextArea::default();
+        let news_composer = TextArea::default();
+        let view = chat_view(
+            &mut rows_cache,
+            &rooms,
+            Some(general.id),
+            &usernames,
+            &countries,
+            &badges,
+            &message_reactions,
+            &unread_counts,
+            &bonsai_glyphs,
+            &composer,
+            &news_composer,
+        );
+
+        let room_rows = build_room_list_rows(&view, Rect::new(0, 0, 40, 20));
+
+        assert!(!room_rows.hit_slots.contains(&Some(RoomSlot::Room(game.id))));
     }
 
     #[test]

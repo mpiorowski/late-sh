@@ -53,7 +53,6 @@ pub(crate) const GAME_SELECTION_SUDOKU: usize = 2;
 pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
-pub(crate) const GAME_SELECTION_BLACKJACK: usize = 6;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 impl NotificationMode {
     /// Map the `notify_format` profile field to a concrete mode. Unknown
@@ -124,7 +123,6 @@ pub struct SessionConfig {
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
     pub blackjack_table_manager: crate::app::rooms::blackjack::manager::BlackjackTableManager,
-    pub blackjack_service: crate::app::rooms::blackjack::svc::BlackjackService,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
     /// enters the dartboard game from the arcade.
@@ -204,6 +202,7 @@ pub struct App {
     pub(super) web_chat_registry: Option<WebChatRegistry>,
     pub(crate) show_web_chat_qr: bool,
     pub(crate) web_chat_qr_url: Option<String>,
+    pub(crate) show_cli_install_modal: bool,
     pub(super) session_token: String,
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
@@ -221,6 +220,7 @@ pub struct App {
     pub(crate) chat: chat::state::ChatState,
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
+    pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
 
     /// Which favorite room the dashboard's chat card is currently showing,
     /// when the user has 2+ favorites pinned. Clamped on read against the
@@ -235,6 +235,9 @@ pub struct App {
     /// Any non-digit keystroke disarms and falls through to its normal
     /// handling.
     pub(crate) dashboard_g_prefix_armed: bool,
+    /// `true` after `b` on the dashboard, waiting for a blackjack room slot
+    /// key (`1..9`, `0`, `-`, `=`, `[`, `]`, `\`).
+    pub(crate) dashboard_blackjack_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -259,6 +262,12 @@ pub struct App {
     pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
     pub(crate) rooms_add_form_open: bool,
     pub(crate) rooms_display_name_input: String,
+    pub(crate) rooms_create_focus_index: usize,
+    pub(crate) rooms_create_pace_index: usize,
+    pub(crate) rooms_create_stake_index: usize,
+    pub(crate) rooms_filter: crate::app::rooms::filter::RoomsFilter,
+    pub(crate) rooms_search_active: bool,
+    pub(crate) rooms_search_query: String,
     pub(super) rooms_snapshot_rx:
         tokio::sync::watch::Receiver<crate::app::rooms::svc::RoomsSnapshot>,
     pub(super) rooms_event_rx: tokio::sync::broadcast::Receiver<crate::app::rooms::svc::RoomsEvent>,
@@ -269,7 +278,7 @@ pub struct App {
     pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
-    pub(crate) blackjack_state: crate::app::rooms::blackjack::state::State,
+    pub(crate) blackjack_state: Option<crate::app::rooms::blackjack::state::State>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -346,6 +355,10 @@ impl App {
         match self.screen {
             Screen::Dashboard => self.dashboard_active_room_id(),
             Screen::Chat => self.chat.selected_room_id,
+            Screen::Rooms => self
+                .rooms_active_room
+                .as_ref()
+                .map(|room| room.chat_room_id),
             _ => None,
         }
     }
@@ -356,6 +369,7 @@ impl App {
         self.chat.set_visible_room_id(visible_room_id);
         if changed && let Some(room_id) = visible_room_id {
             self.chat.mark_room_read(room_id);
+            self.chat.request_room_tail(room_id);
         }
     }
 
@@ -568,11 +582,6 @@ impl App {
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
         );
-        let blackjack_state = crate::app::rooms::blackjack::state::State::new(
-            config.blackjack_service.clone(),
-            config.user_id,
-            config.initial_chip_balance,
-        );
         let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
         let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
         let rooms_event_rx = config.rooms_service.subscribe_events();
@@ -666,6 +675,7 @@ impl App {
             web_chat_registry: config.web_chat_registry,
             show_web_chat_qr: false,
             web_chat_qr_url: None,
+            show_cli_install_modal: false,
             session_token: config.session_token,
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
@@ -687,9 +697,11 @@ impl App {
             ),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
+            rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             dashboard_favorite_index: 0,
             dashboard_previous_favorite_index: None,
             dashboard_g_prefix_armed: false,
+            dashboard_blackjack_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
@@ -712,6 +724,12 @@ impl App {
             rooms_active_room: None,
             rooms_add_form_open: false,
             rooms_display_name_input: String::new(),
+            rooms_create_focus_index: 0,
+            rooms_create_pace_index: 1,
+            rooms_create_stake_index: 0,
+            rooms_filter: crate::app::rooms::filter::RoomsFilter::default(),
+            rooms_search_active: false,
+            rooms_search_query: String::new(),
             rooms_snapshot_rx,
             rooms_event_rx,
             rooms_snapshot,
@@ -721,7 +739,7 @@ impl App {
             nonogram_state,
             solitaire_state,
             minesweeper_state,
-            blackjack_state,
+            blackjack_state: None,
             dartboard_state: None,
             artboard_interacting: false,
             dartboard_server,
@@ -740,6 +758,9 @@ impl App {
         };
         if app.screen == Screen::Artboard {
             app.enter_dartboard();
+        }
+        if app.screen == Screen::Dashboard {
+            app.chat.request_pinned_messages();
         }
         app.sync_visible_chat_room();
         Ok(app)
@@ -813,6 +834,10 @@ impl App {
         if self.screen == Screen::Chat {
             self.chat.request_list();
             self.chat.sync_selection();
+        }
+
+        if self.screen == Screen::Dashboard {
+            self.chat.request_pinned_messages();
         }
 
         if self.screen == Screen::Artboard {

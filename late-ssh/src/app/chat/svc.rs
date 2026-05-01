@@ -1,35 +1,53 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use uuid::Uuid;
 
 use late_core::{
+    MutexRecover,
     db::Db,
     models::{
-        bonsai::Tree,
         chat_message::{ChatMessage, ChatMessageParams},
-        chat_message_reaction::{ChatMessageReaction, ChatMessageReactionSummary},
+        chat_message_reaction::{
+            ChatMessageReaction, ChatMessageReactionOwners, ChatMessageReactionSummary,
+        },
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         user::User,
     },
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::app::bonsai::state::stage_for;
 use crate::metrics;
 
-const HISTORY_LIMIT: i64 = 1000;
+const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
+const PINNED_MESSAGES_LIMIT: i64 = 100;
+const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ChatService {
     db: Db,
-    snapshot_tx: watch::Sender<ChatSnapshot>,
-    snapshot_rx: watch::Receiver<ChatSnapshot>,
+    username_tx: watch::Sender<Arc<Vec<String>>>,
+    username_rx: watch::Receiver<Arc<Vec<String>>>,
     evt_tx: broadcast::Sender<ChatEvent>,
     notification_svc: super::notifications::svc::NotificationService,
+    username_refresh_started: Arc<AtomicBool>,
+    refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
+    refresh_scheduler_started: Arc<AtomicBool>,
+    refresh_signal_tx: mpsc::UnboundedSender<Uuid>,
+    refresh_signal_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<Uuid>>>>,
+    read_permits: Arc<Semaphore>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,17 +59,42 @@ pub struct DiscoverRoomItem {
     pub last_message_at: Option<DateTime<Utc>>,
 }
 
+pub struct SendMessageTask {
+    pub user_id: Uuid,
+    pub room_id: Uuid,
+    pub room_slug: Option<String>,
+    pub body: String,
+    pub reply_to_message_id: Option<Uuid>,
+    pub request_id: Uuid,
+    pub is_admin: bool,
+}
+
+#[derive(Clone)]
+struct ChatRefreshSession {
+    user_id: Uuid,
+    snapshot_tx: watch::Sender<ChatSnapshot>,
+}
+
+struct ChatRefreshSessionGuard {
+    sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
+    session_id: Uuid,
+}
+
+impl Drop for ChatRefreshSessionGuard {
+    fn drop(&mut self) {
+        self.sessions.lock_recover().remove(&self.session_id);
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ChatSnapshot {
     pub user_id: Option<Uuid>,
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
-    pub discover_rooms: Vec<DiscoverRoomItem>,
     pub message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub general_room_id: Option<Uuid>,
     pub usernames: HashMap<Uuid, String>,
     pub countries: HashMap<Uuid, String>,
     pub unread_counts: HashMap<Uuid, i64>,
-    pub all_usernames: Vec<String>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
 }
@@ -61,10 +104,34 @@ pub enum ChatEvent {
     MessageCreated {
         message: ChatMessage,
         target_user_ids: Option<Vec<Uuid>>,
+        author_username: Option<String>,
+        author_bonsai_glyph: Option<String>,
     },
     MessageEdited {
         message: ChatMessage,
         target_user_ids: Option<Vec<Uuid>>,
+        author_username: Option<String>,
+        author_bonsai_glyph: Option<String>,
+    },
+    RoomTailLoaded {
+        user_id: Uuid,
+        room_id: Uuid,
+        messages: Vec<ChatMessage>,
+        message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+        usernames: HashMap<Uuid, String>,
+        bonsai_glyphs: HashMap<Uuid, String>,
+    },
+    RoomTailLoadFailed {
+        user_id: Uuid,
+        room_id: Uuid,
+    },
+    DiscoverRoomsLoaded {
+        user_id: Uuid,
+        rooms: Vec<DiscoverRoomItem>,
+    },
+    DiscoverRoomsFailed {
+        user_id: Uuid,
+        message: String,
     },
     MessageReactionsUpdated {
         room_id: Uuid,
@@ -107,6 +174,10 @@ pub enum ChatEvent {
         user_id: Uuid,
         room_id: Uuid,
         slug: String,
+    },
+    GameRoomJoined {
+        user_id: Uuid,
+        room_id: Uuid,
     },
     RoomFailed {
         user_id: Uuid,
@@ -184,6 +255,16 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    ReactionOwnersListed {
+        user_id: Uuid,
+        message_id: Uuid,
+        owners: Vec<ChatMessageReactionOwners>,
+        usernames: HashMap<Uuid, String>,
+    },
+    ReactionOwnersListFailed {
+        user_id: Uuid,
+        message: String,
+    },
     PublicRoomsListFailed {
         user_id: Uuid,
         message: String,
@@ -196,205 +277,302 @@ pub enum ChatEvent {
 
 impl ChatService {
     pub fn new(db: Db, notification_svc: super::notifications::svc::NotificationService) -> Self {
-        let (snapshot_tx, snapshot_rx) = watch::channel(ChatSnapshot::default());
+        let (username_tx, username_rx) = watch::channel(Arc::new(Vec::new()));
         let (evt_tx, _) = broadcast::channel(512);
+        let (refresh_signal_tx, refresh_signal_rx) = mpsc::unbounded_channel();
 
         Self {
             db,
-            snapshot_tx,
-            snapshot_rx,
+            username_tx,
+            username_rx,
             evt_tx,
             notification_svc,
+            username_refresh_started: Arc::new(AtomicBool::new(false)),
+            refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
+            refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
+            refresh_signal_tx,
+            refresh_signal_rx: Arc::new(Mutex::new(Some(refresh_signal_rx))),
+            read_permits: Arc::new(Semaphore::new(8)),
         }
     }
-    pub fn subscribe_state(&self) -> watch::Receiver<ChatSnapshot> {
-        self.snapshot_rx.clone()
+    pub fn subscribe_usernames(&self) -> watch::Receiver<Arc<Vec<String>>> {
+        self.ensure_username_refresh_task();
+        self.username_rx.clone()
     }
     pub fn subscribe_events(&self) -> broadcast::Receiver<ChatEvent> {
         self.evt_tx.subscribe()
     }
 
-    pub fn publish_snapshot(&self, snapshot: ChatSnapshot) -> Result<()> {
-        self.snapshot_tx.send(snapshot)?;
+    async fn refresh_username_directory(&self) -> Result<()> {
+        let client = self.db.get().await?;
+        let usernames = User::list_all_usernames(&client).await?;
+        let _ = self.username_tx.send(Arc::new(usernames));
         Ok(())
     }
 
-    #[tracing::instrument(skip(self), fields(user_id = %user_id, selected_room_id = ?selected_room_id))]
-    async fn list_chat_rooms(&self, user_id: Uuid, selected_room_id: Option<Uuid>) -> Result<()> {
+    fn ensure_username_refresh_task(&self) {
+        if self
+            .username_refresh_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.refresh_username_directory().await {
+                    late_core::error_span!(
+                        "chat_username_directory_refresh_failed",
+                        error = ?e,
+                        "chat username directory refresh failed"
+                    );
+                }
+
+                let mut interval = tokio::time::interval(USERNAME_DIRECTORY_TTL);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await;
+
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = service.refresh_username_directory().await {
+                        late_core::error_span!(
+                            "chat_username_directory_refresh_failed",
+                            error = ?e,
+                            "chat username directory refresh failed"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!("chat.username_directory_refresh_loop")),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn build_chat_snapshot(&self, user_id: Uuid) -> Result<ChatSnapshot> {
+        let _permit = self.read_permits.acquire().await?;
         let client = self.db.get().await?;
         let rooms = ChatRoom::list_for_user(&client, user_id).await?;
-        let discover_rooms = self.list_discover_rooms(&client, user_id).await?;
         let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
-        let favorite_room_ids = User::favorite_room_ids(&client, user_id).await?;
         let general_room_id = rooms
             .iter()
             .find(|room| room.kind == "general" && room.slug.as_deref() == Some("general"))
             .map(|room| room.id);
-        let active_room_id = selected_room_id
-            .filter(|selected| rooms.iter().any(|room| room.id == *selected))
-            .or_else(|| rooms.first().map(|room| room.id));
 
-        // Preload the same histories regardless of whether the room is opened
-        // from the chat page or surfaced on the dashboard: active room,
-        // `#general`, and any currently-joined pinned favorites.
-        let joined_ids: HashSet<Uuid> = rooms.iter().map(|room| room.id).collect();
-        let mut preload_room_ids = Vec::new();
-        let mut seen = HashSet::new();
-        let mut push_preload = |room_id: Uuid| {
-            if joined_ids.contains(&room_id) && seen.insert(room_id) {
-                preload_room_ids.push(room_id);
-            }
-        };
-        if let Some(room_id) = active_room_id {
-            push_preload(room_id);
-        }
-        if let Some(room_id) = general_room_id {
-            push_preload(room_id);
-        }
-        for room_id in favorite_room_ids {
-            push_preload(room_id);
-        }
-
-        let recent_messages =
-            ChatMessage::list_recent_for_rooms(&client, &preload_room_ids, HISTORY_LIMIT).await?;
-        let message_ids: Vec<Uuid> = recent_messages
-            .values()
-            .flat_map(|messages| messages.iter().map(|message| message.id))
-            .collect();
-        let message_reactions =
-            ChatMessageReaction::list_summaries_for_messages(&client, &message_ids).await?;
-        // General stays warm for the dashboard even when another room is
-        // selected. Favorites ride in the same preload set so the dashboard
-        // quick-switch never depends on a prior manual visit or lucky delta.
-        let usernames = User::list_all_username_map(&client).await?;
-        let countries = User::list_all_country_map(&client).await?;
-        let mut all_usernames: Vec<String> = usernames.values().cloned().collect();
-        all_usernames.sort();
-        let ignored_user_ids = User::ignored_user_ids(&client, user_id).await?;
-        let bonsai_glyphs: HashMap<Uuid, String> = Tree::list_all(&client)
-            .await?
-            .into_iter()
-            .filter_map(|t| {
-                let glyph = stage_for(t.is_alive, t.growth_points).glyph();
-                if glyph.is_empty() {
-                    None
-                } else {
-                    Some((t.user_id, glyph.to_string()))
+        let mut visible_user_ids = vec![user_id];
+        for room in &rooms {
+            if room.kind == "dm" {
+                if let Some(id) = room.dm_user_a {
+                    visible_user_ids.push(id);
                 }
-            })
-            .collect();
+                if let Some(id) = room.dm_user_b {
+                    visible_user_ids.push(id);
+                }
+            }
+        }
+        visible_user_ids.sort();
+        visible_user_ids.dedup();
+        let (usernames, bonsai_glyphs) =
+            Self::load_chat_author_metadata(&client, &visible_user_ids).await?;
+        let ignored_user_ids = User::ignored_user_ids(&client, user_id).await?;
 
-        let rooms = rooms
-            .into_iter()
-            .map(|chat| {
-                let messages = recent_messages.get(&chat.id).cloned().unwrap_or_default();
-                (chat, messages)
-            })
-            .collect();
+        let rooms = rooms.into_iter().map(|chat| (chat, Vec::new())).collect();
 
-        self.publish_snapshot(ChatSnapshot {
+        Ok(ChatSnapshot {
             user_id: Some(user_id),
             chat_rooms: rooms,
-            discover_rooms,
-            message_reactions,
+            message_reactions: HashMap::new(),
             general_room_id,
             usernames,
-            countries,
+            countries: HashMap::new(),
             unread_counts,
-            all_usernames,
             bonsai_glyphs,
             ignored_user_ids,
         })
     }
 
-    async fn list_discover_rooms(
-        &self,
+    async fn load_chat_author_metadata(
         client: &tokio_postgres::Client,
-        user_id: Uuid,
+        user_ids: &[Uuid],
+    ) -> Result<(HashMap<Uuid, String>, HashMap<Uuid, String>)> {
+        if user_ids.is_empty() {
+            return Ok((HashMap::new(), HashMap::new()));
+        }
+
+        let metadata = User::list_chat_author_metadata(client, user_ids).await?;
+
+        let mut usernames = HashMap::with_capacity(metadata.len());
+        let mut bonsai_glyphs = HashMap::new();
+        for item in metadata {
+            if !item.username.trim().is_empty() {
+                usernames.insert(item.user_id, item.username);
+            }
+
+            if let (Some(is_alive), Some(growth_points)) =
+                (item.bonsai_is_alive, item.bonsai_growth_points)
+            {
+                let glyph = stage_for(is_alive, growth_points).glyph();
+                if !glyph.is_empty() {
+                    bonsai_glyphs.insert(item.user_id, glyph.to_string());
+                }
+            }
+        }
+
+        Ok((usernames, bonsai_glyphs))
+    }
+
+    async fn list_all_discover_rooms(
+        client: &tokio_postgres::Client,
     ) -> Result<Vec<DiscoverRoomItem>> {
-        let rows = client
-            .query(
-                "SELECT r.id,
-                        r.slug,
-                        COUNT(DISTINCT m.user_id)::bigint AS member_count,
-                        COUNT(DISTINCT msg.id)::bigint AS message_count,
-                        MAX(msg.created) AS last_message_at
-                 FROM chat_rooms r
-                 LEFT JOIN chat_room_members m ON m.room_id = r.id
-                 LEFT JOIN chat_messages msg ON msg.room_id = r.id
-                 WHERE r.kind = 'topic'
-                   AND r.visibility = 'public'
-                   AND r.permanent = false
-                   AND NOT EXISTS (
-                       SELECT 1
-                       FROM chat_room_members self_member
-                       WHERE self_member.room_id = r.id
-                         AND self_member.user_id = $1
-                   )
-                 GROUP BY r.id, r.slug
-                 ORDER BY
-                    COALESCE(MAX(msg.created), r.created) DESC,
-                    message_count DESC,
-                    member_count DESC,
-                    r.slug ASC",
-                &[&user_id],
-            )
-            .await?;
+        let rows = ChatRoom::list_discover_public_topic_rooms(client).await?;
 
         Ok(rows
             .into_iter()
-            .filter_map(|row| {
-                let slug: Option<String> = row.get("slug");
-                slug.map(|slug| DiscoverRoomItem {
-                    room_id: row.get("id"),
-                    slug,
-                    member_count: row.get("member_count"),
-                    message_count: row.get("message_count"),
-                    last_message_at: row.get("last_message_at"),
-                })
+            .map(|row| DiscoverRoomItem {
+                room_id: row.room_id,
+                slug: row.slug,
+                member_count: row.member_count,
+                message_count: row.message_count,
+                last_message_at: row.last_message_at,
             })
             .collect())
+    }
+
+    fn ensure_refresh_scheduler(&self) {
+        if self
+            .refresh_scheduler_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let service = self.clone();
+        let mut refresh_signal_rx = self
+            .refresh_signal_rx
+            .lock_recover()
+            .take()
+            .expect("chat refresh scheduler receiver missing");
+        tokio::spawn(
+            async move {
+                let mut interval = tokio::time::interval(CHAT_REFRESH_INTERVAL);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await;
+
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            service.refresh_registered_sessions().await;
+                        }
+                        Some(session_id) = refresh_signal_rx.recv() => {
+                            service.refresh_registered_session(session_id).await;
+                        }
+                    }
+                }
+            }
+            .instrument(info_span!("chat.refresh_scheduler")),
+        );
+    }
+
+    async fn refresh_registered_sessions(&self) {
+        let sessions: Vec<ChatRefreshSession> = self
+            .refresh_sessions
+            .lock_recover()
+            .values()
+            .cloned()
+            .collect();
+
+        for session in sessions {
+            self.refresh_session(session).await;
+        }
+    }
+
+    async fn refresh_registered_session(&self, session_id: Uuid) {
+        let session = self
+            .refresh_sessions
+            .lock_recover()
+            .get(&session_id)
+            .cloned();
+        if let Some(session) = session {
+            self.refresh_session(session).await;
+        }
+    }
+
+    async fn refresh_session(&self, session: ChatRefreshSession) {
+        match self.build_chat_snapshot(session.user_id).await {
+            Ok(snapshot) => {
+                let _ = session.snapshot_tx.send(snapshot);
+            }
+            Err(e) => {
+                late_core::error_span!(
+                    "chat_refresh_failed",
+                    user_id = %session.user_id,
+                    error = ?e,
+                    "chat service refresh failed"
+                );
+            }
+        }
     }
 
     pub fn start_user_refresh_task(
         &self,
         user_id: Uuid,
         room_rx: watch::Receiver<Option<Uuid>>,
-    ) -> tokio::task::AbortHandle {
-        let service = self.clone();
+    ) -> (
+        watch::Receiver<ChatSnapshot>,
+        mpsc::UnboundedSender<()>,
+        tokio::task::AbortHandle,
+    ) {
+        self.ensure_refresh_scheduler();
+
+        let session_id = Uuid::now_v7();
+        let (snapshot_tx, snapshot_rx) = watch::channel(ChatSnapshot::default());
+        let (force_refresh_tx, mut force_refresh_rx) = mpsc::unbounded_channel();
+        let initial_room_id = *room_rx.borrow();
+        self.refresh_sessions.lock_recover().insert(
+            session_id,
+            ChatRefreshSession {
+                user_id,
+                snapshot_tx,
+            },
+        );
+        let _ = self.refresh_signal_tx.send(session_id);
+
+        let sessions = self.refresh_sessions.clone();
+        let refresh_signal_tx = self.refresh_signal_tx.clone();
+        let mut room_rx = room_rx;
         let handle = tokio::spawn(
             async move {
-                loop {
-                    let room_id = *room_rx.borrow();
-                    if let Err(e) = service.list_chat_rooms(user_id, room_id).await {
-                        late_core::error_span!(
-                            "chat_refresh_failed",
-                            error = ?e,
-                            "chat service refresh failed"
-                        );
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                }
-            }
-            .instrument(info_span!("chat.refresh_loop", user_id = %user_id)),
-        );
-        handle.abort_handle()
-    }
+                let _guard = ChatRefreshSessionGuard {
+                    sessions: sessions.clone(),
+                    session_id,
+                };
+                let mut last_selected_room_id = initial_room_id;
 
-    pub fn list_chats_task(&self, user_id: Uuid, selected_room_id: Option<Uuid>) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                if let Err(e) = service.list_chat_rooms(user_id, selected_room_id).await {
-                    late_core::error_span!("chat_list_failed", error = ?e, "failed to list chats");
+                loop {
+                    tokio::select! {
+                        changed = room_rx.changed() => {
+                            if changed.is_err() {
+                                break;
+                            }
+
+                            let selected_room_id = *room_rx.borrow_and_update();
+                            if selected_room_id == last_selected_room_id {
+                                continue;
+                            }
+                            last_selected_room_id = selected_room_id;
+                            let _ = refresh_signal_tx.send(session_id);
+                        }
+                        Some(()) = force_refresh_rx.recv() => {
+                            let _ = refresh_signal_tx.send(session_id);
+                        }
+                    }
                 }
             }
-            .instrument(info_span!(
-                "chat.list_task",
-                user_id = %user_id,
-                selected_room_id = ?selected_room_id
-            )),
+            .instrument(info_span!("chat.refresh_registration", user_id = %user_id, session_id = %session_id)),
         );
+        (snapshot_rx, force_refresh_tx, handle.abort_handle())
     }
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id))]
@@ -492,6 +670,125 @@ impl ChatService {
         );
     }
 
+    #[tracing::instrument(skip(self), fields(user_id = %user_id, room_id = %room_id))]
+    async fn load_room_tail(&self, user_id: Uuid, room_id: Uuid) -> Result<()> {
+        let _permit = self.read_permits.acquire().await?;
+        let client = self.db.get().await?;
+        let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
+        if !is_member {
+            anyhow::bail!("user is not a member of room");
+        }
+
+        let messages = ChatMessage::list_recent(&client, room_id, HISTORY_LIMIT).await?;
+        let message_ids: Vec<Uuid> = messages.iter().map(|message| message.id).collect();
+        let author_ids: Vec<Uuid> = messages.iter().map(|message| message.user_id).collect();
+        let message_reactions =
+            ChatMessageReaction::list_summaries_for_messages(&client, &message_ids).await?;
+        let (usernames, bonsai_glyphs) =
+            Self::load_chat_author_metadata(&client, &author_ids).await?;
+
+        let _ = self.evt_tx.send(ChatEvent::RoomTailLoaded {
+            user_id,
+            room_id,
+            messages,
+            message_reactions,
+            usernames,
+            bonsai_glyphs,
+        });
+        Ok(())
+    }
+
+    pub fn load_room_tail_task(&self, user_id: Uuid, room_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.load_room_tail(user_id, room_id).await {
+                    let _ = service
+                        .evt_tx
+                        .send(ChatEvent::RoomTailLoadFailed { user_id, room_id });
+                    late_core::error_span!(
+                        "chat_load_room_tail_failed",
+                        error = ?e,
+                        "failed to load chat room tail"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.load_room_tail_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn list_discover_rooms(&self, user_id: Uuid) -> Result<Vec<DiscoverRoomItem>> {
+        let _permit = self.read_permits.acquire().await?;
+        let client = self.db.get().await?;
+        let joined_ids: HashSet<Uuid> = ChatRoom::list_for_user(&client, user_id)
+            .await?
+            .into_iter()
+            .map(|room| room.id)
+            .collect();
+        Ok(Self::list_all_discover_rooms(&client)
+            .await?
+            .into_iter()
+            .filter(|room| !joined_ids.contains(&room.room_id))
+            .collect())
+    }
+
+    pub fn list_discover_rooms_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                match service.list_discover_rooms(user_id).await {
+                    Ok(rooms) => {
+                        let _ = service
+                            .evt_tx
+                            .send(ChatEvent::DiscoverRoomsLoaded { user_id, rooms });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::DiscoverRoomsFailed {
+                            user_id,
+                            message: "Could not load public rooms.".to_string(),
+                        });
+                        late_core::error_span!(
+                            "chat_discover_rooms_failed",
+                            error = ?e,
+                            "failed to list discover rooms"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!("chat.list_discover_rooms_task", user_id = %user_id)),
+        );
+    }
+
+    pub fn load_pinned_messages_task(&self, pinned_tx: watch::Sender<Vec<ChatMessage>>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    ChatMessage::list_pinned(&client, PINNED_MESSAGES_LIMIT).await
+                }
+                .await;
+                match result {
+                    Ok(messages) => {
+                        let _ = pinned_tx.send(messages);
+                    }
+                    Err(e) => late_core::error_span!(
+                        "chat_load_pinned_messages_failed",
+                        error = ?e,
+                        "failed to load pinned chat messages"
+                    ),
+                }
+            }
+            .instrument(info_span!("chat.load_pinned_messages_task")),
+        );
+    }
+
     pub fn send_message_task(
         &self,
         user_id: Uuid,
@@ -501,11 +798,39 @@ impl ChatService {
         request_id: Uuid,
         is_admin: bool,
     ) {
+        self.send_message_with_reply_task(SendMessageTask {
+            user_id,
+            room_id,
+            room_slug,
+            body,
+            reply_to_message_id: None,
+            request_id,
+            is_admin,
+        });
+    }
+
+    pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
+        let SendMessageTask {
+            user_id,
+            room_id,
+            room_slug,
+            body,
+            reply_to_message_id,
+            request_id,
+            is_admin,
+        } = task;
         let service = self.clone();
         tokio::spawn(
             async move {
                 match service
-                    .send_message(user_id, room_id, room_slug, body, is_admin)
+                    .send_message(
+                        user_id,
+                        room_id,
+                        room_slug,
+                        body,
+                        reply_to_message_id,
+                        is_admin,
+                    )
                     .await
                 {
                     Err(e) => {
@@ -551,6 +876,7 @@ impl ChatService {
         room_id: Uuid,
         room_slug: Option<String>,
         body: String,
+        reply_to_message_id: Option<Uuid>,
         is_admin: bool,
     ) -> Result<()> {
         let body = body.trim_start_matches('\n').trim_end();
@@ -566,6 +892,14 @@ impl ChatService {
         let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
             anyhow::bail!("user is not a member of room");
+        }
+        if let Some(reply_to_message_id) = reply_to_message_id {
+            let reply_target = ChatMessage::get(&client, reply_to_message_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("reply target not found"))?;
+            if reply_target.room_id != room_id {
+                anyhow::bail!("reply target is not in this room");
+            }
         }
         let room = ChatRoom::get(&client, room_id)
             .await?
@@ -586,13 +920,17 @@ impl ChatService {
             user_id,
             body: body.to_string(),
         };
-        let chat = ChatMessage::create(&client, message).await?;
+        let chat = ChatMessage::create_with_reply_to(&client, message, reply_to_message_id).await?;
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;
+        let (mut usernames, mut bonsai_glyphs) =
+            Self::load_chat_author_metadata(&client, &[user_id]).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageCreated {
             message: chat.clone(),
             target_user_ids,
+            author_username: usernames.remove(&user_id),
+            author_bonsai_glyph: bonsai_glyphs.remove(&user_id),
         });
         metrics::record_chat_message_sent();
         self.notification_svc
@@ -675,9 +1013,13 @@ impl ChatService {
         };
         let updated = ChatMessage::update(&client, message_id, params).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, existing.room_id).await?;
+        let (mut usernames, mut bonsai_glyphs) =
+            Self::load_chat_author_metadata(&client, &[existing.user_id]).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageEdited {
             message: updated,
             target_user_ids,
+            author_username: usernames.remove(&existing.user_id),
+            author_bonsai_glyph: bonsai_glyphs.remove(&existing.user_id),
         });
         metrics::record_chat_message_edited();
         Ok(())
@@ -703,6 +1045,37 @@ impl ChatService {
                 user_id = %user_id,
                 message_id = %message_id,
                 kind = kind
+            )),
+        );
+    }
+
+    pub fn toggle_message_pin_task(&self, message_id: Uuid, is_admin: bool) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<()> = async {
+                    if !is_admin {
+                        anyhow::bail!("admin-only");
+                    }
+                    let client = service.db.get().await?;
+                    let message = ChatMessage::get(&client, message_id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("message not found"))?;
+                    ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
+                    Ok(())
+                }
+                .await;
+                if let Err(e) = result {
+                    late_core::error_span!(
+                        "chat_pin_failed",
+                        error = ?e,
+                        "failed to toggle message pin"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.toggle_message_pin_task",
+                message_id = %message_id
             )),
         );
     }
@@ -838,6 +1211,57 @@ impl ChatService {
         Ok((title, members))
     }
 
+    pub fn list_reaction_owners_task(&self, user_id: Uuid, message_id: Uuid) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.list_reaction_owners_task",
+            user_id = %user_id,
+            message_id = %message_id
+        );
+        tokio::spawn(
+            async move {
+                let event = match service.list_reaction_owners(user_id, message_id).await {
+                    Ok((owners, usernames)) => ChatEvent::ReactionOwnersListed {
+                        user_id,
+                        message_id,
+                        owners,
+                        usernames,
+                    },
+                    Err(e) => ChatEvent::ReactionOwnersListFailed {
+                        user_id,
+                        message: e.to_string(),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn list_reaction_owners(
+        &self,
+        user_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<(Vec<ChatMessageReactionOwners>, HashMap<Uuid, String>)> {
+        let client = self.db.get().await?;
+        let message = ChatMessage::get(&client, message_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Message not found"))?;
+        let is_member = ChatRoomMember::is_member(&client, message.room_id, user_id).await?;
+        if !is_member {
+            anyhow::bail!("You are not a member of this room");
+        }
+        let owners = ChatMessageReaction::list_owners_for_message(&client, message_id).await?;
+        let mut owner_ids: Vec<Uuid> = owners
+            .iter()
+            .flat_map(|reaction| reaction.user_ids.iter().copied())
+            .collect();
+        owner_ids.sort();
+        owner_ids.dedup();
+        let usernames = User::list_usernames_by_ids(&client, &owner_ids).await?;
+        Ok((owners, usernames))
+    }
+
     pub fn list_public_rooms_task(&self, user_id: Uuid) {
         let service = self.clone();
         let span = info_span!("chat.list_public_rooms_task", user_id = %user_id);
@@ -862,44 +1286,22 @@ impl ChatService {
 
     async fn list_public_rooms(&self) -> Result<(String, Vec<String>)> {
         let client = self.db.get().await?;
-        let rows = client
-            .query(
-                "SELECT r.kind,
-                        r.slug,
-                        r.language_code,
-                        COUNT(m.user_id)::bigint AS member_count
-                 FROM chat_rooms r
-                 LEFT JOIN chat_room_members m ON m.room_id = r.id
-                 WHERE r.kind = 'topic'
-                   AND r.visibility = 'public'
-                   AND r.permanent = false
-                 GROUP BY r.id, r.kind, r.slug, r.language_code, r.created
-                 ORDER BY
-                    member_count DESC,
-                    COALESCE(r.slug, COALESCE(r.language_code, '')) ASC,
-                    r.created ASC,
-                    r.id ASC",
-                &[],
-            )
-            .await?;
+        let rows = ChatRoom::list_public_topic_room_summaries(&client).await?;
 
         let rooms: Vec<String> = rows
             .into_iter()
             .map(|row| {
-                let kind: String = row.get("kind");
-                let slug: Option<String> = row.get("slug");
-                let language_code: Option<String> = row.get("language_code");
-                let member_count: i64 = row.get("member_count");
-                let label = slug
+                let label = row
+                    .slug
                     .map(|slug| format!("#{slug}"))
-                    .or_else(|| language_code.map(|code| format!("language:{code}")))
-                    .unwrap_or(kind);
-                let noun = if member_count == 1 {
+                    .or_else(|| row.language_code.map(|code| format!("language:{code}")))
+                    .unwrap_or(row.kind);
+                let noun = if row.member_count == 1 {
                     "member"
                 } else {
                     "members"
                 };
-                format!("{label} ({member_count} {noun})")
+                format!("{label} ({} {noun})", row.member_count)
             })
             .collect();
         let rooms = if rooms.is_empty() {
@@ -1045,6 +1447,29 @@ impl ChatService {
         );
     }
 
+    pub fn join_game_room_task(&self, user_id: Uuid, room_id: Uuid) {
+        let service = self.clone();
+        let span = info_span!("chat.join_game_room_task", user_id = %user_id, room_id = %room_id);
+        tokio::spawn(
+            async move {
+                match service.join_game_room(user_id, room_id).await {
+                    Ok(room_id) => {
+                        let _ = service
+                            .evt_tx
+                            .send(ChatEvent::GameRoomJoined { user_id, room_id });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::RoomFailed {
+                            user_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            .instrument(span),
+        );
+    }
+
     async fn join_public_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
         let client = self.db.get().await?;
         let room = ChatRoom::get(&client, room_id)
@@ -1057,9 +1482,27 @@ impl ChatService {
         Ok(room.id)
     }
 
+    async fn join_game_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
+        let client = self.db.get().await?;
+        let room = ChatRoom::get(&client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
+        if room.kind != "game" {
+            anyhow::bail!("Only game rooms can be joined here");
+        }
+        ChatRoomMember::join(&client, room.id, user_id).await?;
+        Ok(room.id)
+    }
+
     async fn open_public_room(&self, user_id: Uuid, slug: &str) -> Result<Uuid> {
         let client = self.db.get().await?;
         let room = ChatRoom::get_or_create_public_room(&client, slug).await?;
+        ChatRoom::set_auto_join(&client, room.id, false).await?;
+        tracing::info!(
+            slug = %slug,
+            room_id = %room.id,
+            "public room opened"
+        );
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
     }

@@ -34,8 +34,7 @@ impl InputContext {
     }
 
     fn blocks_arrow_sequence(self) -> bool {
-        let chat_screen = (self.screen == Screen::Dashboard || self.screen == Screen::Chat)
-            && self.chat_composing;
+        let chat_screen = is_chat_composer_context(self);
         // Allow arrows through when autocomplete is active
         if chat_screen && self.chat_ac_active {
             return false;
@@ -43,6 +42,10 @@ impl InputContext {
         chat_screen
             || (self.screen == Screen::Chat && (self.news_composing || self.showcase_composing))
     }
+}
+
+fn is_chat_composer_context(ctx: InputContext) -> bool {
+    matches!(ctx.screen, Screen::Dashboard | Screen::Chat | Screen::Rooms) && ctx.chat_composing
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -464,13 +467,6 @@ pub fn handle(app: &mut App, data: &[u8]) {
         return;
     }
 
-    // Web chat QR overlay: any key dismisses
-    if app.show_web_chat_qr && !data.is_empty() {
-        app.show_web_chat_qr = false;
-        app.web_chat_qr_url = None;
-        return;
-    }
-
     // Split-across-reads `ESC` chords: previous read ended with a lone ESC
     // and this one begins with a control byte that should be treated as an
     // Alt chord instead of feeding a wedged parser.
@@ -526,9 +522,17 @@ fn handle_vt_segment(app: &mut App, data: &[u8]) {
 }
 
 fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
+    let close_on_any_key = app
+        .chat
+        .overlay()
+        .is_some_and(|overlay| overlay.close_on_any_key);
+
     match overlay_input_action(event) {
         Some(OverlayInputAction::Close) => app.chat.close_overlay(),
         Some(OverlayInputAction::Scroll(delta)) => app.chat.scroll_overlay(delta),
+        None if close_on_any_key && input_dismisses_key_modal(event) => {
+            app.chat.close_overlay();
+        }
         None => {}
     }
 }
@@ -559,6 +563,21 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_cli_install_modal {
+        if input_dismisses_key_modal(&event) {
+            app.show_cli_install_modal = false;
+        }
+        return;
+    }
+
+    if app.show_web_chat_qr {
+        if input_dismisses_key_modal(&event) {
+            app.show_web_chat_qr = false;
+            app.web_chat_qr_url = None;
+        }
         return;
     }
 
@@ -602,7 +621,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
+    if matches!(ctx.screen, Screen::Chat | Screen::Dashboard | Screen::Rooms)
+        && app.chat.has_overlay()
+    {
         handle_overlay_input(app, &event);
         return;
     }
@@ -618,7 +639,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     if ctx.screen == Screen::Artboard && crate::app::artboard::page::handle_event(app, &event) {
         return;
     }
-    if ctx.screen == Screen::Rooms && crate::app::rooms::input::handle_event(app, &event) {
+    if ctx.screen == Screen::Rooms
+        && !ctx.chat_composing
+        && crate::app::rooms::input::handle_event(app, &event)
+    {
         return;
     }
 
@@ -626,8 +650,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         ParsedInput::FocusGained | ParsedInput::FocusLost => {}
         ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
         ParsedInput::AltEnter => {
-            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
-            {
+            if is_chat_composer_context(ctx) {
                 app.chat.composer_push('\n');
                 app.chat.update_autocomplete();
             } else if ctx.screen == Screen::Chat && ctx.showcase_composing {
@@ -635,8 +658,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::AltS => {
-            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
-            {
+            if is_chat_composer_context(ctx) {
                 let from_dashboard = ctx.screen == Screen::Dashboard;
                 if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
                     app.banner = Some(b);
@@ -666,8 +688,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 app.chat.showcase.cycle_field(false);
                 return;
             }
-            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing
-            {
+            if is_chat_composer_context(ctx) {
                 return;
             }
             if ctx.screen == Screen::Chat && (ctx.news_composing || ctx.showcase_composing) {
@@ -708,30 +729,21 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
             handle_scroll_for_screen(app, ctx.screen, isize::MIN)
         }
-        ParsedInput::Delete
-            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-                && ctx.chat_composing =>
-        {
+        ParsedInput::Delete if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_right();
             app.chat.update_autocomplete();
         }
         ParsedInput::Delete if ctx.screen == Screen::Chat && ctx.news_composing => {
             app.chat.news.composer_delete_right();
         }
-        ParsedInput::CtrlBackspace
-            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-                && ctx.chat_composing =>
-        {
+        ParsedInput::CtrlBackspace if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_word_left();
             app.chat.update_autocomplete();
         }
         ParsedInput::CtrlBackspace if ctx.screen == Screen::Chat && ctx.news_composing => {
             app.chat.news.composer_delete_word_left();
         }
-        ParsedInput::Byte(0x17)
-            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-                && ctx.chat_composing =>
-        {
+        ParsedInput::Byte(0x17) if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_word_left();
             app.chat.update_autocomplete();
         }
@@ -741,20 +753,14 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         // Many terminals encode Ctrl+Backspace as raw BS (^H / 0x08) rather
         // than a distinct escape sequence. Treat that as delete-word-left in
         // the chat composer; plain Backspace continues to come through as DEL.
-        ParsedInput::Byte(0x08)
-            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-                && ctx.chat_composing =>
-        {
+        ParsedInput::Byte(0x08) if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_word_left();
             app.chat.update_autocomplete();
         }
         ParsedInput::Byte(0x08) if ctx.screen == Screen::Chat && ctx.news_composing => {
             app.chat.news.composer_delete_word_left();
         }
-        ParsedInput::CtrlDelete
-            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-                && ctx.chat_composing =>
-        {
+        ParsedInput::CtrlDelete if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_word_right();
             app.chat.update_autocomplete();
         }
@@ -762,9 +768,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.chat.news.composer_delete_word_right();
         }
         ParsedInput::CtrlArrow(key) | ParsedInput::AltArrow(key)
-            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-                && ctx.chat_composing
-                && !ctx.chat_ac_active =>
+            if is_chat_composer_context(ctx) && !ctx.chat_ac_active =>
         {
             if key == b'C' {
                 app.chat.composer_cursor_word_right();
@@ -799,8 +803,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 let _ = chat::input::handle_arrow(app, key);
                 return;
             }
-            if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
-                && ctx.chat_composing
+            if is_chat_composer_context(ctx)
                 && !ctx.chat_ac_active
                 && matches!(key, b'A' | b'B' | b'C' | b'D')
             {
@@ -837,10 +840,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         // without reaching for Alt. Plain Enter stays as bare CR (0x0D),
         // which still submits. News composer keeps its submit-on-LF
         // behavior since it only ever holds a single URL.
-        ParsedInput::Byte(b'\n')
-            if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat)
-                && ctx.chat_composing =>
-        {
+        ParsedInput::Byte(b'\n') if is_chat_composer_context(ctx) => {
             app.chat.composer_push('\n');
             app.chat.update_autocomplete();
         }
@@ -885,6 +885,9 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Rooms && app.rooms_active_room.is_some() {
+        if ctx.chat_composing {
+            return false;
+        }
         let _ = crate::app::rooms::input::handle_event(app, event);
         return true;
     }
@@ -893,7 +896,7 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
 }
 
 fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
-    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && ctx.chat_composing {
+    if is_chat_composer_context(ctx) {
         chat::input::handle_compose_char(app, ch);
         return true;
     }
@@ -914,12 +917,23 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
         return;
     }
 
+    if byte == b'/' && start_slash_command_composer(app, ctx.screen) {
+        return;
+    }
+
     if handle_global_key(app, ctx, byte) {
         app.chat.clear_message_selection();
         return;
     }
 
     dispatch_screen_key(app, ctx.screen, byte);
+}
+
+fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
+    !matches!(
+        event,
+        ParsedInput::Mouse(_) | ParsedInput::FocusGained | ParsedInput::FocusLost
+    )
 }
 
 fn dispatch_escape(app: &mut App) {
@@ -947,6 +961,15 @@ fn dispatch_escape(app: &mut App) {
         app.icon_picker_open = false;
         return;
     }
+    if app.show_cli_install_modal {
+        app.show_cli_install_modal = false;
+        return;
+    }
+    if app.show_web_chat_qr {
+        app.show_web_chat_qr = false;
+        app.web_chat_qr_url = None;
+        return;
+    }
     let ctx = InputContext::from_app(app);
     if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.room_jump_active
     {
@@ -956,13 +979,15 @@ fn dispatch_escape(app: &mut App) {
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
-    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard)
+    if matches!(ctx.screen, Screen::Chat | Screen::Dashboard | Screen::Rooms)
         && app.chat.is_reaction_leader_active()
     {
         app.chat.cancel_reaction_leader();
         return;
     }
-    if (ctx.screen == Screen::Chat || ctx.screen == Screen::Dashboard) && app.chat.has_overlay() {
+    if matches!(ctx.screen, Screen::Chat | Screen::Dashboard | Screen::Rooms)
+        && app.chat.has_overlay()
+    {
         app.chat.close_overlay();
         return;
     }
@@ -1019,7 +1044,7 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
 }
 
 fn paste_target(ctx: InputContext) -> PasteTarget {
-    if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing {
+    if is_chat_composer_context(ctx) {
         PasteTarget::ChatComposer
     } else if ctx.screen == Screen::Chat && ctx.news_composing {
         PasteTarget::NewsComposer
@@ -1079,6 +1104,11 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
             }
         }
         Screen::Chat => chat::input::handle_scroll(app, delta),
+        Screen::Rooms => {
+            if let Some(room) = app.rooms_active_room.as_ref() {
+                chat::input::handle_scroll_in_room(app, room.chat_room_id, delta);
+            }
+        }
         Screen::Artboard => {}
         _ => {}
     }
@@ -1098,6 +1128,25 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
 
     match screen {
         Screen::Dashboard => {
+            if crate::app::dashboard::ui::cli_install_button_hit_test(
+                content_area,
+                app.profile_state.profile().show_dashboard_header,
+                x,
+                y,
+            ) {
+                crate::app::dashboard::input::open_cli_install_modal(app);
+                return true;
+            }
+            if crate::app::dashboard::ui::browser_pair_button_hit_test(
+                content_area,
+                app.profile_state.profile().show_dashboard_header,
+                x,
+                y,
+            ) {
+                crate::app::dashboard::input::open_browser_pairing_qr(app);
+                return true;
+            }
+
             let Some(pins) = app.dashboard_strip_pins() else {
                 return false;
             };
@@ -1105,6 +1154,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                 content_area,
                 app.profile_state.profile().show_dashboard_header,
                 &pins,
+                app.chat.pinned_messages().len(),
                 x,
                 y,
             );
@@ -1121,6 +1171,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                 let discover_view = crate::app::chat::discover::ui::DiscoverListView {
                     items: app.chat.discover.all_items(),
                     selected_index: app.chat.discover.selected_index(),
+                    loading: app.chat.discover.is_loading(),
                 };
                 let notifications_view =
                     crate::app::chat::notifications::ui::NotificationListView {
@@ -1242,7 +1293,7 @@ fn mouse_scroll_delta(mouse: MouseEvent) -> Option<isize> {
 
 fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
     // Route arrows to autocomplete when active
-    if (screen == Screen::Chat || screen == Screen::Dashboard)
+    if matches!(screen, Screen::Chat | Screen::Dashboard | Screen::Rooms)
         && app.chat.is_composing()
         && app.chat.is_autocomplete_active()
     {
@@ -1263,7 +1314,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 }
 
 fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
-    if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing {
+    if is_chat_composer_context(ctx) {
         chat::input::handle_compose_input(
             app,
             byte,
@@ -1290,6 +1341,28 @@ fn compose_room_switch_allowed(screen: Screen) -> bool {
     screen == Screen::Chat
 }
 
+fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
+    if app.chat.is_composing() || app.chat.news.composing() || app.chat.showcase.composing() {
+        return false;
+    }
+
+    let room_id = match screen {
+        Screen::Dashboard => app.dashboard_active_room_id(),
+        Screen::Chat => app.chat.selected_room_id,
+        _ => None,
+    };
+    let Some(room_id) = room_id else {
+        return false;
+    };
+
+    if screen == Screen::Chat {
+        app.chat
+            .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
+    }
+    app.chat.start_command_composer_in_room(room_id);
+    true
+}
+
 fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.news.stop_composing();
@@ -1301,6 +1374,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_web_chat_qr = false;
+    app.show_cli_install_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
@@ -1347,9 +1421,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    // When the dashboard's `g` favorite-jump prefix is armed, digits 1-9
-    // belong to the jump (`g3` → favorite slot 3), not the global screen
+    // When a dashboard two-key prefix is armed, slot digits belong to the
+    // prefix (`g3` favorite jump, `b3` blackjack room), not the global screen
     // switcher. Let them fall through to dashboard::input::handle_key.
+    if ctx.screen == Screen::Dashboard
+        && app.dashboard_blackjack_prefix_armed
+        && dashboard::input::blackjack_slot_for_key(byte).is_some()
+    {
+        return false;
+    }
+
     if (b'1'..=b'9').contains(&byte)
         && ctx.screen == Screen::Dashboard
         && app.dashboard_g_prefix_armed
@@ -1473,12 +1554,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(ctx.screen.next());
             true
         }
-        b'P' => {
-            app.pending_clipboard = Some(app.connect_url.clone());
-            app.web_chat_qr_url = Some(app.connect_url.clone());
-            app.show_web_chat_qr = true;
-            true
-        }
         _ => false,
     }
 }
@@ -1515,8 +1590,8 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
 
 fn try_open_icon_picker(app: &mut App) {
     let ctx = InputContext::from_app(app);
-    // Only the chat composer (dashboard and chat screens) can receive icons.
-    if ctx.screen != Screen::Dashboard && ctx.screen != Screen::Chat {
+    // Only chat composers can receive icons.
+    if !matches!(ctx.screen, Screen::Dashboard | Screen::Chat | Screen::Rooms) {
         return;
     }
     if !ctx.chat_composing {
@@ -1527,6 +1602,10 @@ fn try_open_icon_picker(app: &mut App) {
         if ctx.screen == Screen::Dashboard {
             if let Some(room_id) = app.dashboard_active_room_id() {
                 app.chat.start_composing_in_room(room_id);
+            }
+        } else if ctx.screen == Screen::Rooms {
+            if let Some(room) = app.rooms_active_room.as_ref() {
+                app.chat.start_composing_in_room(room.chat_room_id);
             }
         } else {
             app.chat.start_composing();

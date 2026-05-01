@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{
@@ -8,7 +10,10 @@ use uuid::Uuid;
 
 use crate::app::{
     games::cards::{CardRank, CardSuit, PlayingCard},
-    rooms::blackjack::svc::{BlackjackEvent, BlackjackService},
+    rooms::blackjack::{
+        player::BlackjackPlayerInfo,
+        svc::{BlackjackEvent, BlackjackService},
+    },
 };
 
 pub const MIN_BET: i64 = 10;
@@ -18,6 +23,7 @@ pub const BLACKJACK_TARGET: u8 = 21;
 pub const DEALER_STAND_ON: u8 = 17;
 pub const SHOE_DECKS: usize = 6;
 pub const SHOE_PENETRATION: usize = 52;
+const SETTLEMENT_MIN_VIEW_MS: u64 = 1500;
 
 pub const DEALER_STANDS_ON_SOFT_17: bool = true;
 
@@ -91,10 +97,14 @@ pub enum BetError {
 
 impl Bet {
     pub fn new(amount: i64) -> Result<Self, BetError> {
-        if amount < MIN_BET {
+        Self::new_for_table(amount, MIN_BET, MAX_BET)
+    }
+
+    pub fn new_for_table(amount: i64, min_bet: i64, max_bet: i64) -> Result<Self, BetError> {
+        if amount < min_bet {
             return Err(BetError::BelowMin);
         }
-        if amount > MAX_BET {
+        if amount > max_bet {
             return Err(BetError::AboveMax);
         }
         Ok(Self(amount))
@@ -111,6 +121,16 @@ pub enum Outcome {
     PlayerWin,
     Push,
     DealerWin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeatAction {
+    Sit,
+    Bet,
+    Hit,
+    Stand,
+    MissedDeal,
+    MissedAction,
 }
 
 pub fn settle(player: &[PlayingCard], dealer: &[PlayingCard]) -> Outcome {
@@ -172,30 +192,38 @@ pub struct BlackjackSnapshot {
     pub balance: i64,
     pub seats: Vec<BlackjackSeat>,
     pub betting_countdown_secs: Option<u64>,
+    pub action_countdown_secs: Option<u64>,
     pub dealer_hand: Vec<PlayingCard>,
     /// User-facing active/reference hand. The authoritative hands live on seats.
     pub player_hand: Vec<PlayingCard>,
     pub current_bet_amount: Option<i64>,
+    pub min_bet: i64,
+    pub max_bet: i64,
+    pub chip_denominations: Vec<i64>,
     pub phase: Phase,
     pub last_outcome: Option<Outcome>,
     pub last_net_change: i64,
-    pub bet_input: String,
+    pub stake_chips: Vec<i64>,
+    pub selected_chip_index: usize,
     pub status_message: String,
+    pub private_notice: Option<String>,
     pub dealer_revealed: bool,
     pub dealer_score: Option<HandScore>,
     pub player_score: Option<HandScore>,
-    pub outcome_banner: Option<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlackjackSeat {
     pub index: usize,
     pub user_id: Option<Uuid>,
+    pub player: Option<BlackjackPlayerInfo>,
     pub bet_amount: Option<i64>,
+    pub stake_chips: Vec<i64>,
     pub hand: Vec<PlayingCard>,
     pub phase: SeatPhase,
     pub score: Option<HandScore>,
     pub last_outcome: Option<Outcome>,
+    pub last_action: Option<SeatAction>,
     pub last_net_change: i64,
 }
 
@@ -268,10 +296,11 @@ impl Default for Shoe {
 pub struct State {
     user_id: Uuid,
     pub(crate) balance: i64,
-    pub(crate) bet_input: String,
+    pub(crate) selected_chip_index: usize,
     pub(crate) snapshot: BlackjackSnapshot,
     pub(crate) private_notice: Option<String>,
     pending_request_id: Option<Uuid>,
+    settling_seen_at: Option<Instant>,
     svc: BlackjackService,
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_rx: broadcast::Receiver<BlackjackEvent>,
@@ -281,14 +310,20 @@ impl State {
     pub fn new(svc: BlackjackService, user_id: Uuid, balance: i64) -> Self {
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
+        let settling_seen_at = if snapshot.phase == Phase::Settling {
+            Some(Instant::now())
+        } else {
+            None
+        };
         let event_rx = svc.subscribe_events();
         Self {
             user_id,
             balance,
-            bet_input: String::new(),
+            selected_chip_index: 0,
             snapshot,
             private_notice: None,
             pending_request_id: None,
+            settling_seen_at,
             svc,
             snapshot_rx,
             event_rx,
@@ -297,7 +332,13 @@ impl State {
 
     pub fn tick(&mut self) {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
+            let previous_phase = self.snapshot.phase;
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+            if self.snapshot.phase == Phase::Settling && previous_phase != Phase::Settling {
+                self.settling_seen_at = Some(Instant::now());
+            } else if self.snapshot.phase != Phase::Settling {
+                self.settling_seen_at = None;
+            }
         }
 
         loop {
@@ -313,26 +354,67 @@ impl State {
         }
     }
 
-    pub fn append_bet_digit(&mut self, digit: char) {
-        if self.snapshot.phase != Phase::Betting || !digit.is_ascii_digit() || !self.is_seated() {
+    pub fn move_chip_selection(&mut self, delta: isize) {
+        let len = self.snapshot.chip_denominations.len() as isize;
+        if len == 0 {
+            self.selected_chip_index = 0;
+            return;
+        }
+        let current = self.selected_chip_index as isize;
+        self.selected_chip_index = (current + delta).rem_euclid(len) as usize;
+    }
+
+    pub fn touch_activity(&self) {
+        if self.is_seated() {
+            self.svc.touch_activity_task(self.user_id);
+        }
+    }
+
+    pub fn selected_chip_value(&self) -> i64 {
+        self.snapshot
+            .chip_denominations
+            .get(self.selected_chip_index)
+            .copied()
+            .unwrap_or(self.snapshot.min_bet)
+    }
+
+    pub fn throw_selected_chip(&mut self) {
+        if self.snapshot.phase != Phase::Betting || !self.is_seated() {
             return;
         }
         if self.user_seat().and_then(|seat| seat.bet_amount).is_some() {
             self.private_notice = Some("Bet already placed. Dealer will deal soon.".to_string());
             return;
         }
-        if self.bet_input.len() < 3 {
-            self.bet_input.push(digit);
+        let chip = self.selected_chip_value();
+        let next_amount = self.stake_amount() + chip;
+        if next_amount > self.snapshot.max_bet {
+            self.private_notice = Some(format!("Table max is {} chips.", self.snapshot.max_bet));
+            return;
         }
+        if next_amount > self.balance {
+            self.private_notice = Some(format!("Only {} chips available to bet.", self.balance));
+            return;
+        }
+        self.private_notice = None;
+        self.svc.throw_chip_task(self.user_id, chip);
     }
 
-    pub fn pop_bet_digit(&mut self) {
+    pub fn pull_last_chip(&mut self) {
         if self.snapshot.phase == Phase::Betting {
-            self.bet_input.pop();
+            self.private_notice = None;
+            self.svc.pull_stake_chip_task(self.user_id);
         }
     }
 
-    pub fn submit_bet_from_buffer(&mut self) {
+    pub fn clear_stake(&mut self) {
+        if self.snapshot.phase == Phase::Betting {
+            self.private_notice = None;
+            self.svc.clear_stake_task(self.user_id);
+        }
+    }
+
+    pub fn submit_stake(&mut self) {
         if self.snapshot.phase != Phase::Betting {
             return;
         }
@@ -344,38 +426,28 @@ impl State {
             self.private_notice = Some("Bet already placed. Dealer will deal soon.".to_string());
             return;
         }
-        let Ok(amount) = self.bet_input.parse::<i64>() else {
-            self.private_notice = Some("Enter a bet first.".to_string());
-            return;
-        };
-        self.submit_bet(amount);
-    }
-
-    pub fn submit_bet(&mut self, amount: i64) {
-        if self.snapshot.phase != Phase::Betting {
+        let amount = self.stake_amount();
+        if amount == 0 {
+            self.private_notice = Some("Throw chips onto the stake first.".to_string());
             return;
         }
-        if !self.is_seated() {
-            self.private_notice = Some("Sit before betting.".to_string());
-            return;
-        }
-        if self.user_seat().and_then(|seat| seat.bet_amount).is_some() {
-            self.private_notice = Some("Bet already placed. Dealer will deal soon.".to_string());
+        if amount > self.balance {
+            self.private_notice = Some(format!("Only {} chips available to bet.", self.balance));
             return;
         }
         let request_id = Uuid::now_v7();
         self.pending_request_id = Some(request_id);
-        self.private_notice = Some(format!("Placing bet: {amount} chips..."));
-        self.svc.place_bet_task(self.user_id, request_id, amount);
+        self.private_notice = None;
+        self.svc.submit_stake_task(self.user_id, request_id);
     }
 
     pub fn sit(&mut self) {
-        self.private_notice = Some("Taking a seat...".to_string());
+        self.private_notice = None;
         self.svc.sit_task(self.user_id);
     }
 
     pub fn leave_seat(&mut self) {
-        self.private_notice = Some("Leaving seat...".to_string());
+        self.private_notice = None;
         self.svc.leave_seat_task(self.user_id);
     }
 
@@ -388,13 +460,28 @@ impl State {
     }
 
     pub fn next_hand(&mut self) {
+        if !self.settlement_min_view_elapsed() {
+            return;
+        }
         self.svc.next_hand_task(self.user_id);
+    }
+
+    pub fn settlement_min_view_elapsed(&self) -> bool {
+        self.settling_seen_at.is_none_or(|settling_seen_at| {
+            settling_seen_at.elapsed() >= Duration::from_millis(SETTLEMENT_MIN_VIEW_MS)
+        })
     }
 
     pub fn current_bet_amount(&self) -> Option<i64> {
         self.user_seat()
             .and_then(|seat| seat.bet_amount)
             .or(self.snapshot.current_bet_amount)
+    }
+
+    pub fn stake_amount(&self) -> i64 {
+        self.user_seat()
+            .map(|seat| seat.stake_chips.iter().sum())
+            .unwrap_or(0)
     }
 
     pub fn seat_index(&self) -> Option<usize> {
@@ -436,7 +523,13 @@ impl State {
             self.active_seat().or_else(|| self.user_seat())
         };
         snapshot.balance = self.balance;
-        snapshot.bet_input = self.bet_input.clone();
+        snapshot.stake_chips = self
+            .user_seat()
+            .map(|seat| seat.stake_chips.clone())
+            .unwrap_or_default();
+        snapshot.selected_chip_index = self
+            .selected_chip_index
+            .min(snapshot.chip_denominations.len().saturating_sub(1));
         snapshot.current_bet_amount = self.current_bet_amount();
         if let Some(seat) = reference_seat {
             snapshot.player_hand = seat.hand.clone();
@@ -445,10 +538,23 @@ impl State {
         if let Some(user_seat) = self.user_seat() {
             snapshot.last_outcome = user_seat.last_outcome;
             snapshot.last_net_change = user_seat.last_net_change;
-            snapshot.outcome_banner = seat_outcome_banner(user_seat);
         }
-        snapshot.status_message = self.status_message();
+        snapshot.private_notice = self.user_facing_notice();
         snapshot
+    }
+
+    fn user_facing_notice(&self) -> Option<String> {
+        if let Some(notice) = &self.private_notice {
+            return Some(notice.clone());
+        }
+        if self.snapshot.phase == Phase::Betting
+            && self.is_seated()
+            && self.user_seat().and_then(|seat| seat.bet_amount).is_none()
+            && self.balance < self.snapshot.min_bet
+        {
+            return Some("You need more chips to bet.".to_string());
+        }
+        None
     }
 
     pub fn player_score(&self) -> Option<HandScore> {
@@ -461,16 +567,6 @@ impl State {
 
     pub fn dealer_revealed(&self) -> bool {
         self.snapshot.dealer_revealed
-    }
-
-    pub fn outcome_banner(&self) -> Option<(String, String)> {
-        self.snapshot.outcome_banner.clone()
-    }
-
-    pub fn status_message(&self) -> String {
-        self.private_notice
-            .clone()
-            .unwrap_or_else(|| self.snapshot.status_message.clone())
     }
 
     fn apply_event(&mut self, event: BlackjackEvent) {
@@ -487,7 +583,6 @@ impl State {
                 match result {
                     Ok(new_balance) => {
                         self.balance = new_balance;
-                        self.bet_input.clear();
                         self.private_notice = None;
                     }
                     Err(message) => {
@@ -503,7 +598,6 @@ impl State {
             BlackjackEvent::SeatLeft { user_id, .. } => {
                 if user_id == self.user_id {
                     self.private_notice = None;
-                    self.bet_input.clear();
                 }
             }
             BlackjackEvent::HandSettled {
@@ -522,23 +616,6 @@ impl State {
             }
         }
     }
-}
-
-pub fn seat_outcome_banner(seat: &BlackjackSeat) -> Option<(String, String)> {
-    let outcome = seat.last_outcome?;
-    let subtitle = match outcome {
-        Outcome::PlayerBlackjack | Outcome::PlayerWin => format!("+{}", seat.last_net_change),
-        Outcome::Push => "Bet returned".to_string(),
-        Outcome::DealerWin => "No payout".to_string(),
-    };
-    let title = match outcome {
-        Outcome::PlayerBlackjack => "BLACKJACK!",
-        Outcome::PlayerWin => "You win!",
-        Outcome::Push => "Push",
-        Outcome::DealerWin if is_bust(&seat.hand) => "Bust",
-        Outcome::DealerWin => "Dealer wins",
-    };
-    Some((title.to_string(), subtitle))
 }
 
 fn fresh_shoe() -> Vec<PlayingCard> {

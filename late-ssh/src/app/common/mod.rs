@@ -1,3 +1,4 @@
+pub mod cli_install;
 pub mod composer;
 pub mod markdown;
 pub(crate) mod mentions;

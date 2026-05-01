@@ -144,7 +144,6 @@ fn advance_past_backticks(text: &str, mut idx: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Color;
 
     #[test]
     fn extract_single_mention() {
@@ -199,8 +198,8 @@ mod tests {
         assert_eq!(spans[1].content.as_ref(), "@alice");
         assert_eq!(spans[2].content.as_ref(), " and ");
         assert_eq!(spans[3].content.as_ref(), "@bob");
-        assert_eq!(spans[1].style.fg, Some(Color::Rgb(228, 196, 78)));
-        assert_eq!(spans[3].style.fg, Some(Color::Rgb(228, 196, 78)));
+        assert_eq!(spans[1].style.fg, Some(theme::MENTION()));
+        assert_eq!(spans[3].style.fg, Some(theme::MENTION()));
         assert!(spans[1].style.add_modifier.contains(Modifier::BOLD));
     }
 

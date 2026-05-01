@@ -5,6 +5,7 @@
 # --- General (Docker/dev containers) ---
 RUST_LOG ?= info,late_web=debug,late_ssh=debug,late_core=debug
 CARGO_TARGET_DIR ?= /app/target
+INSTANCE ?= late                                            # Prefix for container names; bump (e.g. late2) for a parallel clone
 
 # --- SSH ---
 LATE_FORCE_ADMIN ?= 1
@@ -22,7 +23,7 @@ LATE_SSH_PROXY_PROTOCOL ?= 0                                # Parse PROXY protoc
 LATE_SSH_PROXY_TRUSTED_CIDRS ?=                             # Comma-separated trusted proxy CIDRs (e.g. 10.42.0.0/16)
 LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP ?= 30                      # Max WebSocket pair requests per IP before rate-limited
 LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS ?= 60                   # Rolling window for WS pair rate limiting
-LATE_ALLOWED_ORIGINS ?= http://localhost:3000               # Comma-separated list of allowed CORS origins
+LATE_ALLOWED_ORIGINS ?= http://localhost:$(LATE_WEB_PORT)   # Comma-separated list of allowed CORS origins
 
 # --- Database ---
 LATE_DB_HOST ?= postgres                                    # PostgreSQL hostname (docker service name)
@@ -31,16 +32,19 @@ LATE_DB_USER ?= postgres                                    # PostgreSQL user
 LATE_DB_PASSWORD ?= postgres                                # PostgreSQL password
 LATE_DB_NAME ?= postgres                                    # PostgreSQL database name
 LATE_DB_POOL_SIZE ?= 16                                     # PostgreSQL connection pool size
+LATE_PG_HOST_PORT ?= 5433                                   # Host-side port mapped to postgres 5432
 
 # --- Audio ---
 LATE_ICECAST_URL ?= http://icecast:8000                     # Icecast streaming server URL
 LATE_LIQUIDSOAP_ADDR ?= liquidsoap:1234                     # Liquidsoap telnet address for vibe switching
+LATE_ICECAST_HOST_PORT ?= 8000                              # Host-side port mapped to icecast 8000
+LATE_LIQUIDSOAP_HOST_PORT ?= 1234                           # Host-side port mapped to liquidsoap 1234
 
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
-LATE_WEB_URL ?= http://localhost:3000                       # Public web URL (used by SSH server)
-LATE_SSH_INTERNAL_URL ?= http://service-ssh:4000            # Internal SSH API URL (used by web server)
-LATE_SSH_PUBLIC_URL ?= localhost:4000                       # Public SSH API URL (used by browser for WS)
+LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (used by SSH server)
+LATE_SSH_INTERNAL_URL ?= http://service-ssh:$(LATE_API_PORT) # Internal SSH API URL (used by web server)
+LATE_SSH_PUBLIC_URL ?= localhost:$(LATE_API_PORT)           # Public SSH API URL (used by browser for WS)
 LATE_AUDIO_URL ?= http://icecast:8000                       # Upstream audio URL used by late-web /stream proxy
 
 # --- Vote ---
@@ -60,6 +64,7 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 .env:
 	@echo "RUST_LOG=$(RUST_LOG)" > .env
 	@echo "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" >> .env
+	@echo "INSTANCE=$(INSTANCE)" >> .env
 	@echo "LATE_FORCE_ADMIN=$(LATE_FORCE_ADMIN)" >> .env
 	@echo "LATE_SSH_PORT=$(LATE_SSH_PORT)" >> .env
 	@echo "LATE_API_PORT=$(LATE_API_PORT)" >> .env
@@ -82,8 +87,11 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "LATE_DB_PASSWORD=$(LATE_DB_PASSWORD)" >> .env
 	@echo "LATE_DB_NAME=$(LATE_DB_NAME)" >> .env
 	@echo "LATE_DB_POOL_SIZE=$(LATE_DB_POOL_SIZE)" >> .env
+	@echo "LATE_PG_HOST_PORT=$(LATE_PG_HOST_PORT)" >> .env
 	@echo "LATE_ICECAST_URL=$(LATE_ICECAST_URL)" >> .env
 	@echo "LATE_LIQUIDSOAP_ADDR=$(LATE_LIQUIDSOAP_ADDR)" >> .env
+	@echo "LATE_ICECAST_HOST_PORT=$(LATE_ICECAST_HOST_PORT)" >> .env
+	@echo "LATE_LIQUIDSOAP_HOST_PORT=$(LATE_LIQUIDSOAP_HOST_PORT)" >> .env
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
@@ -93,6 +101,27 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env
 	@echo "LATE_AI_MODEL=$(LATE_AI_MODEL)" >> .env
+
+# Recipe for a parallel "instance 2" clone. Run from the second clone:
+#   make start-instance2          # bring up the stack (foreground)
+#   make .env-instance2           # just (re)generate .env without starting
+# Only ports are overridden; URL/origin vars track the port defaults above.
+INSTANCE2_OVERRIDES = \
+  INSTANCE=late2 \
+  LATE_SSH_PORT=2223 \
+  LATE_API_PORT=4001 \
+  LATE_WEB_PORT=3001 \
+  LATE_PG_HOST_PORT=5434 \
+  LATE_ICECAST_HOST_PORT=8001 \
+  LATE_LIQUIDSOAP_HOST_PORT=1235
+
+.PHONY: .env-instance2
+.env-instance2:
+	@$(MAKE) .env $(INSTANCE2_OVERRIDES)
+
+.PHONY: start-instance2
+start-instance2:
+	@$(MAKE) start $(INSTANCE2_OVERRIDES)
 
 .PHONY: keys
 keys:

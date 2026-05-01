@@ -449,7 +449,11 @@ fn log_op(op: &CanvasOp, username: &str) {
             );
         }
         CanvasOp::PaintRegion { cells } if cells.len() > PAINT_REGION_LOG_THRESHOLD => {
-            info!(user = username, cells = cells.len(), "artboard paint region");
+            info!(
+                user = username,
+                cells = cells.len(),
+                "artboard paint region"
+            );
         }
         _ => {}
     }

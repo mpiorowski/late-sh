@@ -177,6 +177,10 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             }
             return true;
         }
+        if matches!(byte, b'f' | b'F') {
+            app.chat.open_selected_message_reactions_in_room(room_id);
+            return true;
+        }
         app.chat.cancel_reaction_leader();
         return true;
     }
@@ -185,9 +189,16 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     // reap a run of your own messages with repeated presses.
     // `r` enters reply mode and drops the selection.
     // `e` enters edit mode and drops the selection.
+    // `Ctrl-P` toggles the selected message's pinned dashboard status.
     // `p` opens a read-only profile modal for the selected author.
     match byte {
         b'f' | b'F' if app.chat.begin_reaction_leader() => return true,
+        0x10 => {
+            if let Some(b) = app.chat.toggle_pin_selected_message_in_room(room_id) {
+                app.banner = Some(b);
+                return true;
+            }
+        }
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message_in_room(room_id) {
                 app.banner = Some(b);
@@ -224,6 +235,9 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 app.chat.clear_message_selection();
                 return true;
             }
+        }
+        b'\r' | b'\n' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
+            return true;
         }
         _ => {}
     }

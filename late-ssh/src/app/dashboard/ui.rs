@@ -10,14 +10,22 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::chat::ui::{DashboardChatView, draw_dashboard_chat_card},
+    app::chat::ui::{
+        DashboardChatView, dashboard_pinned_height, draw_dashboard_chat_card,
+        draw_dashboard_pinned_messages,
+    },
     app::common::{
         primitives::{format_duration_mmss, genre_label},
         theme,
     },
+    app::rooms::{
+        blackjack::state::BlackjackSnapshot,
+        svc::{GameKind, RoomListItem, RoomsSnapshot},
+    },
     app::vote::svc::{Genre, VoteCount},
     app::vote::ui::{VoteCardView, draw_vote_card},
 };
+use late_core::models::chat_message::ChatMessage;
 
 // `draw_dashboard` receives the content pane after the outer app border and the
 // fixed 24-column sidebar are removed. A 77-column terminal yields 51 columns
@@ -31,6 +39,14 @@ const DASHBOARD_HIDE_STREAM_AT_WIDTH: u16 = 39;
 // Below this many rows the fixed 5-row stream card plus chat card no longer
 // fit cleanly, so we collapse to chat-only rather than render clipped blocks.
 const DASHBOARD_MIN_FULL_HEIGHT: u16 = 16;
+const BLACKJACK_GRID_MIN_WIDTH: u16 = 48;
+const BLACKJACK_GRID_MIN_CHAT_HEIGHT: u16 = 6;
+const BLACKJACK_GRID_COLUMNS: usize = 3;
+const BLACKJACK_GRID_TEXT_ROWS: u16 = 3;
+const BLACKJACK_GRID_HEIGHT: u16 = BLACKJACK_GRID_TEXT_ROWS + 1; // + bottom rule
+const AUDIO_BUTTON_PREFIX: &str = "No audio? ";
+const CLI_BUTTON_TEXT: &str = "[B] CLI";
+const PAIR_BUTTON_TEXT: &str = "[P] web";
 
 pub struct DashboardRenderInput<'a> {
     pub now_playing: Option<&'a str>,
@@ -43,12 +59,25 @@ pub struct DashboardRenderInput<'a> {
     /// quick-switch strip directly above the chat card. Each entry is
     /// `(room_id, label, is_active, unread_count)`. `None` hides the strip.
     pub favorites_strip: Option<&'a [(uuid::Uuid, String, bool, i64)]>,
+    /// Pinned chat messages visible to this user; rendered as a slim amber
+    /// strip above the favorites strip. Empty slice = no strip.
+    pub pinned_messages: &'a [ChatMessage],
+    pub show_room_showcases: bool,
+    pub rooms_snapshot: &'a RoomsSnapshot,
+    pub blackjack_snapshots: &'a std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+    pub blackjack_prefix_armed: bool,
     pub chat_view: DashboardChatView<'a>,
 }
 
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     if !view.show_header {
-        draw_chat_section(frame, area, view.favorites_strip, view.chat_view);
+        draw_chat_section(
+            frame,
+            area,
+            view.pinned_messages,
+            view.favorites_strip,
+            view.chat_view,
+        );
         return;
     }
 
@@ -59,7 +88,13 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         next_switch_in: view.next_switch_in,
     };
     if area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH || area.height < DASHBOARD_MIN_FULL_HEIGHT {
-        draw_chat_section(frame, area, view.favorites_strip, view.chat_view);
+        draw_chat_section(
+            frame,
+            area,
+            view.pinned_messages,
+            view.favorites_strip,
+            view.chat_view,
+        );
         return;
     }
 
@@ -80,17 +115,327 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         );
     }
 
-    draw_chat_section(frame, sections[1], view.favorites_strip, view.chat_view);
+    draw_blackjack_and_chat_section(frame, sections[1], view);
+}
+
+fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
+    let rooms = dashboard_blackjack_rooms(view.rooms_snapshot);
+    if view.show_room_showcases
+        && let Some(grid_height) = blackjack_grid_height(area)
+    {
+        let split =
+            Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
+        draw_blackjack_grid(
+            frame,
+            split[0],
+            &rooms,
+            view.blackjack_snapshots,
+            view.blackjack_prefix_armed,
+        );
+        draw_chat_section(
+            frame,
+            split[1],
+            view.pinned_messages,
+            view.favorites_strip,
+            view.chat_view,
+        );
+    } else {
+        draw_chat_section(
+            frame,
+            area,
+            view.pinned_messages,
+            view.favorites_strip,
+            view.chat_view,
+        );
+    }
+}
+
+fn blackjack_grid_height(area: Rect) -> Option<u16> {
+    if area.width < BLACKJACK_GRID_MIN_WIDTH {
+        return None;
+    }
+
+    if area.height >= BLACKJACK_GRID_HEIGHT.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT) {
+        Some(BLACKJACK_GRID_HEIGHT)
+    } else {
+        None
+    }
+}
+
+fn dashboard_blackjack_rooms(snapshot: &RoomsSnapshot) -> Vec<&RoomListItem> {
+    snapshot
+        .rooms
+        .iter()
+        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
+        .take(BLACKJACK_GRID_COLUMNS)
+        .collect()
+}
+
+fn draw_blackjack_grid(
+    frame: &mut Frame,
+    area: Rect,
+    rooms: &[&RoomListItem],
+    snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+    prefix_armed: bool,
+) {
+    if area.height < BLACKJACK_GRID_HEIGHT {
+        return;
+    }
+
+    let chunks = Layout::vertical([
+        Constraint::Length(BLACKJACK_GRID_TEXT_ROWS),
+        Constraint::Length(1),
+    ])
+    .split(area);
+
+    // 7-track horizontal layout: vert | col1 | vert | col2 | vert | col3 | vert
+    let cols = Layout::horizontal([
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+    ])
+    .split(chunks[0]);
+
+    let border_style = Style::default().fg(theme::BORDER_DIM());
+    for &vert_idx in &[0usize, 2, 4, 6] {
+        let lines = vec![Line::from("│"), Line::from("│"), Line::from("│")];
+        frame.render_widget(Paragraph::new(lines).style(border_style), cols[vert_idx]);
+    }
+
+    let slot_areas = [cols[1], cols[3], cols[5]];
+    let loading = rooms.is_empty();
+    for (slot, area) in slot_areas
+        .iter()
+        .copied()
+        .enumerate()
+        .take(BLACKJACK_GRID_COLUMNS)
+    {
+        let room = rooms.get(slot).copied();
+        // 1-char left/right padding inside each column.
+        let padded = if area.width >= 4 {
+            Rect {
+                x: area.x + 1,
+                width: area.width - 2,
+                ..area
+            }
+        } else {
+            area
+        };
+        draw_blackjack_slot(frame, padded, slot, room, snapshots, prefix_armed, loading);
+    }
+
+    let rule_area = chunks[1];
+    let junctions = [
+        (cols[0].x.saturating_sub(rule_area.x) as usize, '└'),
+        (cols[2].x.saturating_sub(rule_area.x) as usize, '┴'),
+        (cols[4].x.saturating_sub(rule_area.x) as usize, '┴'),
+        (cols[6].x.saturating_sub(rule_area.x) as usize, '┘'),
+    ];
+    draw_blackjack_bottom_rule(frame, rule_area, &junctions, prefix_armed);
+}
+
+fn draw_blackjack_bottom_rule(
+    frame: &mut Frame,
+    area: Rect,
+    junctions: &[(usize, char)],
+    prefix_armed: bool,
+) {
+    let total_w = area.width as usize;
+    if total_w == 0 {
+        return;
+    }
+
+    let hint_text = if prefix_armed {
+        " press 1/2/3 "
+    } else {
+        " b + 1/2/3 to join "
+    };
+    let hint_chars: Vec<char> = hint_text.chars().collect();
+    let hint_w = hint_chars.len();
+
+    let make_rule_char = |i: usize| -> char {
+        junctions
+            .iter()
+            .find_map(|(off, ch)| if *off == i { Some(*ch) } else { None })
+            .unwrap_or('─')
+    };
+
+    let border_style = Style::default().fg(theme::BORDER_DIM());
+
+    if hint_w + 4 > total_w {
+        let rule: String = (0..total_w).map(make_rule_char).collect();
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(rule, border_style))),
+            area,
+        );
+        return;
+    }
+
+    let hint_start = (total_w - hint_w) / 2;
+    let hint_end = hint_start + hint_w;
+    let left: String = (0..hint_start).map(make_rule_char).collect();
+    let right: String = (hint_end..total_w).map(make_rule_char).collect();
+
+    let hint_style = if prefix_armed {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(left, border_style),
+            Span::styled(hint_text.to_string(), hint_style),
+            Span::styled(right, border_style),
+        ])),
+        area,
+    );
+}
+
+fn draw_blackjack_slot(
+    frame: &mut Frame,
+    area: Rect,
+    slot: usize,
+    room: Option<&RoomListItem>,
+    snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+    prefix_armed: bool,
+    loading: bool,
+) {
+    if area.width < 10 || area.height < BLACKJACK_GRID_TEXT_ROWS {
+        return;
+    }
+
+    let key_char = match slot {
+        0 => '1',
+        1 => '2',
+        2 => '3',
+        _ => '?',
+    };
+    let key_style = if prefix_armed {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else if room.is_some() {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let key_tag = Span::styled(format!("b{key_char} "), key_style);
+
+    let inner_width = area.width as usize;
+
+    let Some(room) = room else {
+        let label = if loading { "loading…" } else { "open slot" };
+        let lines = vec![
+            Line::from(vec![
+                key_tag,
+                Span::styled(label, Style::default().fg(theme::TEXT_FAINT())),
+            ]),
+            Line::from(""),
+            Line::from(""),
+        ];
+        frame.render_widget(Paragraph::new(lines), area);
+        return;
+    };
+
+    let snapshot = snapshots.get(&room.id);
+    let max_seats: usize = snapshot.map(|s| s.seats.len()).unwrap_or(4);
+    let occupied: Option<usize> =
+        snapshot.map(|s| s.seats.iter().filter(|seat| seat.user_id.is_some()).count());
+
+    let name_budget = inner_width.saturating_sub(3).max(4); // room for "bN "
+    let line1 = Line::from(vec![
+        key_tag,
+        Span::styled(
+            truncate(&room.display_name, name_budget),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    let pace_label = room.blackjack_settings.pace.label();
+    let stake_label = room.blackjack_settings.stake_label();
+    let line2 = Line::from(vec![
+        Span::styled(
+            pace_label,
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(stake_label, Style::default().fg(theme::TEXT_DIM())),
+    ]);
+
+    let mut seat_text = String::new();
+    for i in 0..max_seats {
+        let filled = occupied.map(|o| i < o).unwrap_or(false);
+        seat_text.push(if filled { '●' } else { '○' });
+    }
+    let count_label = match occupied {
+        Some(n) => format!(" {}/{}", n, max_seats),
+        None => format!(" ?/{}", max_seats),
+    };
+    let phase_label = blackjack_phase_label(snapshot);
+    let phase_color = match snapshot.map(|s| s.phase) {
+        Some(crate::app::rooms::blackjack::state::Phase::PlayerTurn)
+        | Some(crate::app::rooms::blackjack::state::Phase::DealerTurn) => theme::AMBER_GLOW(),
+        Some(_) => theme::TEXT(),
+        None => theme::TEXT_FAINT(),
+    };
+    let line3 = Line::from(vec![
+        Span::styled(seat_text, Style::default().fg(theme::AMBER())),
+        Span::styled(count_label, Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(phase_label, Style::default().fg(phase_color)),
+    ]);
+
+    frame.render_widget(Paragraph::new(vec![line1, line2, line3]), area);
+}
+
+fn blackjack_phase_label(snapshot: Option<&BlackjackSnapshot>) -> String {
+    use crate::app::rooms::blackjack::state::Phase;
+    let Some(snap) = snapshot else {
+        return "idle".to_string();
+    };
+    match snap.phase {
+        Phase::Betting => match snap.betting_countdown_secs {
+            Some(secs) => format!("betting · {secs}s"),
+            None => "betting".to_string(),
+        },
+        Phase::BetPending => "bet pending".to_string(),
+        Phase::PlayerTurn => "player turn".to_string(),
+        Phase::DealerTurn => "dealer".to_string(),
+        Phase::Settling => "settling".to_string(),
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 pub(crate) fn favorites_strip_hit_test(
     area: Rect,
     show_header: bool,
     pins: &[(uuid::Uuid, String, bool, i64)],
+    pinned_count: usize,
     x: u16,
     y: u16,
 ) -> Option<uuid::Uuid> {
-    let strip_area = favorites_strip_area(area, show_header, pins)?;
+    let strip_area = favorites_strip_area(area, show_header, pins, pinned_count)?;
     if y != strip_area.y || x < strip_area.x || x >= strip_area.right() {
         return None;
     }
@@ -121,34 +466,57 @@ pub(crate) fn favorites_strip_hit_test(
     None
 }
 
-/// Draws the chat card, with an optional pill strip above it. When the user
-/// has 2+ favorites pinned, we carve one row off the top for the strip;
-/// otherwise the chat card takes the whole area.
+pub(crate) fn cli_install_button_hit_test(area: Rect, show_header: bool, x: u16, y: u16) -> bool {
+    let Some(button_area) = cli_install_button_area(area, show_header) else {
+        return false;
+    };
+    y == button_area.y && x >= button_area.x && x < button_area.right()
+}
+
+pub(crate) fn browser_pair_button_hit_test(area: Rect, show_header: bool, x: u16, y: u16) -> bool {
+    let Some(button_area) = browser_pair_button_area(area, show_header) else {
+        return false;
+    };
+    y == button_area.y && x >= button_area.x && x < button_area.right()
+}
+
+/// Draws the chat card with two optional strips stacked above it: pinned
+/// messages first (admin-curated), then the favorites pill strip. Each is
+/// only inserted when present and there's room for a useful chat card below.
 fn draw_chat_section(
     frame: &mut Frame,
     area: Rect,
+    pinned_messages: &[ChatMessage],
     favorites_strip: Option<&[(uuid::Uuid, String, bool, i64)]>,
     chat_view: DashboardChatView<'_>,
 ) {
-    let Some(pins) = favorites_strip else {
-        draw_dashboard_chat_card(frame, area, chat_view);
-        return;
-    };
-    // Need enough vertical room for the strip + a useful chat card; if the
-    // dashboard is squeezed below that, drop the strip rather than squash chat.
-    if area.height < 6 {
-        draw_dashboard_chat_card(frame, area, chat_view);
-        return;
+    let mut remaining = area;
+
+    let pinned_height = dashboard_pinned_height(pinned_messages.len(), remaining.height);
+    if pinned_height > 0 {
+        let split = Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)])
+            .split(remaining);
+        draw_dashboard_pinned_messages(frame, split[0], pinned_messages);
+        remaining = split[1];
     }
-    let split = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
-    draw_favorites_strip(frame, split[0], pins);
-    draw_dashboard_chat_card(frame, split[1], chat_view);
+
+    if let Some(pins) = favorites_strip
+        && pins.len() >= 2
+        && remaining.height >= 6
+    {
+        let split = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(remaining);
+        draw_favorites_strip(frame, split[0], pins);
+        remaining = split[1];
+    }
+
+    draw_dashboard_chat_card(frame, remaining, chat_view);
 }
 
 fn favorites_strip_area(
     area: Rect,
     show_header: bool,
     pins: &[(uuid::Uuid, String, bool, i64)],
+    pinned_count: usize,
 ) -> Option<Rect> {
     if pins.len() < 2 {
         return None;
@@ -164,11 +532,19 @@ fn favorites_strip_area(
         area
     };
 
-    if chat_area.height < 6 {
+    let pinned_height = dashboard_pinned_height(pinned_count, chat_area.height);
+    let after_pinned = if pinned_height > 0 {
+        Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)]).split(chat_area)
+            [1]
+    } else {
+        chat_area
+    };
+
+    if after_pinned.height < 6 {
         return None;
     }
 
-    Some(Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(chat_area)[0])
+    Some(Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(after_pinned)[0])
 }
 
 fn draw_favorites_strip(frame: &mut Frame, area: Rect, pins: &[(uuid::Uuid, String, bool, i64)]) {
@@ -253,13 +629,82 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
                 Style::default().fg(theme::TEXT()),
             ),
         ]),
-        Line::from(vec![Span::styled(
-            "No audio? Type /music in chat for setup instructions",
-            Style::default().fg(theme::TEXT_DIM()),
-        )]),
+        Line::from(vec![
+            Span::styled(AUDIO_BUTTON_PREFIX, Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                CLI_BUTTON_TEXT,
+                Style::default()
+                    .fg(theme::BG_CANVAS())
+                    .bg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                PAIR_BUTTON_TEXT,
+                Style::default()
+                    .fg(theme::BG_CANVAS())
+                    .bg(theme::BORDER_ACTIVE())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
     ];
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+fn cli_install_button_area(area: Rect, show_header: bool) -> Option<Rect> {
+    audio_button_area(area, show_header, 0)
+}
+
+fn browser_pair_button_area(area: Rect, show_header: bool) -> Option<Rect> {
+    audio_button_area(area, show_header, 1)
+}
+
+fn audio_button_area(area: Rect, show_header: bool, button_index: usize) -> Option<Rect> {
+    let inner = stream_text_area(area, show_header)?;
+    let prefix_width = UnicodeWidthStr::width(AUDIO_BUTTON_PREFIX) as u16;
+    let cli_width = UnicodeWidthStr::width(CLI_BUTTON_TEXT) as u16;
+    let gap_width = 2u16;
+    let pair_width = UnicodeWidthStr::width(PAIR_BUTTON_TEXT) as u16;
+    let (offset, width) = match button_index {
+        0 => (prefix_width, cli_width),
+        1 => (
+            prefix_width
+                .saturating_add(cli_width)
+                .saturating_add(gap_width),
+            pair_width,
+        ),
+        _ => return None,
+    };
+    Some(Rect::new(
+        inner.x.saturating_add(offset),
+        inner.y.saturating_add(2),
+        width,
+        1,
+    ))
+}
+
+fn stream_text_area(area: Rect, show_header: bool) -> Option<Rect> {
+    if !show_header
+        || area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH
+        || area.height < DASHBOARD_MIN_FULL_HEIGHT
+    {
+        return None;
+    }
+
+    let sections = Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(area);
+    let stream_area = if area.width <= DASHBOARD_HIDE_VOTE_AT_WIDTH {
+        sections[0]
+    } else {
+        Layout::horizontal([Constraint::Fill(2), Constraint::Fill(1)]).split(sections[0])[0]
+    };
+    let inner = Block::default().borders(Borders::ALL).inner(stream_area);
+    let inner = Rect {
+        x: inner.x + 1,
+        width: inner.width.saturating_sub(1),
+        ..inner
+    };
+    Some(inner)
 }
 
 #[cfg(test)]
@@ -291,6 +736,8 @@ mod tests {
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
+        let rooms_snapshot = RoomsSnapshot::default();
+        let blackjack_snapshots: HashMap<Uuid, BlackjackSnapshot> = HashMap::new();
 
         terminal
             .draw(|frame| {
@@ -306,6 +753,11 @@ mod tests {
                         my_vote: Some(Genre::Ambient),
                         show_header: true,
                         favorites_strip: None,
+                        pinned_messages: &[],
+                        show_room_showcases: true,
+                        rooms_snapshot: &rooms_snapshot,
+                        blackjack_snapshots: &blackjack_snapshots,
+                        blackjack_prefix_armed: false,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,
@@ -316,6 +768,7 @@ mod tests {
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
+                            highlighted_message_id: None,
                             reaction_picker_active: false,
                             composer: &composer,
                             composing: false,
@@ -362,6 +815,8 @@ mod tests {
         let lines = render_dashboard(DASHBOARD_HIDE_VOTE_AT_WIDTH);
         assert!(!lines.join("\n").contains("Dashboard view too small."));
         assert!(lines.join("\n").contains("Stream"));
+        assert!(lines.join("\n").contains("[B] CLI"));
+        assert!(lines.join("\n").contains("[P] web"));
         assert!(lines.join("\n").contains("No messages yet."));
     }
 
@@ -393,6 +848,17 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_blackjack_grid_renders_room_slots_when_tall_enough() {
+        let lines = render_dashboard_with_size(100, 36);
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("loading…"));
+        assert!(rendered.contains("b1"));
+        assert!(rendered.contains("b2"));
+        assert!(rendered.contains("b3"));
+        assert!(!rendered.contains("b4"));
+    }
+
+    #[test]
     fn dashboard_hides_stream_and_vote_when_header_setting_disabled() {
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -409,6 +875,8 @@ mod tests {
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
+        let rooms_snapshot = RoomsSnapshot::default();
+        let blackjack_snapshots: HashMap<Uuid, BlackjackSnapshot> = HashMap::new();
 
         terminal
             .draw(|frame| {
@@ -424,6 +892,11 @@ mod tests {
                         my_vote: Some(Genre::Ambient),
                         show_header: false,
                         favorites_strip: None,
+                        pinned_messages: &[],
+                        show_room_showcases: true,
+                        rooms_snapshot: &rooms_snapshot,
+                        blackjack_snapshots: &blackjack_snapshots,
+                        blackjack_prefix_armed: false,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,
@@ -434,6 +907,7 @@ mod tests {
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
+                            highlighted_message_id: None,
                             reaction_picker_active: false,
                             composer: &composer,
                             composing: false,
@@ -482,6 +956,8 @@ mod tests {
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
+        let rooms_snapshot = RoomsSnapshot::default();
+        let blackjack_snapshots: HashMap<Uuid, BlackjackSnapshot> = HashMap::new();
         let rust_room = Uuid::now_v7();
         let go_room = Uuid::now_v7();
 
@@ -502,6 +978,11 @@ mod tests {
                             (rust_room, "#rust".to_string(), true, 3),
                             (go_room, "#go".to_string(), false, 0),
                         ]),
+                        pinned_messages: &[],
+                        show_room_showcases: true,
+                        rooms_snapshot: &rooms_snapshot,
+                        blackjack_snapshots: &blackjack_snapshots,
+                        blackjack_prefix_armed: false,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,
@@ -512,6 +993,7 @@ mod tests {
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
+                            highlighted_message_id: None,
                             reaction_picker_active: false,
                             composer: &composer,
                             composing: false,
@@ -553,14 +1035,14 @@ mod tests {
         let area = Rect::new(1, 1, 74, 30);
 
         assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, 10, 6),
+            favorites_strip_hit_test(area, true, &pins, 0, 10, 6),
             Some(rust_room)
         );
         assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, 18, 6),
+            favorites_strip_hit_test(area, true, &pins, 0, 18, 6),
             Some(go_room)
         );
-        assert_eq!(favorites_strip_hit_test(area, true, &pins, 40, 6), None);
+        assert_eq!(favorites_strip_hit_test(area, true, &pins, 0, 40, 6), None);
     }
 
     #[test]
@@ -569,7 +1051,7 @@ mod tests {
         let pins = vec![(room, "#rust".to_string(), true, 0)];
 
         assert_eq!(
-            favorites_strip_hit_test(Rect::new(1, 1, 74, 30), true, &pins, 5, 7),
+            favorites_strip_hit_test(Rect::new(1, 1, 74, 30), true, &pins, 0, 5, 7),
             None
         );
         assert_eq!(
@@ -580,10 +1062,21 @@ mod tests {
                     (room, "#rust".to_string(), true, 0),
                     (Uuid::now_v7(), "#go".to_string(), false, 0)
                 ],
+                0,
                 5,
                 1
             ),
             None
         );
+    }
+
+    #[test]
+    fn dashboard_audio_buttons_hit_test_separately() {
+        let area = Rect::new(0, 0, 100, 20);
+
+        assert!(cli_install_button_hit_test(area, true, 12, 3));
+        assert!(!cli_install_button_hit_test(area, true, 21, 3));
+        assert!(browser_pair_button_hit_test(area, true, 21, 3));
+        assert!(!browser_pair_button_hit_test(area, true, 12, 3));
     }
 }
