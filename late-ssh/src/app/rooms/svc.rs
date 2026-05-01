@@ -4,12 +4,11 @@ use late_core::{
     db::Db,
     models::{chat_room_member::ChatRoomMember, game_room::GameRoom},
 };
+use serde_json::Value;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::ai::ghost::DEALER_FINGERPRINT;
-
-use super::blackjack::settings::BlackjackTableSettings;
 
 pub use late_core::models::game_room::GameKind;
 
@@ -38,7 +37,7 @@ pub struct RoomListItem {
     pub slug: String,
     pub display_name: String,
     pub status: String,
-    pub blackjack_settings: BlackjackTableSettings,
+    pub settings: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -68,12 +67,14 @@ pub enum RoomsEvent {
 pub(crate) fn game_kind_label(game_kind: GameKind) -> &'static str {
     match game_kind {
         GameKind::Blackjack => "Blackjack",
+        GameKind::TicTacToe => "Tic-Tac-Toe",
     }
 }
 
 fn game_kind_slug_prefix(game_kind: GameKind) -> &'static str {
     match game_kind {
         GameKind::Blackjack => "bj",
+        GameKind::TicTacToe => "ttt",
     }
 }
 
@@ -88,7 +89,7 @@ impl TryFrom<GameRoom> for RoomListItem {
             slug: room.slug,
             display_name: room.display_name,
             status: room.status,
-            blackjack_settings: BlackjackTableSettings::from_json(&room.settings),
+            settings: room.settings,
         })
     }
 }
@@ -178,7 +179,7 @@ impl RoomsService {
         user_id: Uuid,
         game_kind: GameKind,
         display_name: String,
-        settings: BlackjackTableSettings,
+        settings: Value,
     ) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -217,7 +218,7 @@ impl RoomsService {
         user_id: Uuid,
         game_kind: GameKind,
         display_name: &str,
-        settings: BlackjackTableSettings,
+        settings: Value,
     ) -> anyhow::Result<GameRoom> {
         let client = self.db.get().await?;
         let existing_count = count_open_rooms_created_by(&client, user_id, game_kind).await?;
@@ -235,7 +236,7 @@ impl RoomsService {
             game_kind,
             &slug,
             display_name,
-            settings.to_json(),
+            settings,
             Some(user_id),
         )
         .await?;

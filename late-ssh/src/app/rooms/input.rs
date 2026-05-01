@@ -3,6 +3,7 @@ use crate::app::{
     common::primitives::{Banner, Screen},
     input::{MouseEventKind, ParsedInput, sanitize_paste_markers},
     rooms::{
+        backend::InputAction,
         blackjack::settings::{BlackjackTableSettings, PACE_OPTIONS, STAKE_OPTIONS},
         filter::RoomsFilter,
     },
@@ -10,12 +11,12 @@ use crate::app::{
 };
 
 const DISPLAY_NAME_MAX_LEN: usize = 48;
-const DEFAULT_BLACKJACK_TABLE_NAME: &str = "Blackjack Table";
 const SEARCH_QUERY_MAX_LEN: usize = 32;
-const CREATE_FIELD_COUNT: usize = 3;
+const CREATE_FIELD_COUNT: usize = 4;
 const CREATE_FIELD_NAME: usize = 0;
-const CREATE_FIELD_PACE: usize = 1;
-const CREATE_FIELD_STAKE: usize = 2;
+const CREATE_FIELD_GAME: usize = 1;
+const CREATE_FIELD_PACE: usize = 2;
+const CREATE_FIELD_STAKE: usize = 3;
 
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.rooms_active_room.is_some() && !app.rooms_add_form_open {
@@ -273,17 +274,18 @@ fn submit_create_form(app: &mut App) {
         app.banner = Some(Banner::error("Table name is required."));
         return;
     }
+    let game_kind = selected_create_kind(app);
+    let settings = selected_create_settings(app, game_kind);
 
-    app.rooms_service.create_game_room_task(
-        app.user_id,
-        crate::app::rooms::svc::GameKind::Blackjack,
-        display_name,
-        selected_blackjack_settings(app),
-    );
+    app.rooms_service
+        .create_game_room_task(app.user_id, game_kind, display_name, settings);
     app.rooms_display_name_input.clear();
     app.rooms_add_form_open = false;
 
-    app.banner = Some(Banner::success("Creating Blackjack table."));
+    app.banner = Some(Banner::success(&format!(
+        "Creating {} room.",
+        app.room_game_registry.label(game_kind)
+    )));
 }
 
 fn open_create_form(app: &mut App) {
@@ -296,7 +298,11 @@ fn open_create_form(app: &mut App) {
     app.rooms_add_form_open = true;
     app.rooms_create_focus_index = CREATE_FIELD_NAME;
     if app.rooms_display_name_input.trim().is_empty() {
-        app.rooms_display_name_input = DEFAULT_BLACKJACK_TABLE_NAME.to_string();
+        let game_kind = selected_create_kind(app);
+        app.rooms_display_name_input = app
+            .room_game_registry
+            .default_room_name(game_kind)
+            .to_string();
     }
 }
 
@@ -360,6 +366,17 @@ fn move_create_focus(app: &mut App, delta: isize) {
 
 fn adjust_create_selection(app: &mut App, delta: isize) {
     match app.rooms_create_focus_index {
+        CREATE_FIELD_GAME => {
+            let len = app.room_game_registry.ordered_kinds().len();
+            app.rooms_create_kind_index = cycle_index(app.rooms_create_kind_index, len, delta);
+            if app.rooms_display_name_input.trim().is_empty() {
+                let game_kind = selected_create_kind(app);
+                app.rooms_display_name_input = app
+                    .room_game_registry
+                    .default_room_name(game_kind)
+                    .to_string();
+            }
+        }
         CREATE_FIELD_PACE => {
             app.rooms_create_pace_index =
                 cycle_index(app.rooms_create_pace_index, PACE_OPTIONS.len(), delta);
@@ -377,6 +394,26 @@ fn cycle_index(index: usize, len: usize, delta: isize) -> usize {
         return 0;
     }
     (index as isize + delta).rem_euclid(len as isize) as usize
+}
+
+fn selected_create_kind(app: &App) -> crate::app::rooms::svc::GameKind {
+    app.room_game_registry
+        .ordered_kinds()
+        .get(app.rooms_create_kind_index)
+        .copied()
+        .unwrap_or(crate::app::rooms::svc::GameKind::Blackjack)
+}
+
+fn selected_create_settings(
+    app: &App,
+    game_kind: crate::app::rooms::svc::GameKind,
+) -> serde_json::Value {
+    match game_kind {
+        crate::app::rooms::svc::GameKind::Blackjack => selected_blackjack_settings(app).to_json(),
+        crate::app::rooms::svc::GameKind::TicTacToe => {
+            app.room_game_registry.default_settings(game_kind)
+        }
+    }
 }
 
 fn selected_blackjack_settings(app: &App) -> BlackjackTableSettings {
@@ -476,18 +513,17 @@ pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListIt
 
     app.chat.join_game_room_chat(room.chat_room_id);
     app.chat.request_room_tail(room.chat_room_id);
-    if matches!(room.game_kind, crate::app::rooms::svc::GameKind::Blackjack) {
-        app.rooms_service.touch_room_task(room.id);
-        if !can_reuse_blackjack_state(app, room.id) {
-            let svc = app
-                .blackjack_table_manager
-                .get_or_create(room.id, room.blackjack_settings.clone());
-            app.blackjack_state = Some(crate::app::rooms::blackjack::state::State::new(
-                svc,
-                app.user_id,
-                app.chip_balance,
-            ));
-        }
+    app.rooms_service.touch_room_task(room.id);
+    let same_room = app
+        .active_room_game
+        .as_ref()
+        .is_some_and(|game| game.room_id() == room.id);
+    if !same_room {
+        app.active_room_game = Some(app.room_game_registry.enter(
+            &room,
+            app.user_id,
+            app.chip_balance,
+        ));
     }
     app.rooms_last_active_room_id = Some(room.id);
     app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
@@ -496,21 +532,12 @@ pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListIt
     true
 }
 
-fn can_reuse_blackjack_state(app: &App, room_id: uuid::Uuid) -> bool {
-    app.blackjack_state.is_some()
-        && app
-            .rooms_active_room
-            .as_ref()
-            .is_some_and(|active_room| active_room.id == room_id)
-}
-
 fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
     };
-    let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
-    touch_active_room_activity(app, game_kind);
+    touch_active_room_activity(app);
 
     if byte == b'`' {
         app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
@@ -534,24 +561,15 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    match game_kind {
-        crate::app::rooms::svc::GameKind::Blackjack => {
-            let Some(blackjack_state) = &mut app.blackjack_state else {
-                return false;
-            };
-            let byte = if matches!(byte, b'q' | b'Q') {
-                0x1B
-            } else {
-                byte
-            };
-            match crate::app::rooms::blackjack::input::handle_key(blackjack_state, byte) {
-                crate::app::rooms::blackjack::input::InputAction::Ignored => false,
-                crate::app::rooms::blackjack::input::InputAction::Handled => true,
-                crate::app::rooms::blackjack::input::InputAction::Leave => {
-                    app.rooms_active_room = None;
-                    true
-                }
-            }
+    let Some(active_room_game) = &mut app.active_room_game else {
+        return false;
+    };
+    match active_room_game.handle_key(byte) {
+        InputAction::Ignored => false,
+        InputAction::Handled => true,
+        InputAction::Leave => {
+            app.rooms_active_room = None;
+            true
         }
     }
 }
@@ -560,30 +578,29 @@ fn handle_active_room_arrow(app: &mut App, key: u8) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
     };
-    let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
-    touch_active_room_activity(app, game_kind);
-    crate::app::chat::input::handle_message_arrow_in_room(app, chat_room_id, key)
+    touch_active_room_activity(app);
+    if crate::app::chat::input::handle_message_arrow_in_room(app, chat_room_id, key) {
+        return true;
+    }
+    app.active_room_game
+        .as_mut()
+        .is_some_and(|game| game.handle_arrow(key))
 }
 
 fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
     };
-    let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
-    touch_active_room_activity(app, game_kind);
+    touch_active_room_activity(app);
     crate::app::chat::input::handle_scroll_in_room(app, chat_room_id, delta);
     true
 }
 
-fn touch_active_room_activity(app: &mut App, game_kind: crate::app::rooms::svc::GameKind) {
-    match game_kind {
-        crate::app::rooms::svc::GameKind::Blackjack => {
-            if let Some(blackjack_state) = &app.blackjack_state {
-                blackjack_state.touch_activity();
-            }
-        }
+fn touch_active_room_activity(app: &mut App) {
+    if let Some(active_room_game) = &app.active_room_game {
+        active_room_game.touch_activity();
     }
 }
 

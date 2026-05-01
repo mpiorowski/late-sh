@@ -129,7 +129,7 @@ pub struct SessionConfig {
     pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
-    pub blackjack_table_manager: crate::app::rooms::blackjack::manager::BlackjackTableManager,
+    pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
     /// enters the dartboard game from the arcade.
@@ -264,13 +264,13 @@ pub struct App {
     pub(crate) is_playing_game: bool,
     pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
-    pub(crate) blackjack_table_manager:
-        crate::app::rooms::blackjack::manager::BlackjackTableManager,
+    pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     pub(crate) rooms_selected_index: usize,
     pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
     pub(crate) rooms_last_active_room_id: Option<Uuid>,
     pub(crate) rooms_add_form_open: bool,
     pub(crate) rooms_display_name_input: String,
+    pub(crate) rooms_create_kind_index: usize,
     pub(crate) rooms_create_focus_index: usize,
     pub(crate) rooms_create_pace_index: usize,
     pub(crate) rooms_create_stake_index: usize,
@@ -287,7 +287,7 @@ pub struct App {
     pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
-    pub(crate) blackjack_state: Option<crate::app::rooms::blackjack::state::State>,
+    pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -729,12 +729,13 @@ impl App {
             is_playing_game: false,
             dashboard_game_toggle_target: None,
             rooms_service: config.rooms_service,
-            blackjack_table_manager: config.blackjack_table_manager,
+            room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,
             rooms_active_room: None,
             rooms_last_active_room_id: None,
             rooms_add_form_open: false,
             rooms_display_name_input: String::new(),
+            rooms_create_kind_index: 0,
             rooms_create_focus_index: 0,
             rooms_create_pace_index: 1,
             rooms_create_stake_index: 0,
@@ -750,7 +751,7 @@ impl App {
             nonogram_state,
             solitaire_state,
             minesweeper_state,
-            blackjack_state: None,
+            active_room_game: None,
             dartboard_state: None,
             artboard_interacting: false,
             dartboard_server,

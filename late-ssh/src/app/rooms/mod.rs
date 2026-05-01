@@ -1,7 +1,9 @@
+pub mod backend;
 pub mod blackjack;
 pub mod filter;
 pub mod input;
-pub mod mock;
+pub mod registry;
 pub mod state;
 pub mod svc;
+pub mod tictactoe;
 pub mod ui;

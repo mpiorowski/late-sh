@@ -333,6 +333,18 @@ impl State {
         }
     }
 
+    pub fn room_id(&self) -> Uuid {
+        self.svc.room_id()
+    }
+
+    pub fn balance(&self) -> i64 {
+        self.balance
+    }
+
+    pub fn set_balance(&mut self, balance: i64) {
+        self.balance = balance;
+    }
+
     pub fn tick(&mut self) {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             let previous_phase = self.snapshot.phase;

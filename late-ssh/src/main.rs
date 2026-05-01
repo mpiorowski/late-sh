@@ -137,6 +137,12 @@ async fn main() -> anyhow::Result<()> {
             chip_service.clone(),
             late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
         );
+    let tictactoe_table_manager =
+        late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new();
+    let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
+        blackjack_table_manager.clone(),
+        tictactoe_table_manager,
+    );
     let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
         db.clone(),
         activity_tx.clone(),
@@ -228,6 +234,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service,
         rooms_service,
         blackjack_table_manager,
+        room_game_registry,
         dartboard_server,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),

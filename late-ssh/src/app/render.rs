@@ -96,6 +96,7 @@ struct DrawContext<'a> {
     is_playing_game: bool,
     rooms_add_form_open: bool,
     rooms_display_name_input: &'a str,
+    rooms_create_kind_index: usize,
     rooms_create_focus_index: usize,
     rooms_create_pace_index: usize,
     rooms_create_stake_index: usize,
@@ -106,10 +107,8 @@ struct DrawContext<'a> {
     rooms_search_active: bool,
     rooms_search_query: &'a str,
     rooms_usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
-    rooms_blackjack_snapshots: &'a std::collections::HashMap<
-        uuid::Uuid,
-        crate::app::rooms::blackjack::state::BlackjackSnapshot,
-    >,
+    room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
+    active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::games::tetris::state::State,
@@ -117,7 +116,6 @@ struct DrawContext<'a> {
     nonogram_state: &'a crate::app::games::nonogram::state::State,
     solitaire_state: &'a crate::app::games::solitaire::state::State,
     minesweeper_state: &'a crate::app::games::minesweeper::state::State,
-    blackjack_state: Option<&'a crate::app::rooms::blackjack::state::State>,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
@@ -238,7 +236,7 @@ impl App {
         let message_reactions = self.chat.message_reactions();
         let dashboard_active_room = self.dashboard_active_room_id();
         let dashboard_strip_pins = self.dashboard_strip_pins();
-        let rooms_blackjack_snapshots = self.blackjack_table_manager.table_snapshots();
+        let rooms_blackjack_snapshots = self.room_game_registry.blackjack().table_snapshots();
         let dashboard_messages = dashboard_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -390,6 +388,7 @@ impl App {
                         is_playing_game: self.is_playing_game,
                         rooms_add_form_open: self.rooms_add_form_open,
                         rooms_display_name_input: self.rooms_display_name_input.as_str(),
+                        rooms_create_kind_index: self.rooms_create_kind_index,
                         rooms_create_focus_index: self.rooms_create_focus_index,
                         rooms_create_pace_index: self.rooms_create_pace_index,
                         rooms_create_stake_index: self.rooms_create_stake_index,
@@ -400,7 +399,8 @@ impl App {
                         rooms_search_active: self.rooms_search_active,
                         rooms_search_query: self.rooms_search_query.as_str(),
                         rooms_usernames: chat_usernames,
-                        rooms_blackjack_snapshots: &rooms_blackjack_snapshots,
+                        room_game_registry: &self.room_game_registry,
+                        active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -408,7 +408,6 @@ impl App {
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
-                        blackjack_state: self.blackjack_state.as_ref(),
                         dartboard_state: self.dartboard_state.as_ref(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
@@ -633,20 +632,21 @@ impl App {
                 crate::app::rooms::ui::RoomsPageView {
                     add_form_open: ctx.rooms_add_form_open,
                     display_name: ctx.rooms_display_name_input,
+                    create_kind_index: ctx.rooms_create_kind_index,
                     create_focus_index: ctx.rooms_create_focus_index,
                     create_pace_index: ctx.rooms_create_pace_index,
                     create_stake_index: ctx.rooms_create_stake_index,
                     snapshot: ctx.rooms_snapshot,
                     selected_index: ctx.rooms_selected_index,
                     active_room: ctx.rooms_active_room,
-                    blackjack_state: ctx.blackjack_state,
+                    active_room_game: ctx.active_room_game,
+                    room_game_registry: ctx.room_game_registry,
                     is_admin: ctx.is_admin,
                     is_mod: ctx.is_mod,
                     filter: ctx.rooms_filter,
                     search_active: ctx.rooms_search_active,
                     search_query: ctx.rooms_search_query,
                     usernames: ctx.rooms_usernames,
-                    blackjack_snapshots: ctx.rooms_blackjack_snapshots,
                     active_room_chat: ctx.rooms_chat_view,
                 },
             ),
@@ -849,30 +849,23 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
     let bright = Style::default().fg(theme::TEXT_BRIGHT());
 
     if let Some(room) = ctx.rooms_active_room {
-        let Some(blackjack_state) = ctx.blackjack_state else {
-            return;
-        };
-        let snapshot = blackjack_state.snapshot();
-        let seated = snapshot
-            .seats
-            .iter()
-            .filter(|s| s.user_id.is_some())
-            .count();
-        let max = snapshot.seats.len();
-        let seat_label = match blackjack_state.seat_index() {
-            Some(i) => format!("seat {}", i + 1),
-            None => "viewer".to_string(),
-        };
-
         spans.push(Span::styled("· ", dim));
         spans.push(Span::styled(room.display_name.clone(), bright));
-        spans.push(Span::styled(" · ", dim));
-        spans.push(Span::styled(format!("{seated}/{max} seated"), dim));
-        spans.push(Span::styled(" · ", dim));
-        spans.push(Span::styled(seat_label, dim));
-        spans.push(Span::styled(" · ", dim));
-        spans.push(Span::styled("Bal ", dim));
-        spans.push(Span::styled(format!("{} ", snapshot.balance), amber));
+        if let Some(details) = ctx.active_room_game.and_then(|game| game.title_details()) {
+            if let Some(seated) = details.seated {
+                spans.push(Span::styled(" · ", dim));
+                spans.push(Span::styled(seated, dim));
+            }
+            if let Some(role) = details.role {
+                spans.push(Span::styled(" · ", dim));
+                spans.push(Span::styled(role, dim));
+            }
+            if let Some(balance) = details.balance {
+                spans.push(Span::styled(" · ", dim));
+                spans.push(Span::styled("Bal ", dim));
+                spans.push(Span::styled(format!("{} ", balance), amber));
+            }
+        }
     } else {
         let real_count = ctx.rooms_snapshot.rooms.len();
         let open = ctx

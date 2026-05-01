@@ -19,6 +19,7 @@ use crate::{
         theme,
     },
     app::rooms::{
+        blackjack::settings::BlackjackTableSettings,
         blackjack::state::BlackjackSnapshot,
         svc::{GameKind, RoomListItem, RoomsSnapshot},
     },
@@ -403,8 +404,9 @@ fn draw_blackjack_slot(
         key_tag,
     ]);
 
-    let pace_label = room.blackjack_settings.pace.label();
-    let stake_label = room.blackjack_settings.stake_label();
+    let settings = BlackjackTableSettings::from_json(&room.settings);
+    let pace_label = settings.pace.label();
+    let stake_label = settings.stake_label();
     let phase_label = blackjack_phase_label(snapshot);
     let phase_color = match snapshot.map(|s| s.phase) {
         Some(crate::app::rooms::blackjack::state::Phase::PlayerTurn)
