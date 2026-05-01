@@ -958,9 +958,9 @@ impl State {
         icon_picker::picker::click_tab(&mut self.glyph_picker, column, row)
     }
 
-    /// Confirm the selection: paint the leading scalar of the selected glyph
-    /// at the cursor using `insert_char` semantics, and close the picker
-    /// unless `keep_open` is set. Returns `true` if a glyph was inserted.
+    /// Confirm the selection: paint the selected glyph/string at the cursor,
+    /// and close the picker unless `keep_open` is set. Returns `true` if
+    /// anything was inserted.
     pub fn glyph_picker_insert(&mut self, keep_open: bool, screen_size: (u16, u16)) -> bool {
         let Some(catalog) = self.glyph_catalog.as_ref() else {
             self.glyph_picker_open = false;
@@ -972,21 +972,28 @@ impl State {
             }
             return false;
         };
-        let Some(ch) = icon.chars().next() else {
+        if icon.is_empty() {
             if !keep_open {
                 self.glyph_picker_open = false;
             }
             return false;
-        };
+        }
         if !keep_open {
             self.glyph_picker_open = false;
         }
         self.set_viewport_for_screen(screen_size);
-        if ch.is_control() {
-            return false;
+        let start = self.editor.cursor;
+        let changed = self
+            .edit_canvas(|editor, canvas, color| paste_text_block(editor, canvas, &icon, color));
+        if changed {
+            self.editor.cursor = paste_cursor_end(
+                start,
+                &icon,
+                self.snapshot.canvas.width,
+                self.snapshot.canvas.height,
+            );
+            self.editor.scroll_viewport_to_cursor(&self.snapshot.canvas);
         }
-        let _ =
-            self.edit_canvas(|editor, canvas, color| editor_insert_char(editor, canvas, ch, color));
         true
     }
 
@@ -1933,11 +1940,29 @@ mod tests {
         assert!(state.glyph_catalog().is_some());
 
         // First selectable entry on the emoji tab is the first COMMON_EMOJI
-        // ("👍" thumbs up). Confirm insertion paints its leading scalar at
-        // the cursor and closes the picker.
+        // ("👍" thumbs up). Confirm insertion paints it at the cursor and
+        // closes the picker.
         assert!(state.glyph_picker_insert(false, (80, 24)));
         assert!(!state.is_glyph_picker_open());
         assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), '👍');
+    }
+
+    #[test]
+    fn glyph_picker_inserts_full_kaomoji_string() {
+        let mut state = test_state();
+        state.snapshot.canvas = Canvas::with_size(20, 3);
+        state.editor.cursor = Pos { x: 2, y: 1 };
+        state.open_glyph_picker();
+        state
+            .glyph_picker_state_mut()
+            .set_tab(icon_picker::IconPickerTab::Kaomoji);
+
+        assert!(state.glyph_picker_insert(false, (80, 24)));
+        assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 1 }), '(');
+        assert_eq!(state.snapshot.canvas.get(Pos { x: 3, y: 1 }), '*');
+        assert_eq!(state.snapshot.canvas.get(Pos { x: 7, y: 1 }), 'ω');
+        assert_eq!(state.snapshot.canvas.get(Pos { x: 10, y: 1 }), ')');
+        assert_eq!(state.cursor(), Pos { x: 11, y: 1 });
     }
 
     #[test]

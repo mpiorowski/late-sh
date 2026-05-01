@@ -42,8 +42,6 @@ const COMMON_EMOJI: &[&str] = &[
     "🚀", "🤔", "🫠", "🌱", "🤖", "🔧", "💎", "⭐", "🎯",
 ];
 
-
-
 // TODO: use kaomoji.json instead of hardcoding it here
 const COMMON_KAOMOJI: &[(&str, &str)] = &[
     ("(* ^ ω ^)", "happy smile"),
@@ -109,12 +107,10 @@ impl IconCatalogData {
             },
         ];
 
-        let kaomoji_sections = vec![
-            IconSection {
-                title: "Kaomoji",
-                entries: build_kaomoji(),
-            },
-        ];
+        let kaomoji_sections = vec![IconSection {
+            title: "Kaomoji",
+            entries: build_kaomoji(),
+        }];
 
         let unicode_browse_sections = vec![
             IconSection {

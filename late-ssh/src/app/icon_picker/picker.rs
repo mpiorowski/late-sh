@@ -367,7 +367,7 @@ fn entry_line(entry: &IconEntry, is_selected: bool, width: u16) -> Line<'static>
                 format!(" {icon} "),
                 Style::default()
                     .fg(theme::TEXT_BRIGHT())
-                    .bg(theme::BG_HIGHLIGHT()), 
+                    .bg(theme::BG_HIGHLIGHT()),
             ),
             Span::styled(
                 name.clone(),
