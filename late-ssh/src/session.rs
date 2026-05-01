@@ -11,6 +11,7 @@ use std::{
 use tokio::sync::{RwLock, mpsc::Sender, mpsc::UnboundedSender};
 use uuid::Uuid;
 
+use crate::authz::Permissions;
 use crate::metrics;
 
 // WebSocket → SSH session routing for browser-sent visualization data.
@@ -33,6 +34,21 @@ pub struct BrowserVizFrame {
 pub enum SessionMessage {
     Heartbeat,
     Viz(BrowserVizFrame),
+    Terminate {
+        reason: String,
+    },
+    ArtboardBanChanged {
+        banned: bool,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    PermissionsChanged {
+        permissions: Permissions,
+    },
+    RoomRemoved {
+        room_id: Uuid,
+        slug: String,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

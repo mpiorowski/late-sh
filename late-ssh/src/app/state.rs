@@ -1,4 +1,5 @@
 use anyhow::Context;
+use chrono::{DateTime, Utc};
 use crossterm::{
     cursor,
     terminal::{self, ClearType},
@@ -24,13 +25,14 @@ use crate::{
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
         common::primitives::{Banner, Screen},
-        help_modal, profile,
+        help_modal, mod_modal, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal,
         visualizer::Visualizer,
         vote,
         vote::svc::{Genre, VoteService},
     },
+    authz::Permissions,
     session::{
         ClientAudioState, PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry,
     },
@@ -54,6 +56,13 @@ pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DashboardGameToggleTarget {
+    Arcade,
+    Room,
+}
+
 impl NotificationMode {
     /// Map the `notify_format` profile field to a concrete mode. Unknown
     /// or missing values fall back to `Both`, matching the on-read
@@ -147,8 +156,9 @@ pub struct SessionConfig {
     pub active_users: Option<ActiveUsers>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
-    pub is_admin: bool,
-    pub is_mod: bool,
+    pub permissions: Permissions,
+    pub artboard_banned: bool,
+    pub artboard_ban_expires_at: Option<DateTime<Utc>>,
 
     /// Voting
     pub my_vote: Option<Genre>,
@@ -181,9 +191,11 @@ pub struct App {
     pub(crate) splash_hint: String,
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
+    pub(crate) show_mod_modal: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
+    pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
     pub(crate) vt_input: crate::app::input::VtInputParser,
@@ -210,8 +222,11 @@ pub struct App {
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) activity: VecDeque<ActivityEvent>,
     pub(crate) user_id: Uuid,
+    pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
-    pub(crate) is_mod: bool,
+    pub(crate) is_moderator: bool,
+    pub(crate) artboard_banned: bool,
+    pub(crate) artboard_ban_expires_at: Option<DateTime<Utc>>,
 
     /// Voting
     pub(crate) vote: vote::state::VoteState,
@@ -255,11 +270,13 @@ pub struct App {
     /// Games Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
+    pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
     pub(crate) blackjack_table_manager:
         crate::app::rooms::blackjack::manager::BlackjackTableManager,
     pub(crate) rooms_selected_index: usize,
     pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
+    pub(crate) rooms_last_active_room_id: Option<Uuid>,
     pub(crate) rooms_add_form_open: bool,
     pub(crate) rooms_display_name_input: String,
     pub(crate) rooms_create_focus_index: usize,
@@ -595,7 +612,7 @@ impl App {
                 config.user_id,
                 config.bonsai_service.clone(),
                 tree,
-                config.is_admin,
+                config.permissions.is_admin(),
             )
         } else {
             // Fallback: create a default dead-ish state (should not happen in practice)
@@ -612,7 +629,7 @@ impl App {
                     seed: config.user_id.as_u128() as i64,
                     is_alive: true,
                 },
-                config.is_admin,
+                config.permissions.is_admin(),
             )
         };
         let bonsai_care_state = config
@@ -658,9 +675,11 @@ impl App {
             splash_hint,
             show_quit_confirm: false,
             show_help: false,
+            show_mod_modal: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
+            mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
             vt_input: crate::app::input::VtInputParser::default(),
@@ -683,14 +702,17 @@ impl App {
             activity_feed_rx: config.activity_feed_rx,
             activity: VecDeque::new(),
             user_id: config.user_id,
-            is_admin: config.is_admin,
-            is_mod: config.is_mod,
+            permissions: config.permissions,
+            is_admin: config.permissions.is_admin(),
+            is_moderator: config.permissions.is_moderator(),
+            artboard_banned: config.artboard_banned,
+            artboard_ban_expires_at: config.artboard_ban_expires_at,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
                 config.chat_service,
                 config.notification_service,
                 config.user_id,
-                config.is_admin,
+                config.permissions,
                 active_users.clone(),
                 config.article_service.clone(),
                 config.showcase_service.clone(),
@@ -718,10 +740,12 @@ impl App {
             bonsai_care_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
+            dashboard_game_toggle_target: None,
             rooms_service: config.rooms_service,
             blackjack_table_manager: config.blackjack_table_manager,
             rooms_selected_index: 0,
             rooms_active_room: None,
+            rooms_last_active_room_id: None,
             rooms_add_form_open: false,
             rooms_display_name_input: String::new(),
             rooms_create_focus_index: 0,
@@ -799,9 +823,18 @@ impl App {
         self.set_cursor_shape(CURSOR_SHAPE_STEADY_BLOCK);
     }
 
-    pub(crate) fn activate_artboard_interaction(&mut self) {
+    pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
+        self.expire_artboard_ban_if_needed();
+        if self.artboard_banned {
+            self.deactivate_artboard_interaction();
+            self.banner = Some(Banner::error(
+                "Artboard editing is disabled for this account.",
+            ));
+            return false;
+        }
         self.enter_dartboard();
         self.artboard_interacting = true;
+        true
     }
 
     pub(crate) fn deactivate_artboard_interaction(&mut self) {
@@ -812,6 +845,66 @@ impl App {
             state.close_glyph_picker();
             state.close_snapshot_browser();
         }
+    }
+
+    pub(crate) fn set_artboard_banned(&mut self, banned: bool, expires_at: Option<DateTime<Utc>>) {
+        let active_ban = banned
+            && expires_at
+                .map(|expires_at| expires_at > Utc::now())
+                .unwrap_or(true);
+        let active_expires_at = active_ban.then_some(expires_at).flatten();
+        if self.artboard_banned == active_ban && self.artboard_ban_expires_at == active_expires_at {
+            return;
+        }
+        self.artboard_banned = active_ban;
+        self.artboard_ban_expires_at = active_expires_at;
+        if active_ban {
+            self.deactivate_artboard_interaction();
+            self.banner = Some(Banner::error(
+                "Artboard editing is disabled for this account.",
+            ));
+        } else {
+            self.banner = Some(Banner::success("Artboard editing is enabled again."));
+        }
+    }
+
+    pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
+        if self.permissions == permissions {
+            return;
+        }
+        let was_admin = self.permissions.is_admin();
+        let was_moderator = self.permissions.is_moderator();
+        self.permissions = permissions;
+        self.is_admin = permissions.is_admin();
+        self.is_moderator = permissions.is_moderator();
+        self.chat.set_permissions(permissions);
+        self.bonsai_state.is_admin = permissions.is_admin();
+        self.banner = Some(Banner::success(&format!(
+            "Permissions updated: admin={} moderator={}",
+            permissions.is_admin(),
+            permissions.is_moderator()
+        )));
+        if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
+            self.show_mod_modal = false;
+        }
+    }
+
+    pub fn set_artboard_banned_for_tests(&mut self, banned: bool) {
+        self.set_artboard_banned(banned, None);
+    }
+
+    pub(crate) fn expire_artboard_ban_if_needed(&mut self) {
+        if !self.artboard_banned {
+            return;
+        }
+        let Some(expires_at) = self.artboard_ban_expires_at else {
+            return;
+        };
+        if expires_at > Utc::now() {
+            return;
+        }
+        self.artboard_banned = false;
+        self.artboard_ban_expires_at = None;
     }
 
     pub(crate) fn set_screen(&mut self, screen: Screen) {

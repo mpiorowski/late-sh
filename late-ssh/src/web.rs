@@ -179,7 +179,7 @@ async fn handle_chat_socket(mut socket: WebSocket, user_id: Uuid, username: Stri
                             Some("general".to_string()),
                             body,
                             Uuid::now_v7(),
-                            false,
+        false,
                         );
                     }
                     WsChatInbound::Heartbeat {} => {}

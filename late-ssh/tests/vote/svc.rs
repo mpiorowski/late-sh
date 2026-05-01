@@ -129,6 +129,9 @@ async fn does_not_emit_activity_when_revoting_same_genre() {
         user_id,
         late_ssh::state::ActiveUser {
             username: user.username.clone(),
+            fingerprint: Some(user.fingerprint.clone()),
+            peer_ip: None,
+            sessions: Vec::new(),
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
         },

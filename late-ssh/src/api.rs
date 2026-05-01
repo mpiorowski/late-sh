@@ -530,6 +530,9 @@ mod tests {
             Uuid::now_v7(),
             ActiveUser {
                 username: "alice".to_string(),
+                fingerprint: None,
+                peer_ip: None,
+                sessions: Vec::new(),
                 connection_count: 2,
                 last_login_at: Instant::now(),
             },
@@ -538,6 +541,9 @@ mod tests {
             Uuid::now_v7(),
             ActiveUser {
                 username: "bob".to_string(),
+                fingerprint: None,
+                peer_ip: None,
+                sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),
             },
