@@ -9,32 +9,38 @@ use std::{
     time::Duration,
 };
 
+use ringbuf::traits::{Observer, Producer};
+
 use super::{
     AudioSpec, PlaybackQueue, StreamingLinearResampler, SymphoniaStreamDecoder, trim_stream_suffix,
 };
 
 pub(super) fn spawn_decoder_thread(
     audio_base_url: String,
-    queue: PlaybackQueue,
+    mut queue: PlaybackQueue,
     source_spec: AudioSpec,
     output_sample_rate: u32,
     stop: Arc<AtomicBool>,
     ready_tx: mpsc::SyncSender<Result<()>>,
+    prebuffer_samples: usize,
 ) {
     thread::spawn(move || {
         let mut decoder_opt =
             match SymphoniaStreamDecoder::new_http(&trim_stream_suffix(&audio_base_url)) {
-                Ok(decoder) => {
-                    let _ = ready_tx.send(Ok(()));
-                    Some(decoder)
-                }
+                Ok(decoder) => Some(decoder),
                 Err(err) => {
                     let _ = ready_tx.send(Err(err.context("failed to create audio decoder")));
                     return;
                 }
             };
 
-        let max_buffer_samples = output_sample_rate as usize * source_spec.channels * 2;
+        let mut ready_tx = Some(ready_tx);
+        if prebuffer_samples == 0
+            && let Some(ready_tx) = ready_tx.take()
+        {
+            let _ = ready_tx.send(Ok(()));
+        }
+
         let mut chunk = Vec::with_capacity(1024 * source_spec.channels);
         let mut resampler = StreamingLinearResampler::new(
             source_spec.channels,
@@ -101,12 +107,23 @@ pub(super) fn spawn_decoder_thread(
                     return;
                 }
 
-                let mut queue_guard = queue.lock().unwrap_or_else(|e| e.into_inner());
-                if queue_guard.len() + chunk.len() <= max_buffer_samples {
-                    queue_guard.extend(chunk.iter().copied());
+                if queue.vacant_len() >= chunk.len() {
+                    let pushed = queue.push_slice(&chunk);
+                    if pushed == chunk.len() {
+                        if ready_tx.is_some() && queue.occupied_len() >= prebuffer_samples {
+                            if let Some(ready_tx) = ready_tx.take() {
+                                let _ = ready_tx.send(Ok(()));
+                            }
+                        }
+                        break;
+                    }
+                    tracing::warn!(
+                        pushed,
+                        requested = chunk.len(),
+                        "audio queue accepted a partial chunk"
+                    );
                     break;
                 }
-                drop(queue_guard);
                 thread::sleep(Duration::from_millis(5));
             }
         }
