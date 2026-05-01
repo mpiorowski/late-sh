@@ -113,6 +113,18 @@ fn open_settings_modal(app: &mut App) {
     app.show_settings = true;
 }
 
+fn open_mod_modal(app: &mut App) {
+    app.show_help = false;
+    app.show_settings = false;
+    app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_web_chat_qr = false;
+    app.show_quit_confirm = false;
+    app.mod_modal_state
+        .open(app.permissions.can_access_mod_surface());
+    app.show_mod_modal = true;
+}
+
 pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
@@ -122,6 +134,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     }
     if app.chat.take_requested_settings_modal() {
         open_settings_modal(app);
+    }
+    if app.chat.take_requested_mod_modal() {
+        open_mod_modal(app);
     }
 }
 

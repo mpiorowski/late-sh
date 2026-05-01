@@ -1,5 +1,6 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use std::collections::HashMap;
 use tokio_postgres::{Client, Row};
 use uuid::Uuid;
@@ -25,6 +26,9 @@ impl From<Row> for ChatRoomMember {
 
 impl ChatRoomMember {
     pub async fn join(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<Self> {
+        if Self::is_banned_from_room(client, room_id, user_id).await? {
+            bail!("user is banned from this room");
+        }
         let row = client
             .query_one(
                 "INSERT INTO chat_room_members (room_id, user_id)
@@ -36,6 +40,26 @@ impl ChatRoomMember {
             )
             .await?;
         Ok(Self::from(row))
+    }
+
+    pub async fn is_banned_from_room(
+        client: &Client,
+        room_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<bool> {
+        let row = client
+            .query_one(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM room_bans
+                    WHERE room_id = $1
+                      AND target_user_id = $2
+                      AND (expires_at IS NULL OR expires_at > current_timestamp)
+                 )",
+                &[&room_id, &user_id],
+            )
+            .await?;
+        Ok(row.get(0))
     }
 
     pub async fn join_user_by_fingerprint(
@@ -90,7 +114,7 @@ impl ChatRoomMember {
         Ok(rows.into_iter().map(|r| r.get("user_id")).collect())
     }
 
-    pub async fn leave(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<u64> {
+    pub async fn leave(client: &impl GenericClient, room_id: Uuid, user_id: Uuid) -> Result<u64> {
         let count = client
             .execute(
                 "DELETE FROM chat_room_members WHERE room_id = $1 AND user_id = $2",
@@ -107,6 +131,13 @@ impl ChatRoomMember {
                  SELECT id, $1
                  FROM chat_rooms
                  WHERE visibility = 'public' AND auto_join = true
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM room_bans
+                       WHERE room_bans.room_id = chat_rooms.id
+                         AND room_bans.target_user_id = $1
+                         AND (room_bans.expires_at IS NULL OR room_bans.expires_at > current_timestamp)
+                   )
                  ON CONFLICT (room_id, user_id) DO NOTHING",
                 &[&user_id],
             )

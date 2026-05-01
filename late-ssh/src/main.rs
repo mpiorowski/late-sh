@@ -108,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let (now_playing_tx, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
+    let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
         db.clone(),
         config.liquidsoap_addr.clone(),
@@ -116,7 +117,13 @@ async fn main() -> anyhow::Result<()> {
         activity_tx.clone(),
     );
     let notification_service = NotificationService::new(db.clone());
-    let chat_service = ChatService::new(db.clone(), notification_service.clone());
+    let chat_service = ChatService::new_with_active_users(
+        db.clone(),
+        notification_service.clone(),
+        active_users.clone(),
+    )
+    .with_session_registry(session_registry.clone())
+    .with_force_admin(config.force_admin);
     let ai_service = AiService::new(
         config.ai.enabled,
         config.ai.api_key.clone(),
@@ -193,7 +200,6 @@ async fn main() -> anyhow::Result<()> {
         active_users.clone(),
         activity_tx.clone(),
     );
-    let session_registry = SessionRegistry::new();
     let paired_client_registry = late_ssh::session::PairedClientRegistry::new();
     let web_chat_registry = late_ssh::web::WebChatRegistry::new();
     let icecast_url = config.icecast_url.clone();
