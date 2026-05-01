@@ -215,6 +215,7 @@ pub struct SessionConfig {
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub supports_reconnect_on_drain: bool,
     pub reconnect_reason: Option<u16>,
 }
 
@@ -364,6 +365,7 @@ pub struct App {
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) supports_reconnect_on_drain: bool,
     pub(crate) requested_close_code: u16,
     pub(crate) reconnect_notice: Option<ReconnectNotice>,
 
@@ -391,6 +393,10 @@ impl App {
         self.is_draining.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    pub(crate) fn can_reconnect_on_drain(&self) -> bool {
+        self.supports_reconnect_on_drain && self.is_draining()
+    }
+
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.show_settings = false;
@@ -401,6 +407,10 @@ impl App {
     pub fn set_draining_for_tests(&mut self, draining: bool) {
         self.is_draining
             .store(draining, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn set_supports_reconnect_on_drain_for_tests(&mut self, supported: bool) {
+        self.supports_reconnect_on_drain = supported;
     }
 
     pub fn close_code_for_tests(&self) -> u16 {
@@ -837,6 +847,7 @@ impl App {
             pending_terminal_commands: Vec::new(),
             last_notify_at: None,
             is_draining: config.is_draining,
+            supports_reconnect_on_drain: config.supports_reconnect_on_drain,
             reconnect_notice,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),

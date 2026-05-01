@@ -46,6 +46,9 @@ pub struct SessionBootstrapInputs {
     /// caller subscribes so it can drop the receiver cleanly on
     /// connection teardown without the helper holding state.
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    /// True when the transport can request backend-controlled reconnect
+    /// by closing with TUNNEL_CLOSE_RECONNECT_REQUESTED.
+    pub supports_reconnect_on_drain: bool,
     pub reconnect_reason: Option<u16>,
 }
 
@@ -63,6 +66,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_rx,
         activity_feed_rx,
+        supports_reconnect_on_drain,
         reconnect_reason,
     } = inputs;
 
@@ -210,6 +214,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_theme_id: late_ssh_theme_id(&user.settings),
 
         is_draining: state.is_draining.clone(),
+        supports_reconnect_on_drain,
         reconnect_reason,
     }
 }

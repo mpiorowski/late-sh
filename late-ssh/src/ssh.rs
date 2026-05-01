@@ -534,6 +534,7 @@ impl russh::server::Handler for ClientHandler {
                 session_token,
                 session_rx: Some(session_rx),
                 activity_feed_rx: self.activity_feed_rx.take(),
+                supports_reconnect_on_drain: false,
                 reconnect_reason: None,
             },
         )

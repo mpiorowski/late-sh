@@ -460,6 +460,7 @@ async fn handle_session(
             session_token,
             session_rx: None,
             activity_feed_rx,
+            supports_reconnect_on_drain: true,
             reconnect_reason: handshake.reconnect_reason,
         },
     )

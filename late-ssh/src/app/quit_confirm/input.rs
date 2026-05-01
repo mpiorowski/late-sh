@@ -21,8 +21,10 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             app.request_close(TUNNEL_CLOSE_SESSION_ENDED);
         }
-        ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') if app.is_draining() => {
-            app.request_close(TUNNEL_CLOSE_RECONNECT_REQUESTED);
+        ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
+            if app.can_reconnect_on_drain() {
+                app.request_close(TUNNEL_CLOSE_RECONNECT_REQUESTED);
+            }
         }
         ParsedInput::Byte(0x1B) => app.show_quit_confirm = false,
         _ => {}

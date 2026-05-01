@@ -28,6 +28,8 @@ use crate::session::ClientAudioState;
 
 const DRAIN_TOAST_MESSAGE: &str =
     "⚠️  Update available! Press q then r to get the late-est features!";
+const DIRECT_DRAIN_TOAST_MESSAGE: &str =
+    "⚠️ Server updating! Press 'q' to quit, then reconnect to join the new pod.";
 
 fn sanitize_notification_field(input: &str) -> String {
     input
@@ -153,6 +155,7 @@ struct DrawContext<'a> {
     web_chat_qr_url: Option<&'a str>,
     show_cli_install_modal: bool,
     is_draining: bool,
+    supports_reconnect_on_drain: bool,
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
@@ -446,6 +449,7 @@ impl App {
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         show_cli_install_modal: self.show_cli_install_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
+                        supports_reconnect_on_drain: self.supports_reconnect_on_drain,
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
@@ -715,7 +719,11 @@ impl App {
         }
 
         if ctx.show_quit_confirm {
-            quit_confirm::ui::draw(frame, inner, ctx.is_draining);
+            quit_confirm::ui::draw(
+                frame,
+                inner,
+                ctx.is_draining && ctx.supports_reconnect_on_drain,
+            );
         }
 
         if ctx.show_web_chat_qr
@@ -743,8 +751,13 @@ impl App {
 
 fn current_toast_banner(ctx: &DrawContext<'_>) -> Option<Banner> {
     if ctx.is_draining {
+        let message = if ctx.supports_reconnect_on_drain {
+            DRAIN_TOAST_MESSAGE
+        } else {
+            DIRECT_DRAIN_TOAST_MESSAGE
+        };
         Some(Banner {
-            message: DRAIN_TOAST_MESSAGE.to_string(),
+            message: message.to_string(),
             kind: BannerKind::Error,
             created_at: std::time::Instant::now(),
         })

@@ -74,25 +74,61 @@ async fn q_opens_quit_confirm_and_escape_dismisses_it() {
 }
 
 #[tokio::test]
-async fn draining_quit_confirm_can_request_upgrade_reconnect() {
+async fn direct_ssh_draining_quit_confirm_uses_plain_quit_flow() {
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "quit-confirm-draining-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "quit-confirm-draining-flow-it");
+    let user = create_test_user(&test_db.db, "quit-confirm-direct-draining-it").await;
+    let mut app = make_app(
+        test_db.db.clone(),
+        user.id,
+        "quit-confirm-direct-draining-flow-it",
+    );
     app.set_draining_for_tests(true);
 
     app.handle_input(b"q");
-    wait_for_render_contains(&mut app, " Update? ").await;
-    wait_for_render_contains(&mut app, "r to reconnect to the updated late.sh!").await;
+    wait_for_render_contains(&mut app, " Quit? ").await;
+    wait_for_render_contains(&mut app, "Clicked by mistake, right?").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("r to reconnect to the updated late.sh!"),
+        "direct ssh users should not see reconnect prompt; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("Server updating! Press 'q' to quit, then reconnect to join the new pod."),
+        "direct ssh users should see manual reconnect toast; frame={frame:?}"
+    );
 
+    app.handle_input(b"r");
+    assert!(app.is_running());
     app.handle_input(b"\x1b");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains("r to reconnect to the updated late.sh!"),
-        "expected upgrade confirm to dismiss after Esc; frame={frame:?}"
+        !frame.contains("Clicked by mistake, right?"),
+        "expected quit confirm to dismiss after Esc; frame={frame:?}"
     );
+}
+
+#[tokio::test]
+async fn tunnel_draining_quit_confirm_can_request_upgrade_reconnect() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "quit-confirm-tunnel-draining-it").await;
+    let mut app = make_app(
+        test_db.db.clone(),
+        user.id,
+        "quit-confirm-tunnel-draining-flow-it",
+    );
+    app.set_draining_for_tests(true);
+    app.set_supports_reconnect_on_drain_for_tests(true);
 
     app.handle_input(b"q");
+    wait_for_render_contains(&mut app, " Update? ").await;
+    wait_for_render_contains(&mut app, "r to reconnect to the updated late.sh!").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Update available! Press q then r to get the late-est features!"),
+        "tunnel users should see reconnect toast; frame={frame:?}"
+    );
+
     app.handle_input(b"r");
     assert_eq!(app.close_code_for_tests(), TUNNEL_CLOSE_RECONNECT_REQUESTED);
     assert!(!app.is_running());
