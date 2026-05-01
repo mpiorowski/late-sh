@@ -9,7 +9,6 @@ INSTANCE ?= late                                            # Prefix for contain
 
 # --- SSH ---
 LATE_FORCE_ADMIN ?= 0
-LATE_FORCE_ADMIN_USERS ?=                                   # Comma-separated usernames to force-admin (case-insensitive)
 LATE_SSH_PORT ?= 2222                                       # SSH server listen port
 LATE_API_PORT ?= 4000                                       # HTTP API listen port
 LATE_SSH_OPEN ?= 1                                          # Allow connections without auth (1=open, 0=require key)
@@ -67,7 +66,6 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" >> .env
 	@echo "INSTANCE=$(INSTANCE)" >> .env
 	@echo "LATE_FORCE_ADMIN=$(LATE_FORCE_ADMIN)" >> .env
-	@echo "LATE_FORCE_ADMIN_USERS=$(LATE_FORCE_ADMIN_USERS)" >> .env
 	@echo "LATE_SSH_PORT=$(LATE_SSH_PORT)" >> .env
 	@echo "LATE_API_PORT=$(LATE_API_PORT)" >> .env
 	@echo "LATE_SSH_OPEN=$(LATE_SSH_OPEN)" >> .env
