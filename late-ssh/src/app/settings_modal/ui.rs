@@ -357,6 +357,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Theme
         Constraint::Length(1), // Background
         Constraint::Length(1), // Stream + vote
+        Constraint::Length(1), // Room showcase
         Constraint::Length(1), // Right sidebar
         Constraint::Length(1), // Games sidebar
         Constraint::Length(1), // breathing room
@@ -487,12 +488,22 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     frame.render_widget(
         Paragraph::new(row_line(
             state,
+            Row::DashboardRoomShowcases,
+            width,
+            "Room showcase",
+            toggle_span(state.draft().show_dashboard_room_showcases),
+        )),
+        sections[11],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
             Row::RightSidebar,
             width,
             "Right sidebar",
             toggle_span(state.draft().show_right_sidebar),
         )),
-        sections[11],
+        sections[12],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -502,10 +513,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Games sidebar",
             toggle_span(state.draft().show_games_sidebar),
         )),
-        sections[12],
+        sections[13],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Location")), sections[14]);
+    frame.render_widget(Paragraph::new(section_heading("Location")), sections[15]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -514,7 +525,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Country",
             value_with_picker_hint(country_label(state.draft().country.as_deref())),
         )),
-        sections[15],
+        sections[16],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -530,12 +541,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                     .unwrap_or_else(|| "not set".to_string()),
             ),
         )),
-        sections[16],
+        sections[17],
     );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[18],
+        sections[19],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -545,7 +556,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[19],
+        sections[20],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -555,7 +566,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[20],
+        sections[21],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -565,7 +576,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[21],
+        sections[22],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -575,7 +586,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[22],
+        sections[23],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -592,7 +603,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[23],
+        sections[24],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -605,7 +616,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[24],
+        sections[25],
     );
 }
 

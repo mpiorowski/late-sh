@@ -152,9 +152,22 @@ pub(crate) fn render_tree_art_lines(
             0
         };
 
-        let mut spans = Vec::new();
         let chars: Vec<char> = art_line.chars().collect();
-        for (x, ch) in chars.iter().copied().enumerate() {
+        let art_width = chars.len();
+        let window = horizontal_window(w, art_width, offset);
+
+        let mut spans = Vec::new();
+        if window.prefix_spaces > 0 {
+            spans.push(Span::raw(" ".repeat(window.prefix_spaces)));
+        }
+
+        for (x, ch) in chars
+            .iter()
+            .copied()
+            .enumerate()
+            .skip(window.skip_chars)
+            .take(window.take_chars)
+        {
             let cursor_here = overlay.as_ref().is_some_and(|overlay| {
                 overlay.show_selection && overlay.cursor_x == x && overlay.cursor_y == _i
             });
@@ -200,15 +213,39 @@ pub(crate) fn render_tree_art_lines(
             spans.push(Span::styled(cursor_display(ch, cursor_here), style));
         }
 
-        // Manual centering with sway offset
-        let art_width = chars.len();
-        let base_pad = w.saturating_sub(art_width) / 2;
-        let pad = (base_pad as i32 + offset).max(0) as usize;
-        let pad = pad.min(w.saturating_sub(art_width));
-        spans.insert(0, Span::raw(" ".repeat(pad)));
         lines.push(Line::from(spans));
     }
     lines
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct HorizontalWindow {
+    prefix_spaces: usize,
+    skip_chars: usize,
+    take_chars: usize,
+}
+
+fn horizontal_window(width: usize, art_width: usize, offset: i32) -> HorizontalWindow {
+    if width == 0 || art_width == 0 {
+        return HorizontalWindow {
+            prefix_spaces: 0,
+            skip_chars: 0,
+            take_chars: 0,
+        };
+    }
+
+    let base_pad = width.saturating_sub(art_width) / 2;
+    let shifted_pad = base_pad as i32 + offset;
+    let prefix_spaces = shifted_pad.max(0) as usize;
+    let skip_chars = (-shifted_pad).max(0) as usize;
+    let visible_width = width.saturating_sub(prefix_spaces);
+    let take_chars = art_width.saturating_sub(skip_chars).min(visible_width);
+
+    HorizontalWindow {
+        prefix_spaces,
+        skip_chars,
+        take_chars,
+    }
 }
 
 fn target_color(id: i32) -> Color {
@@ -1515,6 +1552,38 @@ mod tests {
         assert_eq!(
             status_line_specs(true, Stage::Young, false),
             vec![StatusLineSpec::WateredToday]
+        );
+    }
+
+    #[test]
+    fn horizontal_window_allows_sway_when_art_fills_width() {
+        assert_eq!(
+            horizontal_window(22, 22, -1),
+            HorizontalWindow {
+                prefix_spaces: 0,
+                skip_chars: 1,
+                take_chars: 21,
+            }
+        );
+        assert_eq!(
+            horizontal_window(22, 22, 1),
+            HorizontalWindow {
+                prefix_spaces: 1,
+                skip_chars: 0,
+                take_chars: 21,
+            }
+        );
+    }
+
+    #[test]
+    fn horizontal_window_keeps_wide_art_centered() {
+        assert_eq!(
+            horizontal_window(72, 22, 0),
+            HorizontalWindow {
+                prefix_spaces: 25,
+                skip_chars: 0,
+                take_chars: 22,
+            }
         );
     }
 }

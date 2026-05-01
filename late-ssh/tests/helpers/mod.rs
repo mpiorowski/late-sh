@@ -24,7 +24,6 @@ use late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
-use late_ssh::app::rooms::blackjack::svc::BlackjackService;
 use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
@@ -117,12 +116,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
     let blackjack_table_manager =
         BlackjackTableManager::new(chip_service.clone(), blackjack_player_directory.clone());
-    let (blackjack_event_tx, _) = broadcast::channel(64);
-    let blackjack_service = BlackjackService::new(
-        chip_service.clone(),
-        blackjack_player_directory,
-        blackjack_event_tx,
-    );
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let nonogram_service =
         NonogramService::new(db.clone(), activity_tx.clone(), chip_service.clone());
@@ -157,7 +150,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         chip_service,
         rooms_service,
         blackjack_table_manager,
-        blackjack_service,
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
         leaderboard_service,
@@ -236,11 +228,6 @@ pub fn make_app_with_chat_service(
         blackjack_table_manager: BlackjackTableManager::new(
             ChipService::new(db.clone()),
             BlackjackPlayerDirectory::new(db.clone()),
-        ),
-        blackjack_service: BlackjackService::new(
-            ChipService::new(db.clone()),
-            BlackjackPlayerDirectory::new(db.clone()),
-            broadcast::channel(64).0,
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),
@@ -342,11 +329,6 @@ pub fn make_app_with_paired_client(
         blackjack_table_manager: BlackjackTableManager::new(
             ChipService::new(db.clone()),
             BlackjackPlayerDirectory::new(db.clone()),
-        ),
-        blackjack_service: BlackjackService::new(
-            ChipService::new(db.clone()),
-            BlackjackPlayerDirectory::new(db.clone()),
-            broadcast::channel(64).0,
         ),
         dartboard_server: test_dartboard_server(),
         dartboard_provenance: test_dartboard_provenance(),

@@ -104,7 +104,6 @@ pub(crate) const GAME_SELECTION_SUDOKU: usize = 2;
 pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
-pub(crate) const GAME_SELECTION_BLACKJACK: usize = 6;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 impl NotificationMode {
     /// Map the `notify_format` profile field to a concrete mode. Unknown
@@ -175,7 +174,6 @@ pub struct SessionConfig {
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
     pub blackjack_table_manager: crate::app::rooms::blackjack::manager::BlackjackTableManager,
-    pub blackjack_service: crate::app::rooms::blackjack::svc::BlackjackService,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
     /// enters the dartboard game from the arcade.
@@ -289,6 +287,9 @@ pub struct App {
     /// Any non-digit keystroke disarms and falls through to its normal
     /// handling.
     pub(crate) dashboard_g_prefix_armed: bool,
+    /// `true` after `b` on the dashboard, waiting for a blackjack room slot
+    /// key (`1..9`, `0`, `-`, `=`, `[`, `]`, `\`).
+    pub(crate) dashboard_blackjack_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -329,7 +330,7 @@ pub struct App {
     pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
-    pub(crate) blackjack_state: crate::app::rooms::blackjack::state::State,
+    pub(crate) blackjack_state: Option<crate::app::rooms::blackjack::state::State>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -657,11 +658,6 @@ impl App {
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
         );
-        let blackjack_state = crate::app::rooms::blackjack::state::State::new(
-            config.blackjack_service.clone(),
-            config.user_id,
-            config.initial_chip_balance,
-        );
         let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
         let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
         let rooms_event_rx = config.rooms_service.subscribe_events();
@@ -791,6 +787,7 @@ impl App {
             dashboard_favorite_index: 0,
             dashboard_previous_favorite_index: None,
             dashboard_g_prefix_armed: false,
+            dashboard_blackjack_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
@@ -828,7 +825,7 @@ impl App {
             nonogram_state,
             solitaire_state,
             minesweeper_state,
-            blackjack_state,
+            blackjack_state: None,
             dartboard_state: None,
             artboard_interacting: false,
             dartboard_server,

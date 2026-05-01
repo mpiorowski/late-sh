@@ -60,6 +60,12 @@ impl App {
                             display_name
                         )));
                     }
+                    RoomsEvent::Deleted {
+                        user_id,
+                        display_name,
+                    } if user_id == self.user_id => {
+                        banner = Some(Banner::success(&format!("Deleted table: {}", display_name)));
+                    }
                     RoomsEvent::Error {
                         user_id,
                         game_kind,
@@ -76,6 +82,16 @@ impl App {
                             game_kind_label(game_kind),
                             table,
                             message
+                        )));
+                    }
+                    RoomsEvent::DeleteError {
+                        user_id,
+                        display_name,
+                        message,
+                    } if user_id == self.user_id => {
+                        banner = Some(Banner::error(&format!(
+                            "Failed to delete table {}: {}",
+                            display_name, message
                         )));
                     }
                     _ => {}
