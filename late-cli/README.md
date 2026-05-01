@@ -47,6 +47,9 @@ late
 
 That's it. On first run it will generate a dedicated SSH key at `~/.ssh/id_late_sh_ed25519`.
 If you want to use a different key, pass `--key /path/to/key`.
+For YubiKey/FIDO security-key identities, use `--ssh-mode openssh` so OpenSSH
+handles PIN and touch prompts. In openssh mode, omitting `--key` lets OpenSSH
+use your normal `~/.ssh/config`, agent, and default identity discovery.
 
 ### Options
 
@@ -55,8 +58,8 @@ If you want to use a different key, pass `--key /path/to/key`.
 --ssh-port <port>          SSH port override
 --ssh-user <user>          SSH username override
 --key <path>               SSH identity file override
---ssh-mode <mode>          SSH transport: native (default) or old
---ssh-bin <command>        SSH client command (subprocess mode only, default: ssh)
+--ssh-mode <mode>          SSH transport: native (default), openssh, or old
+--ssh-bin <command>        SSH client command for openssh/old modes (default: ssh)
 --audio-base-url <url>     Audio stream URL
 --api-base-url <url>       API URL for WebSocket pairing
 -v, --verbose              Debug logging to stderr
@@ -68,7 +71,12 @@ If you want to use a different key, pass `--key /path/to/key`.
 - Working audio output device
 - Rust toolchain (if building from source)
 
-`--ssh-mode old` keeps the old behavior and still depends on a system `ssh` binary.
+`--ssh-mode openssh` uses a system OpenSSH client with an internal ControlMaster
+connection. It is the recommended mode for YubiKey/FIDO security-key identities
+and other OpenSSH-managed auth flows because OpenSSH owns the PIN/passphrase,
+touch prompt, terminal echo, agent, and `~/.ssh/config` handling.
+
+`--ssh-mode old` keeps the legacy OpenSSH-through-PTY behavior and still depends on a system `ssh` binary.
 `--ssh-mode native` uses an embedded `russh` client, records host keys in `~/.ssh/known_hosts`
 with accept-new semantics, fetches the pairing token over a dedicated SSH exec handshake, and
 does not require OpenSSH on `$PATH`. Native mode intentionally does not fall back to the legacy

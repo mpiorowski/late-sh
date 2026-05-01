@@ -28,8 +28,26 @@ async fn main() -> Result<()> {
     let config = Config::from_args(env::args().skip(1))?;
     init_logging(config.verbose)?;
     debug!(?config, "resolved cli config");
-    let ssh_identity = ensure_client_identity_at(config.key_file.as_deref())?;
-    let _raw_mode = RawModeGuard::enable_if_tty();
+    // OpenSSH mode can use normal OpenSSH identity discovery, including
+    // ~/.ssh/config and agent-loaded hardware-backed keys. Skip late's key
+    // helper in that mode unless the caller explicitly asks for a key.
+    let ssh_identity = if config.ssh_mode == config::SshMode::OpenSsh && config.key_file.is_none() {
+        None
+    } else {
+        Some(ensure_client_identity_at(config.key_file.as_deref())?)
+    };
+    // In OpenSSH mode the system ssh client owns the terminal, so PIN,
+    // passphrase, and touch prompts keep OpenSSH's normal echo behavior.
+    let _raw_mode = config
+        .ssh_mode
+        .uses_cli_raw_mode()
+        .then(RawModeGuard::enable_if_tty);
+
+    if config.ssh_mode == config::SshMode::OpenSsh {
+        return run_openssh_mode(config, ssh_identity).await;
+    }
+
+    let ssh_identity = ssh_identity.context("embedded SSH modes require a resolved identity")?;
 
     info!("starting audio runtime");
     let audio = AudioRuntime::start(config.audio_base_url.clone())
@@ -62,8 +80,70 @@ async fn main() -> Result<()> {
         .context("ssh session token channel closed")?;
     flush_stdin_input_queue();
     input_gate.store(true, Ordering::Relaxed);
-    info!("received session token and starting websocket pairing");
+    let ws_task = spawn_ws_pairing(&config, token, &audio);
 
+    let ssh_exit = match completion_task.await {
+        Ok(result) => result?,
+        Err(err) => return Err(anyhow::anyhow!("ssh session task join failed: {err}")),
+    };
+
+    audio.stop.store(true, Ordering::Relaxed);
+    resize_task.abort();
+    input_task.abort();
+    ws_task.abort();
+    debug!(?ssh_exit, "ssh session ended");
+    ssh_exit.ensure_success()?;
+
+    Ok(())
+}
+
+async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBuf>) -> Result<()> {
+    // Authenticate first, while OpenSSH still has direct access to the
+    // terminal. Audio and WebSocket pairing start only after the token exec
+    // succeeds, so PIN/passphrase/touch prompts are not interleaved with them.
+    info!("starting OpenSSH control master");
+    let session = ssh::prepare_openssh_ssh(&config, ssh_identity.as_deref()).await?;
+    let token = session.token().to_string();
+
+    info!("starting audio runtime");
+    let audio = AudioRuntime::start(config.audio_base_url.clone())
+        .await
+        .map_err(|err| {
+            let hint = audio_startup_hint();
+            anyhow::anyhow!("failed to start local audio: {err:#}\n\n{hint}")
+        })?;
+    if audio.enabled {
+        info!(sample_rate = audio.sample_rate, "audio runtime ready");
+    } else {
+        info!("local audio disabled on this platform");
+    }
+    let ws_task = spawn_ws_pairing(&config, token, &audio);
+
+    info!("starting OpenSSH interactive session");
+    let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config).await?;
+    let ssh_exit = match completion_task.await {
+        Ok(result) => result?,
+        Err(err) => return Err(anyhow::anyhow!("ssh session task join failed: {err}")),
+    };
+
+    audio.stop.store(true, Ordering::Relaxed);
+    ws_task.abort();
+    debug!(?ssh_exit, "ssh session ended");
+    ssh_exit.ensure_success()?;
+
+    Ok(())
+}
+
+#[expect(
+    clippy::let_and_return,
+    reason = "keep this helper close to the original inline ws_task pattern"
+)]
+fn spawn_ws_pairing(
+    config: &Config,
+    token: String,
+    audio: &AudioRuntime,
+) -> tokio::task::JoinHandle<()> {
+    info!("received session token and starting websocket pairing");
     let api_base_url = config.api_base_url.clone();
     let client = PairClientInfo {
         ssh_mode: config.ssh_mode.client_state_label(),
@@ -72,12 +152,15 @@ async fn main() -> Result<()> {
     let played_samples = Arc::clone(&audio.played_samples);
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
+    // Copy scalar state before spawning so the task does not capture the
+    // borrowed AudioRuntime reference.
+    let sample_rate = audio.sample_rate;
     let mut frames = audio.analyzer_tx.subscribe();
 
     let ws_task = tokio::spawn(async move {
         let playback = PlaybackState {
             played_samples: &played_samples,
-            sample_rate: audio.sample_rate,
+            sample_rate,
             muted: &muted,
             volume_percent: &volume_percent,
         };
@@ -100,18 +183,5 @@ async fn main() -> Result<()> {
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
-
-    let ssh_exit = match completion_task.await {
-        Ok(result) => result?,
-        Err(err) => return Err(anyhow::anyhow!("ssh session task join failed: {err}")),
-    };
-
-    audio.stop.store(true, Ordering::Relaxed);
-    resize_task.abort();
-    input_task.abort();
-    ws_task.abort();
-    debug!(?ssh_exit, "ssh session ended");
-    ssh_exit.ensure_success()?;
-
-    Ok(())
+    ws_task
 }
