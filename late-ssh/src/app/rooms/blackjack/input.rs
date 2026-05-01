@@ -58,6 +58,10 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                 state.hit();
                 InputAction::Handled
             }
+            b'd' | b'D' => {
+                state.double_down();
+                InputAction::Handled
+            }
             b's' | b'S' => {
                 state.stand();
                 InputAction::Handled
