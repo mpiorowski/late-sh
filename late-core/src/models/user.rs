@@ -393,7 +393,7 @@ pub fn extract_enable_background_color(settings: &Value) -> bool {
     settings
         .get(ENABLE_BACKGROUND_COLOR_KEY)
         .and_then(Value::as_bool)
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 pub fn extract_show_dashboard_header(settings: &Value) -> bool {
@@ -621,6 +621,18 @@ mod tests {
     fn extract_show_dashboard_header_defaults_to_true() {
         let settings = json!({});
         assert!(extract_show_dashboard_header(&settings));
+    }
+
+    #[test]
+    fn extract_enable_background_color_defaults_to_true() {
+        let settings = json!({});
+        assert!(extract_enable_background_color(&settings));
+    }
+
+    #[test]
+    fn extract_enable_background_color_reads_explicit_false() {
+        let settings = json!({ "enable_background_color": false });
+        assert!(!extract_enable_background_color(&settings));
     }
 
     #[test]

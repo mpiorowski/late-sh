@@ -38,6 +38,7 @@ use std::{os::fd::AsRawFd, process::Stdio};
 
 #[cfg(unix)]
 use std::{
+    os::unix::fs::DirBuilderExt,
     path::PathBuf,
     process::Command as StdCommand,
     time::{SystemTime, UNIX_EPOCH},
@@ -358,7 +359,7 @@ impl CommandSpec {
 
 #[cfg(unix)]
 fn create_openssh_control_dir() -> Result<PathBuf> {
-    let base = Path::new("/tmp");
+    let base = openssh_control_base_dir();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -366,17 +367,8 @@ fn create_openssh_control_dir() -> Result<PathBuf> {
 
     for attempt in 0..100 {
         let dir = base.join(format!("late-ssh-{}-{now}-{attempt}", std::process::id()));
-        match fs::create_dir(&dir) {
-            Ok(()) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    // OpenSSH control sockets should not be reachable by other
-                    // users on a multi-user system.
-                    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
-                }
-                return Ok(dir);
-            }
+        match fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return Ok(dir),
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => {
                 return Err(err).with_context(|| format!("failed to create {}", dir.display()));
@@ -384,7 +376,18 @@ fn create_openssh_control_dir() -> Result<PathBuf> {
         }
     }
 
-    anyhow::bail!("failed to create unique OpenSSH control directory in /tmp")
+    anyhow::bail!(
+        "failed to create unique OpenSSH control directory in {}",
+        base.display()
+    )
+}
+
+#[cfg(unix)]
+fn openssh_control_base_dir() -> PathBuf {
+    env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir)
 }
 
 #[cfg(unix)]

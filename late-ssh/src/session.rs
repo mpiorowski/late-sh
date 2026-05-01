@@ -58,6 +58,8 @@ impl ClientKind {
 #[serde(rename_all = "snake_case")]
 pub enum ClientSshMode {
     Native,
+    #[serde(rename = "openssh")]
+    OpenSsh,
     Old,
     #[default]
     Unknown,
@@ -67,6 +69,7 @@ impl ClientSshMode {
     fn metric_label(self) -> Option<&'static str> {
         match self {
             Self::Native => Some("native"),
+            Self::OpenSsh => Some("openssh"),
             Self::Old => Some("old"),
             Self::Unknown => None,
         }
@@ -464,6 +467,13 @@ mod tests {
 
         let decoded = URL_SAFE_NO_PAD.decode(token.as_bytes()).unwrap();
         assert_eq!(decoded.len(), 16);
+    }
+
+    #[test]
+    fn client_ssh_mode_parses_openssh() {
+        let mode: ClientSshMode = serde_json::from_str(r#""openssh""#).unwrap();
+        assert_eq!(mode, ClientSshMode::OpenSsh);
+        assert_eq!(mode.metric_label(), Some("openssh"));
     }
 
     #[test]

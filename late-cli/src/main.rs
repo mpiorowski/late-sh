@@ -134,10 +134,6 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
     Ok(())
 }
 
-#[expect(
-    clippy::let_and_return,
-    reason = "keep this helper close to the original inline ws_task pattern"
-)]
 fn spawn_ws_pairing(
     config: &Config,
     token: String,
@@ -157,7 +153,7 @@ fn spawn_ws_pairing(
     let sample_rate = audio.sample_rate;
     let mut frames = audio.analyzer_tx.subscribe();
 
-    let ws_task = tokio::spawn(async move {
+    tokio::spawn(async move {
         let playback = PlaybackState {
             played_samples: &played_samples,
             sample_rate,
@@ -182,6 +178,5 @@ fn spawn_ws_pairing(
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
-    });
-    ws_task
+    })
 }
