@@ -9,7 +9,7 @@
 - `mod.rs` only declares modules. Keep it declaration-only; do not add `pub use` re-exports.
 - `backend.rs` defines the room-game traits: `RoomGameManager` for static/table-manager behavior and `ActiveRoomBackend` for per-session active-room behavior.
 - `registry.rs` owns the process-local `RoomGameRegistry` and dispatches `GameKind` to Blackjack/Tic-Tac-Toe managers.
-- `svc.rs` owns persistent room creation/listing/deletion over `game_rooms` plus associated `chat_rooms(kind='game')`. It stores opaque `settings: serde_json::Value`; games parse their own settings. Slug prefixes are resolved from `RoomGameRegistry` at the call site and passed into room creation.
+- `svc.rs` owns persistent room creation/listing/deletion over `game_rooms` plus associated `chat_rooms(kind='game')`. It stores opaque `settings: serde_json::Value`; games parse their own settings. Slug prefixes and human-readable labels are resolved from `RoomGameRegistry` at the call site and passed into room creation; `svc.rs` does not match on `GameKind` for either.
 - `state.rs` drains `RoomsService` snapshots/events into `App` fields, clamps list selection, and refreshes the active room copy.
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
 - `ui.rs` renders the directory, create modal, active room split, and delegates game drawing.
