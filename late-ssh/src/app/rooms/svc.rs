@@ -64,13 +64,6 @@ pub enum RoomsEvent {
     },
 }
 
-pub(crate) fn game_kind_label(game_kind: GameKind) -> &'static str {
-    match game_kind {
-        GameKind::Blackjack => "Blackjack",
-        GameKind::TicTacToe => "Tic-Tac-Toe",
-    }
-}
-
 impl TryFrom<GameRoom> for RoomListItem {
     type Error = anyhow::Error;
 
@@ -172,13 +165,14 @@ impl RoomsService {
         user_id: Uuid,
         game_kind: GameKind,
         slug_prefix: &'static str,
+        label: &'static str,
         display_name: String,
         settings: Value,
     ) {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc
-                .create_game_room(user_id, game_kind, slug_prefix, &display_name, settings)
+                .create_game_room(user_id, game_kind, slug_prefix, label, &display_name, settings)
                 .await
             {
                 Ok(room) => {
@@ -212,6 +206,7 @@ impl RoomsService {
         user_id: Uuid,
         game_kind: GameKind,
         slug_prefix: &str,
+        label: &str,
         display_name: &str,
         settings: Value,
     ) -> anyhow::Result<GameRoom> {
@@ -221,7 +216,7 @@ impl RoomsService {
             anyhow::bail!(
                 "table limit reached: max {} open {} tables per user",
                 MAX_TABLES_PER_USER,
-                game_kind_label(game_kind)
+                label
             );
         }
 

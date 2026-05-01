@@ -276,11 +276,13 @@ fn submit_create_form(app: &mut App) {
     let game_kind = selected_create_kind(app);
     let settings = selected_create_settings(app, game_kind);
     let slug_prefix = app.room_game_registry.slug_prefix(game_kind);
+    let label = app.room_game_registry.label(game_kind);
 
     app.rooms_service.create_game_room_task(
         app.user_id,
         game_kind,
         slug_prefix,
+        label,
         display_name,
         settings,
     );

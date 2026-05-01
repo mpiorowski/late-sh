@@ -14,7 +14,7 @@ use crate::app::{
         blackjack::settings::{PACE_OPTIONS, STAKE_OPTIONS},
         filter::RoomsFilter,
         registry::RoomGameRegistry,
-        svc::{RoomListItem, RoomsSnapshot, game_kind_label},
+        svc::{RoomListItem, RoomsSnapshot},
     },
 };
 
@@ -502,7 +502,7 @@ fn real_row_wide<'a>(room: &'a RoomListItem, selected: bool, view: &RoomsPageVie
             name_style,
         ),
         Span::styled(
-            format!("{:<12}", game_kind_label(room.game_kind)),
+            format!("{:<12}", view.room_game_registry.label(room.game_kind)),
             Style::default().fg(theme::AMBER()),
         ),
         Span::styled(format!("{:<8}", seats_label(room, meta.seats, view)), dim),
@@ -578,7 +578,7 @@ fn real_card_narrow<'a>(
         Span::styled(room.display_name.clone(), name_style),
         Span::raw("  "),
         Span::styled(
-            game_kind_label(room.game_kind),
+            view.room_game_registry.label(room.game_kind),
             Style::default().fg(theme::AMBER()),
         ),
     ]);
