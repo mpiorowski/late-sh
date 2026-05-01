@@ -132,6 +132,7 @@ check:
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build
+
 startm: .env keys
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
 down:
