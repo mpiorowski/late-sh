@@ -50,6 +50,16 @@ impl ChatRoom {
         Ok(row.map(Self::from))
     }
 
+    pub async fn find_non_dm_by_slug(client: &Client, slug: &str) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM chat_rooms WHERE slug = $1 AND kind <> 'dm' LIMIT 1",
+                &[&slug],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     pub async fn get_or_create_language(client: &Client, language_code: &str) -> Result<Self> {
         let language_code = language_code.trim().to_lowercase();
         if language_code.is_empty() {

@@ -17,6 +17,32 @@ crate::model! {
 }
 
 impl ModerationAuditLog {
+    pub async fn record_if(
+        client: &impl GenericClient,
+        should_record: bool,
+        actor_user_id: Uuid,
+        action: impl Into<String>,
+        target_kind: impl Into<String>,
+        target_id: Option<Uuid>,
+        metadata: Value,
+    ) -> Result<Option<Self>> {
+        if !should_record {
+            return Ok(None);
+        }
+
+        Ok(Some(
+            Self::record(
+                client,
+                actor_user_id,
+                action,
+                target_kind,
+                target_id,
+                metadata,
+            )
+            .await?,
+        ))
+    }
+
     pub async fn record(
         client: &impl GenericClient,
         actor_user_id: Uuid,

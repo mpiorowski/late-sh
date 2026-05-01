@@ -1,18 +1,18 @@
 use anyhow::Result;
 use chrono::Utc;
-use deadpool_postgres::GenericClient;
 use late_core::{
     db::Db,
     models::{
         artboard_ban::ArtboardBan,
         chat_room::ChatRoom,
+        chat_room_member::ChatRoomMember,
         moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         server_ban::{ServerBan, ServerBanActivation},
         user::User,
     },
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -38,15 +38,6 @@ struct RoomModRequest {
     username: String,
     duration: Option<chrono::Duration>,
     reason: String,
-}
-
-pub(crate) struct ModAuditRecord {
-    pub(crate) permissions: Permissions,
-    pub(crate) target_is_self: bool,
-    pub(crate) audit_action: &'static str,
-    pub(crate) target_kind: &'static str,
-    pub(crate) target_id: Option<Uuid>,
-    pub(crate) metadata: Value,
 }
 
 impl ModerationService {
@@ -172,11 +163,7 @@ impl ModerationService {
         let tx = client.transaction().await?;
         match request.action {
             RoomModAction::Kick => {
-                tx.execute(
-                    "DELETE FROM chat_room_members WHERE room_id = $1 AND user_id = $2",
-                    &[&room.id, &target.id],
-                )
-                .await?;
+                ChatRoomMember::leave(&tx, room.id, target.id).await?;
             }
             RoomModAction::Ban => {
                 let expires_at = request.duration.map(|d| Utc::now() + d);
@@ -189,11 +176,7 @@ impl ModerationService {
                     expires_at,
                 )
                 .await?;
-                tx.execute(
-                    "DELETE FROM chat_room_members WHERE room_id = $1 AND user_id = $2",
-                    &[&room.id, &target.id],
-                )
-                .await?;
+                ChatRoomMember::leave(&tx, room.id, target.id).await?;
             }
             RoomModAction::Unban => {
                 RoomBan::delete_for_room_and_user(&tx, room.id, target.id).await?;
@@ -204,17 +187,14 @@ impl ModerationService {
             RoomModAction::Ban => "room_ban",
             RoomModAction::Unban => "room_unban",
         };
-        record_mod_audit(
+        ModerationAuditLog::record_if(
             &tx,
+            permissions.should_audit(false),
             actor_user_id,
-            ModAuditRecord {
-                permissions,
-                target_is_self: false,
-                audit_action,
-                target_kind: "user",
-                target_id: Some(target.id),
-                metadata: json!({ "room_id": room.id, "room_slug": room.slug, "reason": request.reason }),
-            },
+            audit_action,
+            "user",
+            Some(target.id),
+            json!({ "room_id": room.id, "room_slug": room.slug, "reason": request.reason }),
         )
         .await?;
         tx.commit().await?;
@@ -314,17 +294,14 @@ impl ModerationService {
             ServerUserAction::Ban => "server_ban",
             ServerUserAction::Unban => "server_unban",
         };
-        record_mod_audit(
+        ModerationAuditLog::record_if(
             &tx,
+            permissions.should_audit(false),
             actor_user_id,
-            ModAuditRecord {
-                permissions,
-                target_is_self: false,
-                audit_action,
-                target_kind: "user",
-                target_id: Some(target.id),
-                metadata: json!({ "reason": reason }),
-            },
+            audit_action,
+            "user",
+            Some(target.id),
+            json!({ "reason": reason }),
         )
         .await?;
         tx.commit().await?;
@@ -389,17 +366,14 @@ impl ModerationService {
                 ArtboardBan::delete_for_user(&tx, target.id).await?;
             }
         }
-        record_mod_audit(
+        ModerationAuditLog::record_if(
             &tx,
+            permissions.should_audit(false),
             actor_user_id,
-            ModAuditRecord {
-                permissions,
-                target_is_self: false,
-                audit_action: action.audit_name(),
-                target_kind: "user",
-                target_id: Some(target.id),
-                metadata: json!({ "reason": reason }),
-            },
+            action.audit_name(),
+            "user",
+            Some(target.id),
+            json!({ "reason": reason }),
         )
         .await?;
         tx.commit().await?;
@@ -454,17 +428,14 @@ impl ModerationService {
         };
         let tx = client.transaction().await?;
         User::set_moderator(&tx, target.id, new_is_moderator).await?;
-        record_mod_audit(
+        ModerationAuditLog::record_if(
             &tx,
+            permissions.should_audit(false),
             actor_user_id,
-            ModAuditRecord {
-                permissions,
-                target_is_self: false,
-                audit_action: action.audit_name(),
-                target_kind: "user",
-                target_id: Some(target.id),
-                metadata: json!({}),
-            },
+            action.audit_name(),
+            "user",
+            Some(target.id),
+            json!({}),
         )
         .await?;
         tx.commit().await?;
@@ -518,25 +489,6 @@ pub(crate) fn ensure_not_self(actor_user_id: Uuid, target_user_id: Uuid) -> Resu
     Ok(())
 }
 
-pub(crate) async fn record_mod_audit(
-    client: &impl GenericClient,
-    actor_user_id: Uuid,
-    record: ModAuditRecord,
-) -> Result<()> {
-    if record.permissions.should_audit(record.target_is_self) {
-        ModerationAuditLog::record(
-            client,
-            actor_user_id,
-            record.audit_action,
-            record.target_kind,
-            record.target_id,
-            record.metadata,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
 pub(crate) fn tier_for_user(user: &User) -> Tier {
     Tier::from_user_flags(user.is_admin, user.is_moderator)
 }
@@ -560,7 +512,7 @@ pub(crate) fn ensure_message_permission(
     if is_owner || permissions.can(cap, target_tier) {
         Ok(())
     } else {
-        anyhow::bail!("Cannot edit or delete this message")
+        anyhow::bail!("cannot edit or delete this message")
     }
 }
 
@@ -580,12 +532,7 @@ async fn find_user_by_mod_name(client: &tokio_postgres::Client, username: &str) 
 
 async fn find_room_by_mod_slug(client: &tokio_postgres::Client, slug: &str) -> Result<ChatRoom> {
     let slug = normalize_mod_slug(slug)?;
-    let row = client
-        .query_opt(
-            "SELECT * FROM chat_rooms WHERE slug = $1 AND kind <> 'dm' LIMIT 1",
-            &[&slug],
-        )
-        .await?;
-    row.map(ChatRoom::from)
+    ChatRoom::find_non_dm_by_slug(client, &slug)
+        .await?
         .ok_or_else(|| anyhow::anyhow!("room not found: #{slug}"))
 }

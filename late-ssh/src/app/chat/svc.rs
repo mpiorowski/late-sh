@@ -20,6 +20,7 @@ use late_core::{
         },
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
+        moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         user::User,
     },
@@ -33,8 +34,7 @@ use crate::authz::{Caps, Permissions, Tier};
 use crate::metrics;
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::service::{
-    ModAuditRecord, ModerationService, ensure_message_permission, record_mod_audit,
-    target_tier_for_user_id,
+    ModerationService, ensure_message_permission, target_tier_for_user_id,
 };
 use crate::moderation::session_effects::ModerationSessionEffects;
 use crate::session::SessionRegistry;
@@ -1123,17 +1123,14 @@ impl ChatService {
             )
             .await?;
         let updated = ChatMessage::from(row);
-        record_mod_audit(
+        ModerationAuditLog::record_if(
             &tx,
+            permissions.should_audit(is_owner),
             user_id,
-            ModAuditRecord {
-                permissions,
-                target_is_self: is_owner,
-                audit_action: "message_edit",
-                target_kind: "message",
-                target_id: Some(message_id),
-                metadata: json!({ "room_id": existing.room_id }),
-            },
+            "message_edit",
+            "message",
+            Some(message_id),
+            json!({ "room_id": existing.room_id }),
         )
         .await?;
         tx.commit().await?;
@@ -1963,17 +1960,14 @@ impl ChatService {
         if count == 0 {
             anyhow::bail!("Cannot delete this message");
         }
-        record_mod_audit(
+        ModerationAuditLog::record_if(
             &tx,
+            permissions.should_audit(is_owner),
             user_id,
-            ModAuditRecord {
-                permissions,
-                target_is_self: is_owner,
-                audit_action: "message_delete",
-                target_kind: "message",
-                target_id: Some(message_id),
-                metadata: json!({ "room_id": msg.room_id }),
-            },
+            "message_delete",
+            "message",
+            Some(message_id),
+            json!({ "room_id": msg.room_id }),
         )
         .await?;
         tx.commit().await?;

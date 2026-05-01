@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use std::collections::HashMap;
 use tokio_postgres::{Client, Row};
 use uuid::Uuid;
@@ -113,7 +114,7 @@ impl ChatRoomMember {
         Ok(rows.into_iter().map(|r| r.get("user_id")).collect())
     }
 
-    pub async fn leave(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<u64> {
+    pub async fn leave(client: &impl GenericClient, room_id: Uuid, user_id: Uuid) -> Result<u64> {
         let count = client
             .execute(
                 "DELETE FROM chat_room_members WHERE room_id = $1 AND user_id = $2",
