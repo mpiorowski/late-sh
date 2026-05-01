@@ -381,10 +381,16 @@ async fn bastion_proxies_ssh_to_tunnel_with_full_handshake_and_byte_flow() {
     user_writer.write_all(b"abc").await.expect("user write");
     user_writer.flush().await.ok();
 
-    let frame = backend.next_frame().await.expect("backend frame");
-    match frame {
-        WsMessage::Binary(bytes) => assert_eq!(bytes.as_ref(), b"abc"),
-        other => panic!("expected user bytes as Binary, got {other:?}"),
+    loop {
+        let frame = backend.next_frame().await.expect("backend frame");
+        match frame {
+            WsMessage::Binary(bytes) => {
+                assert_eq!(bytes.as_ref(), b"abc");
+                break;
+            }
+            WsMessage::Ping(_) | WsMessage::Pong(_) => {}
+            other => panic!("expected user bytes as Binary, got {other:?}"),
+        }
     }
 
     // Backend → user.
