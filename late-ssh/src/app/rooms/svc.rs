@@ -71,13 +71,6 @@ pub(crate) fn game_kind_label(game_kind: GameKind) -> &'static str {
     }
 }
 
-fn game_kind_slug_prefix(game_kind: GameKind) -> &'static str {
-    match game_kind {
-        GameKind::Blackjack => "bj",
-        GameKind::TicTacToe => "ttt",
-    }
-}
-
 impl TryFrom<GameRoom> for RoomListItem {
     type Error = anyhow::Error;
 
@@ -178,13 +171,14 @@ impl RoomsService {
         &self,
         user_id: Uuid,
         game_kind: GameKind,
+        slug_prefix: &'static str,
         display_name: String,
         settings: Value,
     ) {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc
-                .create_game_room(user_id, game_kind, &display_name, settings)
+                .create_game_room(user_id, game_kind, slug_prefix, &display_name, settings)
                 .await
             {
                 Ok(room) => {
@@ -217,6 +211,7 @@ impl RoomsService {
         &self,
         user_id: Uuid,
         game_kind: GameKind,
+        slug_prefix: &str,
         display_name: &str,
         settings: Value,
     ) -> anyhow::Result<GameRoom> {
@@ -230,7 +225,7 @@ impl RoomsService {
             );
         }
 
-        let slug = generate_room_slug(game_kind);
+        let slug = generate_room_slug(slug_prefix);
         let room = GameRoom::create_with_chat_room(
             &client,
             game_kind,
@@ -312,9 +307,9 @@ async fn touch_room_activity(client: &tokio_postgres::Client, room_id: Uuid) -> 
     Ok(())
 }
 
-fn generate_room_slug(game_kind: GameKind) -> String {
+fn generate_room_slug(slug_prefix: &str) -> String {
     let id = Uuid::now_v7().simple().to_string();
-    format!("{}-{}", game_kind_slug_prefix(game_kind), &id[..12])
+    format!("{}-{}", slug_prefix, &id[..12])
 }
 
 fn room_create_error_message(error: &anyhow::Error) -> String {

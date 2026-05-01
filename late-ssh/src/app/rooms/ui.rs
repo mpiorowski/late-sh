@@ -189,57 +189,75 @@ fn draw_create_room_modal(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
-    let layout = Layout::vertical([
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // section: Table
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // Name row
-        Constraint::Length(1), // Game row
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // section: Game
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // Pace row
-        Constraint::Length(1), // Stake row
-        Constraint::Min(0),    // flex spacer
-        Constraint::Length(1), // footer
-    ])
-    .split(inner);
-
+    let selected_kind = selected_create_kind(view);
     let width = inner.width as usize;
+    if selected_kind == crate::app::rooms::svc::GameKind::Blackjack {
+        let layout = Layout::vertical([
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // section: Table
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // Name row
+            Constraint::Length(1), // Game row
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // section: Game
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // Pace row
+            Constraint::Length(1), // Stake row
+            Constraint::Min(0),    // flex spacer
+            Constraint::Length(1), // footer
+        ])
+        .split(inner);
 
-    frame.render_widget(Paragraph::new(create_section_heading("Table")), layout[1]);
-    frame.render_widget(Paragraph::new(create_name_row(view, width)), layout[3]);
-    frame.render_widget(Paragraph::new(create_game_kind_row(view, width)), layout[4]);
+        frame.render_widget(Paragraph::new(create_section_heading("Table")), layout[1]);
+        frame.render_widget(Paragraph::new(create_name_row(view, width)), layout[3]);
+        frame.render_widget(Paragraph::new(create_game_kind_row(view, width)), layout[4]);
 
-    frame.render_widget(Paragraph::new(create_section_heading("Options")), layout[6]);
-    frame.render_widget(
-        Paragraph::new(create_option_row(
-            view.create_focus_index == 2,
-            "Pace",
-            PACE_OPTIONS
-                .iter()
-                .map(|pace| pace.label().to_string())
-                .collect::<Vec<_>>(),
-            view.create_pace_index,
-            width,
-        )),
-        layout[8],
-    );
-    frame.render_widget(
-        Paragraph::new(create_option_row(
-            view.create_focus_index == 3,
-            "Stake",
-            STAKE_OPTIONS
-                .iter()
-                .map(|stake| stake.to_string())
-                .collect::<Vec<_>>(),
-            view.create_stake_index,
-            width,
-        )),
-        layout[9],
-    );
+        frame.render_widget(Paragraph::new(create_section_heading("Options")), layout[6]);
+        frame.render_widget(
+            Paragraph::new(create_option_row(
+                view.create_focus_index == 2,
+                "Pace",
+                PACE_OPTIONS
+                    .iter()
+                    .map(|pace| pace.label().to_string())
+                    .collect::<Vec<_>>(),
+                view.create_pace_index,
+                width,
+            )),
+            layout[8],
+        );
+        frame.render_widget(
+            Paragraph::new(create_option_row(
+                view.create_focus_index == 3,
+                "Stake",
+                STAKE_OPTIONS
+                    .iter()
+                    .map(|stake| stake.to_string())
+                    .collect::<Vec<_>>(),
+                view.create_stake_index,
+                width,
+            )),
+            layout[9],
+        );
 
-    frame.render_widget(Paragraph::new(create_footer_line()), layout[11]);
+        frame.render_widget(Paragraph::new(create_footer_line()), layout[11]);
+    } else {
+        let layout = Layout::vertical([
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // section: Table
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // Name row
+            Constraint::Length(1), // Game row
+            Constraint::Min(0),    // flex spacer
+            Constraint::Length(1), // footer
+        ])
+        .split(inner);
+
+        frame.render_widget(Paragraph::new(create_section_heading("Table")), layout[1]);
+        frame.render_widget(Paragraph::new(create_name_row(view, width)), layout[3]);
+        frame.render_widget(Paragraph::new(create_game_kind_row(view, width)), layout[4]);
+        frame.render_widget(Paragraph::new(create_footer_line()), layout[6]);
+    }
 }
 
 fn create_section_heading(title: &str) -> Line<'static> {
@@ -295,6 +313,14 @@ fn create_game_kind_row(view: &RoomsPageView<'_>, width: usize) -> Line<'static>
         view.create_kind_index,
         width,
     )
+}
+
+fn selected_create_kind(view: &RoomsPageView<'_>) -> crate::app::rooms::svc::GameKind {
+    view.room_game_registry
+        .ordered_kinds()
+        .get(view.create_kind_index)
+        .copied()
+        .unwrap_or(crate::app::rooms::svc::GameKind::Blackjack)
 }
 
 fn create_option_row(

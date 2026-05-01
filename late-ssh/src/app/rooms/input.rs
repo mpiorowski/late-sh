@@ -12,7 +12,6 @@ use crate::app::{
 
 const DISPLAY_NAME_MAX_LEN: usize = 48;
 const SEARCH_QUERY_MAX_LEN: usize = 32;
-const CREATE_FIELD_COUNT: usize = 4;
 const CREATE_FIELD_NAME: usize = 0;
 const CREATE_FIELD_GAME: usize = 1;
 const CREATE_FIELD_PACE: usize = 2;
@@ -276,9 +275,15 @@ fn submit_create_form(app: &mut App) {
     }
     let game_kind = selected_create_kind(app);
     let settings = selected_create_settings(app, game_kind);
+    let slug_prefix = app.room_game_registry.slug_prefix(game_kind);
 
-    app.rooms_service
-        .create_game_room_task(app.user_id, game_kind, display_name, settings);
+    app.rooms_service.create_game_room_task(
+        app.user_id,
+        game_kind,
+        slug_prefix,
+        display_name,
+        settings,
+    );
     app.rooms_display_name_input.clear();
     app.rooms_add_form_open = false;
 
@@ -361,7 +366,7 @@ fn enter_search(app: &mut App) {
 
 fn move_create_focus(app: &mut App, delta: isize) {
     app.rooms_create_focus_index =
-        cycle_index(app.rooms_create_focus_index, CREATE_FIELD_COUNT, delta);
+        cycle_index(app.rooms_create_focus_index, create_field_count(app), delta);
 }
 
 fn adjust_create_selection(app: &mut App, delta: isize) {
@@ -369,6 +374,9 @@ fn adjust_create_selection(app: &mut App, delta: isize) {
         CREATE_FIELD_GAME => {
             let len = app.room_game_registry.ordered_kinds().len();
             app.rooms_create_kind_index = cycle_index(app.rooms_create_kind_index, len, delta);
+            app.rooms_create_focus_index = app
+                .rooms_create_focus_index
+                .min(create_field_count(app).saturating_sub(1));
             if app.rooms_display_name_input.trim().is_empty() {
                 let game_kind = selected_create_kind(app);
                 app.rooms_display_name_input = app
@@ -394,6 +402,13 @@ fn cycle_index(index: usize, len: usize, delta: isize) -> usize {
         return 0;
     }
     (index as isize + delta).rem_euclid(len as isize) as usize
+}
+
+fn create_field_count(app: &App) -> usize {
+    match selected_create_kind(app) {
+        crate::app::rooms::svc::GameKind::Blackjack => 4,
+        crate::app::rooms::svc::GameKind::TicTacToe => 2,
+    }
 }
 
 fn selected_create_kind(app: &App) -> crate::app::rooms::svc::GameKind {
