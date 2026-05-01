@@ -241,7 +241,7 @@ fn overview_lines() -> Vec<String> {
         "  [ / ]             cycle prev / next pinned room",
         "  ,                 jump back to the previously-active pin",
         "  g then 1-9        jump directly to favorite slot N",
-        "  `                 toggle Dashboard / last game room",
+        "  `                 toggle Dashboard / last game",
         "",
         "This modal",
         "  Tab / Shift+Tab   next / previous tab",

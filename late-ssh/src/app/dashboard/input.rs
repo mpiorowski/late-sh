@@ -5,7 +5,7 @@ use crate::app::{
         primitives::{Banner, Screen},
     },
     rooms::svc::GameKind,
-    state::App,
+    state::{App, DashboardGameToggleTarget},
     vote,
 };
 
@@ -161,6 +161,13 @@ fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
 }
 
 fn enter_last_game_room(app: &mut App) -> bool {
+    if app.dashboard_game_toggle_target == Some(DashboardGameToggleTarget::Arcade)
+        && app.is_playing_game
+    {
+        app.set_screen(Screen::Games);
+        return true;
+    }
+
     let room = app.rooms_active_room.clone().or_else(|| {
         let room_id = app.rooms_last_active_room_id?;
         app.rooms_snapshot
@@ -170,11 +177,17 @@ fn enter_last_game_room(app: &mut App) -> bool {
             .cloned()
     });
     let Some(room) = room else {
-        app.banner = Some(Banner::error("No game room to return to."));
+        if app.is_playing_game {
+            app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
+            app.set_screen(Screen::Games);
+        } else {
+            app.banner = Some(Banner::error("No game to return to."));
+        }
         return true;
     };
 
     if crate::app::rooms::input::enter_room(app, room) {
+        app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
         app.set_screen(Screen::Rooms);
     }
     true

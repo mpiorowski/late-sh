@@ -1,12 +1,20 @@
+use crate::app::common::primitives::Screen;
 use crate::app::state::{
-    App, GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
-    GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
+    App, DashboardGameToggleTarget, GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER,
+    GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
+    GAME_SELECTION_TETRIS,
 };
 
 const LOBBY_GAME_COUNT: usize = 6;
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.is_playing_game {
+        if byte == b'`' {
+            app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
+            app.set_screen(Screen::Dashboard);
+            return true;
+        }
+
         if app.game_selection == GAME_SELECTION_2048 {
             if byte == 0x1B || byte == b'q' || byte == b'Q' {
                 // Exit game mode back to lobby
@@ -72,6 +80,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 || app.game_selection == GAME_SELECTION_SOLITAIRE
             {
                 app.is_playing_game = true;
+                app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
             }
             true
         }

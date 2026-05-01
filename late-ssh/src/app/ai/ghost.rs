@@ -239,6 +239,9 @@ impl GhostService {
             bot.id,
             ActiveUser {
                 username: bot.username.clone(),
+                fingerprint: None,
+                peer_ip: None,
+                sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),
             },

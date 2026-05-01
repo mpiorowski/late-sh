@@ -50,6 +50,16 @@ impl ChatRoom {
         Ok(row.map(Self::from))
     }
 
+    pub async fn find_non_dm_by_slug(client: &Client, slug: &str) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM chat_rooms WHERE slug = $1 AND kind <> 'dm' LIMIT 1",
+                &[&slug],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     pub async fn get_or_create_language(client: &Client, language_code: &str) -> Result<Self> {
         let language_code = language_code.trim().to_lowercase();
         if language_code.is_empty() {
@@ -385,7 +395,15 @@ impl ChatRoom {
         let count = client
             .execute(
                 "INSERT INTO chat_room_members (room_id, user_id)
-                 SELECT $1, id FROM users
+                 SELECT $1, id
+                 FROM users
+                 WHERE NOT EXISTS (
+                     SELECT 1
+                     FROM room_bans
+                     WHERE room_bans.room_id = $1
+                       AND room_bans.target_user_id = users.id
+                       AND (room_bans.expires_at IS NULL OR room_bans.expires_at > current_timestamp)
+                 )
                  ON CONFLICT (room_id, user_id) DO NOTHING",
                 &[&room_id],
             )

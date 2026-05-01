@@ -123,6 +123,10 @@ impl State {
         self.is_admin
     }
 
+    pub fn set_is_admin(&mut self, is_admin: bool) {
+        self.is_admin = is_admin;
+    }
+
     pub fn list(&self) {
         self.service.list_task();
         self.refresh_unread_count();
