@@ -84,9 +84,6 @@ const COMMON_KAOMOJI: &[(&str, &str)] = &[
     ("꒰⑅ᵕ༚ᵕ꒱˖", "happy blushing"),
     ("ꉂ(˵˃ ᗜ ˂˵)", "happy laugh"),
     ("(˶°▄°˶)", "skeptical"),
-    ("  ᕬ ᕬ
-(„. .„)
- 🍓⊂ )", "strawberry nap"),
 ];
 
 const COMMON_NERD_NAMES: &[&str] = &[
