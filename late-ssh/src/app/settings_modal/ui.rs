@@ -387,9 +387,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             if state.editing_username() {
                 let typed = state.username_input().lines().join("");
                 if typed.is_empty() {
-                    value_span("typing…", theme::AMBER())
+                    value_span("█", theme::AMBER())
                 } else {
-                    value_span(format!("{}█", typed), theme::AMBER())
+                    value_span(
+                        text_with_caret(&typed, state.username_input().cursor().1),
+                        theme::AMBER(),
+                    )
                 }
             } else if state.draft().username.is_empty() {
                 value_span("not set", theme::TEXT_FAINT())
@@ -1228,17 +1231,22 @@ fn value_span(text: impl Into<String>, color: ratatui::style::Color) -> ValueSpa
     }
 }
 
+fn text_with_caret(text: &str, cursor_col: usize) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    chars.insert(cursor_col.min(chars.len()), '█');
+    chars.into_iter().collect()
+}
+
 fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String>) -> ValueSpan {
     if state.editing_system_row(row) {
         let typed = state.system_input().lines().join("");
         if typed.is_empty() {
-            if row == Row::Langs {
-                value_span("rust, go, typescript…", theme::AMBER())
-            } else {
-                value_span("typing…", theme::AMBER())
-            }
+            value_span("█", theme::AMBER())
         } else {
-            value_span(format!("{}█", typed), theme::AMBER())
+            value_span(
+                text_with_caret(&typed, state.system_input().cursor().1),
+                theme::AMBER(),
+            )
         }
     } else {
         match value
@@ -1363,4 +1371,17 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .split(vertical[0]);
     horizontal[0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_with_caret_uses_cursor_column() {
+        assert_eq!(text_with_caret("abcd", 0), "█abcd");
+        assert_eq!(text_with_caret("abcd", 2), "ab█cd");
+        assert_eq!(text_with_caret("abcd", 4), "abcd█");
+        assert_eq!(text_with_caret("abcd", 99), "abcd█");
+    }
 }
