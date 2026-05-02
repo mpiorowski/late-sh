@@ -34,7 +34,10 @@ services:
     container_name: ${INSTANCE}-bastion
     ports:
       - "${LATE_BASTION_SSH_PORT}:${LATE_BASTION_SSH_PORT}"
-    env_file: .env
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
     volumes:
       - .:/app
       - cargo-registry-bastion:/usr/local/cargo/registry

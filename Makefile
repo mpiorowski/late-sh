@@ -29,12 +29,13 @@ LATE_ALLOWED_ORIGINS ?= http://localhost:$(LATE_WEB_PORT)   # Comma-separated li
 LATE_TUNNEL_PORT ?= 4001                                    # /tunnel WS listener port on late-ssh
 LATE_TUNNEL_SHARED_SECRET ?= dev-only-not-a-real-secret     # Pre-shared secret; must match bastion's
 LATE_TUNNEL_TRUSTED_CIDRS ?= 0.0.0.0/0                      # CIDRs allowed to reach /tunnel (compose: open; prod: bastion pod CIDR)
+LATE_ALLOW_INSECURE_TUNNEL_DEV ?= 1                         # Permit compose-only tunnel defaults above
 
 # --- Bastion (late-bastion) ---
 LATE_BASTION_SSH_PORT ?= 5222                               # Bastion russh listener port (dual-path rollout)
 LATE_BASTION_HOST_KEY_PATH ?= /app/bastion_host_key         # Path to bastion's russh host key inside container
 LATE_BASTION_SSH_IDLE_TIMEOUT ?= 3600                       # Bastion russh inactivity timeout (seconds)
-LATE_BASTION_BACKEND_TUNNEL_URL ?= ws://service-ssh:$(LATE_TUNNEL_PORT)/tunnel  # Backend /tunnel URL (compose service name)
+LATE_BASTION_BACKEND_TUNNEL_URL ?= ws://service-ssh:$(strip $(LATE_TUNNEL_PORT))/tunnel  # Backend /tunnel URL (compose service name)
 LATE_BASTION_SHARED_SECRET ?= $(LATE_TUNNEL_SHARED_SECRET)  # Must match LATE_TUNNEL_SHARED_SECRET on the backend
 LATE_BASTION_MAX_CONNS_GLOBAL ?= 10000                      # Bastion: global cap on simultaneous SSH connections
 LATE_BASTION_PROXY_PROTOCOL ?= 0                            # Parse PROXY v1 on bastion listener (NGINX → bastion)
@@ -96,17 +97,18 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP=$(LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP)" >> .env
 	@echo "LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS=$(LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS)" >> .env
 	@echo "LATE_ALLOWED_ORIGINS=$(LATE_ALLOWED_ORIGINS)" >> .env
-	@echo "LATE_TUNNEL_PORT=$(LATE_TUNNEL_PORT)" >> .env
-	@echo "LATE_TUNNEL_SHARED_SECRET=$(LATE_TUNNEL_SHARED_SECRET)" >> .env
-	@echo "LATE_TUNNEL_TRUSTED_CIDRS=$(LATE_TUNNEL_TRUSTED_CIDRS)" >> .env
-	@echo "LATE_BASTION_SSH_PORT=$(LATE_BASTION_SSH_PORT)" >> .env
-	@echo "LATE_BASTION_HOST_KEY_PATH=$(LATE_BASTION_HOST_KEY_PATH)" >> .env
-	@echo "LATE_BASTION_SSH_IDLE_TIMEOUT=$(LATE_BASTION_SSH_IDLE_TIMEOUT)" >> .env
-	@echo "LATE_BASTION_BACKEND_TUNNEL_URL=$(LATE_BASTION_BACKEND_TUNNEL_URL)" >> .env
-	@echo "LATE_BASTION_SHARED_SECRET=$(LATE_BASTION_SHARED_SECRET)" >> .env
-	@echo "LATE_BASTION_MAX_CONNS_GLOBAL=$(LATE_BASTION_MAX_CONNS_GLOBAL)" >> .env
-	@echo "LATE_BASTION_PROXY_PROTOCOL=$(LATE_BASTION_PROXY_PROTOCOL)" >> .env
-	@echo "LATE_BASTION_PROXY_TRUSTED_CIDRS=$(LATE_BASTION_PROXY_TRUSTED_CIDRS)" >> .env
+	@echo "LATE_TUNNEL_PORT=$(strip $(LATE_TUNNEL_PORT))" >> .env
+	@echo "LATE_TUNNEL_SHARED_SECRET=$(strip $(LATE_TUNNEL_SHARED_SECRET))" >> .env
+	@echo "LATE_TUNNEL_TRUSTED_CIDRS=$(strip $(LATE_TUNNEL_TRUSTED_CIDRS))" >> .env
+	@echo "LATE_ALLOW_INSECURE_TUNNEL_DEV=$(strip $(LATE_ALLOW_INSECURE_TUNNEL_DEV))" >> .env
+	@echo "LATE_BASTION_SSH_PORT=$(strip $(LATE_BASTION_SSH_PORT))" >> .env
+	@echo "LATE_BASTION_HOST_KEY_PATH=$(strip $(LATE_BASTION_HOST_KEY_PATH))" >> .env
+	@echo "LATE_BASTION_SSH_IDLE_TIMEOUT=$(strip $(LATE_BASTION_SSH_IDLE_TIMEOUT))" >> .env
+	@echo "LATE_BASTION_BACKEND_TUNNEL_URL=$(strip $(LATE_BASTION_BACKEND_TUNNEL_URL))" >> .env
+	@echo "LATE_BASTION_SHARED_SECRET=$(strip $(LATE_BASTION_SHARED_SECRET))" >> .env
+	@echo "LATE_BASTION_MAX_CONNS_GLOBAL=$(strip $(LATE_BASTION_MAX_CONNS_GLOBAL))" >> .env
+	@echo "LATE_BASTION_PROXY_PROTOCOL=$(strip $(LATE_BASTION_PROXY_PROTOCOL))" >> .env
+	@echo "LATE_BASTION_PROXY_TRUSTED_CIDRS=$(strip $(LATE_BASTION_PROXY_TRUSTED_CIDRS))" >> .env
 	@echo "LATE_DB_HOST=$(LATE_DB_HOST)" >> .env
 	@echo "LATE_DB_PORT=$(LATE_DB_PORT)" >> .env
 	@echo "LATE_DB_USER=$(LATE_DB_USER)" >> .env
@@ -163,9 +165,50 @@ start: .env keys
 
 startm: .env keys
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
+
 down:
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
 stop:
 	docker ps -aq | xargs -r docker stop
 remove:
 	docker ps -aq | xargs -r docker rm -f
+
+####################################################
+# Bastion local testing helpers
+####################################################
+# Exercise the late-bastion reconnect flows. Connect first in another terminal:
+#   ssh -p $(LATE_BASTION_SSH_PORT) -o StrictHostKeyChecking=no foo@localhost
+# Then run one of the targets below.
+
+# SIGTERM service-ssh: sets is_draining=true. Existing bastion sessions show
+# the "Update available! Press q then r..." banner; new connections refused.
+.PHONY: bastion-drain
+bastion-drain:
+	docker compose kill -s SIGTERM service-ssh
+
+# SIGKILL service-ssh: simulates a hard crash. Bastion sees close 1006 and
+# enters the reconnect loop ("reconnecting to late.sh..." after 500ms,
+# "still reconnecting..." at 5s). Pair with `bastion-up` to land in the
+# auto-reconnect post-reconnect banner.
+.PHONY: bastion-kill
+bastion-kill:
+	docker compose kill -s SIGKILL service-ssh
+
+# Bring service-ssh back. Use after `bastion-drain` or `bastion-kill`.
+# Force-recreate only the backend container so compose local testing behaves
+# like prod: old backend drains, then bastion redials into a fresh backend.
+.PHONY: bastion-up
+bastion-up:
+	docker compose up -d --no-deps --force-recreate service-ssh
+
+# Full upgrade simulation: drain, give you 10s to press q then r on your
+# bastion session, then bring service-ssh back. End state: "Welcome to the
+# updated late.sh!" toast on success.
+.PHONY: bastion-rollover
+bastion-rollover:
+	@echo "==> draining service-ssh (SIGTERM); press q then r on your bastion session"
+	docker compose kill -s SIGTERM service-ssh
+	@echo "==> waiting 10s for old pod to drain..."
+	@sleep 10
+	@echo "==> recreating service-ssh"
+	docker compose up -d --no-deps --force-recreate service-ssh

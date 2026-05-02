@@ -76,9 +76,22 @@ pub fn parse_proxy_v1_addr(line: &[u8]) -> Result<Option<SocketAddr>> {
             let src_ip: IpAddr = parts[2]
                 .parse()
                 .with_context(|| format!("invalid proxy v1 source IP '{}'", parts[2]))?;
+            let dst_ip: IpAddr = parts[3]
+                .parse()
+                .with_context(|| format!("invalid proxy v1 destination IP '{}'", parts[3]))?;
             let src_port: u16 = parts[4]
                 .parse()
                 .with_context(|| format!("invalid proxy v1 source port '{}'", parts[4]))?;
+            let _dst_port: u16 = parts[5]
+                .parse()
+                .with_context(|| format!("invalid proxy v1 destination port '{}'", parts[5]))?;
+            match (parts[1], src_ip, dst_ip) {
+                ("TCP4", IpAddr::V4(_), IpAddr::V4(_)) | ("TCP6", IpAddr::V6(_), IpAddr::V6(_)) => {
+                }
+                ("TCP4", _, _) => anyhow::bail!("proxy v1 TCP4 header contains non-IPv4 address"),
+                ("TCP6", _, _) => anyhow::bail!("proxy v1 TCP6 header contains non-IPv6 address"),
+                _ => unreachable!(),
+            }
             Ok(Some(SocketAddr::new(src_ip, src_port)))
         }
         fam => anyhow::bail!("unsupported proxy v1 protocol family '{fam}'"),
@@ -138,6 +151,24 @@ mod tests {
     #[test]
     fn invalid_port_is_error() {
         let line = b"PROXY TCP4 192.0.2.1 198.51.100.1 abc 443\r\n";
+        assert!(parse_proxy_v1_addr(line).is_err());
+    }
+
+    #[test]
+    fn invalid_destination_port_is_error() {
+        let line = b"PROXY TCP4 192.0.2.1 198.51.100.1 56324 nope\r\n";
+        assert!(parse_proxy_v1_addr(line).is_err());
+    }
+
+    #[test]
+    fn tcp4_with_ipv6_address_is_error() {
+        let line = b"PROXY TCP4 2001:db8::1 198.51.100.1 56324 443\r\n";
+        assert!(parse_proxy_v1_addr(line).is_err());
+    }
+
+    #[test]
+    fn tcp6_with_ipv4_address_is_error() {
+        let line = b"PROXY TCP6 192.0.2.1 2001:db8::2 56324 443\r\n";
         assert!(parse_proxy_v1_addr(line).is_err());
     }
 

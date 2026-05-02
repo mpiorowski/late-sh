@@ -11,8 +11,11 @@ use futures_util::{SinkExt, StreamExt};
 use helpers::{new_test_db, test_app_state, test_config};
 use ipnet::IpNet;
 use late_core::MutexRecover;
+use late_core::models::server_ban::{ServerBan, ServerBanActivation};
 use late_core::shutdown::CancellationToken;
+use late_core::test_utils::create_test_user;
 use late_core::tunnel_protocol::ControlFrame;
+use late_core::tunnel_protocol::{TUNNEL_CLOSE_BANNED, TUNNEL_CLOSE_PROTOCOL_ERROR};
 use late_ssh::app::state::App;
 use late_ssh::config::Config;
 use late_ssh::state::State;
@@ -245,6 +248,85 @@ async fn tunnel_session_emits_joined_activity_event() {
     assert_eq!(event.action, "joined");
 
     let _ = ws.close(None).await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn tunnel_banned_user_is_closed_with_4002() {
+    let (addr, state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
+
+    let client = state.db.get().await.expect("db client");
+    let actor = create_test_user(&state.db, "tunnel-ban-actor").await;
+    let target = create_test_user(&state.db, "tunnel-ban-target").await;
+    ServerBan::activate(
+        &client,
+        ServerBanActivation {
+            target_user_id: target.id,
+            fingerprint: Some(&target.fingerprint),
+            ip_address: None,
+            snapshot_username: Some(&target.username),
+            actor_user_id: actor.id,
+            reason: "tunnel smoke ban",
+            expires_at: None,
+        },
+    )
+    .await
+    .expect("activate server ban");
+
+    let mut req = make_request(addr, &target.username);
+    req.headers_mut().insert(
+        HEADER_FINGERPRINT,
+        HeaderValue::from_str(&target.fingerprint).unwrap(),
+    );
+
+    let (mut ws, response) = tokio_tungstenite::connect_async(req)
+        .await
+        .expect("connect banned user");
+    assert_eq!(response.status().as_u16(), 101);
+
+    let close = timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("close timeout")
+        .expect("stream ended")
+        .expect("ws error");
+    match close {
+        Message::Close(Some(frame)) => assert_eq!(u16::from(frame.code), TUNNEL_CLOSE_BANNED),
+        other => panic!("expected banned Close, got {other:?}"),
+    }
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn tunnel_bad_control_frame_closes_with_4003() {
+    let (addr, _state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
+
+    let req = make_request(addr, "bad-control-user");
+    let (mut ws, response) = tokio_tungstenite::connect_async(req)
+        .await
+        .expect("connect");
+    assert_eq!(response.status().as_u16(), 101);
+
+    let _ = timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("first frame timeout");
+
+    ws.send(Message::Text("{\"t\":\"bad\"}".into()))
+        .await
+        .expect("send bad control frame");
+
+    let close = timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("close timeout")
+        .expect("stream ended")
+        .expect("ws error");
+    match close {
+        Message::Close(Some(frame)) => {
+            assert_eq!(u16::from(frame.code), TUNNEL_CLOSE_PROTOCOL_ERROR)
+        }
+        other => panic!("expected protocol-error Close, got {other:?}"),
+    }
+
     server.abort();
 }
 

@@ -16,7 +16,7 @@ use getrandom::SysRng;
 use late_core::tunnel_protocol::SshInputEvent;
 use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
-use russh::{Channel, ChannelId};
+use russh::{Channel, ChannelId, Sig};
 #[cfg(unix)]
 use std::fs::Permissions;
 use std::net::{IpAddr, SocketAddr};
@@ -42,12 +42,17 @@ pub const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 pub struct Server {
     config: Arc<Config>,
     conn_limit: Arc<tokio::sync::Semaphore>,
+    shutdown: late_core::shutdown::CancellationToken,
 }
 
 impl Server {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new(config: Arc<Config>, shutdown: late_core::shutdown::CancellationToken) -> Self {
         let conn_limit = Arc::new(tokio::sync::Semaphore::new(config.max_conns_global));
-        Server { config, conn_limit }
+        Server {
+            config,
+            conn_limit,
+            shutdown,
+        }
     }
 }
 
@@ -61,6 +66,7 @@ impl Server {
 /// channel-open, pty, window-change) as they arrive.
 pub struct ClientHandler {
     config: Arc<Config>,
+    shutdown: late_core::shutdown::CancellationToken,
     peer_addr: Option<SocketAddr>,
     login_username: Option<String>,
     fingerprint: Option<String>,
@@ -105,6 +111,7 @@ impl Server {
         let peer_addr = proxied_peer_addr.or(transport_peer_addr);
         ClientHandler {
             config: self.config.clone(),
+            shutdown: self.shutdown.clone(),
             peer_addr,
             login_username: None,
             fingerprint: None,
@@ -214,6 +221,50 @@ impl russh::server::Handler for ClientHandler {
         Ok(())
     }
 
+    async fn x11_request(
+        &mut self,
+        channel: ChannelId,
+        _single_connection: bool,
+        _x11_auth_protocol: &str,
+        _x11_auth_cookie: &str,
+        _x11_screen_number: u32,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        fail_channel_request(session, channel, "x11");
+        Ok(())
+    }
+
+    async fn env_request(
+        &mut self,
+        channel: ChannelId,
+        _variable_name: &str,
+        _variable_value: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        fail_channel_request(session, channel, "env");
+        Ok(())
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        _data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        fail_channel_request(session, channel, "exec");
+        Ok(())
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        _name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        fail_channel_request(session, channel, "subsystem");
+        Ok(())
+    }
+
     async fn shell_request(
         &mut self,
         channel_id: ChannelId,
@@ -259,6 +310,7 @@ impl russh::server::Handler for ClientHandler {
         let secret = self.config.backend_shared_secret.clone();
         let handle = session.handle();
         let session_id = ctx.session_id.clone();
+        let shutdown = self.shutdown.clone();
 
         tracing::info!(
             ?channel_id,
@@ -272,7 +324,7 @@ impl russh::server::Handler for ClientHandler {
         );
 
         tokio::spawn(async move {
-            if let Err(e) = run_session(channel, ws_url, secret, ctx, input_rx).await {
+            if let Err(e) = run_session(channel, ws_url, secret, ctx, input_rx, shutdown).await {
                 tracing::warn!(error = ?e, session_id = %session_id, "tunnel proxy session failed");
             }
             // Either path (Ok or Err): drop the SSH channel by closing
@@ -285,6 +337,36 @@ impl russh::server::Handler for ClientHandler {
         });
 
         Ok(())
+    }
+
+    async fn signal(
+        &mut self,
+        channel: ChannelId,
+        _signal: Sig,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        fail_channel_request(session, channel, "signal");
+        Ok(())
+    }
+
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        port: &mut u32,
+        _session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        tracing::debug!(address, port = *port, "tcpip-forward rejected");
+        Ok(false)
+    }
+
+    async fn cancel_tcpip_forward(
+        &mut self,
+        address: &str,
+        port: u32,
+        _session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        tracing::debug!(address, port, "cancel-tcpip-forward rejected");
+        Ok(false)
     }
 
     async fn window_change_request(
@@ -335,7 +417,7 @@ impl russh::server::Handler for ClientHandler {
         let Some(tx) = &self.input_tx else {
             return Ok(());
         };
-        if let Err(e) = tx.try_send(SshInputEvent::Bytes(data.to_vec())) {
+        if let Err(e) = tx.send(SshInputEvent::Bytes(data.to_vec())).await {
             tracing::warn!(error = ?e, len = data.len(), "input event dropped");
         }
         Ok(())
@@ -359,6 +441,13 @@ impl russh::server::Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         self.input_tx = None;
         Ok(())
+    }
+}
+
+fn fail_channel_request(session: &mut Session, channel: ChannelId, request: &'static str) {
+    tracing::debug!(?channel, request, "unsupported channel request rejected");
+    if let Err(e) = session.channel_failure(channel) {
+        tracing::debug!(error = ?e, ?channel, request, "channel_failure failed");
     }
 }
 
@@ -405,7 +494,7 @@ pub async fn run(
         ..Default::default()
     });
 
-    let server = Server::new(config.clone());
+    let server = Server::new(config.clone(), shutdown.clone());
     let addr = listener.local_addr()?;
     tracing::info!(address = %addr, "bastion ssh server listening");
 

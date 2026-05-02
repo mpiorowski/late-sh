@@ -74,7 +74,7 @@ resource "kubernetes_secret_v1" "bastion_shared_secret" {
   }
 
   data = {
-    secret = var.BASTION_SHARED_SECRET
+    secret = length(trimspace(var.BASTION_SHARED_SECRET)) > 0 ? var.BASTION_SHARED_SECRET : "disabled-bastion-secret-change-before-enable"
   }
 
   type = "Opaque"

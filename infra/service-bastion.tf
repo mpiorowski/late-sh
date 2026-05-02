@@ -51,7 +51,7 @@ resource "kubernetes_deployment_v1" "service_bastion" {
           name  = "service-bastion"
 
           port {
-            container_port = 5222
+            container_port = tonumber(var.BASTION_SSH_PORT)
             name           = "ssh"
           }
 
@@ -187,7 +187,7 @@ resource "kubernetes_service_v1" "service_bastion_sv" {
 
     port {
       name        = "ssh"
-      port        = 5222
+      port        = tonumber(var.BASTION_SSH_PORT)
       target_port = "ssh"
     }
   }

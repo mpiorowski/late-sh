@@ -17,7 +17,7 @@ use axum::{
     Router,
     extract::{
         ConnectInfo, State as AxumState, WebSocketUpgrade,
-        ws::{Message, WebSocket},
+        ws::{CloseFrame, Message, WebSocket},
     },
     http::{HeaderMap, StatusCode},
     middleware,
@@ -30,7 +30,9 @@ use late_core::MutexRecover;
 use late_core::models::user::User;
 use late_core::shutdown::CancellationToken;
 use late_core::telemetry::http_telemetry_middleware;
-use late_core::tunnel_protocol::{ControlFrame, SshInputEvent};
+use late_core::tunnel_protocol::{
+    ControlFrame, SshInputEvent, TUNNEL_CLOSE_BANNED, TUNNEL_CLOSE_PROTOCOL_ERROR,
+};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -42,7 +44,9 @@ use uuid::Uuid;
 use crate::metrics;
 use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
 use crate::session_io::WsFrameSink;
-use crate::ssh::{INPUT_QUEUE_CAP, RenderSignal, ensure_user, run_session};
+use crate::ssh::{
+    AdmissionReject, INPUT_QUEUE_CAP, RenderSignal, check_ssh_admission, ensure_user, run_session,
+};
 use crate::state::{ActiveSession, ActiveUser, ActivityEvent, State, TunnelSessionPermit};
 
 /// Bound on the writer-task mpsc that feeds `WsFrameSink`. Backpressure
@@ -304,11 +308,17 @@ async fn tunnel_handler(
     // from a trusted bastion, so count it.
     metrics::record_ssh_connection();
 
+    let is_reconnect = handshake.reconnect_reason.is_some();
+
     // Per-IP rate limiter, keyed on the bastion-asserted client IP per
     // devdocs/LATE-CONNECTION-BASTION.md §6 (bastion is intentionally
     // ignorant of per-IP state; backend keys on X-Late-Peer-IP instead
     // of the transport peer, which is always the bastion pod).
-    if !state.ssh_attempt_limiter.allow(handshake.peer_ip) {
+    //
+    // Authenticated bastion redials are exempt: during deploys, many
+    // existing sessions can reconnect in the same rate window, and a
+    // 429 is terminal from the bastion's perspective.
+    if !is_reconnect && !state.ssh_attempt_limiter.allow(handshake.peer_ip) {
         tracing::warn!(
             peer_ip = %handshake.peer_ip,
             max_attempts = state.ssh_attempt_limiter.max_attempts(),
@@ -316,6 +326,34 @@ async fn tunnel_handler(
             "tunnel rejected: per-IP rate limit exceeded"
         );
         return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
+    match check_ssh_admission(&state, &handshake.fingerprint, Some(handshake.peer_ip)).await {
+        Ok(()) => {}
+        Err(AdmissionReject::ClosedAccess) => {
+            tracing::warn!(
+                peer_ip = %handshake.peer_ip,
+                fingerprint = %handshake.fingerprint,
+                "tunnel rejected: open access disabled"
+            );
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        Err(AdmissionReject::Banned) => {
+            tracing::warn!(
+                peer_ip = %handshake.peer_ip,
+                fingerprint = %handshake.fingerprint,
+                "tunnel rejected: active server ban"
+            );
+            return close_after_upgrade(ws, TUNNEL_CLOSE_BANNED, "banned").into_response();
+        }
+        Err(AdmissionReject::Infrastructure) => {
+            tracing::warn!(
+                peer_ip = %handshake.peer_ip,
+                fingerprint = %handshake.fingerprint,
+                "tunnel rejected: admission check failed"
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
 
     // Global concurrent-session limit. Acquire the permit BEFORE
@@ -348,7 +386,9 @@ async fn tunnel_handler(
     {
         let mut counts = state.conn_counts.lock_recover();
         let count = counts.entry(handshake.peer_ip).or_insert(0);
-        if *count >= state.config.max_conns_per_ip {
+        // Authenticated reconnects may briefly exceed the normal per-IP cap
+        // during deploy storms or when an old session is still unwinding.
+        if !is_reconnect && *count >= state.config.max_conns_per_ip {
             tracing::warn!(
                 peer_ip = %handshake.peer_ip,
                 limit = state.config.max_conns_per_ip,
@@ -552,7 +592,7 @@ async fn handle_session(
     let render = tokio::spawn(run_session(
         Arc::clone(&app),
         input_rx,
-        WsFrameSink::new(out_tx),
+        WsFrameSink::new(out_tx.clone()),
         frame_drop_log_every,
         Arc::clone(&signal),
     ));
@@ -627,7 +667,15 @@ async fn handle_session(
                             }
                         },
                         Err(err) => {
-                            tracing::warn!(error = ?err, payload = %text.as_str(), "tunnel: bad control frame");
+                            let sample: String = text.chars().take(200).collect();
+                            tracing::warn!(error = ?err, payload = ?sample, "tunnel: bad control frame");
+                            let _ = out_tx
+                                .send(Message::Close(Some(CloseFrame {
+                                    code: TUNNEL_CLOSE_PROTOCOL_ERROR,
+                                    reason: "bad control frame".into(),
+                                })))
+                                .await;
+                            break;
                         }
                     },
                     Message::Close(_) => {
@@ -659,6 +707,22 @@ async fn handle_session(
         username = %handshake.username,
         "tunnel session ended"
     );
+}
+
+fn close_after_upgrade(
+    ws: WebSocketUpgrade,
+    code: u16,
+    reason: &'static str,
+) -> axum::response::Response {
+    ws.on_upgrade(move |mut socket| async move {
+        let _ = socket
+            .send(Message::Close(Some(CloseFrame {
+                code,
+                reason: reason.into(),
+            })))
+            .await;
+    })
+    .into_response()
 }
 
 #[cfg(test)]

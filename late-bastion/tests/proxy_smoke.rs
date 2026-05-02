@@ -246,8 +246,8 @@ impl TestBastion {
             ..Default::default()
         });
 
-        let server = Server::new(config.clone());
         let cancel = CancellationToken::new();
+        let server = Server::new(config.clone(), cancel.clone());
         let cancel_clone = cancel.clone();
 
         tokio::spawn(async move {
@@ -1039,7 +1039,7 @@ async fn bastion_writes_reconnect_message_during_long_outage() {
 }
 
 #[tokio::test]
-async fn bastion_suppresses_reconnect_message_for_user_requested_redial() {
+async fn bastion_writes_update_wait_message_for_user_requested_redial() {
     let backend = ScriptedBackend::spawn(vec![
         Behavior::CloseWithCode(4100, "upgrade requested"),
         Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE),
@@ -1056,16 +1056,43 @@ async fn bastion_suppresses_reconnect_message_for_user_requested_redial() {
 
     let stream = channel.into_stream();
     let (mut reader, _writer) = tokio::io::split(stream);
-    let mut buf = [0u8; 1024];
-    match timeout(Duration::from_secs(2), reader.read(&mut buf)).await {
-        Err(_) => {}
-        Ok(Ok(0)) => panic!("ssh stream EOF while waiting for silence"),
-        Ok(Ok(n)) => panic!(
-            "expected no bastion reconnect message for 4100 redial; got {:?}",
-            String::from_utf8_lossy(&buf[..n])
-        ),
-        Ok(Err(err)) => panic!("ssh read failed: {err:?}"),
+    let mut accumulated: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 1024];
+    let needle = "waiting for updated late.sh";
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            panic!(
+                "timeout waiting for update wait message; got: {:?}",
+                String::from_utf8_lossy(&accumulated)
+            );
+        }
+        let n = timeout(deadline - now, reader.read(&mut chunk))
+            .await
+            .expect("read deadline")
+            .expect("read");
+        if n == 0 {
+            panic!(
+                "ssh stream EOF before update wait message; got: {:?}",
+                String::from_utf8_lossy(&accumulated)
+            );
+        }
+        accumulated.extend_from_slice(&chunk[..n]);
+        if String::from_utf8_lossy(&accumulated).contains(needle) {
+            break;
+        }
     }
+
+    let text = String::from_utf8_lossy(&accumulated);
+    assert!(
+        text.contains("\x1b[?1049l"),
+        "expected alt-screen exit; got: {text:?}"
+    );
+    assert!(
+        text.contains("\x1b[2J"),
+        "expected screen clear; got: {text:?}"
+    );
 
     bastion.shutdown();
 }

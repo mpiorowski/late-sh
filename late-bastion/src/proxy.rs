@@ -25,13 +25,16 @@
 
 use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
-use late_core::tunnel_protocol::{ControlFrame, SshInputEvent, TUNNEL_CLOSE_ABNORMAL};
+use late_core::tunnel_protocol::{
+    ControlFrame, SshInputEvent, TUNNEL_CLOSE_ABNORMAL, TUNNEL_CLOSE_RECONNECT_REQUESTED,
+};
 use russh::Channel;
 use russh::server::Msg;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tokio::time::{MissedTickBehavior, timeout};
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 
@@ -79,8 +82,13 @@ const TERMINAL_RESET: &str = "\x1b[?1049l\x1b[0m\x1b[2J\x1b[H";
 /// Initial reconnect message; constants for tunability.
 const RECONNECTING_MSG: &str = "reconnecting to late.sh\u{2026}\r\n";
 
+/// Reconnect message for an explicit user-requested reload during drain.
+const RELOADING_UPDATE_MSG: &str = "waiting for updated late.sh...\r\n";
+
 /// Escalated reconnect message after `ESCALATION_MESSAGE_DELAY`.
 const STILL_RECONNECTING_MSG: &str = "still reconnecting\u{2026}\r\n";
+
+const SHUTDOWN_MSG: &str = "late.sh bastion is restarting; disconnecting.\r\n";
 
 /// Cadence of bastion → backend WS Pings. Tungstenite on the backend
 /// auto-replies with Pong, so each ping doubles as a "is the pod
@@ -149,8 +157,20 @@ fn classify_close_code(code: u16) -> PumpOutcome {
     }
 }
 
-fn suppress_plaintext_reconnect_message(reason: Option<u16>) -> bool {
-    matches!(reason, Some(4100..=4199))
+fn initial_reconnect_message_delay(reason: Option<u16>) -> Duration {
+    if matches!(reason, Some(TUNNEL_CLOSE_RECONNECT_REQUESTED)) {
+        Duration::ZERO
+    } else {
+        INITIAL_MESSAGE_DELAY
+    }
+}
+
+fn initial_reconnect_message(reason: Option<u16>) -> &'static str {
+    if matches!(reason, Some(TUNNEL_CLOSE_RECONNECT_REQUESTED)) {
+        RELOADING_UPDATE_MSG
+    } else {
+        RECONNECTING_MSG
+    }
 }
 
 /// Exponential backoff bounded by a wall-clock budget.
@@ -203,6 +223,7 @@ pub async fn run_session(
     secret: String,
     mut ctx: HandshakeContext,
     mut input_rx: mpsc::Receiver<SshInputEvent>,
+    shutdown: late_core::shutdown::CancellationToken,
 ) -> anyhow::Result<()> {
     let session_id = ctx.session_id.clone();
 
@@ -245,7 +266,17 @@ pub async fn run_session(
             let req = build_request(&ws_url, &secret, &ctx)
                 .context("failed to build /tunnel handshake")?;
 
-            match tokio_tungstenite::connect_async(req).await {
+            let dial = tokio::select! {
+                result = tokio_tungstenite::connect_async(req) => result,
+                _ = shutdown.cancelled() => {
+                    let payload = format!("{TERMINAL_RESET}{SHUTDOWN_MSG}");
+                    let _ = ssh_writer.write_all(payload.as_bytes()).await;
+                    let _ = ssh_writer.flush().await;
+                    return finish(ssh_writer, &session_id, "shutdown during dial").await;
+                }
+            };
+
+            match dial {
                 Ok((ws, response)) => {
                     tracing::info!(
                         session_id = %session_id,
@@ -270,11 +301,15 @@ pub async fn run_session(
                         // but only for *re*dials, not for the initial
                         // dial (where there's no prior TUI to clear
                         // and no continuity to explain).
-                        if is_redial && !suppress_plaintext_reconnect_message(ctx.reconnect_reason)
-                        {
+                        if is_redial {
                             let elapsed = backoff.started.elapsed();
-                            if !wrote_initial_message && elapsed >= INITIAL_MESSAGE_DELAY {
-                                let payload = format!("{TERMINAL_RESET}{RECONNECTING_MSG}");
+                            if !wrote_initial_message
+                                && elapsed >= initial_reconnect_message_delay(ctx.reconnect_reason)
+                            {
+                                let payload = format!(
+                                    "{TERMINAL_RESET}{}",
+                                    initial_reconnect_message(ctx.reconnect_reason)
+                                );
                                 let _ = ssh_writer.write_all(payload.as_bytes()).await;
                                 let _ = ssh_writer.flush().await;
                                 wrote_initial_message = true;
@@ -301,7 +336,15 @@ pub async fn run_session(
                             delay_ms = delay.as_millis() as u64,
                             "tunnel dial retryable; sleeping"
                         );
-                        tokio::time::sleep(delay).await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(delay) => {}
+                            _ = shutdown.cancelled() => {
+                                let payload = format!("{TERMINAL_RESET}{SHUTDOWN_MSG}");
+                                let _ = ssh_writer.write_all(payload.as_bytes()).await;
+                                let _ = ssh_writer.flush().await;
+                                return finish(ssh_writer, &session_id, "shutdown during backoff").await;
+                            }
+                        }
                     }
                 },
             }
@@ -314,11 +357,19 @@ pub async fn run_session(
         // detectable even when the user is idle.
         let mut last_inbound = Instant::now();
         let mut ping_interval = tokio::time::interval(PING_INTERVAL);
+        ping_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         // Don't pre-tick: the first tick fires immediately, sending a
         // probe Ping to validate the connection is fully up.
 
         let outcome = loop {
             tokio::select! {
+                _ = shutdown.cancelled() => {
+                    let payload = format!("{TERMINAL_RESET}{SHUTDOWN_MSG}");
+                    let _ = ssh_writer.write_all(payload.as_bytes()).await;
+                    let _ = ssh_writer.flush().await;
+                    break PumpOutcome::Terminal;
+                }
+
                 // SSH (user) → WS (backend). Single FIFO carrying
                 // both Bytes and Resize in russh's dispatch order;
                 // emitted as WS Binary or WS Text accordingly. WS
@@ -430,7 +481,7 @@ pub async fn run_session(
 
         // Tidy the WS halves regardless of outcome — both go out of
         // scope with this iteration.
-        let _ = ws_sink.close().await;
+        let _ = timeout(Duration::from_millis(500), ws_sink.close()).await;
         drop(ws_stream);
 
         match outcome {

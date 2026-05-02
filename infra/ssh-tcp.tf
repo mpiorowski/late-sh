@@ -30,7 +30,7 @@ resource "kubernetes_manifest" "nginx_tcp_config" {
             "22" = "default/service-ssh-sv:2222::PROXY"
           },
           var.BASTION_ENABLED == "1" ? {
-            "5222" = "default/service-bastion-sv:5222::PROXY"
+            "5222" = "default/service-bastion-sv:${var.BASTION_SSH_PORT}::PROXY"
           } : {}
         )
       })

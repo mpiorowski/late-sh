@@ -106,7 +106,11 @@ impl FrameSink for WsFrameSink {
             code: close_code,
             reason: "session ended".into(),
         };
-        let _ = self.tx.send(Message::Close(Some(frame))).await;
+        let _ = timeout(
+            FRAME_SEND_TIMEOUT,
+            self.tx.send(Message::Close(Some(frame))),
+        )
+        .await;
     }
 }
 

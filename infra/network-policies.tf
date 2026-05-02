@@ -64,3 +64,48 @@ resource "kubernetes_network_policy_v1" "service_ssh_ingress" {
     }
   }
 }
+
+resource "kubernetes_network_policy_v1" "service_bastion_egress" {
+  metadata {
+    name = "service-bastion-egress"
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        app = "service-bastion"
+      }
+    }
+
+    policy_types = ["Egress"]
+
+    # Bastion may only dial late-ssh's private /tunnel listener.
+    egress {
+      to {
+        pod_selector {
+          match_labels = {
+            app = "service-ssh"
+          }
+        }
+      }
+
+      ports {
+        port     = 4001
+        protocol = "TCP"
+      }
+    }
+
+    # DNS for resolving service-ssh-internal-sv. Kept to port 53 only.
+    egress {
+      ports {
+        port     = 53
+        protocol = "UDP"
+      }
+
+      ports {
+        port     = 53
+        protocol = "TCP"
+      }
+    }
+  }
+}

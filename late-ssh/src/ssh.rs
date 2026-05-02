@@ -439,20 +439,14 @@ impl russh::server::Handler for ClientHandler {
             tracing::debug!(user, "connection over limit, rejecting auth");
             return Ok(reject_publickey_only());
         }
-        if !self.state.config.open_access {
-            tracing::debug!(user, "open access disabled, rejecting public key auth");
-            return Ok(reject_publickey_only());
-        }
         let fingerprint = key.fingerprint(keys::HashAlg::Sha256).to_string();
-        let client = match self.state.db.get().await {
-            Ok(client) => client,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+        match check_ssh_admission(&self.state, &fingerprint, self.peer_ip).await {
+            Ok(()) => {}
+            Err(AdmissionReject::ClosedAccess) => {
+                tracing::debug!(user, "open access disabled, rejecting public key auth");
                 return Ok(reject_publickey_only());
             }
-        };
-        match has_active_server_ban_before_user_lookup(&client, &fingerprint, self.peer_ip).await {
-            Ok(true) => {
+            Err(AdmissionReject::Banned) => {
                 tracing::warn!(
                     fingerprint = %fingerprint,
                     peer_ip = ?self.peer_ip,
@@ -460,38 +454,11 @@ impl russh::server::Handler for ClientHandler {
                 );
                 return Ok(reject_publickey_only());
             }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+            Err(AdmissionReject::Infrastructure) => {
+                tracing::warn!("failed to check server ban, rejecting auth");
                 return Ok(reject_publickey_only());
             }
         }
-        match User::find_by_fingerprint(&client, &fingerprint).await {
-            Ok(Some(existing_user)) => {
-                match ServerBan::find_active_for_user_id(&client, existing_user.id).await {
-                    Ok(Some(_)) => {
-                        tracing::warn!(
-                            username = %existing_user.username,
-                            fingerprint = %fingerprint,
-                            peer_ip = ?self.peer_ip,
-                            "active server ban rejected SSH auth"
-                        );
-                        return Ok(reject_publickey_only());
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
-                        return Ok(reject_publickey_only());
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to look up user before ban check, rejecting auth");
-                return Ok(reject_publickey_only());
-            }
-        }
-        drop(client);
         let (user, is_new_user) =
             match crate::ssh::ensure_user(&self.state, login_username, &fingerprint).await {
                 Ok(pair) => pair,
@@ -1124,6 +1091,51 @@ pub(crate) async fn ensure_user(
     };
 
     Ok((user, is_new_user))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdmissionReject {
+    ClosedAccess,
+    Banned,
+    Infrastructure,
+}
+
+pub(crate) async fn check_ssh_admission(
+    state: &State,
+    fingerprint: &str,
+    peer_ip: Option<IpAddr>,
+) -> Result<(), AdmissionReject> {
+    if !state.config.open_access {
+        return Err(AdmissionReject::ClosedAccess);
+    }
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| AdmissionReject::Infrastructure)?;
+    if has_active_server_ban_before_user_lookup(&client, fingerprint, peer_ip)
+        .await
+        .map_err(|_| AdmissionReject::Infrastructure)?
+    {
+        return Err(AdmissionReject::Banned);
+    }
+
+    match User::find_by_fingerprint(&client, fingerprint).await {
+        Ok(Some(existing_user)) => {
+            if ServerBan::find_active_for_user_id(&client, existing_user.id)
+                .await
+                .map_err(|_| AdmissionReject::Infrastructure)?
+                .is_some()
+            {
+                return Err(AdmissionReject::Banned);
+            }
+        }
+        Ok(None) => {}
+        Err(_) => return Err(AdmissionReject::Infrastructure),
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

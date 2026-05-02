@@ -9,6 +9,10 @@ on:
       web_image_tag:
         required: true
         type: string
+      bastion_image_tag:
+        required: false
+        type: string
+        default: ""
       environment:
         required: false
         type: string
@@ -25,6 +29,13 @@ jobs:
       TF_VAR_GRAFANA_URL: ${{ vars.GRAFANA_URL }}
       TF_VAR_SSH_IMAGE_TAG: ${{ inputs.ssh_image_tag }}
       TF_VAR_WEB_IMAGE_TAG: ${{ inputs.web_image_tag }}
+      TF_VAR_BASTION_IMAGE_TAG: ${{ inputs.bastion_image_tag }}
+      TF_VAR_BASTION_ENABLED: ${{ vars.BASTION_ENABLED }}
+      TF_VAR_BASTION_HOST_KEY: ${{ secrets.BASTION_HOST_KEY }}
+      TF_VAR_BASTION_SHARED_SECRET: ${{ secrets.BASTION_SHARED_SECRET }}
+      TF_VAR_BASTION_MAX_CONNS_GLOBAL: ${{ vars.BASTION_MAX_CONNS_GLOBAL }}
+      TF_VAR_BASTION_SSH_IDLE_TIMEOUT: ${{ vars.BASTION_SSH_IDLE_TIMEOUT }}
+      TF_VAR_BASTION_TUNNEL_TRUSTED_CIDRS: ${{ vars.BASTION_TUNNEL_TRUSTED_CIDRS }}
       TF_VAR_DOCKER_CONFIG_JSON: ${{ secrets.DOCKER_CONFIG_JSON }}
       TF_VAR_SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
       TF_VAR_SSH_OPEN: ${{ vars.SSH_OPEN }}

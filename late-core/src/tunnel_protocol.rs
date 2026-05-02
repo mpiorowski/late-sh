@@ -26,6 +26,8 @@ pub const HEADER_VIA: &str = "x-late-via";
 pub const HEADER_RECONNECT_REASON: &str = "x-late-reconnect-reason";
 
 pub const TUNNEL_CLOSE_SESSION_ENDED: u16 = 4000;
+pub const TUNNEL_CLOSE_BANNED: u16 = 4002;
+pub const TUNNEL_CLOSE_PROTOCOL_ERROR: u16 = 4003;
 pub const TUNNEL_CLOSE_RECONNECT_REQUESTED: u16 = 4100;
 pub const TUNNEL_CLOSE_ABNORMAL: u16 = 1006;
 

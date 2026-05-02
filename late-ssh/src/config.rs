@@ -1,7 +1,12 @@
 use anyhow::Context;
 use ipnet::IpNet;
 use late_core::db::DbConfig;
-use std::path::PathBuf;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    path::PathBuf,
+};
+
+const DEV_TUNNEL_SECRET: &str = "dev-only-not-a-real-secret";
 
 #[derive(Clone, Debug)]
 pub struct AiConfig {
@@ -66,6 +71,52 @@ where
 fn required_bool(key: &str) -> anyhow::Result<bool> {
     let v = required(key)?;
     Ok(v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+fn optional_bool(key: &str) -> bool {
+    std::env::var(key)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn parse_cidrs(key: &str) -> anyhow::Result<Vec<IpNet>> {
+    required(key)?
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse::<IpNet>()
+                .map_err(|e| anyhow::anyhow!("{key} invalid entry '{s}': {e}"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+}
+
+fn validate_tunnel_security(secret: &str, cidrs: &[IpNet]) -> anyhow::Result<()> {
+    if optional_bool("LATE_ALLOW_INSECURE_TUNNEL_DEV") {
+        return Ok(());
+    }
+    if secret == DEV_TUNNEL_SECRET {
+        anyhow::bail!(
+            "LATE_TUNNEL_SHARED_SECRET uses the dev-only default; set LATE_ALLOW_INSECURE_TUNNEL_DEV=1 only for local compose"
+        );
+    }
+    if cidrs
+        .iter()
+        .any(|cidr| cidr.contains(&IpAddr::from(Ipv4Addr::UNSPECIFIED)) && cidr.prefix_len() == 0)
+    {
+        anyhow::bail!(
+            "LATE_TUNNEL_TRUSTED_CIDRS contains 0.0.0.0/0; set LATE_ALLOW_INSECURE_TUNNEL_DEV=1 only for local compose"
+        );
+    }
+    if cidrs
+        .iter()
+        .any(|cidr| cidr.contains(&IpAddr::from(Ipv6Addr::UNSPECIFIED)) && cidr.prefix_len() == 0)
+    {
+        anyhow::bail!(
+            "LATE_TUNNEL_TRUSTED_CIDRS contains ::/0; set LATE_ALLOW_INSECURE_TUNNEL_DEV=1 only for local compose"
+        );
+    }
+    Ok(())
 }
 
 impl Config {
@@ -145,6 +196,10 @@ impl Config {
             max_pool_size: required_parse("LATE_DB_POOL_SIZE")?,
         };
 
+        let tunnel_shared_secret = required_non_empty("LATE_TUNNEL_SHARED_SECRET")?;
+        let tunnel_trusted_cidrs = parse_cidrs("LATE_TUNNEL_TRUSTED_CIDRS")?;
+        validate_tunnel_security(&tunnel_shared_secret, &tunnel_trusted_cidrs)?;
+
         Ok(Self {
             ssh_port: required_parse("LATE_SSH_PORT")?,
             api_port: required_parse("LATE_API_PORT")?,
@@ -167,30 +222,12 @@ impl Config {
             ssh_max_attempts_per_ip: required_parse("LATE_SSH_MAX_ATTEMPTS_PER_IP")?,
             ssh_rate_limit_window_secs: required_parse("LATE_SSH_RATE_LIMIT_WINDOW_SECS")?,
             ssh_proxy_protocol: required_bool("LATE_SSH_PROXY_PROTOCOL")?,
-            ssh_proxy_trusted_cidrs: required("LATE_SSH_PROXY_TRUSTED_CIDRS")?
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    s.parse::<IpNet>().map_err(|e| {
-                        anyhow::anyhow!("LATE_SSH_PROXY_TRUSTED_CIDRS invalid entry '{s}': {e}")
-                    })
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?,
+            ssh_proxy_trusted_cidrs: parse_cidrs("LATE_SSH_PROXY_TRUSTED_CIDRS")?,
             ws_pair_max_attempts_per_ip: required_parse("LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP")?,
             ws_pair_rate_limit_window_secs: required_parse("LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS")?,
             tunnel_port: required_parse("LATE_TUNNEL_PORT")?,
-            tunnel_shared_secret: required_non_empty("LATE_TUNNEL_SHARED_SECRET")?,
-            tunnel_trusted_cidrs: required("LATE_TUNNEL_TRUSTED_CIDRS")?
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    s.parse::<IpNet>().map_err(|e| {
-                        anyhow::anyhow!("LATE_TUNNEL_TRUSTED_CIDRS invalid entry '{s}': {e}")
-                    })
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?,
+            tunnel_shared_secret,
+            tunnel_trusted_cidrs,
             ai: AiConfig {
                 enabled: required_bool("LATE_AI_ENABLED")?,
                 api_key: ai_api_key,
@@ -214,5 +251,19 @@ mod tests {
     fn non_empty_value_preserves_original_secret() {
         let value = non_empty_value("SECRET", "  padded  ".to_string()).unwrap();
         assert_eq!(value, "  padded  ");
+    }
+
+    #[test]
+    fn tunnel_security_rejects_dev_secret_without_dev_opt_in() {
+        let cidrs = vec!["10.42.0.0/16".parse().unwrap()];
+        let err = validate_tunnel_security(DEV_TUNNEL_SECRET, &cidrs).unwrap_err();
+        assert!(format!("{err:#}").contains("dev-only default"));
+    }
+
+    #[test]
+    fn tunnel_security_rejects_world_open_cidr_without_dev_opt_in() {
+        let cidrs = vec!["0.0.0.0/0".parse().unwrap()];
+        let err = validate_tunnel_security("real-secret", &cidrs).unwrap_err();
+        assert!(format!("{err:#}").contains("0.0.0.0/0"));
     }
 }

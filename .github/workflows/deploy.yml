@@ -38,6 +38,24 @@ jobs:
       docker_target: runtime-ssh
       environment: ${{ github.event.release.prerelease && 'staging' || 'production' }}
 
+  build_bastion:
+    name: build_late_bastion_image
+    if: "!endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')"
+    needs: ci
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      registry: ghcr.io
+      image_name: late-bastion
+      image_tag: ${{ github.event.release.tag_name }}
+      context: .
+      dockerfile: ./Dockerfile
+      docker_target: runtime-bastion
+      environment: ${{ github.event.release.prerelease && 'staging' || 'production' }}
+
   get_web_image:
     name: get_current_web_image_tag
     if: "!endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')"
@@ -63,7 +81,7 @@ jobs:
   terraform:
     name: terraform_apply
     if: "!endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')"
-    needs: [build_ssh, get_web_image]
+    needs: [build_ssh, build_bastion, get_web_image]
     uses: ./.github/workflows/terraform.yml
     permissions:
       contents: read
@@ -71,6 +89,7 @@ jobs:
     with:
       ssh_image_tag: ${{ needs.build_ssh.outputs.image_tag }}
       web_image_tag: ${{ needs.get_web_image.outputs.web_image_tag }}
+      bastion_image_tag: ${{ needs.build_bastion.outputs.image_tag }}
       environment: ${{ github.event.release.prerelease && 'staging' || 'production' }}
 
   wait_for_ssh_rollout:

@@ -132,6 +132,11 @@ variable "BASTION_IMAGE_TAG" {
   description = "Docker image for late-bastion (e.g., ghcr.io/org/late-bastion:sha-abc123). Unused when BASTION_ENABLED=0."
   type        = string
   default     = ""
+
+  validation {
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_IMAGE_TAG)) > 0
+    error_message = "BASTION_IMAGE_TAG must be non-empty when BASTION_ENABLED=1."
+  }
 }
 
 variable "BASTION_HOST_KEY" {
@@ -139,6 +144,11 @@ variable "BASTION_HOST_KEY" {
   type        = string
   sensitive   = true
   default     = ""
+
+  validation {
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_HOST_KEY)) > 0
+    error_message = "BASTION_HOST_KEY must be non-empty when BASTION_ENABLED=1."
+  }
 }
 
 variable "BASTION_SHARED_SECRET" {
@@ -148,8 +158,8 @@ variable "BASTION_SHARED_SECRET" {
   default     = ""
 
   validation {
-    condition     = length(trimspace(var.BASTION_SHARED_SECRET)) > 0
-    error_message = "BASTION_SHARED_SECRET must be non-empty because late-ssh always starts the /tunnel listener."
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_SHARED_SECRET)) > 0
+    error_message = "BASTION_SHARED_SECRET must be non-empty when BASTION_ENABLED=1."
   }
 }
 

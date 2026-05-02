@@ -2,6 +2,8 @@ use anyhow::Context;
 use ipnet::IpNet;
 use std::path::PathBuf;
 
+const DEV_TUNNEL_SECRET: &str = "dev-only-not-a-real-secret";
+
 /// Runtime configuration for `late-bastion`.
 ///
 /// Kept intentionally lean — the bastion has no DB, no service deps, no
@@ -51,10 +53,21 @@ impl Config {
         let host_key_path = PathBuf::from(required("LATE_BASTION_HOST_KEY_PATH")?);
         let ssh_idle_timeout = required_parse("LATE_BASTION_SSH_IDLE_TIMEOUT")?;
         let backend_tunnel_url = required("LATE_BASTION_BACKEND_TUNNEL_URL")?;
-        let backend_shared_secret = required("LATE_BASTION_SHARED_SECRET")?;
+        let backend_shared_secret = required_non_empty("LATE_BASTION_SHARED_SECRET")?;
+        if backend_shared_secret == DEV_TUNNEL_SECRET
+            && !optional_bool("LATE_ALLOW_INSECURE_TUNNEL_DEV")
+        {
+            anyhow::bail!(
+                "LATE_BASTION_SHARED_SECRET uses the dev-only default; set LATE_ALLOW_INSECURE_TUNNEL_DEV=1 only for local compose"
+            );
+        }
         let max_conns_global = required_parse("LATE_BASTION_MAX_CONNS_GLOBAL")?;
         let proxy_protocol = required_bool("LATE_BASTION_PROXY_PROTOCOL")?;
-        let proxy_trusted_cidrs = parse_cidrs(&required("LATE_BASTION_PROXY_TRUSTED_CIDRS")?)?;
+        let proxy_trusted_cidrs = if proxy_protocol {
+            parse_cidrs(&required("LATE_BASTION_PROXY_TRUSTED_CIDRS")?)?
+        } else {
+            Vec::new()
+        };
 
         Ok(Config {
             ssh_port,
@@ -92,6 +105,14 @@ fn required(key: &str) -> anyhow::Result<String> {
     std::env::var(key).with_context(|| format!("{key} must be set"))
 }
 
+fn required_non_empty(key: &str) -> anyhow::Result<String> {
+    let value = required(key)?;
+    if value.trim().is_empty() {
+        anyhow::bail!("{key} must not be empty");
+    }
+    Ok(value)
+}
+
 fn required_parse<T: std::str::FromStr>(key: &str) -> anyhow::Result<T>
 where
     T::Err: std::fmt::Display,
@@ -104,6 +125,12 @@ where
 fn required_bool(key: &str) -> anyhow::Result<bool> {
     let v = required(key)?;
     Ok(v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+fn optional_bool(key: &str) -> bool {
+    std::env::var(key)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn parse_cidrs(raw: &str) -> anyhow::Result<Vec<IpNet>> {
