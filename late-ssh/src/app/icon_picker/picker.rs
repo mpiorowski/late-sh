@@ -522,6 +522,8 @@ mod tests {
     fn tab_navigation_cycles_forward_and_back() {
         let mut state = IconPickerState::default();
         state.next_tab();
+        assert_eq!(state.tab, IconPickerTab::Kaomoji);
+        state.next_tab();
         assert_eq!(state.tab, IconPickerTab::Unicode);
         state.next_tab();
         assert_eq!(state.tab, IconPickerTab::NerdFont);

@@ -23,7 +23,7 @@ pub const BLACKJACK_TARGET: u8 = 21;
 pub const DEALER_STAND_ON: u8 = 17;
 pub const SHOE_DECKS: usize = 6;
 pub const SHOE_PENETRATION: usize = 52;
-const SETTLEMENT_MIN_VIEW_MS: u64 = 1500;
+pub(super) const SETTLEMENT_MIN_VIEW_MS: u64 = 1200;
 
 pub const DEALER_STANDS_ON_SOFT_17: bool = true;
 
@@ -128,6 +128,7 @@ pub enum SeatAction {
     Sit,
     Bet,
     Hit,
+    Double,
     Stand,
     MissedDeal,
     MissedAction,
@@ -234,6 +235,7 @@ pub enum SeatPhase {
     BetPending,
     Ready,
     Playing,
+    ActionPending,
     Stood,
     Settled,
 }
@@ -246,6 +248,7 @@ impl SeatPhase {
             Self::BetPending => "BetPending",
             Self::Ready => "Ready",
             Self::Playing => "Playing",
+            Self::ActionPending => "Pending",
             Self::Stood => "Stood",
             Self::Settled => "Settled",
         }
@@ -277,7 +280,7 @@ impl Shoe {
     }
 
     #[cfg(test)]
-    fn from_top(top_cards: Vec<PlayingCard>) -> Self {
+    pub(crate) fn from_top(top_cards: Vec<PlayingCard>) -> Self {
         let mut cards = top_cards;
         cards.reverse();
         Self {
@@ -459,6 +462,34 @@ impl State {
         self.svc.stand_task(self.user_id);
     }
 
+    pub fn double_down(&mut self) {
+        if self.snapshot.phase != Phase::PlayerTurn {
+            return;
+        }
+        let Some(seat) = self.user_seat() else {
+            self.private_notice = Some("Sit before playing.".to_string());
+            return;
+        };
+        if seat.phase != SeatPhase::Playing {
+            self.private_notice = Some("Your hand is not active.".to_string());
+            return;
+        }
+        if !can_double(&seat.hand) {
+            self.private_notice = Some("Double down is only available on two cards.".to_string());
+            return;
+        }
+        let Some(bet) = seat.bet_amount else {
+            self.private_notice = Some("No locked bet to double.".to_string());
+            return;
+        };
+        if bet > self.balance {
+            self.private_notice = Some(format!("Only {} chips available to double.", self.balance));
+            return;
+        }
+        self.private_notice = None;
+        self.svc.double_down_task(self.user_id);
+    }
+
     pub fn next_hand(&mut self) {
         if !self.settlement_min_view_elapsed() {
             return;
@@ -604,6 +635,14 @@ impl State {
                 user_id,
                 new_balance,
                 ..
+            } => {
+                if user_id == self.user_id {
+                    self.balance = new_balance;
+                }
+            }
+            BlackjackEvent::BalanceUpdated {
+                user_id,
+                new_balance,
             } => {
                 if user_id == self.user_id {
                     self.balance = new_balance;

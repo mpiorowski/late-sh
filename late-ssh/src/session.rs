@@ -11,6 +11,7 @@ use std::{
 use tokio::sync::{RwLock, mpsc::Sender, mpsc::UnboundedSender};
 use uuid::Uuid;
 
+use crate::authz::Permissions;
 use crate::metrics;
 
 // WebSocket → SSH session routing for browser-sent visualization data.
@@ -33,6 +34,21 @@ pub struct BrowserVizFrame {
 pub enum SessionMessage {
     Heartbeat,
     Viz(BrowserVizFrame),
+    Terminate {
+        reason: String,
+    },
+    ArtboardBanChanged {
+        banned: bool,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    PermissionsChanged {
+        permissions: Permissions,
+    },
+    RoomRemoved {
+        room_id: Uuid,
+        slug: String,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -58,6 +74,8 @@ impl ClientKind {
 #[serde(rename_all = "snake_case")]
 pub enum ClientSshMode {
     Native,
+    #[serde(rename = "openssh")]
+    OpenSsh,
     Old,
     #[default]
     Unknown,
@@ -67,6 +85,7 @@ impl ClientSshMode {
     fn metric_label(self) -> Option<&'static str> {
         match self {
             Self::Native => Some("native"),
+            Self::OpenSsh => Some("openssh"),
             Self::Old => Some("old"),
             Self::Unknown => None,
         }
@@ -464,6 +483,13 @@ mod tests {
 
         let decoded = URL_SAFE_NO_PAD.decode(token.as_bytes()).unwrap();
         assert_eq!(decoded.len(), 16);
+    }
+
+    #[test]
+    fn client_ssh_mode_parses_openssh() {
+        let mode: ClientSshMode = serde_json::from_str(r#""openssh""#).unwrap();
+        assert_eq!(mode, ClientSshMode::OpenSsh);
+        assert_eq!(mode.metric_label(), Some("openssh"));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat feeds, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-04-30
+- Last updated: 2026-05-02
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -54,7 +54,8 @@ late-ssh/tests/chat/
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
 `notification.rs`, `article.rs`, `article_feed_read.rs`, `showcase.rs`, and
-`showcase_feed_read.rs`.
+`showcase_feed_read.rs`. Chat-owned moderation commands also use `room_ban.rs`,
+`server_ban.rs`, `artboard_ban.rs`, and `moderation_audit_log.rs`.
 
 ---
 
@@ -155,7 +156,7 @@ Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_
 
 Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
-- `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`.
+- `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`. Jumping to the already selected room/synthetic entry still re-runs the entry's read/list side effects so stale unread badges clear.
 - While composing on the Chat page, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
 - Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`), not `selected_room_id`.
 
@@ -217,6 +218,7 @@ User commands:
 - `/leave` leaves the selected non-permanent room.
 - `/list` lists public rooms.
 - `/members` lists selected-room members.
+- `/mod` opens the moderation command modal; `/mod ...` in chat is rejected because commands run only in the modal.
 - `/music` opens music help.
 - `/private #room` creates a private topic room and joins the caller.
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
@@ -227,6 +229,24 @@ Admin commands:
 - `/create-room #room` creates/promotes a permanent auto-join room and bulk-adds existing users.
 - `/delete-room #room` deletes a permanent room.
 - `/fill-room #room` bulk-adds all users to an existing public room and flips `auto_join=true`; private rooms cannot be filled.
+
+Moderation modal commands:
+- `help [command]`
+- `user @name`
+- `bans [server|artboard|room #slug] [limit]`
+- `audit [limit]`
+- `room kick #slug @name [reason...]`
+- `room ban #slug @name [duration] [reason...]`
+- `room unban #slug @name`
+- `server kick @name [reason...]`
+- `server ban @name [duration] [reason...]`
+- `server unban @name`
+- `artboard ban @name [duration] [reason...]`
+- `artboard unban @name`
+- `grant mod @name`
+- `revoke mod @name`
+
+Moderation list limits default to 25 and cap at 100. Durations use positive `s/m/h/d` suffixes.
 
 Reply mode:
 - Captures `ReplyTarget { message_id, author, preview }`.
@@ -265,7 +285,7 @@ Keys:
 - Enter jumps from a reply to its loaded target.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
-- Digits `1..8` while reaction leader is active toggle reactions.
+- Digits `1..8` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
 - `Ctrl+P` toggles selected-message pin state; admin only.
 
 Selection deltas are message-based, not row-based. Positive means older, negative means newer.
@@ -326,7 +346,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 - Backed by `notifications` joined with actor, room, and message preview data.
 - Snapshot is user-targeted; consumers must ignore snapshots where `snapshot.user_id != current_user`.
-- Selecting Mentions lists notifications and marks all read optimistically.
+- Selecting Mentions lists notifications and marks all read optimistically; re-selecting Mentions through room-jump or mouse does the same.
 - Enter jumps to the referenced room/message when possible.
 
 ### Discover

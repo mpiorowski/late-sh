@@ -43,7 +43,7 @@ use crate::metrics;
 use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
 use crate::session_io::WsFrameSink;
 use crate::ssh::{INPUT_QUEUE_CAP, RenderSignal, ensure_user, run_session};
-use crate::state::{ActiveUser, ActivityEvent, State, TunnelSessionPermit};
+use crate::state::{ActiveSession, ActiveUser, ActivityEvent, State, TunnelSessionPermit};
 
 /// Bound on the writer-task mpsc that feeds `WsFrameSink`. Backpressure
 /// past this is surfaced to the render loop as `Ok(false)` (drop +
@@ -230,6 +230,7 @@ struct TunnelSessionGuard {
     state: State,
     peer_ip: IpAddr,
     user_id: Option<Uuid>,
+    active_session_token: Option<String>,
     per_ip_incremented: bool,
     active_user_incremented: bool,
     _conn_permit: OwnedSemaphorePermit,
@@ -243,6 +244,9 @@ impl Drop for TunnelSessionGuard {
             metrics::add_ssh_session(-1);
             let mut active_users = self.state.active_users.lock_recover();
             if let Some(active) = active_users.get_mut(&user_id) {
+                if let Some(token) = self.active_session_token.as_ref() {
+                    active.sessions.retain(|session| session.token != *token);
+                }
                 if active.connection_count <= 1 {
                     active_users.remove(&user_id);
                 } else {
@@ -334,6 +338,7 @@ async fn tunnel_handler(
         state: state.clone(),
         peer_ip: handshake.peer_ip,
         user_id: None,
+        active_session_token: None,
         per_ip_incremented: false,
         active_user_incremented: false,
         _conn_permit: permit,
@@ -377,6 +382,11 @@ async fn tunnel_handler(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
 
+    let session_token = handshake
+        .session_id
+        .clone()
+        .unwrap_or_else(crate::session::new_session_token);
+
     // Register in `active_users` and bump the active-session metric.
     // Mirrors the auth_publickey block in the russh path.
     {
@@ -384,12 +394,32 @@ async fn tunnel_handler(
         if let Some(active) = active_users.get_mut(&user.id) {
             active.connection_count += 1;
             active.username = user.username.clone();
+            active.fingerprint = Some(handshake.fingerprint.clone());
+            active.peer_ip = Some(handshake.peer_ip);
             active.last_login_at = Instant::now();
+            if !active
+                .sessions
+                .iter()
+                .any(|session| session.token == session_token)
+            {
+                active.sessions.push(ActiveSession {
+                    token: session_token.clone(),
+                    fingerprint: Some(handshake.fingerprint.clone()),
+                    peer_ip: Some(handshake.peer_ip),
+                });
+            }
         } else {
             active_users.insert(
                 user.id,
                 ActiveUser {
                     username: user.username.clone(),
+                    fingerprint: Some(handshake.fingerprint.clone()),
+                    peer_ip: Some(handshake.peer_ip),
+                    sessions: vec![ActiveSession {
+                        token: session_token.clone(),
+                        fingerprint: Some(handshake.fingerprint.clone()),
+                        peer_ip: Some(handshake.peer_ip),
+                    }],
                     connection_count: 1,
                     last_login_at: Instant::now(),
                 },
@@ -398,6 +428,7 @@ async fn tunnel_handler(
     }
     metrics::add_ssh_session(1);
     guard.user_id = Some(user.id);
+    guard.active_session_token = Some(session_token.clone());
     guard.active_user_incremented = true;
 
     // Broadcast the join. Subscribers attach in their own time; a send
@@ -421,6 +452,8 @@ async fn tunnel_handler(
         is_new_user,
         "tunnel handshake accepted; running session"
     );
+    let mut handshake = handshake;
+    handshake.session_id = Some(session_token.clone());
 
     ws.on_upgrade(move |socket| {
         handle_session(
@@ -446,7 +479,10 @@ async fn handle_session(
 ) {
     let frame_drop_log_every = state.config.frame_drop_log_every;
     let activity_feed_rx = Some(state.activity_feed.subscribe());
-    let session_token = uuid::Uuid::now_v7().to_string();
+    let session_token = handshake
+        .session_id
+        .clone()
+        .unwrap_or_else(crate::session::new_session_token);
 
     let (input_tx, input_rx) = mpsc::channel::<SshInputEvent>(INPUT_QUEUE_CAP);
 

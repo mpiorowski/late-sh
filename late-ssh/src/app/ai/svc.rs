@@ -84,6 +84,10 @@ impl AiService {
         self.enabled && self.api_key.is_some()
     }
 
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
     pub async fn generate_reply(
         &self,
         system_prompt: &str,

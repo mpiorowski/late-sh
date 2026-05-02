@@ -1,6 +1,6 @@
 use super::{
-    chat, dashboard, help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
-    state::App,
+    chat, dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm,
+    settings_modal, state::App,
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -594,6 +594,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_mod_modal {
+        mod_modal::input::handle_input(app, event);
+        return;
+    }
+
     if app.show_settings {
         settings_modal::input::handle_input(app, event);
         return;
@@ -943,6 +948,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_help {
         help_modal::input::handle_escape(app);
+        return;
+    }
+    if app.show_mod_modal {
+        app.show_mod_modal = false;
         return;
     }
     if app.show_settings {
@@ -1371,6 +1380,7 @@ fn reset_composers_for_page_change(app: &mut App) {
 
 fn open_settings_modal_globally(app: &mut App) {
     app.show_help = false;
+    app.show_mod_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_web_chat_qr = false;
@@ -1541,6 +1551,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
+            app.rooms_active_room = None;
             app.set_screen(Screen::Rooms);
             true
         }

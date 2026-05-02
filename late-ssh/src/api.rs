@@ -465,6 +465,35 @@ mod tests {
     }
 
     #[test]
+    fn ws_payload_openssh_client_state_parses() {
+        let json = r#"{
+            "event": "client_state",
+            "client_kind": "cli",
+            "ssh_mode": "openssh",
+            "platform": "linux",
+            "muted": false,
+            "volume_percent": 30
+        }"#;
+        let payload: WsPayload = serde_json::from_str(json).unwrap();
+        match payload {
+            WsPayload::ClientState {
+                client_kind,
+                ssh_mode,
+                platform,
+                muted,
+                volume_percent,
+            } => {
+                assert_eq!(client_kind, crate::session::ClientKind::Cli);
+                assert_eq!(ssh_mode, crate::session::ClientSshMode::OpenSsh);
+                assert_eq!(platform, crate::session::ClientPlatform::Linux);
+                assert!(!muted);
+                assert_eq!(volume_percent, 30);
+            }
+            _ => panic!("expected ClientState"),
+        }
+    }
+
+    #[test]
     fn ws_payload_unknown_event_fails() {
         let json = r#"{"event": "unknown"}"#;
         assert!(serde_json::from_str::<WsPayload>(json).is_err());
@@ -501,6 +530,9 @@ mod tests {
             Uuid::now_v7(),
             ActiveUser {
                 username: "alice".to_string(),
+                fingerprint: None,
+                peer_ip: None,
+                sessions: Vec::new(),
                 connection_count: 2,
                 last_login_at: Instant::now(),
             },
@@ -509,6 +541,9 @@ mod tests {
             Uuid::now_v7(),
             ActiveUser {
                 username: "bob".to_string(),
+                fingerprint: None,
+                peer_ip: None,
+                sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),
             },

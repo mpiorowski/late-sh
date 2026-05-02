@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
@@ -12,7 +13,7 @@ crate::model! {
         @generated
         pub last_seen: DateTime<Utc>,
         pub is_admin: bool,
-        pub is_mod: bool;
+        pub is_moderator: bool;
 
         @data
         pub fingerprint: String,
@@ -283,6 +284,25 @@ impl User {
         Ok(())
     }
 
+    pub async fn set_moderator(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        is_moderator: bool,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET is_moderator = $1, updated = current_timestamp
+                 WHERE id = $2",
+                &[&is_moderator, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     async fn settings_for_user(client: &Client, user_id: Uuid) -> Result<Value> {
         let row = client
             .query_opt("SELECT settings FROM users WHERE id = $1", &[&user_id])
@@ -393,7 +413,7 @@ pub fn extract_enable_background_color(settings: &Value) -> bool {
     settings
         .get(ENABLE_BACKGROUND_COLOR_KEY)
         .and_then(Value::as_bool)
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 pub fn extract_show_dashboard_header(settings: &Value) -> bool {
@@ -621,6 +641,18 @@ mod tests {
     fn extract_show_dashboard_header_defaults_to_true() {
         let settings = json!({});
         assert!(extract_show_dashboard_header(&settings));
+    }
+
+    #[test]
+    fn extract_enable_background_color_defaults_to_true() {
+        let settings = json!({});
+        assert!(extract_enable_background_color(&settings));
+    }
+
+    #[test]
+    fn extract_enable_background_color_reads_explicit_false() {
+        let settings = json!({ "enable_background_color": false });
+        assert!(!extract_enable_background_color(&settings));
     }
 
     #[test]

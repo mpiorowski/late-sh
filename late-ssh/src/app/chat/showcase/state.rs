@@ -123,6 +123,10 @@ impl State {
         self.is_admin
     }
 
+    pub fn set_is_admin(&mut self, is_admin: bool) {
+        self.is_admin = is_admin;
+    }
+
     pub fn list(&self) {
         self.service.list_task();
         self.refresh_unread_count();
@@ -133,7 +137,7 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = self.last_read_at;
+        self.marker_read_at = Some(Utc::now());
         self.unread_count = 0;
         self.service.mark_read_task(self.user_id);
     }
@@ -395,6 +399,9 @@ impl State {
                     } if self.user_id == user_id => {
                         self.unread_count = unread_count;
                         self.last_read_at = last_read_at;
+                        if unread_count == 0 {
+                            self.marker_read_at = last_read_at;
+                        }
                     }
                     ShowcaseEvent::NewShowcasesAvailable {
                         user_id,

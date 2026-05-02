@@ -20,6 +20,8 @@ use crate::app::common::overlay::Overlay;
 
 use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
+use crate::authz::Permissions;
+use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
 use crate::state::{ActiveUser, ActiveUsers};
 
 use super::{
@@ -58,6 +60,13 @@ pub(crate) struct ReplyTarget {
     pub preview: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ModCommandOutput {
+    pub request_id: Uuid,
+    pub lines: Vec<String>,
+    pub success: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
@@ -74,10 +83,12 @@ pub(super) fn is_chat_list_room(room: &ChatRoom) -> bool {
 pub struct ChatState {
     pub(crate) service: ChatService,
     user_id: Uuid,
+    permissions: Permissions,
     is_admin: bool,
     active_users: Option<ActiveUsers>,
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
+    moderation_event_rx: tokio::sync::broadcast::Receiver<ModerationEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
     pinned_messages: Vec<ChatMessage>,
     general_room_id: Option<Uuid>,
@@ -131,7 +142,9 @@ pub struct ChatState {
     pub(crate) pending_notifications: Vec<PendingNotification>,
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
+    requested_mod_modal: bool,
     requested_quit: bool,
+    pending_mod_outputs: VecDeque<ModCommandOutput>,
 }
 
 pub(crate) struct PendingNotification {
@@ -151,12 +164,13 @@ impl ChatState {
         service: ChatService,
         notification_service: NotificationService,
         user_id: Uuid,
-        is_admin: bool,
+        permissions: Permissions,
         active_users: Option<ActiveUsers>,
         article_service: news::svc::ArticleService,
         showcase_service: showcase::svc::ShowcaseService,
     ) -> Self {
         let event_rx = service.subscribe_events();
+        let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
         let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
         let (room_tx, room_rx) = watch::channel(None);
@@ -165,10 +179,12 @@ impl ChatState {
         Self {
             service,
             user_id,
-            is_admin,
+            permissions,
+            is_admin: permissions.is_admin(),
             active_users,
             snapshot_rx,
             event_rx,
+            moderation_event_rx,
             rooms: Vec::new(),
             pinned_messages: Vec::new(),
             general_room_id: None,
@@ -205,17 +221,23 @@ impl ChatState {
             reply_target: None,
             bg_task,
             news_selected: false,
-            news: news::state::State::new(article_service, user_id, is_admin),
+            news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
             discover_selected: false,
             discover: discover::state::State::new(),
             showcase_selected: false,
-            showcase: showcase::state::State::new(showcase_service, user_id, is_admin),
+            showcase: showcase::state::State::new(
+                showcase_service,
+                user_id,
+                permissions.is_admin(),
+            ),
             pending_notifications: Vec::new(),
             requested_help_topic: None,
             requested_settings_modal: false,
+            requested_mod_modal: false,
             requested_quit: false,
+            pending_mod_outputs: VecDeque::new(),
         }
     }
 
@@ -368,8 +390,30 @@ impl ChatState {
         std::mem::take(&mut self.requested_settings_modal)
     }
 
+    pub fn take_requested_mod_modal(&mut self) -> bool {
+        std::mem::take(&mut self.requested_mod_modal)
+    }
+
     pub fn take_requested_quit(&mut self) -> bool {
         std::mem::take(&mut self.requested_quit)
+    }
+
+    pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
+        self.permissions = permissions;
+        self.is_admin = permissions.is_admin();
+        self.news.set_is_admin(self.is_admin);
+        self.showcase.set_is_admin(self.is_admin);
+    }
+
+    pub(crate) fn submit_mod_command(&mut self, command: String) -> Uuid {
+        let request_id = Uuid::now_v7();
+        self.service
+            .run_mod_command_task(self.user_id, self.permissions, request_id, command);
+        request_id
+    }
+
+    pub(crate) fn take_mod_outputs(&mut self) -> Vec<ModCommandOutput> {
+        self.pending_mod_outputs.drain(..).collect()
     }
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
@@ -522,7 +566,7 @@ impl ChatState {
         body: &str,
     ) -> Option<Banner> {
         let is_own = message_user_id == self.user_id;
-        if !is_own && !self.is_admin {
+        if !is_own && !self.permissions.can_moderate() {
             return Some(Banner::error("Can only edit your own messages"));
         }
         self.edited_message_id = Some(selected_id);
@@ -549,11 +593,11 @@ impl ChatState {
             .find_message_in_room(room_id, selected_id)
             .map(|m| m.user_id)?;
         let is_own = msg_user_id == self.user_id;
-        if !is_own && !self.is_admin {
+        if !is_own && !self.permissions.can_moderate() {
             return Some(Banner::error("Can only delete your own messages"));
         }
         self.service
-            .delete_message_task(self.user_id, selected_id, self.is_admin);
+            .delete_message_task(self.user_id, selected_id, self.permissions);
         self.selected_message_id = self
             .rooms
             .iter()
@@ -594,7 +638,6 @@ impl ChatState {
         let message = self.selected_message_in_room(room_id)?;
         self.service
             .toggle_message_reaction_task(self.user_id, message.id, kind);
-        self.selected_message_id = None;
         None
     }
 
@@ -704,30 +747,22 @@ impl ChatState {
         match slot {
             RoomSlot::News => {
                 let changed = !self.news_selected;
-                if changed {
-                    self.select_news();
-                }
+                self.select_news();
                 changed
             }
             RoomSlot::Notifications => {
                 let changed = !self.notifications_selected;
-                if changed {
-                    self.select_notifications();
-                }
+                self.select_notifications();
                 changed
             }
             RoomSlot::Discover => {
                 let changed = !self.discover_selected;
-                if changed {
-                    self.select_discover();
-                }
+                self.select_discover();
                 changed
             }
             RoomSlot::Showcase => {
                 let changed = !self.showcase_selected;
-                if changed {
-                    self.select_showcase();
-                }
+                self.select_showcase();
                 changed
             }
             RoomSlot::Room(next_id) => {
@@ -748,6 +783,9 @@ impl ChatState {
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.selected_room_id = Some(next_id);
+                if !changed {
+                    self.mark_room_read(next_id);
+                }
                 changed
             }
         }
@@ -979,6 +1017,19 @@ impl ChatState {
             return None;
         }
 
+        if body.trim() == "/mod" {
+            self.clear_composer_after_submit();
+            self.requested_mod_modal = true;
+            return None;
+        }
+
+        if body.trim().starts_with("/mod ") {
+            self.clear_composer_after_submit();
+            return Some(Banner::error(
+                "open /mod first; moderation commands only run in the modal",
+            ));
+        }
+
         if body.trim() == "/exit" {
             self.clear_composer_after_submit();
             self.requested_quit = true;
@@ -1127,7 +1178,7 @@ impl ChatState {
                     message_id,
                     body,
                     request_id,
-                    self.is_admin,
+                    self.permissions,
                 );
             } else {
                 self.service
@@ -1228,10 +1279,15 @@ impl ChatState {
         self.drain_snapshot();
         self.drain_pinned_messages();
         let banner = self.drain_events();
+        let moderation_banner = self.drain_moderation_events();
         let news_banner = self.news.tick();
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
-        banner.or(news_banner).or(notif_banner).or(showcase_banner)
+        moderation_banner
+            .or(banner)
+            .or(news_banner)
+            .or(notif_banner)
+            .or(showcase_banner)
     }
 
     pub fn select_news(&mut self) {
@@ -1794,7 +1850,35 @@ impl ChatState {
                 ChatEvent::InviteFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::ModCommandOutput {
+                    user_id,
+                    request_id,
+                    lines,
+                    success,
+                } if self.user_id == user_id => {
+                    self.pending_mod_outputs.push_back(ModCommandOutput {
+                        request_id,
+                        lines,
+                        success,
+                    });
+                }
                 _ => {}
+            }
+        }
+        banner
+    }
+
+    fn drain_moderation_events(&mut self) -> Option<Banner> {
+        let mut banner = None;
+        loop {
+            let event = match self.moderation_event_rx.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
+
+            if let Some(message) = moderation_server_toast(&event) {
+                banner = Some(Banner::success(&message));
             }
         }
         banner
@@ -1851,6 +1935,21 @@ impl ChatState {
             messages.retain(|m| m.id != message_id);
         }
         self.message_reactions.remove(&message_id);
+    }
+
+    pub(crate) fn remove_room_for_moderation(&mut self, room_id: Uuid) {
+        self.rooms.retain(|(room, _)| room.id != room_id);
+        self.unread_counts.remove(&room_id);
+        if self.selected_room_id == Some(room_id) {
+            self.selected_room_id = None;
+        }
+        if self.visible_room_id == Some(room_id) {
+            self.visible_room_id = None;
+        }
+        if self.composer_room_id == Some(room_id) {
+            self.clear_composer_after_submit();
+        }
+        self.sync_selection();
     }
 
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
@@ -2059,6 +2158,23 @@ fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>
         .and_then(|id| usernames.get(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
+}
+
+fn moderation_server_toast(event: &ModerationEvent) -> Option<String> {
+    let ModerationEvent::ServerUserAction {
+        target_username,
+        action,
+        ..
+    } = event
+    else {
+        return None;
+    };
+
+    match action {
+        ServerUserAction::Kick => Some(format!("@{target_username} was kicked from the server")),
+        ServerUserAction::Ban => Some(format!("@{target_username} was banned from the server")),
+        ServerUserAction::Unban => None,
+    }
 }
 
 /// Parse `/dm @username` or `/dm username` from the composer text.
@@ -2576,6 +2692,9 @@ mod tests {
             Uuid::now_v7(),
             ActiveUser {
                 username: "Alice".to_string(),
+                fingerprint: None,
+                peer_ip: None,
+                sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),
             },
@@ -2584,6 +2703,9 @@ mod tests {
             Uuid::now_v7(),
             ActiveUser {
                 username: "BOB".to_string(),
+                fingerprint: None,
+                peer_ip: None,
+                sessions: Vec::new(),
                 connection_count: 2,
                 last_login_at: Instant::now(),
             },
@@ -2618,6 +2740,61 @@ mod tests {
     fn news_marker_detection_matches_announcement_messages() {
         assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
         assert!(news_reply_preview_text("regular chat message").is_none());
+    }
+
+    #[test]
+    fn moderation_server_toast_formats_kicks_and_bans() {
+        let base_user_id = Uuid::now_v7();
+        let kick = ModerationEvent::ServerUserAction {
+            actor_user_id: Uuid::now_v7(),
+            target_user_id: base_user_id,
+            target_username: "alice".to_string(),
+            action: ServerUserAction::Kick,
+            reason: "bye".to_string(),
+            terminated_sessions: 1,
+        };
+        let ban = ModerationEvent::ServerUserAction {
+            actor_user_id: Uuid::now_v7(),
+            target_user_id: base_user_id,
+            target_username: "bob".to_string(),
+            action: ServerUserAction::Ban,
+            reason: "spam".to_string(),
+            terminated_sessions: 2,
+        };
+
+        assert_eq!(
+            moderation_server_toast(&kick),
+            Some("@alice was kicked from the server".to_string())
+        );
+        assert_eq!(
+            moderation_server_toast(&ban),
+            Some("@bob was banned from the server".to_string())
+        );
+    }
+
+    #[test]
+    fn moderation_server_toast_ignores_unbans_and_non_server_events() {
+        let target_user_id = Uuid::now_v7();
+        let unban = ModerationEvent::ServerUserAction {
+            actor_user_id: Uuid::now_v7(),
+            target_user_id,
+            target_username: "alice".to_string(),
+            action: ServerUserAction::Unban,
+            reason: String::new(),
+            terminated_sessions: 0,
+        };
+        let room = ModerationEvent::RoomAction {
+            actor_user_id: Uuid::now_v7(),
+            target_user_id,
+            room_id: Uuid::now_v7(),
+            room_slug: "general".to_string(),
+            action: crate::moderation::command::RoomModAction::Kick,
+            reason: String::new(),
+            notified_sessions: 0,
+        };
+
+        assert_eq!(moderation_server_toast(&unban), None);
+        assert_eq!(moderation_server_toast(&room), None);
     }
 
     // --- parse_dm_command ---
@@ -3071,6 +3248,9 @@ mod tests {
                 Uuid::now_v7(),
                 ActiveUser {
                     username: "zoe".to_string(),
+                    fingerprint: None,
+                    peer_ip: None,
+                    sessions: Vec::new(),
                     connection_count: 2,
                     last_login_at: std::time::Instant::now(),
                 },
@@ -3079,6 +3259,9 @@ mod tests {
                 Uuid::now_v7(),
                 ActiveUser {
                     username: "alice".to_string(),
+                    fingerprint: None,
+                    peer_ip: None,
+                    sessions: Vec::new(),
                     connection_count: 1,
                     last_login_at: std::time::Instant::now(),
                 },

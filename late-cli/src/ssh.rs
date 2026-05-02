@@ -4,6 +4,7 @@ use russh::{
     keys::{self, PrivateKeyWithHashAlg, known_hosts},
 };
 use serde::Deserialize;
+use std::ffi::OsString;
 use std::{
     env, fs, io,
     io::{IsTerminal, Read, Write},
@@ -34,6 +35,14 @@ use nix::{libc, pty::openpty, unistd::setsid};
 
 #[cfg(unix)]
 use std::{os::fd::AsRawFd, process::Stdio};
+
+#[cfg(unix)]
+use std::{
+    os::unix::fs::DirBuilderExt,
+    path::PathBuf,
+    process::Command as StdCommand,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(unix)]
 use tokio::process::{Child, Command};
@@ -113,7 +122,6 @@ impl SshExit {
 
 pub(super) struct SshProcess {
     pub(super) completion_task: JoinHandle<Result<SshExit>>,
-    pub(super) input_task: JoinHandle<Result<()>>,
     pub(super) resize_handle: ResizeHandle,
     pub(super) input_gate: Arc<AtomicBool>,
 }
@@ -139,7 +147,351 @@ pub(super) async fn spawn_ssh(
     match config.ssh_mode {
         SshMode::Subprocess => spawn_subprocess_ssh(config, identity_file, token_tx).await,
         SshMode::Native => spawn_native_ssh(config, identity_file, token_tx).await,
+        SshMode::OpenSsh => {
+            anyhow::bail!("openssh mode must use prepare_openssh_ssh")
+        }
     }
+}
+
+#[cfg(unix)]
+pub(super) struct OpenSshSession {
+    token: String,
+    master: OpenSshControlMaster,
+}
+
+#[cfg(unix)]
+impl OpenSshSession {
+    pub(super) fn token(&self) -> &str {
+        &self.token
+    }
+
+    pub(super) async fn spawn_shell(self, config: &Config) -> Result<OpenSshProcess> {
+        // Reuse the already-authenticated master connection for the real
+        // interactive shell, so hardware-key auth is not prompted a second time.
+        let spec = openssh_shell_command_spec(config, self.master.control_path())?;
+        let mut cmd = spec.tokio_command();
+        cmd.stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true);
+        let mut child = cmd
+            .spawn()
+            .context("failed to start OpenSSH interactive session")?;
+        let mut master = self.master;
+        let completion_task = tokio::spawn(async move {
+            let status = child
+                .wait()
+                .await
+                .context("OpenSSH interactive session failed to exit cleanly")?;
+            master.close_async().await;
+            Ok(SshExit::ProcessStatus {
+                status,
+                stdout_closed_cleanly: false,
+            })
+        });
+        Ok(OpenSshProcess { completion_task })
+    }
+}
+
+#[cfg(unix)]
+pub(super) struct OpenSshProcess {
+    pub(super) completion_task: JoinHandle<Result<SshExit>>,
+}
+
+#[cfg(unix)]
+pub(super) async fn prepare_openssh_ssh(
+    config: &Config,
+    identity_file: Option<&Path>,
+) -> Result<OpenSshSession> {
+    // OpenSSH mode delegates authentication to the system ssh client. A
+    // ControlMaster authenticates once, then the token exec and interactive
+    // shell reuse that connection through a private control socket.
+    let control_dir = create_openssh_control_dir()?;
+    let control_path = control_dir.join("ctl");
+    let cleanup_spec = openssh_cleanup_command_spec(config, &control_path)?;
+    let mut master = OpenSshControlMaster::new(control_dir, control_path, cleanup_spec);
+
+    let master_spec = openssh_master_command_spec(config, identity_file, master.control_path())?;
+    let status = master_spec
+        .tokio_command()
+        .status()
+        .await
+        .context("failed to start OpenSSH control master")?;
+    if !status.success() {
+        master.close_async().await;
+        anyhow::bail!("OpenSSH control master exited with status {status}");
+    }
+    wait_for_control_socket(master.control_path()).await?;
+
+    let token = match fetch_openssh_session_token(config, master.control_path()).await {
+        Ok(token) => token,
+        Err(err) => {
+            master.close_async().await;
+            return Err(err);
+        }
+    };
+
+    Ok(OpenSshSession { token, master })
+}
+
+#[cfg(not(unix))]
+pub(super) async fn prepare_openssh_ssh(
+    _config: &Config,
+    _identity_file: Option<&Path>,
+) -> Result<OpenSshSession> {
+    anyhow::bail!("openssh ssh mode is only available on Unix; use --ssh-mode native");
+}
+
+#[cfg(unix)]
+struct OpenSshControlMaster {
+    control_dir: PathBuf,
+    control_path: PathBuf,
+    cleanup_spec: CommandSpec,
+    closed: bool,
+}
+
+#[cfg(unix)]
+impl OpenSshControlMaster {
+    fn new(control_dir: PathBuf, control_path: PathBuf, cleanup_spec: CommandSpec) -> Self {
+        Self {
+            control_dir,
+            control_path,
+            cleanup_spec,
+            closed: false,
+        }
+    }
+
+    fn control_path(&self) -> &Path {
+        &self.control_path
+    }
+
+    async fn close_async(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        let _ = self.cleanup_spec.tokio_command().status().await;
+        let _ = fs::remove_dir_all(&self.control_dir);
+    }
+}
+
+#[cfg(unix)]
+impl Drop for OpenSshControlMaster {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        // Best-effort fallback for paths that drop the session before async
+        // cleanup runs, such as an error after the master is established.
+        let _ = self.cleanup_spec.std_command().status();
+        let _ = fs::remove_dir_all(&self.control_dir);
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) struct OpenSshSession;
+
+#[cfg(not(unix))]
+impl OpenSshSession {
+    pub(super) fn token(&self) -> &str {
+        ""
+    }
+
+    pub(super) async fn spawn_shell(self, _config: &Config) -> Result<OpenSshProcess> {
+        anyhow::bail!("openssh ssh mode is only available on Unix; use --ssh-mode native")
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) struct OpenSshProcess {
+    pub(super) completion_task: JoinHandle<Result<SshExit>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandSpec {
+    program: OsString,
+    args: Vec<OsString>,
+}
+
+impl CommandSpec {
+    fn from_ssh_bin(ssh_bin: &[String]) -> Result<Self> {
+        let (program, args) = ssh_bin
+            .split_first()
+            .context("ssh client command is empty")?;
+        Ok(Self {
+            program: OsString::from(program),
+            args: args.iter().map(OsString::from).collect(),
+        })
+    }
+
+    fn arg(&mut self, value: impl Into<OsString>) {
+        self.args.push(value.into());
+    }
+
+    fn path_arg(&mut self, value: &Path) {
+        self.args.push(value.as_os_str().to_os_string());
+    }
+
+    #[cfg(unix)]
+    fn tokio_command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.args);
+        command
+    }
+
+    #[cfg(unix)]
+    fn std_command(&self) -> StdCommand {
+        let mut command = StdCommand::new(&self.program);
+        command.args(&self.args);
+        command
+    }
+
+    #[cfg(test)]
+    fn args_as_strings(&self) -> Vec<String> {
+        self.args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+fn create_openssh_control_dir() -> Result<PathBuf> {
+    let base = openssh_control_base_dir();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    for attempt in 0..100 {
+        let dir = base.join(format!("late-ssh-{}-{now}-{attempt}", std::process::id()));
+        match fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(err).with_context(|| format!("failed to create {}", dir.display()));
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "failed to create unique OpenSSH control directory in {}",
+        base.display()
+    )
+}
+
+#[cfg(unix)]
+fn openssh_control_base_dir() -> PathBuf {
+    env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir)
+}
+
+#[cfg(unix)]
+async fn wait_for_control_socket(path: &Path) -> Result<()> {
+    for _ in 0..20 {
+        if path.exists() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    anyhow::bail!(
+        "OpenSSH control socket was not created at {}",
+        path.display()
+    )
+}
+
+fn append_openssh_destination_args(spec: &mut CommandSpec, config: &Config) {
+    if let Some(port) = config.ssh_port {
+        spec.arg("-p");
+        spec.arg(port.to_string());
+    }
+    if let Some(user) = config.ssh_user.as_deref() {
+        spec.arg("-l");
+        spec.arg(user);
+    }
+    spec.arg(config.ssh_target.as_str());
+}
+
+fn openssh_master_command_spec(
+    config: &Config,
+    identity_file: Option<&Path>,
+    control_path: &Path,
+) -> Result<CommandSpec> {
+    let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
+    // -f -N backgrounds the master after auth succeeds, leaving no remote
+    // command running except the multiplex control connection.
+    spec.arg("-M");
+    spec.arg("-S");
+    spec.path_arg(control_path);
+    spec.arg("-f");
+    spec.arg("-N");
+    if let Some(identity_file) = identity_file {
+        spec.arg("-i");
+        spec.path_arg(identity_file);
+    }
+    spec.arg("-o");
+    spec.arg("StrictHostKeyChecking=accept-new");
+    append_openssh_destination_args(&mut spec, config);
+    Ok(spec)
+}
+
+fn openssh_token_command_spec(config: &Config, control_path: &Path) -> Result<CommandSpec> {
+    let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
+    spec.arg("-S");
+    spec.path_arg(control_path);
+    spec.arg("-o");
+    // The master has already authenticated; fail instead of opening a second
+    // prompt if the control socket cannot be used.
+    spec.arg("BatchMode=yes");
+    append_openssh_destination_args(&mut spec, config);
+    spec.arg(CLI_TOKEN_REQUEST);
+    Ok(spec)
+}
+
+fn openssh_shell_command_spec(config: &Config, control_path: &Path) -> Result<CommandSpec> {
+    let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
+    spec.arg("-S");
+    spec.path_arg(control_path);
+    spec.arg("-o");
+    // Shell startup should reuse the master and not ask for auth again after
+    // audio and pairing have started.
+    spec.arg("BatchMode=yes");
+    spec.arg("-tt");
+    append_openssh_destination_args(&mut spec, config);
+    Ok(spec)
+}
+
+fn openssh_cleanup_command_spec(config: &Config, control_path: &Path) -> Result<CommandSpec> {
+    let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
+    spec.arg("-S");
+    spec.path_arg(control_path);
+    spec.arg("-O");
+    spec.arg("exit");
+    append_openssh_destination_args(&mut spec, config);
+    Ok(spec)
+}
+
+#[cfg(unix)]
+async fn fetch_openssh_session_token(config: &Config, control_path: &Path) -> Result<String> {
+    let output = openssh_token_command_spec(config, control_path)?
+        .tokio_command()
+        .output()
+        .await
+        .context("failed to run OpenSSH token handshake")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "OpenSSH token handshake exited with status {}: {}",
+            output.status,
+            stderr.trim()
+        );
+    }
+
+    parse_session_token_response(&output.stdout, "OpenSSH token handshake")
 }
 
 pub(super) async fn forward_resize_events(handle: ResizeHandle) {
@@ -277,14 +629,14 @@ async fn spawn_subprocess_ssh(
     let input_gate_for_task = Arc::clone(&input_gate);
 
     let output_task = tokio::task::spawn_blocking(move || forward_ssh_output(output_pty, token_tx));
-    let input_task =
-        tokio::task::spawn_blocking(move || forward_stdin_to_pty(input_pty, input_gate_for_task));
+    spawn_stdin_forwarder("late-cli-stdin-pty", move || {
+        forward_stdin_to_pty(input_pty, input_gate_for_task)
+    });
     let completion_task =
         tokio::spawn(async move { wait_for_subprocess_exit(child, output_task).await });
 
     Ok(SshProcess {
         completion_task,
-        input_task,
         resize_handle: ResizeHandle::Subprocess(PtyResizeHandle { master }),
         input_gate,
     })
@@ -379,7 +731,7 @@ async fn spawn_native_ssh(
     let writer_tx_for_resize = writer_tx.clone();
 
     let writer_task = tokio::spawn(async move { drive_native_writer(write_half, writer_rx).await });
-    let input_task = tokio::task::spawn_blocking(move || {
+    spawn_stdin_forwarder("late-cli-stdin-native", move || {
         forward_stdin_to_native(writer_tx, input_gate_for_task)
     });
     let completion_task = tokio::spawn(async move {
@@ -394,7 +746,6 @@ async fn spawn_native_ssh(
 
     Ok(SshProcess {
         completion_task,
-        input_task,
         resize_handle: ResizeHandle::Native(writer_tx_for_resize),
         input_gate,
     })
@@ -446,10 +797,14 @@ async fn fetch_native_session_token(
         );
     }
 
-    let response: SessionTokenResponse = serde_json::from_slice(&stdout)
-        .context("native ssh token handshake returned invalid JSON")?;
+    parse_session_token_response(&stdout, "native ssh token handshake")
+}
+
+fn parse_session_token_response(stdout: &[u8], context: &str) -> Result<String> {
+    let response: SessionTokenResponse = serde_json::from_slice(stdout)
+        .with_context(|| format!("{context} returned invalid JSON"))?;
     if response.session_token.trim().is_empty() {
-        anyhow::bail!("native ssh token handshake returned an empty session token");
+        anyhow::bail!("{context} returned an empty session token");
     }
     Ok(response.session_token)
 }
@@ -606,8 +961,7 @@ async fn drive_native_output(read_half: &mut ChannelReadHalf) -> Result<SshExit>
             } => {
                 exit_signal = Some((render_signal_name(&signal_name), error_message));
             }
-            ChannelMsg::Close => break,
-            ChannelMsg::Eof => {}
+            ChannelMsg::Close | ChannelMsg::Eof => break,
             ChannelMsg::Failure => debug!("native ssh channel request failed"),
             ChannelMsg::Success => {}
             _ => {}
@@ -639,6 +993,20 @@ fn render_signal_name(signal_name: &russh::Sig) -> String {
         russh::Sig::TERM => "TERM".to_string(),
         russh::Sig::USR1 => "USR1".to_string(),
         russh::Sig::Custom(name) => name.clone(),
+    }
+}
+
+fn spawn_stdin_forwarder(name: &'static str, f: impl FnOnce() -> Result<()> + Send + 'static) {
+    let spawn_result = std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || {
+            if let Err(err) = f() {
+                debug!(error = ?err, "stdin forwarding task ended with error");
+            }
+        });
+
+    if let Err(err) = spawn_result {
+        debug!(error = ?err, "failed to spawn stdin forwarding thread");
     }
 }
 
@@ -902,6 +1270,24 @@ fn parse_cli_banner(buf: &[u8]) -> BannerState {
 mod tests {
     use super::*;
 
+    fn test_config() -> Config {
+        Config {
+            ssh_target: "late.example".to_string(),
+            ssh_port: Some(2222),
+            ssh_user: Some("alice".to_string()),
+            key_file: None,
+            ssh_mode: SshMode::OpenSsh,
+            ssh_bin: vec![
+                "ssh".to_string(),
+                "-F".to_string(),
+                "/tmp/ssh_config".to_string(),
+            ],
+            audio_base_url: "https://audio.example".to_string(),
+            api_base_url: "https://api.example".to_string(),
+            verbose: false,
+        }
+    }
+
     #[test]
     fn parse_cli_banner_extracts_token_and_consumed_bytes() {
         let buf = b"LATE_SESSION_TOKEN=abc-123\r\n\x1b[?1049h";
@@ -921,6 +1307,138 @@ mod tests {
             BannerState::Passthrough { consumed } => assert_eq!(consumed, 7),
             _ => panic!("expected passthrough"),
         }
+    }
+
+    #[test]
+    fn openssh_master_command_uses_control_master_and_identity() {
+        let config = test_config();
+        let spec = openssh_master_command_spec(
+            &config,
+            Some(Path::new("/home/alice/.ssh/id_ed25519_sk")),
+            Path::new("/tmp/late-ssh-test/ctl"),
+        )
+        .unwrap();
+
+        assert_eq!(spec.program, OsString::from("ssh"));
+        assert_eq!(
+            spec.args_as_strings(),
+            vec![
+                "-F",
+                "/tmp/ssh_config",
+                "-M",
+                "-S",
+                "/tmp/late-ssh-test/ctl",
+                "-f",
+                "-N",
+                "-i",
+                "/home/alice/.ssh/id_ed25519_sk",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-p",
+                "2222",
+                "-l",
+                "alice",
+                "late.example",
+            ]
+        );
+    }
+
+    #[test]
+    fn openssh_master_command_allows_config_or_agent_identity() {
+        let config = test_config();
+        let spec = openssh_master_command_spec(&config, None, Path::new("/tmp/late-ssh-test/ctl"))
+            .unwrap();
+
+        assert!(!spec.args_as_strings().contains(&"-i".to_string()));
+    }
+
+    #[test]
+    fn openssh_token_command_uses_control_socket_and_exec_handshake() {
+        let config = test_config();
+        let spec =
+            openssh_token_command_spec(&config, Path::new("/tmp/late-ssh-test/ctl")).unwrap();
+
+        assert_eq!(
+            spec.args_as_strings(),
+            vec![
+                "-F",
+                "/tmp/ssh_config",
+                "-S",
+                "/tmp/late-ssh-test/ctl",
+                "-o",
+                "BatchMode=yes",
+                "-p",
+                "2222",
+                "-l",
+                "alice",
+                "late.example",
+                CLI_TOKEN_REQUEST,
+            ]
+        );
+    }
+
+    #[test]
+    fn openssh_shell_command_uses_control_socket_and_tty() {
+        let config = test_config();
+        let spec =
+            openssh_shell_command_spec(&config, Path::new("/tmp/late-ssh-test/ctl")).unwrap();
+
+        assert_eq!(
+            spec.args_as_strings(),
+            vec![
+                "-F",
+                "/tmp/ssh_config",
+                "-S",
+                "/tmp/late-ssh-test/ctl",
+                "-o",
+                "BatchMode=yes",
+                "-tt",
+                "-p",
+                "2222",
+                "-l",
+                "alice",
+                "late.example",
+            ]
+        );
+    }
+
+    #[test]
+    fn openssh_cleanup_command_exits_control_master() {
+        let config = test_config();
+        let spec =
+            openssh_cleanup_command_spec(&config, Path::new("/tmp/late-ssh-test/ctl")).unwrap();
+
+        assert_eq!(
+            spec.args_as_strings(),
+            vec![
+                "-F",
+                "/tmp/ssh_config",
+                "-S",
+                "/tmp/late-ssh-test/ctl",
+                "-O",
+                "exit",
+                "-p",
+                "2222",
+                "-l",
+                "alice",
+                "late.example",
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_session_token_response_accepts_valid_json() {
+        let token =
+            parse_session_token_response(br#"{"session_token":"token-123"}"#, "test handshake")
+                .unwrap();
+        assert_eq!(token, "token-123");
+    }
+
+    #[test]
+    fn parse_session_token_response_rejects_empty_token() {
+        let err = parse_session_token_response(br#"{"session_token":"  "}"#, "test handshake")
+            .unwrap_err();
+        assert!(err.to_string().contains("empty session token"));
     }
 
     #[test]

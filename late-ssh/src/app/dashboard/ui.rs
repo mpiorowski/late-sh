@@ -42,7 +42,7 @@ const DASHBOARD_MIN_FULL_HEIGHT: u16 = 16;
 const BLACKJACK_GRID_MIN_WIDTH: u16 = 48;
 const BLACKJACK_GRID_MIN_CHAT_HEIGHT: u16 = 6;
 const BLACKJACK_GRID_COLUMNS: usize = 3;
-const BLACKJACK_GRID_TEXT_ROWS: u16 = 3;
+const BLACKJACK_GRID_TEXT_ROWS: u16 = 2;
 const BLACKJACK_GRID_HEIGHT: u16 = BLACKJACK_GRID_TEXT_ROWS + 1; // + bottom rule
 const AUDIO_BUTTON_PREFIX: &str = "No audio? ";
 const CLI_BUTTON_TEXT: &str = "[B] CLI";
@@ -131,14 +131,11 @@ fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: Dashboar
             &rooms,
             view.blackjack_snapshots,
             view.blackjack_prefix_armed,
-        );
-        draw_chat_section(
-            frame,
-            split[1],
             view.pinned_messages,
-            view.favorites_strip,
-            view.chat_view,
         );
+        // Newest pinned now lives in the grid's bottom rule, so skip the
+        // separate strip above chat to keep this layout compact.
+        draw_chat_section(frame, split[1], &[], view.favorites_strip, view.chat_view);
     } else {
         draw_chat_section(
             frame,
@@ -177,6 +174,7 @@ fn draw_blackjack_grid(
     rooms: &[&RoomListItem],
     snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     prefix_armed: bool,
+    pinned_messages: &[ChatMessage],
 ) {
     if area.height < BLACKJACK_GRID_HEIGHT {
         return;
@@ -202,7 +200,7 @@ fn draw_blackjack_grid(
 
     let border_style = Style::default().fg(theme::BORDER_DIM());
     for &vert_idx in &[0usize, 2, 4, 6] {
-        let lines = vec![Line::from("│"), Line::from("│"), Line::from("│")];
+        let lines = vec![Line::from("│"), Line::from("│")];
         frame.render_widget(Paragraph::new(lines).style(border_style), cols[vert_idx]);
     }
 
@@ -235,27 +233,19 @@ fn draw_blackjack_grid(
         (cols[4].x.saturating_sub(rule_area.x) as usize, '┴'),
         (cols[6].x.saturating_sub(rule_area.x) as usize, '┘'),
     ];
-    draw_blackjack_bottom_rule(frame, rule_area, &junctions, prefix_armed);
+    draw_blackjack_bottom_rule(frame, rule_area, &junctions, pinned_messages.first());
 }
 
 fn draw_blackjack_bottom_rule(
     frame: &mut Frame,
     area: Rect,
     junctions: &[(usize, char)],
-    prefix_armed: bool,
+    newest_pinned: Option<&ChatMessage>,
 ) {
     let total_w = area.width as usize;
     if total_w == 0 {
         return;
     }
-
-    let hint_text = if prefix_armed {
-        " press 1/2/3 "
-    } else {
-        " b + 1/2/3 to join "
-    };
-    let hint_chars: Vec<char> = hint_text.chars().collect();
-    let hint_w = hint_chars.len();
 
     let make_rule_char = |i: usize| -> char {
         junctions
@@ -266,32 +256,61 @@ fn draw_blackjack_bottom_rule(
 
     let border_style = Style::default().fg(theme::BORDER_DIM());
 
-    if hint_w + 4 > total_w {
+    let render_plain_rule = |frame: &mut Frame| {
         let rule: String = (0..total_w).map(make_rule_char).collect();
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(rule, border_style))),
             area,
         );
+    };
+
+    let Some(msg) = newest_pinned else {
+        render_plain_rule(frame);
+        return;
+    };
+
+    let first_line = msg.body.split('\n').next().unwrap_or("").trim();
+    if first_line.is_empty() {
+        render_plain_rule(frame);
         return;
     }
 
-    let hint_start = (total_w - hint_w) / 2;
-    let hint_end = hint_start + hint_w;
-    let left: String = (0..hint_start).map(make_rule_char).collect();
-    let right: String = (hint_end..total_w).map(make_rule_char).collect();
+    // Centered "  <body>  " between rule chars. Outer-pad spaces on each side
+    // keep the message from butting against the rule; junctions are preserved
+    // wherever the message doesn't cover them.
+    let outer_pad = 2usize;
+    let chrome_w = outer_pad * 2;
+    let min_pad = 3usize;
+    let min_body = 3usize;
+    let min_required = min_pad * 2 + chrome_w + min_body;
+    if total_w < min_required {
+        render_plain_rule(frame);
+        return;
+    }
 
-    let hint_style = if prefix_armed {
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
+    let max_body = total_w - min_pad * 2 - chrome_w;
+    let body = truncate(first_line, max_body);
+    let body_w = UnicodeWidthStr::width(body.as_str());
+    let middle_w = chrome_w + body_w;
+    let left_rule_w = (total_w - middle_w) / 2;
+
+    let left: String = (0..left_rule_w).map(make_rule_char).collect();
+    let right: String = (left_rule_w + middle_w..total_w)
+        .map(make_rule_char)
+        .collect();
+    let outer_space: String = " ".repeat(outer_pad);
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(left, border_style),
-            Span::styled(hint_text.to_string(), hint_style),
+            Span::raw(outer_space.clone()),
+            Span::styled(
+                body,
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(outer_space),
             Span::styled(right, border_style),
         ])),
         area,
@@ -328,7 +347,7 @@ fn draw_blackjack_slot(
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
-    let key_tag = Span::styled(format!("b{key_char} "), key_style);
+    let key_tag = Span::styled(format!("[b{key_char}]"), key_style);
 
     let inner_width = area.width as usize;
 
@@ -336,10 +355,10 @@ fn draw_blackjack_slot(
         let label = if loading { "loading…" } else { "open slot" };
         let lines = vec![
             Line::from(vec![
-                key_tag,
                 Span::styled(label, Style::default().fg(theme::TEXT_FAINT())),
+                Span::raw(" "),
+                key_tag,
             ]),
-            Line::from(""),
             Line::from(""),
         ];
         frame.render_widget(Paragraph::new(lines), area);
@@ -351,39 +370,41 @@ fn draw_blackjack_slot(
     let occupied: Option<usize> =
         snapshot.map(|s| s.seats.iter().filter(|seat| seat.user_id.is_some()).count());
 
-    let name_budget = inner_width.saturating_sub(3).max(4); // room for "bN "
-    let line1 = Line::from(vec![
-        key_tag,
-        Span::styled(
-            truncate(&room.display_name, name_budget),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
-
-    let pace_label = room.blackjack_settings.pace.label();
-    let stake_label = room.blackjack_settings.stake_label();
-    let line2 = Line::from(vec![
-        Span::styled(
-            pace_label,
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
-        Span::styled(stake_label, Style::default().fg(theme::TEXT_DIM())),
-    ]);
-
     let mut seat_text = String::new();
     for i in 0..max_seats {
         let filled = occupied.map(|o| i < o).unwrap_or(false);
         seat_text.push(if filled { '●' } else { '○' });
     }
     let count_label = match occupied {
-        Some(n) => format!(" {}/{}", n, max_seats),
-        None => format!(" ?/{}", max_seats),
+        Some(n) => format!("{}/{}", n, max_seats),
+        None => format!("?/{}", max_seats),
     };
+
+    // Line 1: "○○○○ 0/4 <name> [bN]" — single-space gaps so the name has room
+    // to breathe at the dashboard's narrow grid widths.
+    let seats_w = UnicodeWidthStr::width(seat_text.as_str());
+    let count_w = UnicodeWidthStr::width(count_label.as_str());
+    let key_w = UnicodeWidthStr::width(format!("[b{key_char}]").as_str());
+    // 3 single-space gaps between the four pieces.
+    let fixed_w = seats_w + 1 + count_w + 1 + 1 + key_w;
+    let name_budget = inner_width.saturating_sub(fixed_w).max(2);
+    let line1 = Line::from(vec![
+        Span::styled(seat_text, Style::default().fg(theme::AMBER())),
+        Span::raw(" "),
+        Span::styled(count_label, Style::default().fg(theme::TEXT_DIM())),
+        Span::raw(" "),
+        Span::styled(
+            truncate(&room.display_name, name_budget),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        key_tag,
+    ]);
+
+    let pace_label = room.blackjack_settings.pace.label();
+    let stake_label = room.blackjack_settings.stake_label();
     let phase_label = blackjack_phase_label(snapshot);
     let phase_color = match snapshot.map(|s| s.phase) {
         Some(crate::app::rooms::blackjack::state::Phase::PlayerTurn)
@@ -391,14 +412,21 @@ fn draw_blackjack_slot(
         Some(_) => theme::TEXT(),
         None => theme::TEXT_FAINT(),
     };
-    let line3 = Line::from(vec![
-        Span::styled(seat_text, Style::default().fg(theme::AMBER())),
-        Span::styled(count_label, Style::default().fg(theme::TEXT_DIM())),
-        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
+    let sep = || Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT()));
+    let line2 = Line::from(vec![
+        Span::styled(
+            pace_label,
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        sep(),
+        Span::styled(stake_label, Style::default().fg(theme::TEXT_DIM())),
+        sep(),
         Span::styled(phase_label, Style::default().fg(phase_color)),
     ]);
 
-    frame.render_widget(Paragraph::new(vec![line1, line2, line3]), area);
+    frame.render_widget(Paragraph::new(vec![line1, line2]), area);
 }
 
 fn blackjack_phase_label(snapshot: Option<&BlackjackSnapshot>) -> String {
@@ -579,7 +607,7 @@ fn draw_favorites_strip(frame: &mut Frame, area: Rect, pins: &[(uuid::Uuid, Stri
         ));
     }
     spans.push(Span::styled(
-        "   [] cycle · , last · g_ jump",
+        "   [] cycle · , last · g_ jump · ` game",
         Style::default().fg(theme::TEXT_FAINT()),
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);

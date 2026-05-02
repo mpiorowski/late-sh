@@ -52,6 +52,10 @@ impl State {
         &self.articles
     }
 
+    pub fn set_is_admin(&mut self, is_admin: bool) {
+        self.is_admin = is_admin;
+    }
+
     pub fn list_articles(&self) {
         self.article_service.list_articles_task();
         self.article_service.refresh_unread_count_task(self.user_id);
@@ -111,7 +115,7 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = self.last_read_at;
+        self.marker_read_at = Some(Utc::now());
         self.unread_count = 0;
         self.article_service.mark_read_task(self.user_id);
     }
@@ -257,6 +261,9 @@ impl State {
                     } if self.user_id == user_id => {
                         self.unread_count = unread_count;
                         self.last_read_at = last_read_at;
+                        if unread_count == 0 {
+                            self.marker_read_at = last_read_at;
+                        }
                     }
                     ArticleEvent::NewArticlesAvailable {
                         user_id,

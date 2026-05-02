@@ -12,9 +12,9 @@ use crate::app::{
         player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
         settings::BlackjackTableSettings,
         state::{
-            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase, SeatAction,
-            SeatPhase, Shoe, dealer_must_hit, is_bust, is_natural_blackjack, payout_credit, score,
-            settle,
+            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase,
+            SETTLEMENT_MIN_VIEW_MS, SeatAction, SeatPhase, Shoe, can_double, dealer_must_hit,
+            is_bust, is_natural_blackjack, payout_credit, score, settle,
         },
     },
 };
@@ -22,8 +22,7 @@ use crate::app::{
 const BETTING_LOCK_CAP_SECS: u64 = 30;
 const MAX_MISSED_DEALS: u8 = 3;
 const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
-const DEALER_CARD_DELAY_MS: u64 = 1100;
-const SETTLEMENT_MIN_VIEW_MS: u64 = 1500;
+const DEALER_CARD_DELAY_MS: u64 = 900;
 
 #[derive(Clone)]
 pub struct BlackjackService {
@@ -57,6 +56,10 @@ pub enum BlackjackEvent {
         bet: i64,
         outcome: Outcome,
         credit: i64,
+        new_balance: i64,
+    },
+    BalanceUpdated {
+        user_id: Uuid,
         new_balance: i64,
     },
     ActionError {
@@ -117,6 +120,7 @@ impl StakeFailure {
 enum ActionFailure {
     InvalidPhase(&'static str),
     NotSeated,
+    InsufficientChips,
     Internal(anyhow::Error),
 }
 
@@ -125,6 +129,7 @@ impl ActionFailure {
         match self {
             ActionFailure::InvalidPhase(msg) => (*msg).to_string(),
             ActionFailure::NotSeated => "sit before playing".to_string(),
+            ActionFailure::InsufficientChips => "insufficient chips".to_string(),
             ActionFailure::Internal(_) => "internal error".to_string(),
         }
     }
@@ -169,6 +174,12 @@ struct DealerStep {
     done: bool,
     settlements: Vec<Settlement>,
     left_seats: Vec<(Uuid, usize)>,
+}
+
+struct DoubleDownSuccess {
+    new_balance: i64,
+    settlements: Vec<Settlement>,
+    dealer_turn_id: Option<u64>,
 }
 
 impl BlackjackService {
@@ -670,6 +681,102 @@ impl BlackjackService {
         Ok(())
     }
 
+    pub fn double_down_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            match svc.double_down(user_id).await {
+                Ok(success) => {
+                    let _ = svc.event_tx.send(BlackjackEvent::BalanceUpdated {
+                        user_id,
+                        new_balance: success.new_balance,
+                    });
+                    if let Some(dealer_turn_id) = success.dealer_turn_id {
+                        svc.schedule_dealer_turn(dealer_turn_id);
+                    }
+                    if let Err(e) = svc.persist_settlements(success.settlements).await {
+                        tracing::error!(error = ?e, %user_id, "blackjack double_down settlement failed");
+                        let _ = svc.event_tx.send(BlackjackEvent::ActionError {
+                            user_id,
+                            message: "internal error".to_string(),
+                        });
+                    }
+                }
+                Err(failure) => {
+                    if let ActionFailure::Internal(ref e) = failure {
+                        tracing::error!(error = ?e, %user_id, "blackjack double_down failed");
+                    }
+                    let _ = svc.event_tx.send(BlackjackEvent::ActionError {
+                        user_id,
+                        message: failure.user_message(),
+                    });
+                }
+            }
+        });
+    }
+
+    async fn double_down(&self, user_id: Uuid) -> Result<DoubleDownSuccess, ActionFailure> {
+        let extra_bet = {
+            let mut table = self.table.lock().await;
+            let Some(seat_index) = table.user_seat_index(user_id) else {
+                return Err(ActionFailure::NotSeated);
+            };
+            let extra_bet = table.prepare_double_down(seat_index)?;
+            let activity_generation = table.record_activity(user_id);
+            self.publish_snapshot_locked(&table);
+            if let Some(activity_generation) = activity_generation {
+                self.schedule_inactivity_kick(user_id, activity_generation);
+            }
+            extra_bet
+        };
+
+        let new_balance = match self.chip_svc.debit_bet(user_id, extra_bet).await {
+            Ok(Some(new_balance)) => new_balance,
+            Ok(None) => {
+                let mut table = self.table.lock().await;
+                if let Some(seat_index) = table.user_seat_index(user_id) {
+                    table.clear_pending_double(seat_index);
+                }
+                table.status_message = "insufficient chips".to_string();
+                self.publish_snapshot_locked(&table);
+                return Err(ActionFailure::InsufficientChips);
+            }
+            Err(e) => {
+                let mut table = self.table.lock().await;
+                if let Some(seat_index) = table.user_seat_index(user_id) {
+                    table.clear_pending_double(seat_index);
+                }
+                table.status_message = "internal error".to_string();
+                self.publish_snapshot_locked(&table);
+                return Err(ActionFailure::Internal(e));
+            }
+        };
+
+        let (settlements, activity_generation, dealer_turn_id) = {
+            let mut table = self.table.lock().await;
+            let Some(seat_index) = table.user_seat_index(user_id) else {
+                return Ok(DoubleDownSuccess {
+                    new_balance,
+                    settlements: Vec::new(),
+                    dealer_turn_id: None,
+                });
+            };
+            let settlements = table.finish_double_down(seat_index, new_balance)?;
+            let activity_generation = table.record_activity(user_id);
+            let dealer_turn_id = table.schedule_dealer_turn_if_needed();
+            self.publish_snapshot_locked(&table);
+            (settlements, activity_generation, dealer_turn_id)
+        };
+        if let Some(activity_generation) = activity_generation {
+            self.schedule_inactivity_kick(user_id, activity_generation);
+        }
+
+        Ok(DoubleDownSuccess {
+            new_balance,
+            settlements,
+            dealer_turn_id,
+        })
+    }
+
     pub fn deal_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -965,6 +1072,7 @@ struct SeatState {
     stake_chips: Vec<i64>,
     pending_bet: Option<Bet>,
     bet: Option<Bet>,
+    pending_double: bool,
     hand: Vec<PlayingCard>,
     stood: bool,
     last_outcome: Option<Outcome>,
@@ -998,6 +1106,7 @@ impl SeatState {
             stake_chips: Vec::new(),
             pending_bet: None,
             bet: None,
+            pending_double: false,
             hand: Vec::new(),
             stood: false,
             last_outcome: None,
@@ -1037,6 +1146,9 @@ impl SeatState {
         if self.pending_bet.is_some() {
             return SeatPhase::BetPending;
         }
+        if self.pending_double {
+            return SeatPhase::ActionPending;
+        }
         if self.last_outcome.is_some() {
             return SeatPhase::Settled;
         }
@@ -1055,6 +1167,7 @@ impl SeatState {
     fn clear_round(&mut self) {
         self.pending_bet = None;
         self.bet = None;
+        self.pending_double = false;
         self.stake_chips.clear();
         self.hand.clear();
         self.stood = false;
@@ -1358,6 +1471,11 @@ impl SharedTableState {
         })
     }
 
+    fn doubled_bet_for_amount(&self, amount: i64) -> Result<Bet, ActionFailure> {
+        Bet::new_for_table(amount, self.settings.min_bet(), self.settings.max_bet() * 2)
+            .map_err(|_| ActionFailure::InvalidPhase("double would exceed table limit"))
+    }
+
     fn has_pending_bets(&self) -> bool {
         self.seats.iter().any(|seat| seat.pending_bet.is_some())
     }
@@ -1473,6 +1591,7 @@ impl SharedTableState {
         if seat.activity_generation != activity_generation
             || seat.last_activity.elapsed() < Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS)
             || seat.pending_bet.is_some()
+            || seat.pending_double
         {
             return None;
         }
@@ -1654,7 +1773,10 @@ impl SharedTableState {
     }
 
     fn hit_seat(&mut self, index: usize) -> Result<Vec<Settlement>, ActionFailure> {
-        if !self.seats[index].has_unresolved_bet() || self.seats[index].stood {
+        if !self.seats[index].has_unresolved_bet()
+            || self.seats[index].stood
+            || self.seats[index].pending_double
+        {
             return Err(ActionFailure::InvalidPhase("your hand is not active"));
         }
         self.seats[index].hand.push(self.shoe.draw());
@@ -1678,12 +1800,94 @@ impl SharedTableState {
     }
 
     fn stand_seat(&mut self, index: usize) -> Result<Vec<Settlement>, ActionFailure> {
-        if !self.seats[index].has_unresolved_bet() || self.seats[index].stood {
+        if !self.seats[index].has_unresolved_bet()
+            || self.seats[index].stood
+            || self.seats[index].pending_double
+        {
             return Err(ActionFailure::InvalidPhase("your hand is not active"));
         }
         self.seats[index].stood = true;
         self.seats[index].last_action = Some(SeatAction::Stand);
         Ok(self.advance_or_finish_round())
+    }
+
+    fn prepare_double_down(&mut self, index: usize) -> Result<i64, ActionFailure> {
+        if self.phase != Phase::PlayerTurn {
+            return Err(ActionFailure::InvalidPhase("you cannot double right now"));
+        }
+        let seat = &mut self.seats[index];
+        if !seat.has_unresolved_bet() || seat.stood || seat.pending_double {
+            return Err(ActionFailure::InvalidPhase("your hand is not active"));
+        }
+        if !can_double(&seat.hand) {
+            return Err(ActionFailure::InvalidPhase(
+                "double down is only available on two cards",
+            ));
+        }
+        let Some(bet) = seat.bet else {
+            return Err(ActionFailure::InvalidPhase("no locked bet to double"));
+        };
+        seat.pending_double = true;
+        self.status_message = format!("Seat {} is doubling down...", index + 1);
+        Ok(bet.amount())
+    }
+
+    fn clear_pending_double(&mut self, index: usize) {
+        self.seats[index].pending_double = false;
+    }
+
+    fn finish_double_down(
+        &mut self,
+        index: usize,
+        new_balance: i64,
+    ) -> Result<Vec<Settlement>, ActionFailure> {
+        if self.phase != Phase::PlayerTurn {
+            self.clear_pending_double(index);
+            return Err(ActionFailure::InvalidPhase("you cannot double right now"));
+        }
+        if !self.seats[index].pending_double {
+            return Err(ActionFailure::InvalidPhase("your hand is not active"));
+        }
+        if !self.seats[index].has_unresolved_bet()
+            || self.seats[index].stood
+            || !can_double(&self.seats[index].hand)
+        {
+            self.clear_pending_double(index);
+            return Err(ActionFailure::InvalidPhase("your hand is not active"));
+        }
+
+        let current_bet = self.seats[index]
+            .bet
+            .ok_or(ActionFailure::InvalidPhase("no locked bet to double"))?;
+        let doubled_amount = current_bet.amount() * 2;
+        let doubled_bet = self.doubled_bet_for_amount(doubled_amount)?;
+
+        self.seats[index].pending_double = false;
+        self.seats[index].bet = Some(doubled_bet);
+        self.seats[index].hand.push(self.shoe.draw());
+        self.seats[index].last_action = Some(SeatAction::Double);
+        self.update_player_balance(
+            self.seats[index].user_id.ok_or(ActionFailure::NotSeated)?,
+            new_balance,
+        );
+
+        let mut settlements = Vec::new();
+        if is_bust(&self.seats[index].hand) {
+            if let Some(settlement) = self.finish_seat(index, Outcome::DealerWin) {
+                settlements.push(settlement);
+            }
+            settlements.extend(self.advance_or_finish_round());
+        } else {
+            self.seats[index].stood = true;
+            self.status_message = format!(
+                "Seat {} doubles to {} and stands on {}.",
+                index + 1,
+                doubled_amount,
+                score(&self.seats[index].hand).total
+            );
+            settlements.extend(self.advance_or_finish_round());
+        }
+        Ok(settlements)
     }
 
     fn advance_or_finish_round(&mut self) -> Vec<Settlement> {
@@ -1706,7 +1910,7 @@ impl SharedTableState {
 
     fn auto_stand_remaining(&mut self) -> Vec<Settlement> {
         for seat in &mut self.seats {
-            if seat.has_unresolved_bet() && !seat.stood {
+            if seat.has_unresolved_bet() && !seat.stood && !seat.pending_double {
                 seat.stood = true;
                 seat.last_action = Some(SeatAction::MissedAction);
                 seat.deferred_leave_reason = Some(DeferredLeaveReason::MissedAction);
@@ -1907,6 +2111,70 @@ mod tests {
         assert_eq!(table.seats[seat_a].last_action, Some(SeatAction::Stand));
         assert!(!table.seats[seat_b].stood);
         assert_eq!(table.phase, Phase::PlayerTurn);
+    }
+
+    #[test]
+    fn double_down_doubles_bet_draws_once_and_stands() {
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        let user_id = user_id();
+        let seat_index = table.sit(user_id).expect("seat should be open");
+        table.seats[seat_index].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.seats[seat_index].hand = vec![card(CardRank::Number(10)), card(CardRank::Number(6))];
+        table.dealer_hand = vec![card(CardRank::Number(10)), card(CardRank::Number(7))];
+        table.shoe = Shoe::from_top(vec![card(CardRank::Number(2))]);
+        table.phase = Phase::PlayerTurn;
+
+        let extra_bet = table
+            .prepare_double_down(seat_index)
+            .expect("double should be available");
+        let settlements = table
+            .finish_double_down(seat_index, 900)
+            .expect("double should finish");
+
+        assert_eq!(extra_bet, MIN_BET);
+        assert!(settlements.is_empty());
+        assert_eq!(
+            table.seats[seat_index].bet.map(Bet::amount),
+            Some(MIN_BET * 2)
+        );
+        assert_eq!(table.seats[seat_index].hand.len(), 3);
+        assert!(table.seats[seat_index].stood);
+        assert!(!table.seats[seat_index].pending_double);
+        assert_eq!(
+            table.seats[seat_index].last_action,
+            Some(SeatAction::Double)
+        );
+        assert_eq!(table.phase, Phase::DealerTurn);
+    }
+
+    #[test]
+    fn double_down_bust_settles_doubled_bet() {
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        let user_id = user_id();
+        let seat_index = table.sit(user_id).expect("seat should be open");
+        table.seats[seat_index].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.seats[seat_index].hand = vec![card(CardRank::Number(10)), card(CardRank::Number(9))];
+        table.dealer_hand = vec![card(CardRank::Number(10)), card(CardRank::Number(7))];
+        table.shoe = Shoe::from_top(vec![card(CardRank::Number(5))]);
+        table.phase = Phase::PlayerTurn;
+
+        table
+            .prepare_double_down(seat_index)
+            .expect("double should be available");
+        let settlements = table
+            .finish_double_down(seat_index, 900)
+            .expect("double should finish");
+
+        assert_eq!(settlements.len(), 1);
+        assert_eq!(settlements[0].bet, MIN_BET * 2);
+        assert_eq!(settlements[0].outcome, Outcome::DealerWin);
+        assert_eq!(settlements[0].credit, 0);
+        assert_eq!(
+            table.seats[seat_index].last_outcome,
+            Some(Outcome::DealerWin)
+        );
+        assert_eq!(table.seats[seat_index].last_net_change, -(MIN_BET * 2));
+        assert_eq!(table.phase, Phase::Settling);
     }
 
     #[test]

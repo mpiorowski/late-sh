@@ -31,6 +31,7 @@ struct CachedUnicodeQuery {
 
 pub struct IconCatalogData {
     emoji_sections: Vec<IconSection>,
+    kaomoji_sections: Vec<IconSection>,
     unicode_browse_sections: Vec<IconSection>,
     nerd_sections: Vec<IconSection>,
     unicode_query_cache: RefCell<Vec<CachedUnicodeQuery>>,
@@ -39,6 +40,53 @@ pub struct IconCatalogData {
 const COMMON_EMOJI: &[&str] = &[
     "👍", "👎", "🙏", "🙌", "🙋", "🐐", "😂", "🫡", "👀", "💀", "🎉", "🤝", "🧡", "✅", "🔥", "⚡",
     "🚀", "🤔", "🫠", "🌱", "🤖", "🔧", "💎", "⭐", "🎯",
+];
+
+// TODO: use kaomoji.json instead of hardcoding it here
+const COMMON_KAOMOJI: &[(&str, &str)] = &[
+    ("(╯`Д´)╯︵ ┻━┻", "table flip"),
+    ("(∩｀-´)⊃━☆ﾟ.*･｡ﾟ", "wizard"),
+    ("(˶ᵔᗜᵔ˶)ﾉﾞ", "waving"),
+    ("٩(◕‿◕｡)۶", "dancing"),
+    ("୧((#Φ益Φ#))୨", "angry"),
+    ("(* ^ ω ^)", "happy smile"),
+    ("*⸜( •ᴗ• )⸝*", "cheer yay"),
+    ("(>⩊<)", "excited laugh"),
+    ("(„• ᴗ •„)", "cute blush"),
+    ("(*￣▽￣)b", "thumbs up good"),
+    ("(´,,•ω•,,)♡", "love affection"),
+    ("(⁄ ⁄•⁄ω⁄•⁄ ⁄)", "blush shy"),
+    ("(⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄)", "embarrassed flustered"),
+    ("(；￣Д￣)", "shocked wtf"),
+    ("( ` ω ´ )", "angry mad"),
+    ("(｡•́︿•̀｡)", "sad pleading"),
+    ("(っ˘̩╭╮˘̩)っ", "cry hug"),
+    ("ლ(ಠ_ಠ ლ)", "disapproval look"),
+    ("ʕ•ᴥ•ʔ", "bear"),
+    ("૮ ˶ᵔ ᵕ ᵔ˶ ა", "happy"),
+    ("(˶˃ ᵕ ˂˶) .ᐟ.ᐟ", "happy blush"),
+    ("₍₍⚞(˶ˆᗜˆ˵)⚟⁾⁾", "excited"),
+    ("ദ്ദി(˵ •̀ ᴗ - ˵ ) ✧", "proud confident"),
+    ("₍^. .^₎⟆", "kitty"),
+    ("(˵◝ ⩊  ◜˵マ", "roger"),
+    ("(ᵕ—ᴗ—)ᵕ", "content"),
+    ("ฅ^>⩊<^ ฅ", "happy cat"),
+    ("｡°(°¯᷄◠¯᷅°)°｡", "sobbing"),
+    ("(╥‸╥)", "crying"),
+    ("(ㆆ_ㆆ)", "speechless"),
+    ("(｡ᵕ ◞ _◟)", "sad"),
+    ("(˶°ㅁ°)!!", "shocked"),
+    (
+        "〜\u{2060}(\u{2060}꒪\u{2060}꒳\u{2060}꒪\u{2060})\u{2060}〜",
+        "vibing",
+    ),
+    ("( ◡̀_◡́)ᕤ", "strong flex"),
+    ("(๑>؂•̀๑)", "teheh"),
+    ("˶ˊᜊˋ˶", "singing"),
+    ("𓆝 ⋆｡𖦹°‧🫧", "fih."),
+    ("꒰⑅ᵕ༚ᵕ꒱˖", "happy blushing"),
+    ("ꉂ(˵˃ ᗜ ˂˵)", "happy laugh"),
+    ("(˶°▄°˶)", "skeptical"),
 ];
 
 const COMMON_NERD_NAMES: &[&str] = &[
@@ -90,6 +138,11 @@ impl IconCatalogData {
             },
         ];
 
+        let kaomoji_sections = vec![IconSection {
+            title: "Kaomoji",
+            entries: build_kaomoji(),
+        }];
+
         let unicode_browse_sections = vec![
             IconSection {
                 title: "Common Unicode",
@@ -117,6 +170,7 @@ impl IconCatalogData {
 
         Self {
             emoji_sections,
+            kaomoji_sections,
             unicode_browse_sections,
             nerd_sections,
             unicode_query_cache: RefCell::new(Vec::with_capacity(UNICODE_QUERY_CACHE_CAP)),
@@ -132,6 +186,10 @@ impl IconCatalogData {
         match tab {
             IconPickerTab::Emoji => {
                 let sections = filter_sections(&self.emoji_sections, query);
+                f(&sections)
+            }
+            IconPickerTab::Kaomoji => {
+                let sections = filter_sections(&self.kaomoji_sections, query);
                 f(&sections)
             }
             IconPickerTab::Unicode => {
@@ -226,6 +284,13 @@ fn build_emoji_common() -> Vec<IconEntry> {
 fn build_emoji_all() -> Vec<IconEntry> {
     emojis::iter()
         .map(|emoji| make_entry(emoji.as_str().to_string(), emoji.name().to_string()))
+        .collect()
+}
+
+fn build_kaomoji() -> Vec<IconEntry> {
+    COMMON_KAOMOJI
+        .iter()
+        .map(|&(icon, name)| make_entry(icon.to_string(), name.to_string()))
         .collect()
 }
 

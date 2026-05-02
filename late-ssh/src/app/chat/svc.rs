@@ -20,14 +20,25 @@ use late_core::{
         },
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
+        moderation_audit_log::ModerationAuditLog,
+        room_ban::RoomBan,
         user::User,
     },
 };
+use serde_json::json;
 use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::app::bonsai::state::stage_for;
+use crate::authz::{Caps, Permissions, Tier};
 use crate::metrics;
+use crate::moderation::event::ModerationEvent;
+use crate::moderation::service::{
+    ModerationService, ensure_message_permission, target_tier_for_user_id,
+};
+use crate::moderation::session_effects::ModerationSessionEffects;
+use crate::session::SessionRegistry;
+use crate::state::ActiveUsers;
 
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
@@ -41,7 +52,11 @@ pub struct ChatService {
     username_tx: watch::Sender<Arc<Vec<String>>>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
     evt_tx: broadcast::Sender<ChatEvent>,
+    moderation_event_tx: broadcast::Sender<ModerationEvent>,
     notification_svc: super::notifications::svc::NotificationService,
+    active_users: Option<ActiveUsers>,
+    session_registry: Option<SessionRegistry>,
+    force_admin: bool,
     username_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
     refresh_scheduler_started: Arc<AtomicBool>,
@@ -273,12 +288,19 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    ModCommandOutput {
+        user_id: Uuid,
+        request_id: Uuid,
+        lines: Vec<String>,
+        success: bool,
+    },
 }
 
 impl ChatService {
     pub fn new(db: Db, notification_svc: super::notifications::svc::NotificationService) -> Self {
         let (username_tx, username_rx) = watch::channel(Arc::new(Vec::new()));
         let (evt_tx, _) = broadcast::channel(512);
+        let (moderation_event_tx, _) = broadcast::channel(256);
         let (refresh_signal_tx, refresh_signal_rx) = mpsc::unbounded_channel();
 
         Self {
@@ -286,7 +308,11 @@ impl ChatService {
             username_tx,
             username_rx,
             evt_tx,
+            moderation_event_tx,
             notification_svc,
+            active_users: None,
+            session_registry: None,
+            force_admin: false,
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
             refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
@@ -295,12 +321,83 @@ impl ChatService {
             read_permits: Arc::new(Semaphore::new(8)),
         }
     }
+
+    pub fn new_with_active_users(
+        db: Db,
+        notification_svc: super::notifications::svc::NotificationService,
+        active_users: ActiveUsers,
+    ) -> Self {
+        let mut service = Self::new(db, notification_svc);
+        service.active_users = Some(active_users);
+        service
+    }
+
+    pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
+        self.session_registry = Some(session_registry);
+        self
+    }
+
+    pub fn with_force_admin(mut self, force_admin: bool) -> Self {
+        self.force_admin = force_admin;
+        self
+    }
+
     pub fn subscribe_usernames(&self) -> watch::Receiver<Arc<Vec<String>>> {
         self.ensure_username_refresh_task();
         self.username_rx.clone()
     }
+
     pub fn subscribe_events(&self) -> broadcast::Receiver<ChatEvent> {
         self.evt_tx.subscribe()
+    }
+
+    pub fn subscribe_moderation_events(&self) -> broadcast::Receiver<ModerationEvent> {
+        self.moderation_event_tx.subscribe()
+    }
+
+    fn moderation_session_effects(&self) -> ModerationSessionEffects {
+        ModerationSessionEffects::new(self.active_users.clone(), self.session_registry.clone())
+    }
+
+    pub fn run_mod_command_task(
+        &self,
+        user_id: Uuid,
+        permissions: Permissions,
+        request_id: Uuid,
+        command: String,
+    ) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.run_mod_command_task",
+            user_id = %user_id,
+            request_id = %request_id
+        );
+        tokio::spawn(
+            async move {
+                let moderation = service.moderation_service();
+                let (success, lines) =
+                    match moderation.run_command(user_id, permissions, &command).await {
+                        Ok(lines) => (true, lines),
+                        Err(e) => (false, vec![format!("error: {e}")]),
+                    };
+                let _ = service.evt_tx.send(ChatEvent::ModCommandOutput {
+                    user_id,
+                    request_id,
+                    lines,
+                    success,
+                });
+            }
+            .instrument(span),
+        );
+    }
+
+    fn moderation_service(&self) -> ModerationService {
+        ModerationService::new(
+            self.db.clone(),
+            self.moderation_session_effects(),
+            self.moderation_event_tx.clone(),
+            self.force_admin,
+        )
     }
 
     async fn refresh_username_directory(&self) -> Result<()> {
@@ -836,6 +933,8 @@ impl ChatService {
                     Err(e) => {
                         let message = if e.to_string().contains("not a member") {
                             "You are not a member of this room."
+                        } else if e.to_string().contains("banned from this room") {
+                            "You are banned from this room."
                         } else if e.to_string().contains("admin-only") {
                             "Only admins can post in #announcements."
                         } else {
@@ -893,6 +992,9 @@ impl ChatService {
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
+        if RoomBan::is_active_for_room_and_user(&client, room_id, user_id).await? {
+            anyhow::bail!("user is banned from this room");
+        }
         if let Some(reply_to_message_id) = reply_to_message_id {
             let reply_target = ChatMessage::get(&client, reply_to_message_id)
                 .await?
@@ -945,13 +1047,13 @@ impl ChatService {
         message_id: Uuid,
         new_body: String,
         request_id: Uuid,
-        is_admin: bool,
+        permissions: Permissions,
     ) {
         let service = self.clone();
         tokio::spawn(
             async move {
                 match service
-                    .edit_message(user_id, message_id, new_body, is_admin)
+                    .edit_message(user_id, message_id, new_body, permissions)
                     .await
                 {
                     Err(e) => {
@@ -991,27 +1093,47 @@ impl ChatService {
         user_id: Uuid,
         message_id: Uuid,
         new_body: String,
-        is_admin: bool,
+        permissions: Permissions,
     ) -> Result<()> {
         let new_body = new_body.trim_start_matches('\n').trim_end();
         if new_body.is_empty() {
             anyhow::bail!("edited body is empty");
         }
 
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let existing = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("message not found"))?;
-        if existing.user_id != user_id && !is_admin {
-            anyhow::bail!("cannot edit this message");
-        }
-
-        let params = ChatMessageParams {
-            room_id: existing.room_id,
-            user_id: existing.user_id,
-            body: new_body.to_string(),
+        let is_owner = existing.user_id == user_id;
+        let target_tier = if is_owner {
+            Tier::Regular
+        } else {
+            target_tier_for_user_id(&client, existing.user_id).await?
         };
-        let updated = ChatMessage::update(&client, message_id, params).await?;
+        ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
+
+        let tx = client.transaction().await?;
+        let row = tx
+            .query_one(
+                "UPDATE chat_messages
+                 SET body = $1, updated = current_timestamp
+                 WHERE id = $2
+                 RETURNING *",
+                &[&new_body, &message_id],
+            )
+            .await?;
+        let updated = ChatMessage::from(row);
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(is_owner),
+            user_id,
+            "message_edit",
+            "message",
+            Some(message_id),
+            json!({ "room_id": existing.room_id }),
+        )
+        .await?;
+        tx.commit().await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, existing.room_id).await?;
         let (mut usernames, mut bonsai_glyphs) =
             Self::load_chat_author_metadata(&client, &[existing.user_id]).await?;
@@ -1773,12 +1895,15 @@ impl ChatService {
         Ok(())
     }
 
-    pub fn delete_message_task(&self, user_id: Uuid, message_id: Uuid, is_admin: bool) {
+    pub fn delete_message_task(&self, user_id: Uuid, message_id: Uuid, permissions: Permissions) {
         let service = self.clone();
         let span = info_span!("chat.delete_message", user_id = %user_id, message_id = %message_id);
         tokio::spawn(
             async move {
-                match service.delete_message(user_id, message_id, is_admin).await {
+                match service
+                    .delete_message(user_id, message_id, permissions)
+                    .await
+                {
                     Ok(room_id) => {
                         let _ = service.evt_tx.send(ChatEvent::MessageDeleted {
                             user_id,
@@ -1802,21 +1927,50 @@ impl ChatService {
         &self,
         user_id: Uuid,
         message_id: Uuid,
-        is_admin: bool,
+        permissions: Permissions,
     ) -> Result<Uuid> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         // Look up the message to get room_id
         let msg = ChatMessage::get(&client, message_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Message not found"))?;
-        let count = if is_admin {
-            ChatMessage::delete_by_admin(&client, message_id).await?
+        let is_owner = msg.user_id == user_id;
+        let target_tier = if is_owner {
+            Tier::Regular
         } else {
-            ChatMessage::delete_by_author(&client, message_id, user_id).await?
+            target_tier_for_user_id(&client, msg.user_id).await?
+        };
+        ensure_message_permission(
+            permissions,
+            is_owner,
+            Caps::DELETE_OTHER_MESSAGE,
+            target_tier,
+        )?;
+        let tx = client.transaction().await?;
+        let count = if is_owner {
+            tx.execute(
+                "DELETE FROM chat_messages WHERE id = $1 AND user_id = $2",
+                &[&message_id, &user_id],
+            )
+            .await?
+        } else {
+            tx.execute("DELETE FROM chat_messages WHERE id = $1", &[&message_id])
+                .await?
         };
         if count == 0 {
             anyhow::bail!("Cannot delete this message");
         }
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(is_owner),
+            user_id,
+            "message_delete",
+            "message",
+            Some(message_id),
+            json!({ "room_id": msg.room_id }),
+        )
+        .await?;
+        tx.commit().await?;
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
     }

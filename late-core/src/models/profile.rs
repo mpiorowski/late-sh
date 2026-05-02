@@ -57,7 +57,7 @@ impl Default for Profile {
             notify_cooldown_mins: 0,
             notify_format: None,
             theme_id: None,
-            enable_background_color: false,
+            enable_background_color: true,
             show_dashboard_header: true,
             show_dashboard_room_showcases: true,
             show_right_sidebar: true,

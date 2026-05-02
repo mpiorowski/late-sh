@@ -20,11 +20,12 @@
 //! play user and trusts the caller to have passed the appropriate
 //! transport-shaped session_token / session_rx / activity_feed_rx.
 
-use late_core::models::user::User;
+use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::app::artboard::svc::ArtboardSnapshotService;
 use crate::app::state::SessionConfig;
+use crate::authz::Permissions;
 use crate::session::SessionMessage;
 use crate::ssh::late_ssh_theme_id;
 use crate::state::{ActivityEvent, State};
@@ -157,6 +158,19 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             0
         }
     };
+    let artboard_ban = match state.db.get().await {
+        Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
+            Ok(ban) => ban,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to check artboard ban status");
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to get db client for artboard ban check");
+            None
+        }
+    };
 
     SessionConfig {
         cols,
@@ -205,8 +219,9 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         active_users: Some(state.active_users.clone()),
         activity_feed_rx,
         user_id,
-        is_admin: user.is_admin || state.config.force_admin,
-        is_mod: user.is_mod,
+        permissions: Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator),
+        artboard_banned: artboard_ban.is_some(),
+        artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
         my_vote,
         is_new_user,

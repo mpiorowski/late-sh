@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-30 (Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
+- Last updated: 2026-05-01 (CLI details in `late-cli/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, and a shared multi-user ASCII Artboard. Detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, and a shared multi-user ASCII Artboard. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -421,21 +421,16 @@ Nonograms intentionally use an offline generation pipeline instead of generating
 Current invariant:
 - `late-ssh` is runtime-only for nonograms: read JSON assets, select a puzzle, render/play it, and persist per-user progress. Generation belongs in `late-core/src/bin/gen_nonograms.rs`, not in the SSH hot path.
 
-### 2.9 Local CLI MVP
+### 2.9 Local CLI
 
-`late-cli/src/main.rs` is the standalone local launcher (companion CLI).
+`late-cli` builds the `late` companion binary. It launches the SSH TUI, plays the audio stream locally, sends visualizer frames over `/api/ws/pair`, and receives paired mute/volume controls from the TUI.
 
-1. **Standalone crate** — `late-cli` has zero dependency on `late-core`. `AnalyzerConfig` is inlined so the crate can be built independently.
-2. **Single-process audio path** — It opens the audio stream once, decodes MP3 locally with symphonia, feeds local playback via `cpal`, and derives visualizer/analyzer data from that same decoded stream. Native output sample rate is preferred; otherwise it chooses the nearest supported device rate and applies in-process linear resampling.
-3. **SSH transport modes** — `late-cli` now has a runtime transport switch, but native is the default. `--ssh-mode old` preserves the original OpenSSH-through-pty path, while `--ssh-mode native` uses an embedded `russh` client. The old path still intercepts the one-line `LATE_SESSION_TOKEN=<base64url-uuid-v7>` banner from the PTY stream. The native path now does a dedicated `late-cli-token-v1` SSH `exec` request on a separate session channel, expects JSON `{ "session_token": "..." }`, and then opens the real PTY shell channel with no banner parsing and no fallback. In both modes stdin stays blocked until the token phase completes so pre-handshake keystrokes do not leak into the app.
-4. **Identity + host trust + pairing** — Client identity remains SSH-key based, but the interactive fallback now generates `~/.ssh/id_late_sh_ed25519` natively instead of shelling out to `ssh-keygen`. Operators can override the key path with `--key` or `LATE_KEY_FILE`; if the file does not exist and the terminal is interactive, the CLI offers to generate the key at that exact path. `LATE_IDENTITY_FILE` is still accepted as a legacy env fallback. Native mode verifies server keys against `~/.ssh/known_hosts` and learns first-seen keys with accept-new semantics. The CLI then uses `/api/ws/pair` to forward analyzer frames, accept paired control commands, and report `client_state { client_kind, ssh_mode, platform, muted, volume_percent }`.
-5. **Distribution + platform notes** — The landing page advertises both `curl -fsSL https://cli.late.sh/install.sh | bash` and a source build path. CLI releases go through `deploy_cli`. Audio playback is still `cpal`-based and requires a working local output device. The launcher now has a native SSH path intended to remove the hard OpenSSH dependency over time; on Unix it forwards resize via `SIGWINCH`, and on non-Unix it polls terminal size changes and emits SSH `window-change` requests. Repo helper scripts now include native-mode bash launchers plus PowerShell equivalents for local/prod flows. WSL-specific audio hints still check `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER`.
-
-Current invariants:
-- The installer defaults to `https://cli.late.sh`, and the CLI supports `-v` / `--verbose` for stderr debug logging.
-- Browser and CLI share the same paired-client protocol, so the TUI can show target kind plus live mute/volume state in the sidebar.
-- The CLI currently requires a working local audio output device to fully start.
-- Native SSH is now the default launcher path; `--ssh-mode old` remains the compatibility fallback. Native mode requires a server that supports the `late-cli-token-v1` SSH exec handshake.
+Root-level contracts:
+- `late-cli` is a standalone crate with no `late-core` dependency.
+- Browser and CLI share the paired-client WebSocket schema, so the TUI can show client kind plus live mute/volume state.
+- Native SSH is the default launcher path. `--ssh-mode old` remains the legacy OpenSSH-through-PTY compatibility path, and `--ssh-mode openssh` is the OpenSSH-managed path for hardware-backed keys.
+- Native and OpenSSH modes require server support for the `late-cli-token-v1` SSH exec handshake.
+- Detailed CLI architecture, flags/env vars, audio pipeline, installer behavior, SSH modes, and fragile invariants live in `late-cli/CONTEXT.md`.
 
 ### 2.10 Artboard (Shared ASCII Canvas) [STABLE]
 
@@ -493,6 +488,7 @@ late-sh/
 │   ├── assets/nonograms/       # Prebuilt puzzle packs
 │   └── tests/                  # Integration/smoke tests grouped by feature
 ├── late-cli/
+│   ├── CONTEXT.md              # Companion CLI details: SSH modes, pairing, audio, installers
 │   └── src/                    # Standalone CLI: main + config, identity, raw_mode, pty, ssh, ws, audio/{decoder,resampler,output,decoder_thread,analyzer}
 ├── late-web/
 │   ├── src/
@@ -521,7 +517,7 @@ late-sh/
 **WS payloads (client → server):**
 - `{ "event": "heartbeat" }`
 - `{ "event": "viz", "position_ms": u64, "bands": [f32; 8], "rms": f32 }`
-- `{ "event": "client_state", "client_kind": "browser" | "cli", "muted": bool, "volume_percent": u8 }`
+- `{ "event": "client_state", "client_kind": "browser" | "cli", "ssh_mode"?: "native" | "openssh" | "old", "platform"?: "android" | "linux" | "macos" | "windows", "muted": bool, "volume_percent": u8 }`
 
 **WS payloads (server → client):**
 - `{ "event": "toggle_mute" }`
@@ -559,7 +555,7 @@ late-sh/
 
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_mod` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_games_sidebar` (bool, default-on when absent), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
+| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_games_sidebar` (bool, default-on when absent), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
@@ -808,12 +804,9 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, dashboard favorite
 - **Web Audio `createMediaElementSource` is one-shot:** Can only be called once per `<audio>` element. AudioContext + source node must be created once and reused across play/pause cycles. Disconnect suspends the context (`audioCtx.suspend()`), replay resumes it — never close and recreate.
 - **Browser audio pairing status must not be stomped by WS:** WS `onclose`/`onerror` must check `status !== 'playing'` before setting `'disconnected'`, otherwise a WS drop kills the "streaming" UI while audio is still playing fine
 - **Paired-client control routing is latest-wins per token:** `PairedClientRegistry` stores one outbound sender/state entry per session token. If multiple browser/CLI clients pair against the same token, the most recent registration owns control/state until it disconnects.
-- **CLI visualizer follows audible output now:** The CLI analyzer ring must record post-mute/post-volume samples, not raw decoded samples, otherwise the TUI visualizer drifts from what the user actually hears.
-- **CLI output sample-rate fallback is device-driven:** Prefer native `44.1 kHz` playback when the output backend supports it; only resample when the chosen `cpal` device config requires a different rate such as `48 kHz`.
-- **Web/CLI Audio and WS Resiliency:** Both paired clients use a 10-attempt retry loop (2s delay) for WebSocket disconnections and audio stream failures. Web Audio reconstructs elements with cache-busting `?t=` URLs, and CLI re-probes `SymphoniaStreamDecoder` in place, so both recover seamlessly from `ERR_NETWORK_CHANGED` without dropping the session.
+- **Web/CLI Audio and WS Resiliency:** Both paired clients use bounded retry loops for WebSocket disconnections and audio stream failures. Web Audio reconstructs elements with cache-busting `?t=` URLs, and CLI stream/audio specifics live in `late-cli/CONTEXT.md`.
 - **Browser and CLI viz payloads share schema, not implementation:** Both paired clients send `{ event: "viz", position_ms, bands, rms }`, but the browser uses Web Audio `AnalyserNode` while the CLI uses an in-process Rust FFT over playback samples. Expect similar behavior, not identical numbers.
-- **CLI binary must forward local terminal resizes:** The `late` binary runs SSH inside a local PTY and must propagate `SIGWINCH` size changes into that PTY so side-by-side panes and split windows reflow correctly after startup.
-- **CLI must suppress pre-token input:** The local `late` binary must not forward stdin into the interactive SSH PTY until the pairing token exchange has completed. In subprocess mode that still means waiting for the server's `LATE_SESSION_TOKEN=` banner; in native mode it means waiting for the dedicated `late-cli-token-v1` SSH exec handshake response. Any keys typed during handshake/welcome race windows are intentionally discarded, and pending terminal input is flushed immediately before forwarding starts.
+- **CLI invariants live locally:** SSH modes, token handshakes, identity generation, local audio pipeline, terminal resize forwarding, and pre-token input gating are documented in `late-cli/CONTEXT.md`.
 - **Activity feed broadcast timing:** `broadcast::Receiver` only sees messages sent AFTER subscription. The receiver must be created in `auth_publickey` (before login event is sent), stored on `ClientHandler`, then `.take()`'d into `SessionConfig` in `pty_request`. Creating the receiver later misses the user's own login event.
 - **Leaderboard refresh is async, badges are eventually consistent:** `LeaderboardService` refreshes every 30s. A new daily win won't appear in the leaderboard or chat badges until the next refresh cycle. Activity feed callouts are immediate (fire-and-forget from `record_win_task`).
 - **Streak SQL uses gaps-and-islands:** A streak is "current" if its last day is today or yesterday. This means a user who hasn't played today still keeps their streak visible until midnight UTC tomorrow. The `UNION` across `sudoku_daily_wins` and `nonogram_daily_wins` deduplicates dates so playing both games on the same day counts as one streak day.

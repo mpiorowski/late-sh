@@ -17,6 +17,7 @@ pub(super) struct SymphoniaStreamDecoder {
     decoder: Box<dyn Decoder>,
     track_id: u32,
     sample_buf: Vec<f32>,
+    convert_buf: Option<SampleBuffer<f32>>,
     sample_pos: usize,
     spec: AudioSpec,
 }
@@ -92,6 +93,7 @@ impl SymphoniaStreamDecoder {
             decoder,
             track_id,
             sample_buf: Vec::new(),
+            convert_buf: None,
             sample_pos: 0,
             spec,
         })
@@ -111,7 +113,7 @@ impl SymphoniaStreamDecoder {
             let decoded = self.decoder.decode(&packet)?;
             self.sample_buf.clear();
             self.sample_pos = 0;
-            push_interleaved_samples(&mut self.sample_buf, decoded)?;
+            push_interleaved_samples(&mut self.sample_buf, &mut self.convert_buf, decoded)?;
             return Ok(true);
         }
     }
@@ -201,9 +203,26 @@ fn find_mp3_sync_offset(bytes: &[u8]) -> Option<usize> {
     None
 }
 
-fn push_interleaved_samples(out: &mut Vec<f32>, decoded: AudioBufferRef<'_>) -> Result<()> {
+fn push_interleaved_samples(
+    out: &mut Vec<f32>,
+    convert_buf: &mut Option<SampleBuffer<f32>>,
+    decoded: AudioBufferRef<'_>,
+) -> Result<()> {
     let spec = *decoded.spec();
-    let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+    let required_samples = decoded.frames() * spec.channels.count();
+    let needs_new = match convert_buf.as_ref() {
+        Some(buf) => buf.capacity() < required_samples,
+        None => true,
+    };
+
+    if needs_new {
+        *convert_buf = Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
+    }
+
+    let buf = convert_buf
+        .as_mut()
+        .context("sample conversion buffer missing")?;
+    buf.clear();
     buf.copy_interleaved_ref(decoded);
     out.extend_from_slice(buf.samples());
     Ok(())

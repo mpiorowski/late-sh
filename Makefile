@@ -8,7 +8,7 @@ CARGO_TARGET_DIR ?= /app/target
 INSTANCE ?= late                                            # Prefix for container names; bump (e.g. late2) for a parallel clone
 
 # --- SSH ---
-LATE_FORCE_ADMIN ?= 1
+LATE_FORCE_ADMIN ?= 0
 LATE_SSH_PORT ?= 2222                                       # SSH server listen port
 LATE_API_PORT ?= 4000                                       # HTTP API listen port
 LATE_SSH_OPEN ?= 1                                          # Allow connections without auth (1=open, 0=require key)
@@ -160,6 +160,7 @@ check:
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build
+
 startm: .env keys
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
 down:
