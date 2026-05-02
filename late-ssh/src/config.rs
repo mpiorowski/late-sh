@@ -12,8 +12,7 @@ pub struct AiConfig {
 
 #[derive(Clone, Debug)]
 pub struct WebTunnelConfig {
-    pub enabled: bool,
-    pub token: Option<String>,
+    pub token: String,
     pub username: String,
     pub fingerprint: String,
 }
@@ -65,12 +64,6 @@ fn required_bool(key: &str) -> anyhow::Result<bool> {
 
 fn optional(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
-}
-
-fn optional_bool(key: &str) -> bool {
-    optional(key)
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
 }
 
 impl Config {
@@ -126,10 +119,9 @@ impl Config {
             "ai: @bot chat responder model and status"
         );
         tracing::info!(
-            enabled = self.web_tunnel.enabled,
-            has_token = self.web_tunnel.token.is_some(),
             username = %self.web_tunnel.username,
-            "web-tunnel: optional browser TUI display route"
+            token_len = self.web_tunnel.token.len(),
+            "web-tunnel: browser TUI display route"
         );
     }
 
@@ -149,10 +141,9 @@ impl Config {
             dbname: required("LATE_DB_NAME")?,
             max_pool_size: required_parse("LATE_DB_POOL_SIZE")?,
         };
-        let web_tunnel_enabled = optional_bool("LATE_WEB_TUNNEL_ENABLED");
-        let web_tunnel_token = optional("LATE_WEB_TUNNEL_TOKEN");
-        if web_tunnel_enabled && web_tunnel_token.is_none() {
-            anyhow::bail!("LATE_WEB_TUNNEL_TOKEN must be set when LATE_WEB_TUNNEL_ENABLED=1");
+        let web_tunnel_token = required("LATE_WEB_TUNNEL_TOKEN")?;
+        if web_tunnel_token.trim().is_empty() {
+            anyhow::bail!("LATE_WEB_TUNNEL_TOKEN must not be empty");
         }
 
         Ok(Self {
@@ -190,7 +181,6 @@ impl Config {
             ws_pair_max_attempts_per_ip: required_parse("LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP")?,
             ws_pair_rate_limit_window_secs: required_parse("LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS")?,
             web_tunnel: WebTunnelConfig {
-                enabled: web_tunnel_enabled,
                 token: web_tunnel_token,
                 username: optional("LATE_WEB_TUNNEL_USERNAME")
                     .unwrap_or_else(|| "web-demo".to_string()),

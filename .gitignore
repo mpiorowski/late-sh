@@ -11,6 +11,7 @@ result-*
 late-ssh/assets/nonograms/.number-loom-validation/
 server_key
 server_key.pub
+.web_tunnel_token
 
 # draw.io temp/backup files
 *.bkp

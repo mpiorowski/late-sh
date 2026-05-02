@@ -46,8 +46,8 @@ LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (us
 LATE_SSH_INTERNAL_URL ?= http://service-ssh:$(LATE_API_PORT) # Internal SSH API URL (used by web server)
 LATE_SSH_PUBLIC_URL ?= localhost:$(LATE_API_PORT)           # Public SSH API URL (used by browser for WS)
 LATE_AUDIO_URL ?= http://icecast:8000                       # Upstream audio URL used by late-web /stream proxy
-LATE_WEB_TUNNEL_ENABLED ?= 1                                # Enable browser TUI at /play in local dev
-LATE_WEB_TUNNEL_TOKEN ?= dev-web-tunnel                     # Shared token for late-web -> late-ssh web terminal
+LATE_WEB_TUNNEL_TOKEN_FILE ?= .web_tunnel_token             # Local generated shared token file
+LATE_WEB_TUNNEL_TOKEN ?=                                    # Override to force a specific shared token
 
 # --- Vote ---
 LATE_VOTE_SWITCH_INTERVAL_SECS ?= 3600                      # Duration of each vote round (60 min)
@@ -62,8 +62,12 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 ####################################################
 
 # All vars above are written to .env, docker-compose reads it via env_file
+$(LATE_WEB_TUNNEL_TOKEN_FILE):
+	@umask 077; od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$(LATE_WEB_TUNNEL_TOKEN_FILE)"
+	@printf '\n' >> "$(LATE_WEB_TUNNEL_TOKEN_FILE)"
+
 .PHONY: .env
-.env:
+.env: $(LATE_WEB_TUNNEL_TOKEN_FILE)
 	@echo "RUST_LOG=$(RUST_LOG)" > .env
 	@echo "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" >> .env
 	@echo "INSTANCE=$(INSTANCE)" >> .env
@@ -99,8 +103,9 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
 	@echo "LATE_SSH_PUBLIC_URL=$(LATE_SSH_PUBLIC_URL)" >> .env
 	@echo "LATE_AUDIO_URL=$(LATE_AUDIO_URL)" >> .env
-	@echo "LATE_WEB_TUNNEL_ENABLED=$(LATE_WEB_TUNNEL_ENABLED)" >> .env
-	@echo "LATE_WEB_TUNNEL_TOKEN=$(LATE_WEB_TUNNEL_TOKEN)" >> .env
+	@WEB_TUNNEL_TOKEN="$(LATE_WEB_TUNNEL_TOKEN)"; \
+	if [ -z "$$WEB_TUNNEL_TOKEN" ]; then WEB_TUNNEL_TOKEN="$$(cat "$(LATE_WEB_TUNNEL_TOKEN_FILE)")"; fi; \
+	echo "LATE_WEB_TUNNEL_TOKEN=$$WEB_TUNNEL_TOKEN" >> .env
 	@echo "LATE_VOTE_SWITCH_INTERVAL_SECS=$(LATE_VOTE_SWITCH_INTERVAL_SECS)" >> .env
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env

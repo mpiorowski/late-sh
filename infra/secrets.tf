@@ -67,6 +67,27 @@ resource "kubernetes_secret_v1" "ai_credentials" {
 }
 
 # =============================================================================
+# Web Terminal Tunnel Token
+# =============================================================================
+
+resource "random_password" "web_tunnel_token" {
+  length  = 32
+  special = false
+}
+
+resource "kubernetes_secret_v1" "web_tunnel_token" {
+  metadata {
+    name = "web-tunnel-token"
+  }
+
+  data = {
+    token = random_password.web_tunnel_token.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Icecast Passwords
 # =============================================================================
 

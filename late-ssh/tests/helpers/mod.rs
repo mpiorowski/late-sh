@@ -75,8 +75,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ws_pair_max_attempts_per_ip: 30,
         ws_pair_rate_limit_window_secs: 60,
         web_tunnel: WebTunnelConfig {
-            enabled: false,
-            token: None,
+            token: "test-web-tunnel-token".to_string(),
             username: "web-demo".to_string(),
             fingerprint: "web-tunnel-demo".to_string(),
         },

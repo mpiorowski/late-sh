@@ -135,20 +135,13 @@ pub async fn ws_handler(
     headers: HeaderMap,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
 ) -> axum::response::Response {
-    if !state.config.web_tunnel.enabled {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-
     let peer_ip = effective_client_ip(&headers, peer_addr, &state);
     if !state.ws_pair_limiter.allow(peer_ip) {
         tracing::warn!(peer_ip = %peer_ip, "web tunnel rate limit exceeded");
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
 
-    let expected_token = match state.config.web_tunnel.token.as_deref() {
-        Some(token) => token,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
+    let expected_token = state.config.web_tunnel.token.as_str();
     let presented_token = match params.token.as_deref() {
         Some(token) if constant_time_eq(token.as_bytes(), expected_token.as_bytes()) => token,
         _ => {

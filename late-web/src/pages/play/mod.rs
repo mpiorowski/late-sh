@@ -18,23 +18,19 @@ pub fn router() -> Router<AppState> {
 #[template(path = "pages/play/page.html")]
 struct Page {
     tunnel_url_json: String,
-    enabled: bool,
     listeners_count: usize,
 }
 
 async fn handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     metrics::record_page_view("play", false);
     let listeners_count = fetch_listeners_count(&state).await;
-    let tunnel_url_json = state
-        .config
-        .web_tunnel_token
-        .as_ref()
-        .map(|token| tunnel_ws_url(&state.config.ssh_public_url, token))
-        .and_then(|url| serde_json::to_string(&url).ok())
-        .unwrap_or_default();
+    let tunnel_url_json = serde_json::to_string(&tunnel_ws_url(
+        &state.config.ssh_public_url,
+        &state.config.web_tunnel_token,
+    ))
+    .unwrap_or_else(|_| "\"\"".to_string());
     let page = Page {
         tunnel_url_json,
-        enabled: state.config.web_tunnel_enabled && state.config.web_tunnel_token.is_some(),
         listeners_count,
     };
     Ok(Html(page.render()?))

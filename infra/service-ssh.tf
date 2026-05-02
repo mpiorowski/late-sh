@@ -162,6 +162,15 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name  = "LATE_ALLOWED_ORIGINS"
             value = "https://${var.DOMAIN}"
           }
+          env {
+            name = "LATE_WEB_TUNNEL_TOKEN"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.web_tunnel_token.metadata[0].name
+                key  = "token"
+              }
+            }
+          }
 
           # --- SSH ---
           env {
