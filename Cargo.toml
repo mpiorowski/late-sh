@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "late-bastion",
     "late-cli",
     "late-core",
     "late-ssh",

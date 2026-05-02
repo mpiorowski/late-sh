@@ -8,6 +8,7 @@ services:
     ports:
       - "${LATE_SSH_PORT}:${LATE_SSH_PORT}"
       - "${LATE_API_PORT}:${LATE_API_PORT}"
+      - "${LATE_TUNNEL_PORT}:${LATE_TUNNEL_PORT}"
     env_file:
       - .env
       - path: .env.local
@@ -22,6 +23,31 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "timeout 2 bash -c 'exec 3<>/dev/tcp/localhost/${LATE_API_PORT}; printf \"GET /api/health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \"200\"' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  service-bastion:
+    build:
+      context: .
+      target: dev-bastion
+    container_name: ${INSTANCE}-bastion
+    ports:
+      - "${LATE_BASTION_SSH_PORT}:${LATE_BASTION_SSH_PORT}"
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry-bastion:/usr/local/cargo/registry
+      - cargo-git-bastion:/usr/local/cargo/git
+      - cargo-target-bastion:/app/target
+    depends_on:
+      service-ssh:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/${LATE_BASTION_SSH_PORT}' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -101,3 +127,6 @@ volumes:
   cargo-registry-web:
   cargo-git-web:
   cargo-target-web:
+  cargo-registry-bastion:
+  cargo-git-bastion:
+  cargo-target-bastion:

@@ -1403,7 +1403,7 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
             app.show_quit_confirm = true;
         }
         quit_confirm::input::QuitAction::QuitNow => {
-            app.running = false;
+            app.request_close(late_core::tunnel_protocol::TUNNEL_CLOSE_SESSION_ENDED);
         }
     }
 }

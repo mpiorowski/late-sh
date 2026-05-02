@@ -119,6 +119,75 @@ variable "DB_POOL_SIZE" {
 }
 
 # =============================================================================
+# Bastion (late-bastion)
+# =============================================================================
+
+variable "BASTION_ENABLED" {
+  description = "\"1\" to deploy the late-bastion pod and the :5222 NGINX TCP entry. Off by default until Phase 3 wires the bastion's /tunnel client."
+  type        = string
+  default     = "0"
+}
+
+variable "BASTION_IMAGE_TAG" {
+  description = "Docker image for late-bastion (e.g., ghcr.io/org/late-bastion:sha-abc123). Unused when BASTION_ENABLED=0."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_IMAGE_TAG)) > 0
+    error_message = "BASTION_IMAGE_TAG must be non-empty when BASTION_ENABLED=1."
+  }
+}
+
+variable "BASTION_HOST_KEY" {
+  description = "Ed25519 private key for the bastion's russh host key. Always populates the secret so a future enable doesn't require re-applying secrets."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_HOST_KEY)) > 0
+    error_message = "BASTION_HOST_KEY must be non-empty when BASTION_ENABLED=1."
+  }
+}
+
+variable "BASTION_SHARED_SECRET" {
+  description = "Pre-shared secret sent on the /tunnel WS upgrade. Mounted into both late-bastion and late-ssh."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_SHARED_SECRET)) > 0
+    error_message = "BASTION_SHARED_SECRET must be non-empty when BASTION_ENABLED=1."
+  }
+}
+
+variable "BASTION_SSH_PORT" {
+  description = "Port the bastion russh server listens on inside the cluster."
+  type        = string
+  default     = "5222"
+}
+
+variable "BASTION_MAX_CONNS_GLOBAL" {
+  description = "Bastion: max simultaneous SSH connections (global cap)."
+  type        = string
+  default     = "10000"
+}
+
+variable "BASTION_SSH_IDLE_TIMEOUT" {
+  description = "Bastion: russh inactivity timeout in seconds."
+  type        = string
+  default     = "3600"
+}
+
+variable "BASTION_TUNNEL_TRUSTED_CIDRS" {
+  description = "CIDRs allowed to reach late-ssh /tunnel. Should match the bastion pod CIDR."
+  type        = string
+  default     = "10.42.0.0/16"
+}
+
+# =============================================================================
 # AI (Gemini)
 # =============================================================================
 

@@ -4,13 +4,20 @@ use crossterm::{
     cursor,
     terminal::{self, ClearType},
 };
-use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame};
+use late_core::{
+    MutexRecover,
+    api_types::NowPlaying,
+    audio::VizFrame,
+    tunnel_protocol::{
+        TUNNEL_CLOSE_ABNORMAL, TUNNEL_CLOSE_RECONNECT_REQUESTED, TUNNEL_CLOSE_SESSION_ENDED,
+    },
+};
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::{
     collections::VecDeque,
     io::{self, Write},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -24,7 +31,7 @@ use crate::{
         chat::news::svc::ArticleService,
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
-        common::primitives::{Banner, Screen},
+        common::primitives::{Banner, BannerKind, Screen},
         help_modal, mod_modal, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal,
@@ -47,6 +54,50 @@ pub(crate) enum NotificationMode {
     Both,
     Osc777,
     Osc9,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReconnectNoticeKind {
+    Updated,
+    Transport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReconnectNotice {
+    kind: ReconnectNoticeKind,
+    created_at: Instant,
+}
+
+impl ReconnectNotice {
+    const DISPLAY_DURATION: Duration = Duration::from_secs(6);
+
+    pub(crate) fn new(kind: ReconnectNoticeKind) -> Self {
+        Self {
+            kind,
+            created_at: Instant::now(),
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.created_at.elapsed() < Self::DISPLAY_DURATION
+    }
+
+    pub(crate) fn as_banner(&self) -> Banner {
+        Banner {
+            message: self.message().to_string(),
+            kind: BannerKind::Success,
+            created_at: self.created_at,
+        }
+    }
+
+    fn message(&self) -> &'static str {
+        match self.kind {
+            ReconnectNoticeKind::Updated => "Welcome to the updated late.sh! Enjoy.",
+            ReconnectNoticeKind::Transport => {
+                "Reconnected after an update or network problem. Welcome back!"
+            }
+        }
+    }
 }
 
 pub(crate) const GAME_SELECTION_2048: usize = 0;
@@ -174,6 +225,8 @@ pub struct SessionConfig {
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub supports_reconnect_on_drain: bool,
+    pub reconnect_reason: Option<u16>,
 }
 
 /// Main application state
@@ -329,6 +382,9 @@ pub struct App {
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) supports_reconnect_on_drain: bool,
+    pub(crate) requested_close_code: u16,
+    pub(crate) reconnect_notice: Option<ReconnectNotice>,
 
     /// Emoji + Nerd Font picker
     pub(crate) icon_picker_open: bool,
@@ -341,11 +397,41 @@ impl App {
         self.running
     }
 
+    pub(crate) fn close_code(&self) -> u16 {
+        self.requested_close_code
+    }
+
+    pub(crate) fn request_close(&mut self, close_code: u16) {
+        self.requested_close_code = close_code;
+        self.running = false;
+    }
+
+    pub(crate) fn is_draining(&self) -> bool {
+        self.is_draining.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn can_reconnect_on_drain(&self) -> bool {
+        self.supports_reconnect_on_drain && self.is_draining()
+    }
+
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.show_settings = false;
         self.show_quit_confirm = false;
         self.show_bonsai_modal = false;
+    }
+
+    pub fn set_draining_for_tests(&mut self, draining: bool) {
+        self.is_draining
+            .store(draining, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn set_supports_reconnect_on_drain_for_tests(&mut self, supported: bool) {
+        self.supports_reconnect_on_drain = supported;
+    }
+
+    pub fn close_code_for_tests(&self) -> u16 {
+        self.requested_close_code
     }
 
     /// Resolves which room the dashboard's chat card should display, given
@@ -651,6 +737,15 @@ impl App {
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        let reconnect_notice = match config.reconnect_reason {
+            Some(TUNNEL_CLOSE_RECONNECT_REQUESTED) => {
+                Some(ReconnectNotice::new(ReconnectNoticeKind::Updated))
+            }
+            Some(TUNNEL_CLOSE_ABNORMAL) => {
+                Some(ReconnectNotice::new(ReconnectNoticeKind::Transport))
+            }
+            _ => None,
+        };
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
             ..Profile::default()
@@ -666,6 +761,7 @@ impl App {
         );
         let mut app = Self {
             running: true,
+            requested_close_code: TUNNEL_CLOSE_SESSION_ENDED,
             size: (cols, rows),
             screen: Screen::Dashboard,
             banner: None,
@@ -775,6 +871,8 @@ impl App {
             pending_terminal_commands: Vec::new(),
             last_notify_at: None,
             is_draining: config.is_draining,
+            supports_reconnect_on_drain: config.supports_reconnect_on_drain,
+            reconnect_notice,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
@@ -1114,6 +1212,25 @@ mod tests {
             NotificationMode::from_format(Some("garbage")),
             NotificationMode::Both
         );
+    }
+
+    #[test]
+    fn reconnect_notice_renders_as_six_second_success_banner() {
+        let notice = ReconnectNotice::new(ReconnectNoticeKind::Transport);
+        let banner = notice.as_banner();
+
+        assert!(notice.is_active());
+        assert_eq!(
+            banner.message,
+            "Reconnected after an update or network problem. Welcome back!"
+        );
+        assert!(matches!(banner.kind, BannerKind::Success));
+
+        let expired = ReconnectNotice {
+            kind: ReconnectNoticeKind::Updated,
+            created_at: Instant::now() - Duration::from_secs(7),
+        };
+        assert!(!expired.is_active());
     }
 
     #[test]

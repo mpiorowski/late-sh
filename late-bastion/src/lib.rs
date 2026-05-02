@@ -1,0 +1,13 @@
+//! late-bastion — long-lived SSH frontend for late.sh.
+//!
+//! Terminates user SSH connections and (eventually) tunnels the shell byte
+//! stream to `late-ssh` over a WebSocket, transparently reconnecting across
+//! backend deploys.
+//!
+//! See `BASTION.md` and `devdocs/LATE-CONNECTION-BASTION.md`
+//! for the full design.
+
+pub mod config;
+pub mod handshake;
+pub mod proxy;
+pub mod ssh;

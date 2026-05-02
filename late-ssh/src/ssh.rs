@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::{
-    artboard_ban::ArtboardBan,
     server_ban::ServerBan,
     user::{User, UserParams, extract_theme_id},
 };
+use late_core::tunnel_protocol::{SshInputEvent, TUNNEL_CLOSE_SESSION_ENDED};
 use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::*;
@@ -18,28 +18,24 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{self, Duration, Instant};
-use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
-use crate::app::{
-    common::theme,
-    state::{App, SessionConfig},
-};
-use crate::authz::Permissions as AuthzPermissions;
+use crate::app::{common::theme, state::App};
 use crate::metrics;
+use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
+use crate::session_io::{FrameSink, RusshFrameSink};
 use crate::state::{ActiveSession, ActivityEvent, State};
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
-const PROXY_V1_MAX_LEN: usize = 108;
 const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
-const INPUT_QUEUE_CAP: usize = 256;
+pub(crate) const INPUT_QUEUE_CAP: usize = 256;
 
 /// World tick advances animations, game clocks, splash timer, visualizer
 /// decay, etc. Keeps the rate users see animations at before this commit.
@@ -55,13 +51,13 @@ const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
 /// immediately before draining that queue under the app mutex. Using `Notify`
 /// alone leaves a stored permit after a batched render, causing one spurious
 /// identical frame per typing burst.
-struct RenderSignal {
-    dirty: AtomicBool,
-    notify: Notify,
+pub(crate) struct RenderSignal {
+    pub(crate) dirty: AtomicBool,
+    pub(crate) notify: Notify,
 }
 
 impl RenderSignal {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             dirty: AtomicBool::new(false),
             notify: Notify::new(),
@@ -98,8 +94,8 @@ struct ClientHandler {
     /// Signaled by input/resize paths to request an immediate (world-stateless)
     /// render, so typed characters echo without waiting for the next world tick.
     render_signal: Option<Arc<RenderSignal>>,
-    input_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
-    input_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    input_tx: Option<tokio::sync::mpsc::Sender<SshInputEvent>>,
+    input_rx: Option<tokio::sync::mpsc::Receiver<SshInputEvent>>,
     cli_mode: bool,
     session_token: Option<String>,
     session_rx: Option<tokio::sync::mpsc::Receiver<crate::session::SessionMessage>>,
@@ -331,7 +327,7 @@ async fn resolve_proxied_client_addr(
         return Ok(None);
     }
 
-    read_proxy_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
+    late_core::proxy_protocol::read_proxy_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
 }
 
 fn is_trusted_proxy_peer(state: &State, ip: IpAddr) -> bool {
@@ -340,61 +336,6 @@ fn is_trusted_proxy_peer(state: &State, ip: IpAddr) -> bool {
         .ssh_proxy_trusted_cidrs
         .iter()
         .any(|cidr| cidr.contains(&ip))
-}
-
-async fn read_proxy_v1_client_addr(
-    stream: &mut TcpStream,
-    timeout_duration: Duration,
-) -> Result<Option<SocketAddr>> {
-    let mut line = Vec::with_capacity(PROXY_V1_MAX_LEN);
-    let mut byte = [0u8; 1];
-
-    let read_future = async {
-        while line.len() < PROXY_V1_MAX_LEN {
-            stream.read_exact(&mut byte).await?;
-            line.push(byte[0]);
-            if line.len() >= 2 && line[line.len() - 2..] == *b"\r\n" {
-                return parse_proxy_v1_addr(&line);
-            }
-        }
-        anyhow::bail!(
-            "proxy protocol v1 header exceeded {} bytes",
-            PROXY_V1_MAX_LEN
-        );
-    };
-
-    match timeout(timeout_duration, read_future).await {
-        Ok(Ok(addr)) => Ok(addr),
-        Ok(Err(e)) => Err(e.context("failed to read proxy protocol header")),
-        Err(_) => anyhow::bail!("timed out waiting for proxy protocol header"),
-    }
-}
-
-fn parse_proxy_v1_addr(line: &[u8]) -> Result<Option<SocketAddr>> {
-    let text = std::str::from_utf8(line).context("proxy v1 header is not valid UTF-8")?;
-    let text = text
-        .strip_suffix("\r\n")
-        .ok_or_else(|| anyhow::anyhow!("proxy v1 header missing CRLF terminator"))?;
-    let parts: Vec<&str> = text.split_whitespace().collect();
-    if parts.len() < 2 || parts[0] != "PROXY" {
-        anyhow::bail!("proxy v1 header malformed");
-    }
-    match parts[1] {
-        "UNKNOWN" => Ok(None),
-        "TCP4" | "TCP6" => {
-            if parts.len() != 6 {
-                anyhow::bail!("proxy v1 TCP header has unexpected field count");
-            }
-            let src_ip: IpAddr = parts[2]
-                .parse()
-                .with_context(|| format!("invalid proxy v1 source IP '{}'", parts[2]))?;
-            let src_port: u16 = parts[4]
-                .parse()
-                .with_context(|| format!("invalid proxy v1 source port '{}'", parts[4]))?;
-            Ok(Some(SocketAddr::new(src_ip, src_port)))
-        }
-        fam => anyhow::bail!("unsupported proxy v1 protocol family '{fam}'"),
-    }
 }
 
 impl Drop for ClientHandler {
@@ -498,20 +439,14 @@ impl russh::server::Handler for ClientHandler {
             tracing::debug!(user, "connection over limit, rejecting auth");
             return Ok(reject_publickey_only());
         }
-        if !self.state.config.open_access {
-            tracing::debug!(user, "open access disabled, rejecting public key auth");
-            return Ok(reject_publickey_only());
-        }
         let fingerprint = key.fingerprint(keys::HashAlg::Sha256).to_string();
-        let client = match self.state.db.get().await {
-            Ok(client) => client,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+        match check_ssh_admission(&self.state, &fingerprint, self.peer_ip).await {
+            Ok(()) => {}
+            Err(AdmissionReject::ClosedAccess) => {
+                tracing::debug!(user, "open access disabled, rejecting public key auth");
                 return Ok(reject_publickey_only());
             }
-        };
-        match has_active_server_ban_before_user_lookup(&client, &fingerprint, self.peer_ip).await {
-            Ok(true) => {
+            Err(AdmissionReject::Banned) => {
                 tracing::warn!(
                     fingerprint = %fingerprint,
                     peer_ip = ?self.peer_ip,
@@ -519,38 +454,11 @@ impl russh::server::Handler for ClientHandler {
                 );
                 return Ok(reject_publickey_only());
             }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+            Err(AdmissionReject::Infrastructure) => {
+                tracing::warn!("failed to check server ban, rejecting auth");
                 return Ok(reject_publickey_only());
             }
         }
-        match User::find_by_fingerprint(&client, &fingerprint).await {
-            Ok(Some(existing_user)) => {
-                match ServerBan::find_active_for_user_id(&client, existing_user.id).await {
-                    Ok(Some(_)) => {
-                        tracing::warn!(
-                            username = %existing_user.username,
-                            fingerprint = %fingerprint,
-                            peer_ip = ?self.peer_ip,
-                            "active server ban rejected SSH auth"
-                        );
-                        return Ok(reject_publickey_only());
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
-                        return Ok(reject_publickey_only());
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to look up user before ban check, rejecting auth");
-                return Ok(reject_publickey_only());
-            }
-        }
-        drop(client);
         let (user, is_new_user) =
             match crate::ssh::ensure_user(&self.state, login_username, &fingerprint).await {
                 Ok(pair) => pair,
@@ -659,208 +567,29 @@ impl russh::server::Handler for ClientHandler {
             .take()
             .ok_or_else(|| anyhow::anyhow!("cli session receiver missing during pty request"))?;
 
-        let article_service = self.state.article_service.clone();
-        let vote_service = self.state.vote_service.clone();
-        let chat_service = self.state.chat_service.clone();
-        let profile_service = self.state.profile_service.clone();
-        let twenty_forty_eight_service = self.state.twenty_forty_eight_service.clone();
-        let sudoku_service = self.state.sudoku_service.clone();
-        let nonogram_service = self.state.nonogram_service.clone();
-        let solitaire_service = self.state.solitaire_service.clone();
-        let nonogram_library = self.state.nonogram_library.clone();
+        let user = self.user.clone().ok_or_else(|| {
+            tracing::error!("pty request without authenticated user");
+            anyhow::anyhow!("unauthenticated pty request")
+        })?;
 
-        let user = match self.user.as_ref() {
-            Some(user) => user,
-            None => {
-                tracing::error!("pty request without authenticated user");
-                return Err(anyhow::anyhow!("unauthenticated pty request"));
-            }
-        };
-
-        let user_id = user.id;
-
-        let my_vote = match self.state.vote_service.get_user_vote(user_id).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to get user vote");
-                None
-            }
-        };
-
-        let initial_2048_game = match self
-            .state
-            .twenty_forty_eight_service
-            .load_game(user_id)
-            .await
-        {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load 2048 game state");
-                None
-            }
-        };
-        let initial_2048_high_score = match self
-            .state
-            .twenty_forty_eight_service
-            .load_high_score(user_id)
-            .await
-        {
-            Ok(score) => score,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load 2048 high score");
-                None
-            }
-        };
-        let initial_tetris_game = match self.state.tetris_service.load_game(user_id).await {
-            Ok(game) => game,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load tetris game state");
-                None
-            }
-        };
-        let initial_tetris_high_score =
-            match self.state.tetris_service.load_high_score(user_id).await {
-                Ok(score) => score,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load tetris high score");
-                    None
-                }
-            };
-
-        let initial_sudoku_games = match self.state.sudoku_service.load_games(user_id).await {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load sudoku game states");
-                Vec::new()
-            }
-        };
-        let initial_nonogram_games = match self.state.nonogram_service.load_games(user_id).await {
-            Ok(games) => games,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load nonogram game states");
-                Vec::new()
-            }
-        };
-        let initial_solitaire_games = match self.state.solitaire_service.load_games(user_id).await {
-            Ok(games) => games,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load solitaire game states");
-                Vec::new()
-            }
-        };
-        let initial_minesweeper_games =
-            match self.state.minesweeper_service.load_games(user_id).await {
-                Ok(games) => games,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load minesweeper game states");
-                    Vec::new()
-                }
-            };
-        let (initial_bonsai_tree, initial_bonsai_care) = match self
-            .state
-            .bonsai_service
-            .ensure_tree_with_care(user_id)
-            .await
-        {
-            Ok((tree, care)) => (Some(tree), Some(care)),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None)
-            }
-        };
-
-        // Grant daily chip stipend on login
-        let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
-            Ok(chips) => chips.balance,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to grant daily chip stipend");
-                0
-            }
-        };
-        let artboard_ban = match self.state.db.get().await {
-            Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
-                Ok(ban) => ban,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to check artboard ban status");
-                    None
-                }
-            },
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to get db client for artboard ban check");
-                None
-            }
-        };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
-        let app = crate::app::state::App::new(SessionConfig {
-            // Terminal / layout
-            cols: col_width as u16,
-            rows: row_height as u16,
-
-            // Services / data sources
-            vote_service,
-            chat_service,
-            notification_service: self.state.notification_service.clone(),
-            article_service,
-            showcase_service: self.state.showcase_service.clone(),
-            profile_service,
-            twenty_forty_eight_service,
-            initial_2048_game,
-            initial_2048_high_score,
-            tetris_service: self.state.tetris_service.clone(),
-            initial_tetris_game,
-            initial_tetris_high_score,
-            sudoku_service,
-            initial_sudoku_games,
-            nonogram_service,
-            initial_nonogram_games,
-            solitaire_service,
-            initial_solitaire_games,
-            minesweeper_service: self.state.minesweeper_service.clone(),
-            initial_minesweeper_games,
-            rooms_service: self.state.rooms_service.clone(),
-            blackjack_table_manager: self.state.blackjack_table_manager.clone(),
-            dartboard_server: self.state.dartboard_server.clone(),
-            dartboard_provenance: self.state.dartboard_provenance.clone(),
-            artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
-                self.state.db.clone(),
-            ),
-            username: user.username.clone(),
-            bonsai_service: self.state.bonsai_service.clone(),
-            initial_bonsai_tree,
-            initial_bonsai_care,
-            nonogram_library,
-            initial_chip_balance,
-            leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),
-
-            // Session / connection
-            web_url: self.state.config.web_url.clone(),
-            session_token,
-            session_registry: Some(self.state.session_registry.clone()),
-            paired_client_registry: Some(self.state.paired_client_registry.clone()),
-            web_chat_registry: Some(self.state.web_chat_registry.clone()),
-            session_rx: Some(session_rx),
-            now_playing_rx: Some(self.state.now_playing_rx.clone()),
-            active_users: Some(self.state.active_users.clone()),
-            activity_feed_rx: self.activity_feed_rx.take(),
-            user_id,
-            permissions: AuthzPermissions::new(
-                user.is_admin || self.state.config.force_admin,
-                user.is_moderator,
-            ),
-            artboard_banned: artboard_ban.is_some(),
-            artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
-
-            // Voting
-            my_vote,
-            is_new_user: self.is_new_user,
-
-            // Display config
-            initial_theme_id: late_ssh_theme_id(&user.settings),
-
-            // Server state
-            is_draining: self.state.is_draining.clone(),
-        })
-        .context("failed to initialize app for PTY session")?;
+        let session_config = build_session_config(
+            &self.state,
+            SessionBootstrapInputs {
+                user,
+                is_new_user: self.is_new_user,
+                cols: col_width as u16,
+                rows: row_height as u16,
+                session_token,
+                session_rx: Some(session_rx),
+                activity_feed_rx: self.activity_feed_rx.take(),
+                supports_reconnect_on_drain: false,
+                reconnect_reason: None,
+            },
+        )
+        .await;
+        let app = crate::app::state::App::new(session_config)
+            .context("failed to initialize app for PTY session")?;
         self.app = Some(Arc::new(TokioMutex::new(app)));
         self.input_tx = Some(input_tx);
         self.input_rx = Some(input_rx);
@@ -961,7 +690,7 @@ impl russh::server::Handler for ClientHandler {
             Err(e) => tracing::error!(error = ?e, "shell channel_success failed"),
         }
         if let (Some(chan), Some(app)) = (self.channel.take(), self.app.as_ref()) {
-            let mut input_rx = self.input_rx.take().ok_or_else(|| {
+            let input_rx = self.input_rx.take().ok_or_else(|| {
                 anyhow::anyhow!("session input receiver missing during shell request")
             })?;
             let channel_id = chan.id();
@@ -985,56 +714,13 @@ impl russh::server::Handler for ClientHandler {
             let frame_drop_log_every = self.state.config.frame_drop_log_every;
             let signal = Arc::new(RenderSignal::new());
             self.render_signal = Some(Arc::clone(&signal));
-            tokio::spawn(async move {
-                let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
-                world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                let mut previous_render: Option<Instant> = None;
-                let mut input_pending = false;
-                loop {
-                    let advance_world = match next_render_action(
-                        &mut world_tick,
-                        &signal,
-                        &mut input_pending,
-                        previous_render,
-                    )
-                    .await
-                    {
-                        RenderAction::AdvanceWorld => true,
-                        RenderAction::Render => false,
-                        RenderAction::Skip => continue,
-                    };
-                    match render_once(
-                        &app,
-                        &mut input_rx,
-                        &handle,
-                        channel_id,
-                        frame_drop_log_every,
-                        advance_world,
-                        &signal,
-                    )
-                    .await
-                    {
-                        Ok(should_quit) => {
-                            previous_render = Some(Instant::now());
-                            if should_quit {
-                                tracing::debug!("app requested quit, closing connection");
-                                clean_disconnect(&handle, channel_id).await;
-                                break;
-                            }
-                        }
-                        Err(err) => {
-                            tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
-                            let exit = App::leave_alt_screen();
-                            let _ =
-                                timeout(Duration::from_millis(50), handle.data(channel_id, exit))
-                                    .await;
-                            let _ = handle.eof(channel_id).await;
-                            let _ = handle.close(channel_id).await;
-                            break;
-                        }
-                    }
-                }
-            });
+            tokio::spawn(run_session(
+                app,
+                input_rx,
+                RusshFrameSink::new(handle, channel_id),
+                frame_drop_log_every,
+                signal,
+            ));
         }
         Ok(())
     }
@@ -1055,7 +741,7 @@ impl russh::server::Handler for ClientHandler {
         };
         match input_tx.try_reserve() {
             Ok(permit) => {
-                permit.send(data.to_vec());
+                permit.send(SshInputEvent::Bytes(data.to_vec()));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
@@ -1085,6 +771,7 @@ impl russh::server::Handler for ClientHandler {
         tracing::debug!(?channel, "client sent channel EOF");
         if let Some(app) = self.app.as_ref() {
             let mut app = app.lock().await;
+            // Peer already closed; no backend close-code signal remains to send.
             app.running = false;
         }
         Ok(())
@@ -1099,6 +786,7 @@ impl russh::server::Handler for ClientHandler {
         tracing::debug!(?channel, "client closed channel");
         if let Some(app) = self.app.as_ref() {
             let mut app = app.lock().await;
+            // Peer already closed; no backend close-code signal remains to send.
             app.running = false;
         }
         Ok(())
@@ -1115,22 +803,96 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(col_width, row_height, "window resize");
-        let Some(app) = self.app.as_ref() else {
+        // Resize is queued on the same input mpsc as data so the
+        // render loop applies it in the SSH wire order, not in
+        // app-lock-acquisition order. Dropping resize on a full queue
+        // would leave the TUI on a stale viewport, but the queue cap
+        // is 256 and resize events are sparse, so contention is
+        // pathological — log and move on.
+        let Some(input_tx) = self.input_tx.as_ref() else {
             return Ok(());
         };
-        {
-            let mut app = app.lock().await;
-            if let Err(e) = app.resize(col_width as u16, row_height as u16) {
-                tracing::error!(error = ?e, "error resizing app");
+        let event = SshInputEvent::Resize {
+            cols: col_width.try_into().unwrap_or(u16::MAX),
+            rows: row_height.try_into().unwrap_or(u16::MAX),
+        };
+        match input_tx.try_reserve() {
+            Ok(permit) => permit.send(event),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!(
+                    queue_cap = INPUT_QUEUE_CAP,
+                    col_width,
+                    row_height,
+                    "session input queue full; dropping resize event"
+                );
+                return Ok(());
             }
-            if let Some(signal) = self.render_signal.as_ref() {
-                signal.dirty.store(true, Ordering::Release);
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                tracing::debug!("session input queue closed; dropping resize event");
+                return Ok(());
             }
         }
         if let Some(signal) = self.render_signal.as_ref() {
+            signal.dirty.store(true, Ordering::Release);
             signal.notify.notify_one();
         }
         Ok(())
+    }
+}
+
+/// Per-session render driver. Spawned from `shell_request` (russh path)
+/// and from the `/tunnel` handler in Phase 2c (WS path). Generic over
+/// `FrameSink` so both paths share this loop unchanged.
+pub(crate) async fn run_session<S: FrameSink>(
+    app: Arc<TokioMutex<crate::app::state::App>>,
+    mut input_rx: tokio::sync::mpsc::Receiver<SshInputEvent>,
+    sink: S,
+    frame_drop_log_every: u64,
+    signal: Arc<RenderSignal>,
+) {
+    let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
+    world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut previous_render: Option<Instant> = None;
+    let mut input_pending = false;
+    loop {
+        let advance_world = match next_render_action(
+            &mut world_tick,
+            &signal,
+            &mut input_pending,
+            previous_render,
+        )
+        .await
+        {
+            RenderAction::AdvanceWorld => true,
+            RenderAction::Render => false,
+            RenderAction::Skip => continue,
+        };
+        match render_once(
+            &app,
+            &mut input_rx,
+            &sink,
+            frame_drop_log_every,
+            advance_world,
+            &signal,
+        )
+        .await
+        {
+            Ok(should_quit) => {
+                previous_render = Some(Instant::now());
+                if should_quit {
+                    tracing::debug!("app requested quit, closing connection");
+                    let close_code = app.lock().await.close_code();
+                    clean_disconnect(&sink, close_code).await;
+                    break;
+                }
+            }
+            Err(err) => {
+                tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
+                let _ = sink.send_frame(App::leave_alt_screen()).await;
+                sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED).await;
+                break;
+            }
+        }
     }
 }
 
@@ -1188,11 +950,10 @@ async fn next_render_action(
     }
 }
 
-async fn render_once(
+async fn render_once<S: FrameSink>(
     app: &Arc<TokioMutex<crate::app::state::App>>,
-    input_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
-    handle: &russh::server::Handle,
-    channel_id: ChannelId,
+    input_rx: &mut tokio::sync::mpsc::Receiver<SshInputEvent>,
+    sink: &S,
     frame_drop_log_every: u64,
     advance_world: bool,
     signal: &RenderSignal,
@@ -1205,9 +966,21 @@ async fn render_once(
         // Clear `dirty` before draining the queued input so any input arriving
         // during this render flips it back to `true` and schedules another
         // pass instead of being erased by this batch.
+        //
+        // Bytes and Resize are drained from the same FIFO under one
+        // lock-hold so the app sees them in SSH-wire order — the
+        // whole point of routing resize through input_tx instead of
+        // taking the app lock from the handler callback.
         signal.dirty.store(false, Ordering::Release);
-        while let Ok(data) = input_rx.try_recv() {
-            app.handle_input(&data);
+        while let Ok(event) = input_rx.try_recv() {
+            match event {
+                SshInputEvent::Bytes(data) => app.handle_input(&data),
+                SshInputEvent::Resize { cols, rows } => {
+                    if let Err(e) = app.resize(cols, rows) {
+                        tracing::error!(error = ?e, cols, rows, "error resizing app");
+                    }
+                }
+            }
             if !app.running {
                 return Ok(true);
             }
@@ -1220,16 +993,9 @@ async fn render_once(
         (frame, terminal_commands)
     };
 
-    let frame_sent = match timeout(Duration::from_millis(50), handle.data(channel_id, frame)).await
-    {
-        Ok(Ok(())) => true,
-        Ok(Err(err)) => {
-            return Err(anyhow::anyhow!(
-                "render_once: handle send failed: {:?}",
-                err
-            ));
-        }
-        Err(_) => {
+    let frame_sent = match sink.send_frame(frame).await {
+        Ok(true) => true,
+        Ok(false) => {
             let drops = FRAME_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             metrics::record_render_frame_drop();
             if drops.is_multiple_of(frame_drop_log_every) {
@@ -1237,6 +1003,7 @@ async fn render_once(
             }
             false
         }
+        Err(err) => return Err(err.context("render_once: frame send failed")),
     };
 
     if !frame_sent {
@@ -1251,42 +1018,37 @@ async fn render_once(
     }
 
     for command in terminal_commands {
-        match timeout(Duration::from_millis(50), handle.data(channel_id, command)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                return Err(anyhow::anyhow!(
-                    "render_once: terminal command send failed: {:?}",
-                    err
-                ));
-            }
-            Err(_) => {
+        match sink.send_frame(command).await {
+            Ok(true) => {}
+            Ok(false) => {
                 let drops = FRAME_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                 metrics::record_render_frame_drop();
                 if drops.is_multiple_of(frame_drop_log_every) {
                     tracing::debug!(drops, "frame drops (handle busy)");
                 }
             }
+            Err(err) => return Err(err.context("render_once: terminal command send failed")),
         }
     }
 
     Ok(false)
 }
 
-async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId) {
-    let exit = App::leave_alt_screen();
-    let _ = timeout(Duration::from_millis(50), handle.data(channel_id, exit)).await;
-    let _ = timeout(
-        Duration::from_millis(50),
-        handle.data(channel_id, EXIT_MESSAGE.as_bytes().to_vec()),
-    )
-    .await;
-    let _ = handle.eof(channel_id).await;
-    let _ = handle.close(channel_id).await;
+async fn clean_disconnect<S: FrameSink>(sink: &S, close_code: u16) {
+    let _ = sink.send_frame(App::leave_alt_screen()).await;
+    if close_code == TUNNEL_CLOSE_SESSION_ENDED {
+        let _ = sink.send_frame(EXIT_MESSAGE.as_bytes().to_vec()).await;
+    }
+    sink.eof_close(close_code).await;
 }
 
 // Updated helper to take State
 /// Returns `(user, is_new)` — `is_new` is true when the user was just created.
-async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result<(User, bool)> {
+pub(crate) async fn ensure_user(
+    state: &State,
+    username: &str,
+    fingerprint: &str,
+) -> Result<(User, bool)> {
     tracing::debug!(username, fingerprint, "ensuring user exists");
     let client = state.db.get().await?;
     let row = User::find_by_fingerprint(&client, fingerprint).await?;
@@ -1329,6 +1091,51 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
     };
 
     Ok((user, is_new_user))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdmissionReject {
+    ClosedAccess,
+    Banned,
+    Infrastructure,
+}
+
+pub(crate) async fn check_ssh_admission(
+    state: &State,
+    fingerprint: &str,
+    peer_ip: Option<IpAddr>,
+) -> Result<(), AdmissionReject> {
+    if !state.config.open_access {
+        return Err(AdmissionReject::ClosedAccess);
+    }
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| AdmissionReject::Infrastructure)?;
+    if has_active_server_ban_before_user_lookup(&client, fingerprint, peer_ip)
+        .await
+        .map_err(|_| AdmissionReject::Infrastructure)?
+    {
+        return Err(AdmissionReject::Banned);
+    }
+
+    match User::find_by_fingerprint(&client, fingerprint).await {
+        Ok(Some(existing_user)) => {
+            if ServerBan::find_active_for_user_id(&client, existing_user.id)
+                .await
+                .map_err(|_| AdmissionReject::Infrastructure)?
+                .is_some()
+            {
+                return Err(AdmissionReject::Banned);
+            }
+        }
+        Ok(None) => {}
+        Err(_) => return Err(AdmissionReject::Infrastructure),
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1377,7 +1184,7 @@ async fn has_active_server_ban_before_user_lookup(
         .is_some())
 }
 
-fn late_ssh_theme_id(settings: &Value) -> String {
+pub(crate) fn late_ssh_theme_id(settings: &Value) -> String {
     extract_theme_id(settings).unwrap_or_else(|| theme::DEFAULT_ID.to_string())
 }
 
@@ -1511,31 +1318,6 @@ mod tests {
                 .await
                 .expect("ip ban lookup")
         );
-    }
-
-    #[test]
-    fn parse_proxy_v1_tcp4_source_addr() {
-        let line = b"PROXY TCP4 203.0.113.10 10.42.0.76 54231 2222\r\n";
-        let addr = parse_proxy_v1_addr(line)
-            .expect("parse")
-            .expect("source addr");
-        assert_eq!(
-            addr,
-            SocketAddr::from_str("203.0.113.10:54231").expect("socket addr")
-        );
-    }
-
-    #[test]
-    fn parse_proxy_v1_unknown_returns_none() {
-        let line = b"PROXY UNKNOWN\r\n";
-        let addr = parse_proxy_v1_addr(line).expect("parse");
-        assert!(addr.is_none());
-    }
-
-    #[test]
-    fn parse_proxy_v1_rejects_malformed_header() {
-        let line = b"PROXY TCP4 203.0.113.10 10.42.0.76 only-one-port\r\n";
-        assert!(parse_proxy_v1_addr(line).is_err());
     }
 
     #[test]

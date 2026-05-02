@@ -3,9 +3,10 @@
 # Multi-stage Dockerfile for late.sh services using cargo-chef
 # Optimized for fast rebuilds via Docker layer caching
 #
-# Build SSH:  docker build --target runtime-ssh -t late-ssh .
-# Build Web:  docker build --target runtime-web -t late-web .
-# Run:        docker run -p 2222:2222 late-ssh
+# Build SSH:      docker build --target runtime-ssh -t late-ssh .
+# Build Web:      docker build --target runtime-web -t late-web .
+# Build Bastion:  docker build --target runtime-bastion -t late-bastion .
+# Run:            docker run -p 2222:2222 late-ssh
 
 ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=bookworm
@@ -51,13 +52,15 @@ COPY late-core/Cargo.toml late-core/Cargo.toml
 COPY late-ssh/Cargo.toml late-ssh/Cargo.toml
 COPY late-web/Cargo.toml late-web/Cargo.toml
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
+COPY late-bastion/Cargo.toml late-bastion/Cargo.toml
 
 # Create dummy source files for cargo-chef to analyze
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src && \
+RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-bastion/src && \
     echo "fn main() {}" > late-core/src/lib.rs && \
     echo "fn main() {}" > late-ssh/src/main.rs && \
     echo "fn main() {}" > late-web/src/main.rs && \
-    echo "fn main() {}" > late-cli/src/main.rs
+    echo "fn main() {}" > late-cli/src/main.rs && \
+    echo "fn main() {}" > late-bastion/src/main.rs
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -71,22 +74,24 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
-    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web
+    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-bastion
 
 # Copy actual source code
 COPY Cargo.toml Cargo.lock ./
 COPY late-core late-core
 COPY late-ssh late-ssh
 COPY late-web late-web
+COPY late-bastion late-bastion
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 RUN mkdir -p late-cli/src && echo "fn main() {}" > late-cli/src/main.rs
 # Build deployable binaries only (late-cli excluded - local CLI tooling)
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
-    cargo build --release --features otel -p late-ssh -p late-web && \
+    cargo build --release --features otel -p late-ssh -p late-web -p late-bastion && \
     cp /app/target/release/late-ssh /app/late-ssh-bin && \
-    cp /app/target/release/late-web /app/late-web-bin
+    cp /app/target/release/late-web /app/late-web-bin && \
+    cp /app/target/release/late-bastion /app/late-bastion-bin
 
 # Build frontend assets
 RUN cd late-web && npm install && npm run tailwind:build
@@ -108,6 +113,11 @@ CMD ["cargo", "watch", "-w", "late-ssh", "-x", "run --features otel -p late-ssh"
 
 FROM dev-base AS dev-web
 CMD ["bash", "-c", "cd /app/late-web && npm install && npm run tailwind:build && (npm run tailwind:watch &) && cd /app && cargo watch -w late-web -x 'run --features otel -p late-web'"]
+
+FROM dev-base AS dev-bastion
+# Watch both late-bastion and late-core (bastion uses late-core::tunnel_protocol /
+# proxy_protocol; rebuild on changes there too).
+CMD ["cargo", "watch", "-w", "late-bastion", "-w", "late-core", "-x", "run --features otel -p late-bastion"]
 
 # ==============================================================================
 # Stage 4a: Runtime base - Common runtime setup
@@ -151,3 +161,17 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD timeout 2 bash -c '</dev/tcp/localhost/8080' || exit 1
 
 CMD ["/app/late-web-bin"]
+
+# ==============================================================================
+# Stage 4d: Runtime Bastion - SSH frontend (no DB, no service deps)
+# ==============================================================================
+FROM runtime-base AS runtime-bastion
+
+COPY --from=builder /app/late-bastion-bin /app/late-bastion
+
+EXPOSE 5222
+
+# No HTTP healthcheck — the bastion has no API. K8s probes the SSH
+# port via TCP-level liveness instead.
+
+CMD ["/app/late-bastion"]

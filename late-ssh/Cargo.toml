@@ -23,6 +23,7 @@ ipnet.workspace = true
 
 # Async Runtime
 tokio = { workspace = true }
+futures-util = { workspace = true }
 
 # Memory allocator
 tikv-jemallocator = "0.6"
@@ -63,3 +64,4 @@ opentelemetry-http = { workspace = true, optional = true }
 [dev-dependencies]
 late-core = { workspace = true, features = ["testing"] }
 rstest.workspace = true
+tokio-tungstenite = { workspace = true }

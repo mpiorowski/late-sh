@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use late_core::models::leaderboard::LeaderboardData;
@@ -25,6 +25,11 @@ use super::{
     visualizer::Visualizer,
 };
 use crate::session::ClientAudioState;
+
+const DRAIN_TOAST_MESSAGE: &str =
+    "⚠️  Update available! Press q then r to get the late-est features!";
+const DIRECT_DRAIN_TOAST_MESSAGE: &str =
+    "⚠️ Server updating! Press 'q' to quit, then reconnect to join the new pod.";
 
 fn sanitize_notification_field(input: &str) -> String {
     input
@@ -147,10 +152,12 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
+    reconnect_banner: Option<&'a Banner>,
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
     show_cli_install_modal: bool,
     is_draining: bool,
+    supports_reconnect_on_drain: bool,
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
@@ -228,6 +235,7 @@ impl App {
         let vote_my_vote = self.vote.my_vote();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let now_playing_text = now_playing.as_ref().map(|np| np.track.to_string());
+        let reconnect_banner = self.active_reconnect_banner();
         let vote_next_switch_in = vote_snapshot
             .next_switch_in
             .saturating_sub(vote_snapshot.updated_at.elapsed());
@@ -440,10 +448,12 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
+                        reconnect_banner: reconnect_banner.as_ref(),
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         show_cli_install_modal: self.show_cli_install_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
+                        supports_reconnect_on_drain: self.supports_reconnect_on_drain,
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
@@ -510,6 +520,12 @@ impl App {
 
     fn active_banner(&self) -> Option<&Banner> {
         self.banner.as_ref().filter(|b| b.is_active())
+    }
+
+    fn active_reconnect_banner(&self) -> Option<Banner> {
+        self.reconnect_notice
+            .filter(|notice| notice.is_active())
+            .map(|notice| notice.as_banner())
     }
 
     fn draw(frame: &mut Frame, area: Rect, screen: Screen, ctx: DrawContext<'_>) {
@@ -581,6 +597,9 @@ impl App {
                 let hint_paragraph = ratatui::widgets::Paragraph::new(hint).centered();
                 frame.render_widget(hint_paragraph, hint_area);
             }
+            if let Some(banner) = current_toast_banner(&ctx) {
+                draw_toast_banner(frame, area, &banner);
+            }
             return;
         }
 
@@ -604,6 +623,7 @@ impl App {
             (inner, None)
         };
         let connect_url = ctx.connect_url;
+        let toast_banner = current_toast_banner(&ctx);
 
         match screen {
             Screen::Dashboard => {
@@ -676,36 +696,8 @@ impl App {
             );
         }
 
-        // Toast banner overlay at top of content area
-        let banner = if ctx.is_draining {
-            Some(Banner {
-                message:
-                    "⚠️ Server updating! Press 'q' to quit, then reconnect to join the new pod."
-                        .to_string(),
-                kind: BannerKind::Error,
-                created_at: std::time::Instant::now(),
-            })
-        } else {
-            ctx.banner.cloned()
-        };
-
-        if let Some(banner) = banner {
-            let color = match banner.kind {
-                BannerKind::Success => theme::SUCCESS(),
-                BannerKind::Error => theme::ERROR(),
-            };
-            // leading space (1) + icon (2) + message + border padding (4)
-            let msg_w = (banner.message.len() as u16) + 7;
-            let toast_w = msg_w.max(20).min(inner.width);
-            let toast_x = inner.x + inner.width.saturating_sub(toast_w);
-            let toast_area = Rect::new(toast_x, inner.y, toast_w, 3);
-            frame.render_widget(Clear, toast_area);
-            let notif_block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(color));
-            let notif_inner = notif_block.inner(toast_area);
-            frame.render_widget(notif_block, toast_area);
-            draw_banner(frame, notif_inner, &banner);
+        if let Some(banner) = toast_banner {
+            draw_toast_banner(frame, inner, &banner);
         }
 
         if ctx.show_settings {
@@ -735,7 +727,11 @@ impl App {
         }
 
         if ctx.show_quit_confirm {
-            quit_confirm::ui::draw(frame, inner);
+            quit_confirm::ui::draw(
+                frame,
+                inner,
+                ctx.is_draining && ctx.supports_reconnect_on_drain,
+            );
         }
 
         if ctx.show_web_chat_qr
@@ -759,6 +755,65 @@ impl App {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
     }
+}
+
+fn current_toast_banner(ctx: &DrawContext<'_>) -> Option<Banner> {
+    if ctx.is_draining {
+        let message = if ctx.supports_reconnect_on_drain {
+            DRAIN_TOAST_MESSAGE
+        } else {
+            DIRECT_DRAIN_TOAST_MESSAGE
+        };
+        Some(Banner {
+            message: message.to_string(),
+            kind: BannerKind::Error,
+            created_at: std::time::Instant::now(),
+        })
+    } else {
+        ctx.reconnect_banner
+            .cloned()
+            .or_else(|| ctx.banner.cloned())
+    }
+}
+
+fn draw_toast_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
+    let color = match banner.kind {
+        BannerKind::Success => theme::SUCCESS(),
+        BannerKind::Error => theme::ERROR(),
+    };
+    // leading space (1) + icon (2) + message + border padding (4)
+    let msg_w = (banner.message.len() as u16) + 7;
+    let toast_w = msg_w.max(20).min(area.width);
+    let toast_x = area.x + area.width.saturating_sub(toast_w);
+    let toast_area = Rect::new(toast_x, area.y, toast_w, 3);
+    frame.render_widget(Clear, toast_area);
+    let notif_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color));
+    let notif_inner = notif_block.inner(toast_area);
+    frame.render_widget(notif_block, toast_area);
+    if banner.message == DRAIN_TOAST_MESSAGE {
+        draw_drain_toast_banner(frame, notif_inner, color);
+    } else {
+        draw_banner(frame, notif_inner, banner);
+    }
+}
+
+fn draw_drain_toast_banner(frame: &mut Frame, area: Rect, color: ratatui::style::Color) {
+    let key_style = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let text_style = Style::default().fg(color);
+    let content = Paragraph::new(Line::from(vec![
+        Span::styled(" ✗ ", text_style),
+        Span::styled("⚠️  Update available! Press ", text_style),
+        Span::styled("q", key_style),
+        Span::styled(" then ", text_style),
+        Span::styled("r", key_style),
+        Span::styled(" to get the late-est features!", text_style),
+    ]));
+
+    frame.render_widget(content, area);
 }
 
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {

@@ -1,10 +1,18 @@
 # =============================================================================
 # SSH TCP Passthrough via NGINX Ingress Controller
 # =============================================================================
-# Configures the RKE2 built-in NGINX ingress controller to listen on port 22
-# and forward raw TCP traffic to the late-ssh pod on port 2222 with
-# PROXY protocol metadata so the backend can see real client IPs.
-# This enables: ssh late.sh
+# Configures the RKE2 built-in NGINX ingress controller to listen on TCP
+# entrypoints and forward raw bytes to backend pods, prefixed with PROXY v1
+# headers so the backend can see real client IPs.
+#
+# Two parallel paths during Phase 1–4 of the bastion rollout
+# (devdocs/LATE-CONNECTION-BASTION.md §3 / §10):
+#
+#   :22    → service-ssh-sv:2222   (legacy in-proc russh)        — production
+#   :5222  → service-bastion-sv:5222 (bastion → /tunnel WS)      — dogfood
+#
+# Phase 5 cutover is a one-line edit: change `:22` to point at
+# service-bastion-sv:5222, retire the :5222 entry.
 # =============================================================================
 
 resource "kubernetes_manifest" "nginx_tcp_config" {
@@ -17,9 +25,14 @@ resource "kubernetes_manifest" "nginx_tcp_config" {
     }
     spec = {
       valuesContent = yamlencode({
-        tcp = {
-          "22" = "default/service-ssh-sv:2222::PROXY"
-        }
+        tcp = merge(
+          {
+            "22" = "default/service-ssh-sv:2222::PROXY"
+          },
+          var.BASTION_ENABLED == "1" ? {
+            "5222" = "default/service-bastion-sv:${var.BASTION_SSH_PORT}::PROXY"
+          } : {}
+        )
       })
     }
   }
