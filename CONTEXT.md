@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-01 (CLI details in `late-cli/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
+- Last updated: 2026-05-02 (CLI details in `late-cli/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -534,7 +534,7 @@ late-sh/
 
 **Service stream contracts (internal):**
 - `VoteService::subscribe_state()` (in `app::vote::svc`) → shared `watch::Receiver<VoteSnapshot>` (durable latest state)
-- Chat service/news/notifications/showcase stream contracts live in `late-ssh/src/app/chat/CONTEXT.md`.
+- Chat service/news/notifications/showcase/work stream contracts live in `late-ssh/src/app/chat/CONTEXT.md`.
 - `ProfileService::subscribe_snapshot(user_id)` → per-user `watch::Receiver<...Snapshot>` (durable latest state)
 - `ProfileService::prune_user_snapshot_channel(user_id)` → explicit cleanup hook called from UI state `Drop`; removes idle per-user snapshot senders
 - `LeaderboardService::subscribe()` → `watch::Receiver<Arc<LeaderboardData>>` (shared, refreshed every 30s from DB; contains today's champions, streak leaders, per-user streak map for badge computation)
@@ -575,12 +575,14 @@ late-sh/
 | UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (floor=100), `last_stipend_date` DATE |
 | Showcase | `showcases` | `user_id` FK; `title` 1-120, `url` 1-2000, `description` 1-800, `tags` TEXT[] (lowercased, ≤8). Listed newest-first, edit/delete restricted to author or admin |
 | ShowcaseFeedRead | `showcase_feed_reads` | `user_id` PK/FK, `last_read_at` timestamp cursor for per-user Showcase unread counts |
+| WorkProfile | `work_profiles` | `user_id` UNIQUE FK; `slug` UNIQUE (`w_` + 12 lowercase alnum), `headline`, status (`open`, `casual`, `not-looking`), type/location, links, skills, summary, include flags. Listed latest-update-first, edit/delete restricted to author or admin |
+| WorkFeedRead | `work_feed_reads` | `user_id` PK/FK, `last_read_at` timestamp cursor for per-user Work unread counts |
 | GameRoom | `game_rooms` | Generic game-room registry. `id` UUIDv7, `chat_room_id` UNIQUE FK to `chat_rooms`, `game_kind` TEXT, `slug` UNIQUE, `display_name` non-empty, `status` IN (`open`, `in_round`, `paused`, `closed`), `settings` JSONB, optional `created_by`. `GameKind` is a Rust enum over text, not a Postgres enum. |
 | ArtboardSnapshot | `artboard_snapshots` | `board_key` UNIQUE (`main`, `daily:YYYY-MM-DD`, `monthly:YYYY-MM`), `canvas` JSONB, `provenance` JSONB. Runtime contracts live in `late-ssh/src/app/artboard/CONTEXT.md`. |
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Chat`, `Games`, `Rooms`, `Artboard` (cycle: `Dashboard -> Chat -> Games -> Rooms -> Artboard -> Dashboard`; News, Mentions, Discover, and Showcase are synthetic room-like entries within Chat, not separate screens. News, Mentions, and Showcase each carry persisted unread state; Showcase is a user-authored project showcase backed by the `showcases` table.)
+- `Screen`: `Dashboard`, `Chat`, `Games`, `Rooms`, `Artboard` (cycle: `Dashboard -> Chat -> Games -> Rooms -> Artboard -> Dashboard`; News, Mentions, Discover, Showcase, and Work are synthetic room-like entries within Chat, not separate screens. News, Mentions, Showcase, and Work each carry persisted unread state; Showcase is backed by `showcases`, and Work is one public work profile per user backed by `work_profiles`.)
 - `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 - `GameKind`: Rust enum in `late-core::models::game_room`; currently `Blackjack`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
@@ -970,7 +972,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen with DMs, public/private rooms, mentions, News, Showcase, and Discover synthetic entries. Detailed commands, keybindings, service flow, and gotchas live in `late-ssh/src/app/chat/CONTEXT.md`. |
+| **Chat** | 2 | Active | Full room-list chat screen with DMs, public/private rooms, mentions, News, Showcase, Work, and Discover synthetic entries. Detailed commands, keybindings, service flow, and gotchas live in `late-ssh/src/app/chat/CONTEXT.md`. |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`) and daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`). Blackjack lives in Rooms. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
 | **Rooms** | 4 | Active | Persistent game-room directory plus active Blackjack table/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
 | **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |

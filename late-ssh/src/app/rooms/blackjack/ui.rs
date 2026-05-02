@@ -10,7 +10,7 @@ use crate::app::{
     common::theme,
     games::{
         cards::{AsciiCardTheme, PlayingCard},
-        ui::{draw_game_frame, info_label_value, info_tagline, key_hint},
+        ui::{draw_game_frame_with_info_sidebar, info_label_value, info_tagline, key_hint},
     },
     rooms::blackjack::state::{
         BlackjackSeat, BlackjackSnapshot, Outcome, Phase, SeatAction, SeatPhase, State, is_bust,
@@ -968,7 +968,8 @@ fn draw_table_compact(
         key_line(snapshot, is_seated, user_is_active),
     ];
 
-    let inner = draw_game_frame(frame, area, "Blackjack", info_lines, show_sidebar);
+    let inner =
+        draw_game_frame_with_info_sidebar(frame, area, "Blackjack", info_lines, show_sidebar);
     let rows = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(1),

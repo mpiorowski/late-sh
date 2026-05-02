@@ -9,27 +9,27 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use super::state::{ComposerField, State};
-use super::svc::ShowcaseFeedItem;
+use super::state::{ComposerField, State, status_label};
+use super::svc::WorkFeedItem;
 
-pub struct ShowcaseListView<'a> {
-    pub items: &'a [ShowcaseFeedItem],
+pub struct WorkListView<'a> {
+    pub items: &'a [WorkFeedItem],
     pub selected_index: usize,
     pub current_user_id: uuid::Uuid,
     pub is_admin: bool,
     pub marker_read_at: Option<DateTime<Utc>>,
 }
 
-const ITEM_HEIGHT: u16 = 7;
-const SUMMARY_LINES: usize = 3;
+const ITEM_HEIGHT: u16 = 8;
+const SUMMARY_LINES: usize = 2;
 
-pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView<'_>) {
+pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
     let selected = if view.items.is_empty() {
         0
     } else {
         view.selected_index.min(view.items.len() - 1) + 1
     };
-    let title = format!(" Showcases ({selected}/{}) ", view.items.len());
+    let title = format!(" Work ({selected}/{}) ", view.items.len());
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
@@ -41,16 +41,15 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
     if view.items.is_empty() {
         let text = Text::from(vec![
             Line::from(Span::styled(
-                "No showcases yet.",
+                "No work profiles yet.",
                 Style::default().fg(theme::TEXT_DIM()),
             )),
             Line::from(Span::styled(
-                "Press 'i' to share a project link.",
+                "Press 'i' to create yours.",
                 Style::default().fg(theme::TEXT_DIM()),
             )),
         ]);
-        let empty_p = Paragraph::new(text);
-        frame.render_widget(empty_p, inner);
+        frame.render_widget(Paragraph::new(text), inner);
         return;
     }
 
@@ -70,11 +69,11 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
     for (row, item_area) in layout.iter().copied().enumerate() {
         let item_idx = start_index + row;
         let item = &view.items[item_idx];
-        let s = &item.showcase;
+        let p = &item.profile;
         let is_selected = item_idx == selected_index;
         let is_unread = view
             .marker_read_at
-            .map(|last_read_at| s.created > last_read_at)
+            .map(|last_read_at| p.updated > last_read_at)
             .unwrap_or(true);
         let bg = if is_selected {
             theme::BG_SELECTION()
@@ -89,21 +88,18 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
         let content_area = item_block.inner(item_area);
         frame.render_widget(item_block, item_area);
 
-        let mut lines: Vec<Line> = Vec::new();
-
-        // Title row: title + ownership marker
-        let owner = item.showcase.user_id == view.current_user_id;
+        let owner = p.user_id == view.current_user_id;
         let mut title_spans = Vec::new();
         if is_unread {
             title_spans.push(Span::styled(
-                "● ",
+                "* ",
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ));
         }
         title_spans.push(Span::styled(
-            s.title.as_str(),
+            p.headline.as_str(),
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
@@ -114,91 +110,94 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
                 Style::default().fg(theme::AMBER_DIM()),
             ));
         }
-        lines.push(Line::from(title_spans));
 
-        // URL directly under the title.
-        lines.push(Line::from(vec![
-            Span::styled("↗ ", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(
-                s.url.as_str(),
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]));
+        let mut lines = vec![
+            Line::from(title_spans),
+            Line::from(vec![
+                Span::styled("@", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(
+                    item.author_username.as_str(),
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(
+                        " - {} - {} - {}",
+                        status_label(&p.status),
+                        p.work_type,
+                        p.location
+                    ),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ]),
+        ];
 
-        // Description (up to 3 visual lines, with inline ellipsis on truncation).
-        let (mut desc_lines, truncated) =
-            description_summary_lines(&s.description, content_area.width as usize, SUMMARY_LINES);
-        if truncated && let Some(last) = desc_lines.last_mut() {
+        let (mut summary_lines, truncated) =
+            summary_lines(&p.summary, content_area.width as usize, SUMMARY_LINES);
+        if truncated && let Some(last) = summary_lines.last_mut() {
             apply_inline_ellipsis(last, content_area.width as usize);
         }
-        for line in desc_lines {
+        for line in summary_lines {
             lines.push(Line::from(Span::styled(
                 line,
                 Style::default().fg(theme::TEXT()),
             )));
         }
 
-        // Author + time + tags as the footer line.
-        let mut meta_spans = vec![
+        if !p.skills.is_empty() {
+            lines.push(Line::from(Span::styled(
+                p.skills
+                    .iter()
+                    .map(|skill| format!("#{skill}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                Style::default().fg(theme::AMBER_DIM()),
+            )));
+        }
+
+        let first_link = p.links.first().map(String::as_str).unwrap_or("");
+        lines.push(Line::from(vec![
+            Span::styled("link ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
-                format!("@{}", item.author_username),
+                first_link.to_string(),
                 Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
             ),
             Span::styled(
-                format!(" · {}", format_relative_time(s.created)),
+                format!(" - {} - {}", p.slug, format_relative_time(p.updated)),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
-        ];
-        if !s.tags.is_empty() {
-            let tags_text = s
-                .tags
-                .iter()
-                .map(|t| format!("#{t}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            meta_spans.push(Span::styled(
-                format!("  {tags_text}"),
-                Style::default().fg(theme::AMBER_DIM()),
-            ));
-        }
-        lines.push(Line::from(meta_spans));
+        ]));
 
-        let p = Paragraph::new(lines).wrap(Wrap { trim: true });
-        frame.render_widget(p, content_area);
+        frame.render_widget(
+            Paragraph::new(lines).wrap(Wrap { trim: true }),
+            content_area,
+        );
     }
 }
 
 fn apply_inline_ellipsis(line: &mut String, width: usize) {
     let width = width.max(1);
-    let char_count = line.chars().count();
-    if char_count < width {
-        line.push('…');
+    if line.chars().count() < width {
+        line.push_str("...");
         return;
     }
     line.pop();
-    line.push('…');
+    line.push('.');
 }
 
-fn description_summary_lines(
-    description: &str,
-    width: usize,
-    max_lines: usize,
-) -> (Vec<String>, bool) {
+fn summary_lines(summary: &str, width: usize, max_lines: usize) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
-
-    for paragraph in description.lines().filter(|line| !line.trim().is_empty()) {
+    for paragraph in summary.lines().filter(|line| !line.trim().is_empty()) {
         let wrapped = composer::build_composer_rows(paragraph.trim(), width.max(1));
         let rows: Vec<String> = if wrapped.is_empty() {
             vec![String::new()]
         } else {
             wrapped.into_iter().map(|row| row.text).collect()
         };
-
         for row in rows {
             if out.len() == max_lines {
                 truncated = true;
@@ -206,30 +205,28 @@ fn description_summary_lines(
             }
             out.push(row);
         }
-
         if truncated {
             break;
         }
     }
-
     (out, truncated)
 }
 
-pub struct ShowcaseComposerView<'a> {
+pub struct WorkComposerView<'a> {
     pub state: &'a State,
 }
 
-pub fn draw_showcase_composer(frame: &mut Frame, area: Rect, view: &ShowcaseComposerView<'_>) {
+pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView<'_>) {
     let editing = view.state.editing();
     let composing = view.state.composing();
     let active = view.state.active_field();
 
     let title = if !composing {
-        " Showcase "
+        " Work "
     } else if editing {
-        " Editing · Tab/S+Tab switch · Enter submit · Alt+Enter newline · Esc cancel "
+        " Editing work profile - Tab/S+Tab switch - Enter submit - Alt+Enter newline - Esc cancel "
     } else {
-        " New showcase · Tab/S+Tab switch · Enter submit · Alt+Enter newline · Esc cancel "
+        " New work profile - Tab/S+Tab switch - Enter submit - Alt+Enter newline - Esc cancel "
     };
     let border_style = if composing {
         Style::default().fg(theme::BORDER_ACTIVE())
@@ -245,36 +242,36 @@ pub fn draw_showcase_composer(frame: &mut Frame, area: Rect, view: &ShowcaseComp
 
     if !composing {
         let hint = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter copy URL · i compose · e edit own · d delete own",
+            " j/k navigate - Enter/c copy profile - i create/edit yours - e edit selected - d delete own",
             Style::default().fg(theme::TEXT_DIM()),
         )));
         frame.render_widget(hint, inner);
         return;
     }
 
-    // Four-row form: 3 single-line fields then a multi-line description.
-    // Description gets the remaining space.
     let constraints = [
-        Constraint::Length(2), // title
-        Constraint::Length(2), // url
-        Constraint::Length(2), // tags
-        Constraint::Min(2),    // description
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(2),
     ];
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(inner);
 
-    draw_field(frame, rows[0], view.state, ComposerField::Title, active);
-    draw_field(frame, rows[1], view.state, ComposerField::Url, active);
-    draw_field(frame, rows[2], view.state, ComposerField::Tags, active);
-    draw_field(
-        frame,
-        rows[3],
-        view.state,
-        ComposerField::Description,
-        active,
-    );
+    draw_field(frame, rows[0], view.state, ComposerField::Headline, active);
+    draw_field(frame, rows[1], view.state, ComposerField::Status, active);
+    draw_field(frame, rows[2], view.state, ComposerField::Type, active);
+    draw_field(frame, rows[3], view.state, ComposerField::Location, active);
+    draw_field(frame, rows[4], view.state, ComposerField::Links, active);
+    draw_field(frame, rows[5], view.state, ComposerField::Skills, active);
+    draw_field(frame, rows[6], view.state, ComposerField::Includes, active);
+    draw_field(frame, rows[7], view.state, ComposerField::Summary, active);
 }
 
 fn draw_field(
@@ -292,7 +289,7 @@ fn draw_field(
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
-    let label_w: u16 = 18;
+    let label_w: u16 = 14;
     let split = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -301,33 +298,26 @@ fn draw_field(
             Constraint::Min(1),
         ])
         .split(area);
-    let prefix = if is_active { "▸ " } else { "  " };
-    let label = Paragraph::new(Line::from(Span::styled(
-        format!("{prefix}{}:", field.label()),
-        label_style,
-    )));
-    frame.render_widget(label, split[0]);
+    let prefix = if is_active { "> " } else { "  " };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("{prefix}{}:", field.label()),
+            label_style,
+        ))),
+        split[0],
+    );
     frame.render_widget(Paragraph::new(" "), split[1]);
     frame.render_widget(state.field_textarea(field), split[2]);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::description_summary_lines;
+    use super::summary_lines;
 
     #[test]
-    fn description_summary_wraps_to_visual_line_budget() {
-        let (lines, truncated) = description_summary_lines("hello wide world\nsecond line", 8, 3);
-
-        assert_eq!(lines, vec!["hello", "wide", "world"]);
+    fn summary_lines_wrap_to_budget() {
+        let (lines, truncated) = summary_lines("hello wide world", 8, 2);
+        assert_eq!(lines, vec!["hello", "wide"]);
         assert!(truncated);
-    }
-
-    #[test]
-    fn description_summary_preserves_short_multiline_description() {
-        let (lines, truncated) = description_summary_lines("one\ntwo\nthree", 20, 3);
-
-        assert_eq!(lines, vec!["one", "two", "three"]);
-        assert!(!truncated);
     }
 }

@@ -12,7 +12,7 @@ use crate::app::games::cards::{
     AsciiCardTheme, CardRank, CardSuit, OUTLINE_CARD_WIDTH, PlayingCard,
 };
 use crate::app::games::ui::{
-    draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint,
+    GameBottomBar, draw_game_frame, draw_game_overlay, keys_line, status_line, tip_line,
 };
 
 const SOLITAIRE_CARD_THEME: AsciiCardTheme = AsciiCardTheme::Outline;
@@ -20,70 +20,41 @@ const FACE_DOWN_PEEK_LINES: usize = 1;
 const FACE_UP_PEEK_LINES: usize = 2;
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
-    let info_lines = vec![
-        info_tagline("Klondike solitaire."),
-        Line::from(""),
-        info_label_value(
-            "Mode",
-            match state.mode {
-                Mode::Daily => "daily".to_string(),
-                Mode::Personal => "personal".to_string(),
-            },
-            theme::AMBER_GLOW(),
-        ),
-        info_label_value(
-            "Difficulty",
-            state.difficulty_key().to_string(),
-            theme::SUCCESS(),
-        ),
-        info_label_value(
-            "Draw",
-            format!(
-                "{} card{}",
-                state.draw_count(),
-                if state.draw_count() == 1 { "" } else { "s" }
-            ),
-            theme::TEXT_BRIGHT(),
-        ),
-        info_label_value(
-            "Progress",
-            format!("{}/52", state.score()),
-            theme::SUCCESS(),
-        ),
-        info_label_value(
-            "Cards",
-            SOLITAIRE_CARD_THEME.name().to_string(),
-            theme::TEXT_BRIGHT(),
-        ),
-        info_label_value("Stock", state.stock.len().to_string(), theme::TEXT_BRIGHT()),
-        info_label_value("Cursor", state.cursor_label(), theme::TEXT_BRIGHT()),
-        info_label_value("Selected", state.selection_label(), theme::TEXT_BRIGHT()),
-        Line::from(""),
-        key_hint("h/j/k/l", "move"),
-        key_hint("Space", "select/place"),
-        key_hint("a", "auto-place"),
-        key_hint("f", "auto-foundation all"),
-        key_hint("u", "undo"),
-        key_hint("c", "deselect"),
-        key_hint("d/p/n", "daily/pers/new"),
-        key_hint("[ ]", "draw mode"),
-        key_hint("{ }", "scroll"),
-        key_hint("r", "reset"),
-        key_hint("Esc", "exit"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Selection tips",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        )),
-        info_tagline("Click a face-down card to"),
-        info_tagline("select the visible stack."),
-        info_tagline("Select + click any column"),
-        info_tagline("to place on that column."),
-    ];
+    let mode_str = match state.mode {
+        Mode::Daily => "daily".to_string(),
+        Mode::Personal => "personal".to_string(),
+    };
 
-    let board_area = draw_game_frame(frame, area, "Solitaire", info_lines, show_sidebar);
+    let bottom = GameBottomBar {
+        status: status_line(vec![
+            ("mode", mode_str, theme::AMBER_GLOW()),
+            ("diff", state.difficulty_key().to_string(), theme::SUCCESS()),
+            (
+                "draw",
+                state.draw_count().to_string(),
+                theme::TEXT_BRIGHT(),
+            ),
+            ("score", format!("{}/52", state.score()), theme::SUCCESS()),
+            ("stock", state.stock.len().to_string(), theme::TEXT_BRIGHT()),
+            ("sel", state.selection_label(), theme::TEXT_BRIGHT()),
+        ]),
+        keys: keys_line(vec![
+            ("h/j/k/l", "move"),
+            ("Space", "select/place"),
+            ("a", "auto"),
+            ("u", "undo"),
+            ("d/p/n", "new"),
+            ("[ ]", "draw"),
+            ("r", "reset"),
+            ("`", "dashboard"),
+            ("Esc", "exit"),
+        ]),
+        tip: Some(tip_line(
+            "Pick a face-down card to grab the visible stack; pick a column to place it.",
+        )),
+    };
+
+    let board_area = draw_game_frame(frame, area, "Solitaire", bottom, show_sidebar);
     let board_width = 78.min(board_area.width);
     let board_height = 44.min(board_area.height);
     let board_rect = Rect {

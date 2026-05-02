@@ -197,6 +197,20 @@ pub fn chat_help_lines() -> Vec<String> {
         "  Enter              submit",
         "  Alt+Enter          newline (description only)",
         "  Esc                cancel compose",
+        "",
+        "Work room",
+        "  A synthetic room where users post one work profile.",
+        "  j / k              navigate work profiles",
+        "  Enter / c          copy selected profile summary",
+        "  i                  create/edit your own profile",
+        "  e                  edit your own profile (admin: any)",
+        "  d                  delete your own profile (admin: any)",
+        "  Fields             headline, status, type, location, links, skills, include flags, summary",
+        "  Status             open, casual, or not-looking",
+        "  Tab / Shift+Tab    cycle composer fields",
+        "  Enter              submit",
+        "  Alt+Enter          newline (summary only)",
+        "  Esc                cancel compose",
     ]
     .into_iter()
     .map(str::to_string)

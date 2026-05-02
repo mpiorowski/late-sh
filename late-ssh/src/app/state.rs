@@ -114,6 +114,7 @@ pub struct SessionConfig {
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub showcase_service: crate::app::chat::showcase::svc::ShowcaseService,
+    pub work_service: crate::app::chat::work::svc::WorkService,
     pub profile_service: ProfileService,
     pub twenty_forty_eight_service:
         crate::app::games::twenty_forty_eight::svc::TwentyFortyEightService,
@@ -716,6 +717,7 @@ impl App {
                 active_users.clone(),
                 config.article_service.clone(),
                 config.showcase_service.clone(),
+                config.work_service.clone(),
             ),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
