@@ -8,6 +8,13 @@ pub(crate) enum ModCommand {
     User {
         username: String,
     },
+    Bans {
+        scope: BanListScope,
+        limit: i64,
+    },
+    Audit {
+        limit: i64,
+    },
     RoomAction {
         action: RoomModAction,
         slug: String,
@@ -31,6 +38,14 @@ pub(crate) enum ModCommand {
         action: RoleAction,
         username: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BanListScope {
+    All,
+    Server,
+    Room { slug: String },
+    Artboard,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,6 +159,8 @@ pub(crate) fn parse_mod_command(input: &str) -> Result<ModCommand> {
         "user" => Ok(ModCommand::User {
             username: required_username(rest.first().copied(), "usage: user @name")?,
         }),
+        "bans" => parse_bans_mod_command(&rest),
+        "audit" => parse_audit_mod_command(&rest),
         "room" => parse_room_mod_command(&rest),
         "server" => parse_server_mod_command(&rest),
         "artboard" => parse_artboard_mod_command(&rest),
@@ -151,6 +168,67 @@ pub(crate) fn parse_mod_command(input: &str) -> Result<ModCommand> {
         "revoke" => parse_role_mod_command(RoleAction::RevokeMod, &rest),
         _ => anyhow::bail!("unknown mod command: {head}"),
     }
+}
+
+fn parse_bans_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    let Some(first) = parts.first().copied() else {
+        return Ok(ModCommand::Bans {
+            scope: BanListScope::All,
+            limit: DEFAULT_LIST_LIMIT,
+        });
+    };
+
+    if let Some(limit) = parse_limit(first)? {
+        if parts.len() > 1 {
+            anyhow::bail!("usage: bans [server|artboard|room #slug] [limit]");
+        }
+        return Ok(ModCommand::Bans {
+            scope: BanListScope::All,
+            limit,
+        });
+    }
+
+    match first {
+        "server" => {
+            if parts.len() > 2 {
+                anyhow::bail!("usage: bans server [limit]");
+            }
+            Ok(ModCommand::Bans {
+                scope: BanListScope::Server,
+                limit: optional_limit(parts.get(1).copied())?,
+            })
+        }
+        "artboard" => {
+            if parts.len() > 2 {
+                anyhow::bail!("usage: bans artboard [limit]");
+            }
+            Ok(ModCommand::Bans {
+                scope: BanListScope::Artboard,
+                limit: optional_limit(parts.get(1).copied())?,
+            })
+        }
+        "room" => {
+            if parts.len() > 3 {
+                anyhow::bail!("usage: bans room #slug [limit]");
+            }
+            Ok(ModCommand::Bans {
+                scope: BanListScope::Room {
+                    slug: required_slug(parts.get(1).copied(), "usage: bans room #slug [limit]")?,
+                },
+                limit: optional_limit(parts.get(2).copied())?,
+            })
+        }
+        _ => anyhow::bail!("unknown bans scope: {first}"),
+    }
+}
+
+fn parse_audit_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    if parts.len() > 1 {
+        anyhow::bail!("usage: audit [limit]");
+    }
+    Ok(ModCommand::Audit {
+        limit: optional_limit(parts.first().copied())?,
+    })
 }
 
 fn parse_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -288,6 +366,26 @@ fn parse_mod_duration(value: &str) -> Result<Option<chrono::Duration>> {
     Ok(Some(duration))
 }
 
+const DEFAULT_LIST_LIMIT: i64 = 25;
+const MAX_LIST_LIMIT: i64 = 100;
+
+fn optional_limit(value: Option<&str>) -> Result<i64> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_LIST_LIMIT);
+    };
+    parse_limit(value)?.ok_or_else(|| anyhow::anyhow!("limit must be a positive number"))
+}
+
+fn parse_limit(value: &str) -> Result<Option<i64>> {
+    let Ok(limit) = value.parse::<i64>() else {
+        return Ok(None);
+    };
+    if limit <= 0 {
+        anyhow::bail!("limit must be positive");
+    }
+    Ok(Some(limit.min(MAX_LIST_LIMIT)))
+}
+
 fn nonempty(value: String) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
@@ -362,6 +460,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         return help_lines(&[
             "help [command]",
             "user @name",
+            "bans [server|artboard|room #slug] [limit]",
+            "audit [limit]",
             "room kick #slug @name [reason...]",
             "room ban #slug @name [duration] [reason...]",
             "room unban #slug @name",
@@ -387,6 +487,25 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "user @name",
             "Shows one user's id, roles, timestamps, and active server/artboard ban flags.",
             "@name: username, with or without @.",
+        ],
+        "bans" => &[
+            "bans [server|artboard|room #slug] [limit]",
+            "Lists current active bans. Without a scope, shows server, artboard, and room bans.",
+            "limit: optional positive number; capped at 100; default 25.",
+        ],
+        "bans server" => &[
+            "bans server [limit]",
+            "Lists active server bans with actor, expiry, and reason.",
+        ],
+        "bans artboard" => &[
+            "bans artboard [limit]",
+            "Lists active artboard bans with actor, expiry, and reason.",
+        ],
+        "bans room" => &["bans room #slug [limit]", "Lists active bans for one room."],
+        "audit" => &[
+            "audit [limit]",
+            "Lists recent moderation audit log entries.",
+            "limit: optional positive number; capped at 100; default 25.",
         ],
         "room" => &[
             "room <kick|ban|unban> #slug @name",
@@ -520,12 +639,16 @@ mod tests {
     }
 
     #[test]
-    fn command_help_rejects_deferred_topics() {
+    fn command_help_explains_audit_arguments() {
         let lines = mod_help_lines(Some("audit"));
 
         assert!(
-            lines.iter().any(|line| line == "unknown help topic: audit"),
-            "audit help should be deferred: {lines:?}"
+            lines.iter().any(|line| line == "audit [limit]"),
+            "audit help should be available: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("capped at 100")),
+            "audit help should explain limit bounds: {lines:?}"
         );
     }
 
@@ -603,6 +726,49 @@ mod tests {
             }
         );
         assert!(parse_mod_command("server disconnect @alice").is_err());
+    }
+
+    #[test]
+    fn parses_ban_listing_commands() {
+        assert_eq!(
+            parse_mod_command("bans").unwrap(),
+            ModCommand::Bans {
+                scope: BanListScope::All,
+                limit: DEFAULT_LIST_LIMIT,
+            }
+        );
+        assert_eq!(
+            parse_mod_command("bans room #lobby 200").unwrap(),
+            ModCommand::Bans {
+                scope: BanListScope::Room {
+                    slug: "lobby".to_string()
+                },
+                limit: MAX_LIST_LIMIT,
+            }
+        );
+        assert_eq!(
+            parse_mod_command("bans server 3").unwrap(),
+            ModCommand::Bans {
+                scope: BanListScope::Server,
+                limit: 3,
+            }
+        );
+        assert!(parse_mod_command("bans topic").is_err());
+    }
+
+    #[test]
+    fn parses_audit_listing_commands() {
+        assert_eq!(
+            parse_mod_command("audit").unwrap(),
+            ModCommand::Audit {
+                limit: DEFAULT_LIST_LIMIT,
+            }
+        );
+        assert_eq!(
+            parse_mod_command("audit 5").unwrap(),
+            ModCommand::Audit { limit: 5 }
+        );
+        assert!(parse_mod_command("audit nope").is_err());
     }
 
     #[test]

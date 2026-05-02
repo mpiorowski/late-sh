@@ -21,7 +21,7 @@ const MODAL_WIDTH: u16 = 92;
 const MODAL_HEIGHT: u16 = 28;
 // Match the right-sidebar bonsai card width (see common/sidebar.rs).
 const BONSAI_CARD_WIDTH: u16 = 24;
-const FETCH_STRIP_HEIGHT: u16 = 4;
+const FETCH_STRIP_HEIGHT: u16 = 5;
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
@@ -180,20 +180,26 @@ fn draw_late_fetch_strip(frame: &mut Frame, area: Rect, state: &ProfileModalStat
     };
 
     let inner_w = inner.width as usize;
-    let col_w = inner_w / 3;
+    let col_w = inner_w / 2;
 
-    let row1 = Line::from(format_three_cells(
+    let row1 = Line::from(format_two_cells(
         ("created", &created),
-        ("ide", &ide),
-        ("os", &os),
+        ("theme", &theme_label),
         col_w,
         label,
         value,
         dim,
     ));
-    let row2 = Line::from(format_three_cells(
-        ("theme", &theme_label),
+    let row2 = Line::from(format_two_cells(
+        ("ide", &ide),
         ("terminal", &terminal),
+        col_w,
+        label,
+        value,
+        dim,
+    ));
+    let row3 = Line::from(format_two_cells(
+        ("os", &os),
         ("langs", &langs),
         col_w,
         label,
@@ -201,30 +207,28 @@ fn draw_late_fetch_strip(frame: &mut Frame, area: Rect, state: &ProfileModalStat
         dim,
     ));
 
-    frame.render_widget(Paragraph::new(vec![row1, row2]), inner);
+    frame.render_widget(Paragraph::new(vec![row1, row2, row3]), inner);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn format_three_cells(
+fn format_two_cells(
     a: (&str, &str),
     b: (&str, &str),
-    c: (&str, &str),
     col_w: usize,
     label_style: Style,
     value_style: Style,
     sep_style: Style,
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
-    for (i, (label, value)) in [a, b, c].into_iter().enumerate() {
+    for (i, (label, value)) in [a, b].into_iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled("│ ", sep_style));
         }
         let label_padded = format!("{label:<9} ");
         let used = label_padded.chars().count() + value.chars().count();
-        let pad = col_w.saturating_sub(used + if i < 2 { 2 } else { 0 });
+        let pad = col_w.saturating_sub(used + if i == 0 { 2 } else { 0 });
         spans.push(Span::styled(label_padded, label_style));
         spans.push(Span::styled(value.to_string(), value_style));
-        if i < 2 {
+        if i == 0 {
             spans.push(Span::raw(" ".repeat(pad)));
         }
     }

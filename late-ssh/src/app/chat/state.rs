@@ -638,7 +638,6 @@ impl ChatState {
         let message = self.selected_message_in_room(room_id)?;
         self.service
             .toggle_message_reaction_task(self.user_id, message.id, kind);
-        self.selected_message_id = None;
         None
     }
 
@@ -748,30 +747,22 @@ impl ChatState {
         match slot {
             RoomSlot::News => {
                 let changed = !self.news_selected;
-                if changed {
-                    self.select_news();
-                }
+                self.select_news();
                 changed
             }
             RoomSlot::Notifications => {
                 let changed = !self.notifications_selected;
-                if changed {
-                    self.select_notifications();
-                }
+                self.select_notifications();
                 changed
             }
             RoomSlot::Discover => {
                 let changed = !self.discover_selected;
-                if changed {
-                    self.select_discover();
-                }
+                self.select_discover();
                 changed
             }
             RoomSlot::Showcase => {
                 let changed = !self.showcase_selected;
-                if changed {
-                    self.select_showcase();
-                }
+                self.select_showcase();
                 changed
             }
             RoomSlot::Room(next_id) => {
@@ -792,6 +783,9 @@ impl ChatState {
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.selected_room_id = Some(next_id);
+                if !changed {
+                    self.mark_room_read(next_id);
+                }
                 changed
             }
         }
