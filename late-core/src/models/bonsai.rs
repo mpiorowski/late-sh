@@ -70,6 +70,34 @@ impl Tree {
         Ok(())
     }
 
+    pub async fn water_and_add_growth_if_available(
+        client: &Client,
+        user_id: Uuid,
+        today: NaiveDate,
+        unlimited: bool,
+    ) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE bonsai_trees
+                 SET last_watered = $2,
+                     growth_points = LEAST(
+                         growth_points + 10 + CASE
+                             WHEN $2::date - last_watered = 1 THEN 5
+                             ELSE 0
+                         END,
+                         $3
+                     ),
+                     updated = current_timestamp
+                 WHERE user_id = $1
+                   AND is_alive = true
+                   AND ($4 OR last_watered IS DISTINCT FROM $2)
+                 RETURNING user_id",
+                &[&user_id, &today, &MAX_GROWTH_POINTS, &unlimited],
+            )
+            .await?;
+        Ok(row.is_some())
+    }
+
     pub async fn add_growth(client: &Client, user_id: Uuid, points: i32) -> Result<()> {
         client
             .execute(
