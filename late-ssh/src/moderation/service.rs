@@ -3,12 +3,12 @@ use chrono::Utc;
 use late_core::{
     db::Db,
     models::{
-        artboard_ban::ArtboardBan,
+        artboard_ban::{ArtboardBan, ArtboardBanListItem},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
-        moderation_audit_log::ModerationAuditLog,
-        room_ban::RoomBan,
-        server_ban::{ServerBan, ServerBanActivation},
+        moderation_audit_log::{ModerationAuditLog, ModerationAuditLogListItem},
+        room_ban::{RoomBan, RoomBanListItem},
+        server_ban::{ServerBan, ServerBanActivation, ServerBanListItem},
         user::User,
     },
 };
@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 use crate::authz::{Caps, Permissions, Tier};
 use crate::moderation::command::{
-    ArtboardAction, ModCommand, RoleAction, RoomModAction, ServerUserAction, mod_help_lines,
-    normalize_mod_slug, parse_mod_command, strip_user_prefix,
+    ArtboardAction, BanListScope, ModCommand, RoleAction, RoomModAction, ServerUserAction,
+    mod_help_lines, normalize_mod_slug, parse_mod_command, strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -65,6 +65,8 @@ impl ModerationService {
         match command {
             ModCommand::Help { topic } => Ok(mod_help_lines(topic.as_deref())),
             ModCommand::User { username } => self.user_detail(permissions, &username).await,
+            ModCommand::Bans { scope, limit } => self.list_bans(permissions, scope, limit).await,
+            ModCommand::Audit { limit } => self.list_audit(permissions, limit).await,
             ModCommand::RoomAction {
                 action,
                 slug,
@@ -140,6 +142,88 @@ impl ModerationService {
             format!("server_banned: {}", server_ban.is_some()),
             format!("artboard_banned: {}", artboard_ban.is_some()),
         ])
+    }
+
+    async fn list_bans(
+        &self,
+        permissions: Permissions,
+        scope: BanListScope,
+        limit: i64,
+    ) -> Result<Vec<String>> {
+        ensure_mod_surface(permissions)?;
+        let client = self.db.get().await?;
+        match scope {
+            BanListScope::All => {
+                let server = ServerBan::active_with_usernames(&client, limit).await?;
+                let artboard = ArtboardBan::active_with_usernames(&client, limit).await?;
+                let room = RoomBan::active_with_usernames(&client, limit).await?;
+                if server.is_empty() && artboard.is_empty() && room.is_empty() {
+                    return Ok(vec!["no active bans".to_string()]);
+                }
+                let mut lines = vec![format!("active bans (limit {limit} per section)")];
+                append_section(
+                    &mut lines,
+                    "server bans",
+                    server
+                        .iter()
+                        .map(format_server_ban_item)
+                        .collect::<Vec<_>>(),
+                );
+                append_section(
+                    &mut lines,
+                    "artboard bans",
+                    artboard
+                        .iter()
+                        .map(format_artboard_ban_item)
+                        .collect::<Vec<_>>(),
+                );
+                append_section(
+                    &mut lines,
+                    "room bans",
+                    room.iter().map(format_room_ban_item).collect::<Vec<_>>(),
+                );
+                Ok(lines)
+            }
+            BanListScope::Server => {
+                let items = ServerBan::active_with_usernames(&client, limit).await?;
+                Ok(single_section(
+                    "active server bans",
+                    "no active server bans",
+                    items.iter().map(format_server_ban_item).collect(),
+                ))
+            }
+            BanListScope::Artboard => {
+                let items = ArtboardBan::active_with_usernames(&client, limit).await?;
+                Ok(single_section(
+                    "active artboard bans",
+                    "no active artboard bans",
+                    items.iter().map(format_artboard_ban_item).collect(),
+                ))
+            }
+            BanListScope::Room { slug } => {
+                let room = find_room_by_mod_slug(&client, &slug).await?;
+                let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+                let items =
+                    RoomBan::active_for_room_with_usernames(&client, room.id, limit).await?;
+                Ok(single_section(
+                    &format!("active room bans for #{room_slug}"),
+                    &format!("no active room bans for #{room_slug}"),
+                    items.iter().map(format_room_ban_item).collect(),
+                ))
+            }
+        }
+    }
+
+    async fn list_audit(&self, permissions: Permissions, limit: i64) -> Result<Vec<String>> {
+        ensure_has(permissions, Caps::VIEW_STAFF_INFO)?;
+        let client = self.db.get().await?;
+        let items = ModerationAuditLog::recent_with_usernames(&client, limit).await?;
+        if items.is_empty() {
+            return Ok(vec!["no audit log entries".to_string()]);
+        }
+        let mut lines = vec![format!("recent audit log entries (limit {limit})")];
+        lines.extend(items.iter().map(format_audit_log_item));
+        Ok(lines)
     }
 
     async fn room_action(
@@ -522,6 +606,145 @@ pub(crate) const fn cap_for_server_ban(duration: Option<chrono::Duration>) -> Ca
     } else {
         Caps::PERMA_BAN_USER
     }
+}
+
+fn single_section(title: &str, empty: &str, items: Vec<String>) -> Vec<String> {
+    if items.is_empty() {
+        vec![empty.to_string()]
+    } else {
+        let mut lines = vec![format!("{title}:")];
+        lines.extend(items);
+        lines
+    }
+}
+
+fn append_section(lines: &mut Vec<String>, title: &str, items: Vec<String>) {
+    lines.push(format!("{title}:"));
+    if items.is_empty() {
+        lines.push("- none".to_string());
+    } else {
+        lines.extend(items);
+    }
+}
+
+fn format_server_ban_item(item: &ServerBanListItem) -> String {
+    let target = item
+        .target_username
+        .as_deref()
+        .or(item.ban.snapshot_username.as_deref())
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.target_user_id.to_string());
+    let actor = item
+        .actor_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.actor_user_id.to_string());
+    let ip = item
+        .ban
+        .ip_address
+        .as_deref()
+        .map(|ip| format!(" ip: {ip}"))
+        .unwrap_or_default();
+    format!(
+        "- {target} by {actor} expires: {}{} reason: {}",
+        format_expires_at(item.ban.expires_at),
+        ip,
+        format_reason(&item.ban.reason)
+    )
+}
+
+fn format_artboard_ban_item(item: &ArtboardBanListItem) -> String {
+    let target = item
+        .target_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.target_user_id.to_string());
+    let actor = item
+        .actor_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.actor_user_id.to_string());
+    format!(
+        "- {target} by {actor} expires: {} reason: {}",
+        format_expires_at(item.ban.expires_at),
+        format_reason(&item.ban.reason)
+    )
+}
+
+fn format_room_ban_item(item: &RoomBanListItem) -> String {
+    let room = item
+        .room_slug
+        .as_deref()
+        .map(|slug| format!("#{slug}"))
+        .unwrap_or_else(|| item.ban.room_id.to_string());
+    let target = item
+        .target_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.target_user_id.to_string());
+    let actor = item
+        .actor_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.actor_user_id.to_string());
+    format!(
+        "- {room} {target} by {actor} expires: {} reason: {}",
+        format_expires_at(item.ban.expires_at),
+        format_reason(&item.ban.reason)
+    )
+}
+
+fn format_audit_log_item(item: &ModerationAuditLogListItem) -> String {
+    let actor = item
+        .actor_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.log.actor_user_id.to_string());
+    let target = if item.log.target_kind == "user" {
+        item.target_username
+            .as_deref()
+            .map(user_label)
+            .or_else(|| item.log.target_id.map(|id| id.to_string()))
+            .unwrap_or_else(|| "none".to_string())
+    } else {
+        item.log
+            .target_id
+            .map(|id| format!("{}:{id}", item.log.target_kind))
+            .unwrap_or_else(|| item.log.target_kind.clone())
+    };
+    let metadata = if item
+        .log
+        .metadata
+        .as_object()
+        .is_some_and(|map| map.is_empty())
+    {
+        String::new()
+    } else {
+        format!(" metadata: {}", item.log.metadata)
+    };
+    format!(
+        "- {} {actor} {} target: {target}{metadata}",
+        item.log.created.format("%Y-%m-%d %H:%M UTC"),
+        item.log.action
+    )
+}
+
+fn format_expires_at(expires_at: Option<chrono::DateTime<Utc>>) -> String {
+    expires_at
+        .map(|expires_at| expires_at.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "permanent".to_string())
+}
+
+fn format_reason(reason: &str) -> &str {
+    if reason.trim().is_empty() {
+        "-"
+    } else {
+        reason.trim()
+    }
+}
+
+fn user_label(username: &str) -> String {
+    format!("@{username}")
 }
 
 async fn find_user_by_mod_name(client: &tokio_postgres::Client, username: &str) -> Result<User> {
