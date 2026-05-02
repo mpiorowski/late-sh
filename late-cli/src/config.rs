@@ -96,6 +96,8 @@ impl Config {
             }
         }
 
+        let ssh_bin = crate::ipv4::apply_ipv4_default(ssh_bin, ssh_mode);
+
         Ok(Self {
             ssh_target,
             ssh_port,

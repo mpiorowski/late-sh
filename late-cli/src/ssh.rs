@@ -676,7 +676,8 @@ async fn spawn_native_ssh(
         ..Default::default()
     });
 
-    let mut session = client::connect(client_config, (target.host.as_str(), target.port), handler)
+    let stream = crate::ipv4::connect_ipv4_only(&target.host, target.port).await?;
+    let mut session = client::connect_stream(client_config, stream, handler)
         .await
         .with_context(|| format!("failed to connect to {}:{}", target.host, target.port))?;
 

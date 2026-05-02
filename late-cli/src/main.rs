@@ -11,6 +11,7 @@ mod audio;
 
 mod config;
 mod identity;
+mod ipv4;
 mod pty;
 mod raw_mode;
 mod ssh;
