@@ -106,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
     let conn_limit = Arc::new(Semaphore::new(config.max_conns_global));
     let conn_counts = Arc::new(Mutex::new(HashMap::new()));
     let active_users = Arc::new(Mutex::new(HashMap::new()));
+    let account_deletions = late_ssh::state::AccountDeletionGate::new();
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let (now_playing_tx, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
     let session_registry = SessionRegistry::new();
@@ -129,7 +130,9 @@ async fn main() -> anyhow::Result<()> {
         config.ai.api_key.clone(),
         config.ai.model.clone(),
     );
-    let profile_service = ProfileService::new(db.clone(), active_users.clone());
+    let profile_service = ProfileService::new(db.clone(), active_users.clone())
+        .with_session_registry(session_registry.clone())
+        .with_account_deletion_gate(account_deletions.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let showcase_service = ShowcaseService::new(db.clone());
     let twenty_forty_eight_service =
@@ -240,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
         conn_limit,
         conn_counts,
         active_users,
+        account_deletions,
         activity_feed: activity_tx,
         now_playing_rx: now_playing_rx.clone(),
         session_registry,

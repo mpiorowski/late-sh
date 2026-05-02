@@ -84,6 +84,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
 
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
+    let account_deletions = late_ssh::state::AccountDeletionGate::new();
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
@@ -112,7 +113,9 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         config.ws_pair_rate_limit_window_secs,
     );
     let (_, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
-    let profile_service = ProfileService::new(db.clone(), active_users.clone());
+    let profile_service = ProfileService::new(db.clone(), active_users.clone())
+        .with_session_registry(session_registry.clone())
+        .with_account_deletion_gate(account_deletions.clone());
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = TetrisService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
@@ -134,6 +137,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
+        account_deletions,
         config,
         db,
         vote_service,

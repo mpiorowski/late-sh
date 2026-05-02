@@ -49,6 +49,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Tab::Themes => draw_themes_tab(frame, layout[3], state),
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
         Tab::Favorites => draw_favorites_tab(frame, layout[3], state),
+        Tab::Account => draw_account_tab(frame, layout[3], state),
         Tab::Special => draw_special_tab(frame, layout[3], state),
     }
 
@@ -56,6 +57,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 
     if state.picker_open() {
         draw_picker(frame, popup, state);
+    }
+    if state.delete_account_dialog().open() {
+        draw_delete_account_dialog(frame, popup, state);
     }
 }
 
@@ -150,6 +154,16 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" remove  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" add  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+            ]);
+        }
+        (Tab::Account, _) => {
+            spans.extend([
+                Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" open confirm  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
@@ -703,6 +717,55 @@ fn draw_special_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     }
 }
 
+fn draw_account_tab(frame: &mut Frame, area: Rect, _state: &SettingsModalState) {
+    let sections = Layout::vertical([
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // button
+        Constraint::Length(1), // description
+        Constraint::Min(0),
+    ])
+    .split(area);
+
+    frame.render_widget(Paragraph::new(section_heading("Account")), sections[0]);
+
+    let width = area.width as usize;
+    let label = "Delete Account";
+    let prefix = " › ";
+    let used = prefix.chars().count() + label.chars().count();
+    let trailing = " ".repeat(width.saturating_sub(used));
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                prefix,
+                Style::default()
+                    .fg(theme::ERROR())
+                    .bg(theme::BG_SELECTION())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                label,
+                Style::default()
+                    .fg(theme::ERROR())
+                    .bg(theme::BG_SELECTION())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(trailing, Style::default().bg(theme::BG_SELECTION())),
+        ])),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(
+                "Delete your own account (cannot be undone!)",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        sections[3],
+    );
+}
+
 /// Layout note: `area` is the 6-line strip reserved at the bottom of the
 /// Special tab. The small gem hugs a corner; the grand gem is centered.
 /// The gem's screen-coordinate rect is stashed back on `gem.hit_area` so the
@@ -1202,6 +1265,115 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[3]);
+}
+
+fn draw_delete_account_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let popup = centered_rect(64, 12, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Delete Account ")
+        .title_style(
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::ERROR()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "This cannot be undone.",
+                Style::default()
+                    .fg(theme::ERROR())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        layout[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Type your username to confirm:",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[2],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                state.draft().username.clone(),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        layout[3],
+    );
+
+    let typed = state.delete_account_dialog().input().lines().join("");
+    let input_text = if typed.is_empty() {
+        "username".to_string()
+    } else if state.delete_account_dialog().pending() {
+        typed.clone()
+    } else {
+        format!("{typed}█")
+    };
+    let input_style = if typed.is_empty() {
+        Style::default().fg(theme::TEXT_FAINT())
+    } else {
+        Style::default().fg(theme::AMBER())
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" › ", Style::default().fg(theme::AMBER_GLOW())),
+            Span::styled(input_text, input_style),
+        ])),
+        layout[4],
+    );
+
+    if let Some(status) = state.delete_account_dialog().status() {
+        let color = if state.delete_account_dialog().pending() {
+            theme::AMBER()
+        } else {
+            theme::ERROR()
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(status.to_string(), Style::default().fg(color)),
+            ])),
+            layout[5],
+        );
+    }
+
+    let footer = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" delete  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(footer), layout[7]);
 }
 
 fn section_heading(title: &str) -> Line<'static> {

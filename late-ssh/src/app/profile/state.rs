@@ -11,6 +11,7 @@ pub struct ProfileState {
     pub(crate) profile: Profile,
     snapshot_rx: watch::Receiver<ProfileSnapshot>,
     event_rx: broadcast::Receiver<ProfileEvent>,
+    account_deleted: bool,
 }
 
 impl Drop for ProfileState {
@@ -35,6 +36,7 @@ impl ProfileState {
             profile,
             snapshot_rx,
             event_rx,
+            account_deleted: false,
         }
     }
 
@@ -47,6 +49,10 @@ impl ProfileState {
             .theme_id
             .as_deref()
             .unwrap_or_else(|| theme::normalize_id(""))
+    }
+
+    pub fn take_account_deleted(&mut self) -> bool {
+        std::mem::take(&mut self.account_deleted)
     }
 
     // Tick
@@ -89,6 +95,9 @@ impl ProfileState {
                     }
                     ProfileEvent::Error { user_id, message } if self.user_id == user_id => {
                         banner = Some(Banner::error(&message));
+                    }
+                    ProfileEvent::AccountDeleted { user_id } if self.user_id == user_id => {
+                        self.account_deleted = true;
                     }
                     _ => (),
                 },
