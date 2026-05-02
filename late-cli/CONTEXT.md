@@ -259,16 +259,19 @@ Audio path:
 2. Choose the output sample rate from the default `cpal` output device.
 3. Prefer the stream's native `44.1 kHz` when supported.
 4. If the device requires another rate, such as `48 kHz`, resample locally with streaming linear resampling.
-5. Decode frames into a playback queue.
+5. Decode frames into a lock-free SPSC playback ring buffer.
 6. The output callback applies mute/volume and records post-mute/post-volume samples into the played ring.
 7. The analyzer reads from the played ring and broadcasts `VizSample { bands: [f32; 8], rms }`.
 
 Critical audio invariant:
 - The analyzer must follow audible output, not raw decoded samples. Muting or lowering volume should visibly affect the TUI visualizer.
+- The CPAL output callback must not take a mutex or allocate per output frame. Keep decoder-to-output transport on a lock-free SPSC ring and map channels directly into the callback buffer.
+- Reuse Symphonia `SampleBuffer` storage across decoded packets; do not allocate a fresh conversion buffer per packet.
 
 Platform notes:
 - Android/Termux currently disables local audio in the runtime and still allows the SSH/client path to proceed.
-- On non-Android platforms, audio startup failure aborts the CLI before the interactive SSH session proceeds.
+- WSL uses a dedicated audio profile: fixed 2048-frame CPAL buffer where possible, a short prebuffer before `stream.play()`, and fail-open startup. If local WSL audio cannot start, the CLI continues into SSH with audio disabled and points users to browser pairing or Windows-native `late.exe`.
+- On non-WSL, non-Android platforms, audio startup failure aborts the CLI before the interactive SSH session proceeds.
 - WSL startup failures include a targeted hint that checks `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER`.
 - A working default local audio output device is required for full desktop CLI startup.
 - MP3 is the only enabled stream format.
@@ -300,6 +303,10 @@ The CLI binary must forward local terminal resizes so side-by-side panes and spl
 Raw mode:
 - Native and old modes enable CLI raw mode.
 - OpenSSH mode leaves raw mode to system OpenSSH so auth prompts retain normal terminal behavior.
+
+Shutdown invariant:
+- Native mode treats SSH channel `EOF` the same as `Close` for interactive-session shutdown.
+- Native and old modes must not run stdin forwarding in Tokio `spawn_blocking`: a thread blocked in `stdin.read()` cannot be aborted and can keep the runtime alive after the server has printed the farewell frame. Use a detached OS thread for stdin forwarding so process exit is controlled by the SSH completion task, not by the next local keypress.
 
 ---
 
@@ -385,8 +392,8 @@ Relevant TUI controls:
 
 ## 12. Current Known Gaps [VOLATILE]
 
-- CLI startup still depends on a working local audio output device for full desktop operation.
-- On non-Android platforms, audio startup failure prevents the interactive SSH session from proceeding.
+- CLI startup still depends on a working local audio output device for full desktop audio.
+- On non-WSL, non-Android platforms, audio startup failure prevents the interactive SSH session from proceeding.
 - OpenSSH mode is Unix-only; Windows users should use native mode.
 - Old mode remains as a compatibility path and still depends on system OpenSSH plus PTY behavior.
 - Native mode does not handle OpenSSH/FIDO/YubiKey auth flows; users must switch to OpenSSH mode for those.

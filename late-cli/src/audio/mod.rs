@@ -1,10 +1,9 @@
 use anyhow::{Context, Result};
 use cpal::traits::StreamTrait;
 use std::{
-    collections::VecDeque,
     env,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU8, AtomicU64},
         mpsc,
     },
@@ -45,6 +44,13 @@ use resampler::StreamingLinearResampler;
 mod output;
 
 use output::{PlaybackQueue, PlayedRing, build_output_stream, output_sample_rate_for};
+use ringbuf::{HeapRb, traits::Split};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AudioBackendProfile {
+    Default,
+    Wsl,
+}
 
 impl AudioRuntime {
     pub(super) async fn start(audio_base_url: String) -> Result<Self> {
@@ -52,15 +58,37 @@ impl AudioRuntime {
             return Ok(Self::disabled());
         }
 
+        let profile = if is_wsl() {
+            AudioBackendProfile::Wsl
+        } else {
+            AudioBackendProfile::Default
+        };
+
+        match Self::start_enabled(audio_base_url, profile).await {
+            Ok(runtime) => Ok(runtime),
+            Err(err) if profile == AudioBackendProfile::Wsl => {
+                let hint = audio_startup_hint();
+                eprintln!(
+                    "late: local WSL audio could not start; continuing without CLI audio.\n\
+                     late: use browser pairing or the Windows-native late.exe for audio.\n\
+                     late: {err:#}\n\n{hint}"
+                );
+                tracing::warn!(error = ?err, "WSL audio startup failed; continuing without local audio");
+                Ok(Self::disabled())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn start_enabled(audio_base_url: String, profile: AudioBackendProfile) -> Result<Self> {
         let probe_url = audio_base_url.clone();
         let source_spec = tokio::task::spawn_blocking(move || probe_stream_spec(&probe_url))
             .await
             .context("audio stream probe task failed")??;
         let output_sample_rate = output_sample_rate_for(source_spec)?;
-        let queue = Arc::new(Mutex::new(VecDeque::with_capacity(
-            output_sample_rate as usize * source_spec.channels,
-        )));
-        let played_ring = Arc::new(Mutex::new(VecDeque::with_capacity(4096)));
+        let queue_capacity = output_sample_rate as usize * source_spec.channels * 2;
+        let (queue_tx, queue_rx) = HeapRb::<f32>::new(queue_capacity).split();
+        let (played_tx, played_rx) = HeapRb::<f32>::new(4096).split();
         let played_samples = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let muted = Arc::new(AtomicBool::new(false));
@@ -70,24 +98,26 @@ impl AudioRuntime {
 
         let stream = build_output_stream(
             source_spec,
-            Arc::clone(&queue),
-            Arc::clone(&played_ring),
+            queue_rx,
+            played_tx,
             Arc::clone(&played_samples),
             Arc::clone(&muted),
             Arc::clone(&volume_percent),
+            profile,
         )?;
         let output_sample_rate = stream.sample_rate;
         let stream = stream.stream;
         spawn_decoder_thread(
             audio_base_url,
-            queue,
+            queue_tx,
             source_spec,
             output_sample_rate,
             Arc::clone(&stop),
             ready_tx,
+            prebuffer_samples(profile, output_sample_rate, source_spec.channels),
         );
         spawn_playback_analyzer_thread(
-            Arc::clone(&played_ring),
+            played_rx,
             analyzer_tx.clone(),
             output_sample_rate,
             Arc::clone(&stop),
@@ -123,6 +153,16 @@ impl AudioRuntime {
             volume_percent: Arc::new(AtomicU8::new(0)),
             enabled: false,
         }
+    }
+}
+
+fn prebuffer_samples(profile: AudioBackendProfile, sample_rate: u32, channels: usize) -> usize {
+    match profile {
+        AudioBackendProfile::Default => 0,
+        // WSLg's RDP/PulseAudio bridge is prone to startup underruns. Buffer a
+        // short half-second runway there without increasing native-platform
+        // latency.
+        AudioBackendProfile::Wsl => (sample_rate as usize * channels) / 2,
     }
 }
 

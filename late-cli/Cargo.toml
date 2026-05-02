@@ -24,6 +24,7 @@ futures-util.workspace = true
 getrandom.workspace = true
 rand_core.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
+ringbuf.workspace = true
 russh.workspace = true
 rustfft.workspace = true
 shlex.workspace = true

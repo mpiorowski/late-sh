@@ -1,5 +1,6 @@
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::{
+    collections::VecDeque,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -9,10 +10,12 @@ use std::{
 };
 use tokio::sync::broadcast;
 
+use ringbuf::traits::Consumer;
+
 use super::{PlayedRing, VizSample};
 
 pub(super) fn spawn_playback_analyzer_thread(
-    played_ring: PlayedRing,
+    mut played_ring: PlayedRing,
     analyzer_tx: broadcast::Sender<VizSample>,
     sample_rate: u32,
     stop: Arc<AtomicBool>,
@@ -22,24 +25,31 @@ pub(super) fn spawn_playback_analyzer_thread(
         let bands = log_bands(sample_rate as f32, cfg.fft_size, cfg.band_count);
         let fft = FftPlanner::new().plan_fft_forward(cfg.fft_size);
         let mut scratch = vec![Complex::new(0.0, 0.0); cfg.fft_size];
+        let mut samples = vec![0.0; cfg.fft_size];
+        let mut history = VecDeque::with_capacity(4096);
         let tick = Duration::from_millis(1000 / cfg.target_hz.max(1));
 
         while !stop.load(Ordering::Relaxed) {
-            let frame = {
-                let played_ring = played_ring.lock().unwrap_or_else(|e| e.into_inner());
-                if played_ring.len() < cfg.fft_size {
-                    None
-                } else {
-                    let start = played_ring.len() - cfg.fft_size;
-                    let samples: Vec<f32> = played_ring.iter().skip(start).copied().collect();
-                    let (mut bands_out, mut rms) =
-                        analyze_frame(&samples, &*fft, &mut scratch, &bands);
-                    normalize_bands(&mut bands_out, &mut rms, cfg.gain);
-                    Some(VizSample {
-                        bands: bands_out,
-                        rms,
-                    })
+            while let Some(sample) = played_ring.try_pop() {
+                history.push_back(sample);
+                while history.len() > 4096 {
+                    history.pop_front();
                 }
+            }
+
+            let frame = if history.len() < cfg.fft_size {
+                None
+            } else {
+                let start = history.len() - cfg.fft_size;
+                for (dst, sample) in samples.iter_mut().zip(history.iter().skip(start)) {
+                    *dst = *sample;
+                }
+                let (mut bands_out, mut rms) = analyze_frame(&samples, &*fft, &mut scratch, &bands);
+                normalize_bands(&mut bands_out, &mut rms, cfg.gain);
+                Some(VizSample {
+                    bands: bands_out,
+                    rms,
+                })
             };
 
             if let Some(frame) = frame {
