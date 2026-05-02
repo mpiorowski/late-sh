@@ -12,9 +12,9 @@ use crate::app::{
         player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
         settings::BlackjackTableSettings,
         state::{
-            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase, SeatAction,
-            SeatPhase, Shoe, can_double, dealer_must_hit, is_bust, is_natural_blackjack,
-            payout_credit, score, settle,
+            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase,
+            SETTLEMENT_MIN_VIEW_MS, SeatAction, SeatPhase, Shoe, can_double, dealer_must_hit,
+            is_bust, is_natural_blackjack, payout_credit, score, settle,
         },
     },
 };
@@ -22,8 +22,7 @@ use crate::app::{
 const BETTING_LOCK_CAP_SECS: u64 = 30;
 const MAX_MISSED_DEALS: u8 = 3;
 const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
-const DEALER_CARD_DELAY_MS: u64 = 1100;
-const SETTLEMENT_MIN_VIEW_MS: u64 = 1500;
+const DEALER_CARD_DELAY_MS: u64 = 900;
 
 #[derive(Clone)]
 pub struct BlackjackService {

@@ -110,10 +110,11 @@ pub(super) fn spawn_decoder_thread(
                 if queue.vacant_len() >= chunk.len() {
                     let pushed = queue.push_slice(&chunk);
                     if pushed == chunk.len() {
-                        if ready_tx.is_some() && queue.occupied_len() >= prebuffer_samples {
-                            if let Some(ready_tx) = ready_tx.take() {
-                                let _ = ready_tx.send(Ok(()));
-                            }
+                        if ready_tx.is_some()
+                            && queue.occupied_len() >= prebuffer_samples
+                            && let Some(ready_tx) = ready_tx.take()
+                        {
+                            let _ = ready_tx.send(Ok(()));
                         }
                         break;
                     }
