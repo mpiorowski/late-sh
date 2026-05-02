@@ -87,6 +87,17 @@ struct WebTunnelGuard {
     _conn_permit: OwnedSemaphorePermit,
 }
 
+struct WebTunnelSession {
+    socket: WebSocket,
+    state: State,
+    user: User,
+    is_new_user: bool,
+    session_token: String,
+    cols: u16,
+    rows: u16,
+    _guard: WebTunnelGuard,
+}
+
 impl Drop for WebTunnelGuard {
     fn drop(&mut self) {
         if self.active_user_incremented {
@@ -199,7 +210,7 @@ pub async fn ws_handler(
     let cols = params.cols.unwrap_or(120).clamp(20, 240);
     let rows = params.rows.unwrap_or(36).clamp(10, 80);
     ws.on_upgrade(move |socket| {
-        handle_socket(
+        handle_socket(WebTunnelSession {
             socket,
             state,
             user,
@@ -207,21 +218,23 @@ pub async fn ws_handler(
             session_token,
             cols,
             rows,
-            guard,
-        )
+            _guard: guard,
+        })
     })
 }
 
-async fn handle_socket(
-    socket: WebSocket,
-    state: State,
-    user: User,
-    is_new_user: bool,
-    session_token: String,
-    cols: u16,
-    rows: u16,
-    _guard: WebTunnelGuard,
-) {
+async fn handle_socket(session: WebTunnelSession) {
+    let WebTunnelSession {
+        socket,
+        state,
+        user,
+        is_new_user,
+        session_token,
+        cols,
+        rows,
+        _guard,
+    } = session;
+
     let session_config = build_session_config(
         &state,
         SessionBootstrapInputs {
