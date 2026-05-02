@@ -387,6 +387,8 @@ impl GhostService {
         let system_prompt = format!(
             "You are @{bot_name}, an AI helper in a terminal developer chat.\n\
             {app_context}\n\
+            You run on Google's Gemini API. The exact model id is: {model}. \
+            If a user asks what AI, model, or LLM you are, answer honestly with that model id and that it is served via Google's Gemini API. Do not deny being an AI.\n\
             Give concise, practical help in 1-4 short lines.\n\
             Use the extra space when the question benefits from a clearer answer.\n\
             You can answer questions about late.sh features, product positioning, and high-level architecture.\n\
@@ -397,6 +399,7 @@ impl GhostService {
             Output only raw message text.",
             bot_name = bot.username,
             app_context = bot_app_context(),
+            model = self.ai_service.model(),
         );
 
         let Some(reply) = self
