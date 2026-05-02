@@ -1,27 +1,189 @@
 {% extends "pages/app.html" %}
 
-{% block title %}late.sh{% endblock %}
+{% block title %}Play - late.sh{% endblock %}
 
 {% block content %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 
-<div class="fixed inset-0 bg-[#101318] text-slate-100">
-    <header class="h-12 border-b border-slate-700/70 bg-[#151922] px-3 sm:px-4 flex items-center justify-between gap-3">
-        <a href="/" class="font-semibold tracking-normal text-slate-100">late.sh</a>
-        <div class="flex items-center gap-2 text-xs text-slate-300">
-            <span id="terminal-status-dot" class="h-2 w-2 rounded-full bg-slate-500"></span>
+<style>
+    @font-face {
+        font-family: "Symbols Nerd Font";
+        src:
+            url("/static/fonts/SymbolsNerdFont-Regular.woff2") format("woff2"),
+            url("/static/fonts/SymbolsNerdFont-Regular.ttf") format("truetype");
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+    }
+
+    html,
+    body {
+        overflow: hidden !important;
+        overscroll-behavior: none;
+    }
+
+    .play-root {
+        position: fixed;
+        inset: 0;
+        background: #030712;
+        color: #e5e7eb;
+        display: flex;
+        flex-direction: column;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        z-index: 1;
+    }
+
+    .play-topbar {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.55rem 0.9rem;
+        border-bottom: 1px solid #1f2937;
+        background: #111827;
+        flex-shrink: 0;
+        font-size: 0.8rem;
+    }
+
+    .play-topbar a {
+        color: inherit;
+        text-decoration: none;
+    }
+
+    .play-topbar .crumb-sep {
+        color: #374151;
+    }
+
+    .play-topbar .meta {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: #6b7280;
+        font-size: 0.7rem;
+    }
+
+    .play-topbar .status-dot {
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 9999px;
+        background: #6b7280;
+        transition: background 0.15s ease;
+    }
+
+    .play-topbar .status-dot.is-connecting { background: #eab308; }
+    .play-topbar .status-dot.is-online { background: #22c55e; }
+    .play-topbar .status-dot.is-error { background: #ef4444; }
+
+    .play-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.9rem;
+        height: 1.9rem;
+        background: rgba(17, 24, 39, 0.85);
+        border: 1px solid #1f2937;
+        color: #9ca3af;
+        cursor: pointer;
+        font-family: inherit;
+        transition: color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .play-btn:hover {
+        color: #22c55e;
+        border-color: #14532d;
+    }
+
+    .play-btn svg { width: 14px; height: 14px; }
+
+    .play-body {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        padding: 0.6rem;
+        background: #030712;
+    }
+
+    .play-stage {
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        border: 1px solid #1f2937;
+        background: #030712;
+        box-shadow: 0 0 60px -10px rgba(34, 197, 94, 0.06);
+    }
+
+    .play-disabled {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        pointer-events: none;
+    }
+
+    .play-disabled-card {
+        max-width: 28rem;
+        border: 1px solid #1f2937;
+        background: rgba(17, 24, 39, 0.9);
+        backdrop-filter: blur(4px);
+        padding: 1rem 1.1rem;
+        font-size: 0.8rem;
+        color: #9ca3af;
+        pointer-events: auto;
+    }
+
+    .play-disabled-card .label {
+        color: #4b5563;
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 0.35rem;
+    }
+
+    .play-disabled-card a {
+        color: #22c55e;
+        text-decoration: none;
+    }
+
+    .play-disabled-card a:hover { text-decoration: underline; }
+</style>
+
+<div class="play-root">
+    <header class="play-topbar">
+        <a href="/" class="text-green-500 tracking-tight">late.sh</a>
+        <span class="crumb-sep">/</span>
+        <span class="text-gray-400">play</span>
+
+        <div class="meta">
+            <span id="terminal-status-dot" class="status-dot"></span>
             <span id="terminal-status">offline</span>
-            <button id="terminal-reconnect" type="button" class="hidden h-8 w-8 place-items-center rounded border border-slate-600 text-slate-200 hover:bg-slate-700" title="Reconnect" aria-label="Reconnect">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path><path d="M16 16h5v5"></path></svg>
+            <span class="crumb-sep">·</span>
+            <span><span id="listener-count" hx-get="/play/listeners" hx-trigger="every 15s" hx-swap="innerHTML">{{ listeners_count }}</span> online</span>
+            <button id="terminal-reconnect" type="button" class="play-btn hidden" title="reconnect" aria-label="reconnect">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                    <path d="M3 3v5h5"></path>
+                    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+                    <path d="M16 16h5v5"></path>
+                </svg>
             </button>
         </div>
     </header>
 
-    <main class="h-[calc(100vh-3rem)] p-2 sm:p-3">
-        <div id="terminal-container" class="h-full w-full overflow-hidden rounded border border-slate-700/80 bg-[#05070a]"></div>
+    <main class="play-body">
+        <div id="terminal-container" class="play-stage"></div>
         {% if !enabled %}
-        <div class="absolute inset-x-4 top-20 border border-slate-700 bg-[#151922] px-4 py-3 text-sm text-slate-200 shadow-xl sm:inset-x-auto sm:right-4 sm:w-96">
-            Web terminal is disabled.
+        <div class="play-disabled">
+            <div class="play-disabled-card">
+                <div class="label"># web terminal</div>
+                <div>web terminal is disabled on this server.</div>
+                <div class="mt-2 text-gray-500">connect with ssh instead:</div>
+                <div class="mt-1 text-gray-300">$ ssh late.sh</div>
+                <div class="mt-3 text-xs text-gray-600">
+                    back to <a href="/">home</a>
+                </div>
+            </div>
         </div>
         {% endif %}
     </main>
@@ -43,16 +205,16 @@
 
     const term = new Terminal({
         cursorBlink: true,
-        fontFamily: "\"Symbols Nerd Font\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", monospace",
+        fontFamily: "\"Symbols Nerd Font\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", monospace",
         fontSize: 14,
         lineHeight: 1.1,
         convertEol: false,
         allowProposedApi: false,
         theme: {
-            background: "#05070a",
-            foreground: "#d7dee8",
-            cursor: "#f5d36c",
-            selectionBackground: "#334155",
+            background: "#030712",
+            foreground: "#e5e7eb",
+            cursor: "#22c55e",
+            selectionBackground: "#1f2937",
             black: "#0f172a",
             red: "#f87171",
             green: "#86efac",
@@ -75,9 +237,9 @@
     term.loadAddon(fitAddon);
     term.open(container);
 
-    function setStatus(label, colorClass) {
+    function setStatus(label, dotClass) {
         statusEl.textContent = label;
-        statusDot.className = "h-2 w-2 rounded-full " + colorClass;
+        statusDot.className = "status-dot " + dotClass;
     }
 
     function sendResize() {
@@ -105,9 +267,8 @@
         if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
             return;
         }
-        setStatus("connecting", "bg-amber-300");
+        setStatus("connecting", "is-connecting");
         reconnectButton.classList.add("hidden");
-        reconnectButton.classList.remove("grid");
         fitAddon.fit();
         const url = new URL(tunnelUrl);
         url.searchParams.set("cols", String(term.cols));
@@ -117,7 +278,7 @@
 
         socket.addEventListener("open", () => {
             term.focus();
-            setStatus("online", "bg-emerald-400");
+            setStatus("online", "is-online");
             sendResize();
         });
 
@@ -130,13 +291,12 @@
         });
 
         socket.addEventListener("close", () => {
-            setStatus("closed", "bg-slate-500");
+            setStatus("closed", "");
             reconnectButton.classList.remove("hidden");
-            reconnectButton.classList.add("grid");
         });
 
         socket.addEventListener("error", () => {
-            setStatus("error", "bg-red-400");
+            setStatus("error", "is-error");
         });
     }
 

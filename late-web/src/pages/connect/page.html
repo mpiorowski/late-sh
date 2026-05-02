@@ -440,6 +440,21 @@
         </button>
     </div>
 
+    <div class="stagger stagger-2 mb-12">
+        <a href="/play"
+            class="group block w-full text-left border border-gray-700 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/40">
+            <div class="flex items-center justify-between gap-4">
+                <span class="text-lg min-w-0 truncate">
+                    <span class="text-gray-100">/play</span>
+                </span>
+                <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">launch &rarr;</span>
+            </div>
+            <div class="mt-2 text-xs text-gray-600">
+                no ssh client? open the terminal in your browser
+            </div>
+        </a>
+    </div>
+
     <div class="stagger stagger-3 mb-4">
         <button @click="copy('curl -fsSL https://cli.late.sh/install.sh | bash')"
             class="group w-full text-left border border-gray-800 hover:border-green-950 px-5 py-4 transition-colors duration-200 bg-gray-900/20">

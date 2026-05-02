@@ -6,10 +6,12 @@ use axum::{
     routing::get,
 };
 
-use crate::{AppState, error::AppError, metrics};
+use crate::{AppState, error::AppError, metrics, pages::shared::now_playing};
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/play", get(handler))
+    Router::new()
+        .route("/play", get(handler))
+        .route("/play/listeners", get(listeners_handler))
 }
 
 #[derive(Template)]
@@ -17,10 +19,12 @@ pub fn router() -> Router<AppState> {
 struct Page {
     tunnel_url_json: String,
     enabled: bool,
+    listeners_count: usize,
 }
 
 async fn handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     metrics::record_page_view("play", false);
+    let listeners_count = fetch_listeners_count(&state).await;
     let tunnel_url_json = state
         .config
         .web_tunnel_token
@@ -31,8 +35,21 @@ async fn handler(State(state): State<AppState>) -> Result<impl IntoResponse, App
     let page = Page {
         tunnel_url_json,
         enabled: state.config.web_tunnel_enabled && state.config.web_tunnel_token.is_some(),
+        listeners_count,
     };
     Ok(Html(page.render()?))
+}
+
+async fn listeners_handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    Ok(Html(fetch_listeners_count(&state).await.to_string()))
+}
+
+async fn fetch_listeners_count(state: &AppState) -> usize {
+    now_playing::fetch(state)
+        .await
+        .unwrap_or_default()
+        .listeners_count
+        .unwrap_or_default()
 }
 
 fn tunnel_ws_url(public_url: &str, token: &str) -> String {
