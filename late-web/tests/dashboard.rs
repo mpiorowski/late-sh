@@ -23,6 +23,8 @@ fn test_state(ssh_internal_url: String) -> AppState {
         ssh_internal_url,
         ssh_public_url: "localhost:3000".to_string(),
         audio_base_url: "http://localhost:8000".to_string(),
+        web_tunnel_enabled: false,
+        web_tunnel_token: None,
     };
     AppState {
         config,

@@ -2711,6 +2711,7 @@ dependencies = [
  "dartboard-local",
  "dartboard-tui",
  "emojis",
+ "futures-util",
  "getrandom 0.4.2",
  "image",
  "ipnet",

@@ -6,6 +6,8 @@ pub struct Config {
     pub ssh_internal_url: String,
     pub ssh_public_url: String,
     pub audio_base_url: String,
+    pub web_tunnel_enabled: bool,
+    pub web_tunnel_token: Option<String>,
 }
 
 impl Config {
@@ -24,6 +26,11 @@ impl Config {
             audio_url = %self.audio_base_url,
             "audio: upstream Icecast URL proxied via /stream with silent-frame keepalive"
         );
+        tracing::info!(
+            enabled = self.web_tunnel_enabled,
+            has_token = self.web_tunnel_token.is_some(),
+            "web-tunnel: browser TUI page"
+        );
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
@@ -40,12 +47,20 @@ impl Config {
 
         let audio_base_url =
             std::env::var("LATE_AUDIO_URL").context("LATE_AUDIO_URL must be set")?;
+        let web_tunnel_enabled = std::env::var("LATE_WEB_TUNNEL_ENABLED")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let web_tunnel_token = std::env::var("LATE_WEB_TUNNEL_TOKEN")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
 
         Ok(Self {
             port,
             ssh_internal_url,
             ssh_public_url,
             audio_base_url,
+            web_tunnel_enabled,
+            web_tunnel_token,
         })
     }
 }

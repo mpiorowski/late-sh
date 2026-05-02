@@ -1,0 +1,155 @@
+{% extends "pages/app.html" %}
+
+{% block title %}late.sh{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+
+<div class="fixed inset-0 bg-[#101318] text-slate-100">
+    <header class="h-12 border-b border-slate-700/70 bg-[#151922] px-3 sm:px-4 flex items-center justify-between gap-3">
+        <a href="/" class="font-semibold tracking-normal text-slate-100">late.sh</a>
+        <div class="flex items-center gap-2 text-xs text-slate-300">
+            <span id="terminal-status-dot" class="h-2 w-2 rounded-full bg-slate-500"></span>
+            <span id="terminal-status">offline</span>
+            <button id="terminal-reconnect" type="button" class="hidden h-8 w-8 place-items-center rounded border border-slate-600 text-slate-200 hover:bg-slate-700" title="Reconnect" aria-label="Reconnect">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path><path d="M16 16h5v5"></path></svg>
+            </button>
+        </div>
+    </header>
+
+    <main class="h-[calc(100vh-3rem)] p-2 sm:p-3">
+        <div id="terminal-container" class="h-full w-full overflow-hidden rounded border border-slate-700/80 bg-[#05070a]"></div>
+        {% if !enabled %}
+        <div class="absolute inset-x-4 top-20 border border-slate-700 bg-[#151922] px-4 py-3 text-sm text-slate-200 shadow-xl sm:inset-x-auto sm:right-4 sm:w-96">
+            Web terminal is disabled.
+        </div>
+        {% endif %}
+    </main>
+</div>
+
+{% if enabled %}
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script>
+(() => {
+    const tunnelUrl = {{ tunnel_url_json|safe }};
+    const container = document.getElementById("terminal-container");
+    const statusEl = document.getElementById("terminal-status");
+    const statusDot = document.getElementById("terminal-status-dot");
+    const reconnectButton = document.getElementById("terminal-reconnect");
+    const encoder = new TextEncoder();
+    let socket = null;
+    let fitTimer = null;
+
+    const term = new Terminal({
+        cursorBlink: true,
+        fontFamily: "\"Symbols Nerd Font\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", monospace",
+        fontSize: 14,
+        lineHeight: 1.1,
+        convertEol: false,
+        allowProposedApi: false,
+        theme: {
+            background: "#05070a",
+            foreground: "#d7dee8",
+            cursor: "#f5d36c",
+            selectionBackground: "#334155",
+            black: "#0f172a",
+            red: "#f87171",
+            green: "#86efac",
+            yellow: "#fde68a",
+            blue: "#93c5fd",
+            magenta: "#d8b4fe",
+            cyan: "#67e8f9",
+            white: "#e5e7eb",
+            brightBlack: "#64748b",
+            brightRed: "#fca5a5",
+            brightGreen: "#bbf7d0",
+            brightYellow: "#fef3c7",
+            brightBlue: "#bfdbfe",
+            brightMagenta: "#e9d5ff",
+            brightCyan: "#a5f3fc",
+            brightWhite: "#ffffff"
+        }
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(container);
+
+    function setStatus(label, colorClass) {
+        statusEl.textContent = label;
+        statusDot.className = "h-2 w-2 rounded-full " + colorClass;
+    }
+
+    function sendResize() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        socket.send(JSON.stringify({
+            t: "resize",
+            cols: term.cols,
+            rows: term.rows
+        }));
+    }
+
+    function fitAndResize() {
+        fitAddon.fit();
+        sendResize();
+    }
+
+    function scheduleFit() {
+        window.clearTimeout(fitTimer);
+        fitTimer = window.setTimeout(fitAndResize, 80);
+    }
+
+    function connect() {
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+        setStatus("connecting", "bg-amber-300");
+        reconnectButton.classList.add("hidden");
+        reconnectButton.classList.remove("grid");
+        fitAddon.fit();
+        const url = new URL(tunnelUrl);
+        url.searchParams.set("cols", String(term.cols));
+        url.searchParams.set("rows", String(term.rows));
+        socket = new WebSocket(url);
+        socket.binaryType = "arraybuffer";
+
+        socket.addEventListener("open", () => {
+            term.focus();
+            setStatus("online", "bg-emerald-400");
+            sendResize();
+        });
+
+        socket.addEventListener("message", event => {
+            if (event.data instanceof ArrayBuffer) {
+                term.write(new Uint8Array(event.data));
+            } else if (event.data instanceof Blob) {
+                event.data.arrayBuffer().then(buffer => term.write(new Uint8Array(buffer)));
+            }
+        });
+
+        socket.addEventListener("close", () => {
+            setStatus("closed", "bg-slate-500");
+            reconnectButton.classList.remove("hidden");
+            reconnectButton.classList.add("grid");
+        });
+
+        socket.addEventListener("error", () => {
+            setStatus("error", "bg-red-400");
+        });
+    }
+
+    term.onData(data => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(encoder.encode(data));
+        }
+    });
+
+    reconnectButton.addEventListener("click", connect);
+    window.addEventListener("resize", scheduleFit);
+    connect();
+})();
+</script>
+{% endif %}
+{% endblock %}

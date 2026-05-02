@@ -28,7 +28,7 @@ use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
 use late_ssh::authz::Permissions;
-use late_ssh::config::{AiConfig, Config};
+use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
 use late_ssh::session::{PairControlMessage, PairedClientRegistry, SessionRegistry};
 use late_ssh::state::ActivityEvent;
 use late_ssh::state::State;
@@ -74,6 +74,12 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ssh_proxy_trusted_cidrs: vec![],
         ws_pair_max_attempts_per_ip: 30,
         ws_pair_rate_limit_window_secs: 60,
+        web_tunnel: WebTunnelConfig {
+            enabled: false,
+            token: None,
+            username: "web-demo".to_string(),
+            fingerprint: "web-tunnel-demo".to_string(),
+        },
         ai: AiConfig {
             enabled: false,
             api_key: None,

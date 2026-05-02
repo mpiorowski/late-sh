@@ -46,6 +46,8 @@ LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (us
 LATE_SSH_INTERNAL_URL ?= http://service-ssh:$(LATE_API_PORT) # Internal SSH API URL (used by web server)
 LATE_SSH_PUBLIC_URL ?= localhost:$(LATE_API_PORT)           # Public SSH API URL (used by browser for WS)
 LATE_AUDIO_URL ?= http://icecast:8000                       # Upstream audio URL used by late-web /stream proxy
+LATE_WEB_TUNNEL_ENABLED ?= 1                                # Enable browser TUI at /play in local dev
+LATE_WEB_TUNNEL_TOKEN ?= dev-web-tunnel                     # Shared token for late-web -> late-ssh web terminal
 
 # --- Vote ---
 LATE_VOTE_SWITCH_INTERVAL_SECS ?= 3600                      # Duration of each vote round (60 min)
@@ -97,6 +99,8 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
 	@echo "LATE_SSH_PUBLIC_URL=$(LATE_SSH_PUBLIC_URL)" >> .env
 	@echo "LATE_AUDIO_URL=$(LATE_AUDIO_URL)" >> .env
+	@echo "LATE_WEB_TUNNEL_ENABLED=$(LATE_WEB_TUNNEL_ENABLED)" >> .env
+	@echo "LATE_WEB_TUNNEL_TOKEN=$(LATE_WEB_TUNNEL_TOKEN)" >> .env
 	@echo "LATE_VOTE_SWITCH_INTERVAL_SECS=$(LATE_VOTE_SWITCH_INTERVAL_SECS)" >> .env
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env
