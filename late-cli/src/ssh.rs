@@ -122,7 +122,6 @@ impl SshExit {
 
 pub(super) struct SshProcess {
     pub(super) completion_task: JoinHandle<Result<SshExit>>,
-    pub(super) input_task: JoinHandle<Result<()>>,
     pub(super) resize_handle: ResizeHandle,
     pub(super) input_gate: Arc<AtomicBool>,
 }
@@ -630,14 +629,14 @@ async fn spawn_subprocess_ssh(
     let input_gate_for_task = Arc::clone(&input_gate);
 
     let output_task = tokio::task::spawn_blocking(move || forward_ssh_output(output_pty, token_tx));
-    let input_task =
-        tokio::task::spawn_blocking(move || forward_stdin_to_pty(input_pty, input_gate_for_task));
+    spawn_stdin_forwarder("late-cli-stdin-pty", move || {
+        forward_stdin_to_pty(input_pty, input_gate_for_task)
+    });
     let completion_task =
         tokio::spawn(async move { wait_for_subprocess_exit(child, output_task).await });
 
     Ok(SshProcess {
         completion_task,
-        input_task,
         resize_handle: ResizeHandle::Subprocess(PtyResizeHandle { master }),
         input_gate,
     })
@@ -732,7 +731,7 @@ async fn spawn_native_ssh(
     let writer_tx_for_resize = writer_tx.clone();
 
     let writer_task = tokio::spawn(async move { drive_native_writer(write_half, writer_rx).await });
-    let input_task = tokio::task::spawn_blocking(move || {
+    spawn_stdin_forwarder("late-cli-stdin-native", move || {
         forward_stdin_to_native(writer_tx, input_gate_for_task)
     });
     let completion_task = tokio::spawn(async move {
@@ -747,7 +746,6 @@ async fn spawn_native_ssh(
 
     Ok(SshProcess {
         completion_task,
-        input_task,
         resize_handle: ResizeHandle::Native(writer_tx_for_resize),
         input_gate,
     })
@@ -963,8 +961,7 @@ async fn drive_native_output(read_half: &mut ChannelReadHalf) -> Result<SshExit>
             } => {
                 exit_signal = Some((render_signal_name(&signal_name), error_message));
             }
-            ChannelMsg::Close => break,
-            ChannelMsg::Eof => {}
+            ChannelMsg::Close | ChannelMsg::Eof => break,
             ChannelMsg::Failure => debug!("native ssh channel request failed"),
             ChannelMsg::Success => {}
             _ => {}
@@ -996,6 +993,20 @@ fn render_signal_name(signal_name: &russh::Sig) -> String {
         russh::Sig::TERM => "TERM".to_string(),
         russh::Sig::USR1 => "USR1".to_string(),
         russh::Sig::Custom(name) => name.clone(),
+    }
+}
+
+fn spawn_stdin_forwarder(name: &'static str, f: impl FnOnce() -> Result<()> + Send + 'static) {
+    let spawn_result = std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || {
+            if let Err(err) = f() {
+                debug!(error = ?err, "stdin forwarding task ended with error");
+            }
+        });
+
+    if let Err(err) = spawn_result {
+        debug!(error = ?err, "failed to spawn stdin forwarding thread");
     }
 }
 

@@ -304,6 +304,10 @@ Raw mode:
 - Native and old modes enable CLI raw mode.
 - OpenSSH mode leaves raw mode to system OpenSSH so auth prompts retain normal terminal behavior.
 
+Shutdown invariant:
+- Native mode treats SSH channel `EOF` the same as `Close` for interactive-session shutdown.
+- Native and old modes must not run stdin forwarding in Tokio `spawn_blocking`: a thread blocked in `stdin.read()` cannot be aborted and can keep the runtime alive after the server has printed the farewell frame. Use a detached OS thread for stdin forwarding so process exit is controlled by the SSH completion task, not by the next local keypress.
+
 ---
 
 ## 9. Distribution [VOLATILE]
