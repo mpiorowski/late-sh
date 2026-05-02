@@ -88,7 +88,7 @@ resource "kubernetes_deployment_v1" "service_web" {
           }
           env {
             name  = "LATE_SSH_PUBLIC_URL"
-            value = "api.${var.DOMAIN}"
+            value = "https://api.${var.DOMAIN}"
           }
           env {
             name  = "LATE_AUDIO_URL"

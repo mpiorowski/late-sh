@@ -54,10 +54,22 @@ fn tunnel_ws_url(public_url: &str, token: &str) -> String {
         format!("wss://{rest}")
     } else if let Some(rest) = base.strip_prefix("http://") {
         format!("ws://{rest}")
-    } else {
+    } else if is_local_host(base) {
         format!("ws://{base}")
+    } else {
+        format!("wss://{base}")
     };
     format!("{ws_base}/api/ws/tunnel?token={}", query_encode(token))
+}
+
+fn is_local_host(value: &str) -> bool {
+    let host = value.split('/').next().unwrap_or(value);
+    host.starts_with("localhost:")
+        || host == "localhost"
+        || host.starts_with("127.0.0.1:")
+        || host == "127.0.0.1"
+        || host.starts_with("[::1]:")
+        || host == "[::1]"
 }
 
 fn query_encode(value: &str) -> String {
@@ -98,6 +110,14 @@ mod tests {
         assert_eq!(
             tunnel_ws_url("localhost:4000", "secret"),
             "ws://localhost:4000/api/ws/tunnel?token=secret"
+        );
+    }
+
+    #[test]
+    fn tunnel_ws_url_defaults_public_hosts_to_wss() {
+        assert_eq!(
+            tunnel_ws_url("api.late.sh", "secret"),
+            "wss://api.late.sh/api/ws/tunnel?token=secret"
         );
     }
 
