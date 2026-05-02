@@ -16,7 +16,43 @@ crate::model! {
     }
 }
 
+pub struct ModerationAuditLogListItem {
+    pub log: ModerationAuditLog,
+    pub actor_username: Option<String>,
+    pub target_username: Option<String>,
+}
+
 impl ModerationAuditLog {
+    pub async fn recent_with_usernames(
+        client: &tokio_postgres::Client,
+        limit: i64,
+    ) -> Result<Vec<ModerationAuditLogListItem>> {
+        let rows = client
+            .query(
+                "SELECT mal.*, actor.username AS actor_username, target.username AS target_username
+                 FROM moderation_audit_log mal
+                 LEFT JOIN users actor ON actor.id = mal.actor_user_id
+                 LEFT JOIN users target
+                   ON target.id = mal.target_id AND mal.target_kind = 'user'
+                 ORDER BY mal.created DESC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let actor_username: Option<String> = row.get("actor_username");
+                let target_username: Option<String> = row.get("target_username");
+                ModerationAuditLogListItem {
+                    log: Self::from(row),
+                    actor_username,
+                    target_username,
+                }
+            })
+            .collect())
+    }
+
     pub async fn record_if(
         client: &impl GenericClient,
         should_record: bool,

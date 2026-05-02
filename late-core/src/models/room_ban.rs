@@ -17,6 +17,13 @@ crate::model! {
     }
 }
 
+pub struct RoomBanListItem {
+    pub ban: RoomBan,
+    pub room_slug: Option<String>,
+    pub target_username: Option<String>,
+    pub actor_username: Option<String>,
+}
+
 impl RoomBan {
     pub async fn find_for_room_and_user(
         client: &Client,
@@ -64,6 +71,52 @@ impl RoomBan {
         )
     }
 
+    pub async fn active_with_usernames(
+        client: &Client,
+        limit: i64,
+    ) -> Result<Vec<RoomBanListItem>> {
+        let rows = client
+            .query(
+                "SELECT rb.*, room.slug AS room_slug,
+                        target.username AS target_username,
+                        actor.username AS actor_username
+                 FROM room_bans rb
+                 LEFT JOIN chat_rooms room ON room.id = rb.room_id
+                 LEFT JOIN users target ON target.id = rb.target_user_id
+                 LEFT JOIN users actor ON actor.id = rb.actor_user_id
+                 WHERE rb.expires_at IS NULL OR rb.expires_at > current_timestamp
+                 ORDER BY rb.created DESC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::list_item_from_row).collect())
+    }
+
+    pub async fn active_for_room_with_usernames(
+        client: &Client,
+        room_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<RoomBanListItem>> {
+        let rows = client
+            .query(
+                "SELECT rb.*, room.slug AS room_slug,
+                        target.username AS target_username,
+                        actor.username AS actor_username
+                 FROM room_bans rb
+                 LEFT JOIN chat_rooms room ON room.id = rb.room_id
+                 LEFT JOIN users target ON target.id = rb.target_user_id
+                 LEFT JOIN users actor ON actor.id = rb.actor_user_id
+                 WHERE rb.room_id = $1
+                   AND (rb.expires_at IS NULL OR rb.expires_at > current_timestamp)
+                 ORDER BY rb.created DESC
+                 LIMIT $2",
+                &[&room_id, &limit],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::list_item_from_row).collect())
+    }
+
     pub async fn activate(
         client: &impl GenericClient,
         room_id: Uuid,
@@ -108,5 +161,17 @@ impl RoomBan {
             )
             .await?;
         Ok(count)
+    }
+
+    fn list_item_from_row(row: tokio_postgres::Row) -> RoomBanListItem {
+        let room_slug: Option<String> = row.get("room_slug");
+        let target_username: Option<String> = row.get("target_username");
+        let actor_username: Option<String> = row.get("actor_username");
+        RoomBanListItem {
+            ban: Self::from(row),
+            room_slug,
+            target_username,
+            actor_username,
+        }
     }
 }

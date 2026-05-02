@@ -29,6 +29,12 @@ pub struct ServerBanActivation<'a> {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+pub struct ServerBanListItem {
+    pub ban: ServerBan,
+    pub target_username: Option<String>,
+    pub actor_username: Option<String>,
+}
+
 impl ServerBan {
     pub async fn activate(
         client: &impl GenericClient,
@@ -95,6 +101,36 @@ impl ServerBan {
             .map(|row| {
                 let actor_username: Option<String> = row.get("actor_username");
                 (Self::from(row), actor_username)
+            })
+            .collect())
+    }
+
+    pub async fn active_with_usernames(
+        client: &Client,
+        limit: i64,
+    ) -> Result<Vec<ServerBanListItem>> {
+        let rows = client
+            .query(
+                "SELECT sb.*, target.username AS target_username, actor.username AS actor_username
+                 FROM server_bans sb
+                 LEFT JOIN users target ON target.id = sb.target_user_id
+                 LEFT JOIN users actor ON actor.id = sb.actor_user_id
+                 WHERE sb.expires_at IS NULL OR sb.expires_at > current_timestamp
+                 ORDER BY sb.created DESC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let target_username: Option<String> = row.get("target_username");
+                let actor_username: Option<String> = row.get("actor_username");
+                ServerBanListItem {
+                    ban: Self::from(row),
+                    target_username,
+                    actor_username,
+                }
             })
             .collect())
     }
