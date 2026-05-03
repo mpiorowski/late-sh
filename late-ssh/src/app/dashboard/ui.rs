@@ -1351,12 +1351,22 @@ mod tests {
         let statuses = unfinished_daily_statuses();
 
         let rendered_zero = render_dashboard_section(100, 9, &[], &statuses, &[], 0).join("\n");
-        let rendered_ten = render_dashboard_section(100, 9, &[], &statuses, &[], 10).join("\n");
-        let rendered_twenty = render_dashboard_section(100, 9, &[], &statuses, &[], 20).join("\n");
+        let rendered_second =
+            render_dashboard_section(100, 9, &[], &statuses, &[], DASHBOARD_DAILY_CYCLE_SECONDS)
+                .join("\n");
+        let rendered_third = render_dashboard_section(
+            100,
+            9,
+            &[],
+            &statuses,
+            &[],
+            DASHBOARD_DAILY_CYCLE_SECONDS * 2,
+        )
+        .join("\n");
 
         assert!(rendered_zero.contains("Sudoku"));
-        assert!(rendered_ten.contains("Nonogram"));
-        assert!(rendered_twenty.contains("Solitaire"));
+        assert!(rendered_second.contains("Nonogram"));
+        assert!(rendered_third.contains("Solitaire"));
     }
 
     #[test]
