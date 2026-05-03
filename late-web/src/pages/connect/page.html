@@ -149,7 +149,7 @@
                 }
 
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//${this.apiUrl.replace(/^https?:\/\//, '')}/api/ws/pair?token=${this.token}`;
+                const wsUrl = `${protocol}//${this.apiUrl}/api/ws/pair?token=${this.token}`;
 
                 this.ws = new WebSocket(wsUrl);
 
