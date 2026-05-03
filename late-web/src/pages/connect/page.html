@@ -440,21 +440,6 @@
         </button>
     </div>
 
-    <div class="stagger stagger-2 mb-12">
-        <a href="/play"
-            class="group block w-full text-left border border-gray-700 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/40">
-            <div class="flex items-center justify-between gap-4">
-                <span class="text-lg min-w-0 truncate">
-                    <span class="text-gray-100">/play</span>
-                </span>
-                <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">launch &rarr;</span>
-            </div>
-            <div class="mt-2 text-xs text-gray-600">
-                no ssh client? open the terminal in your browser
-            </div>
-        </a>
-    </div>
-
     <div class="stagger stagger-3 mb-4">
         <button @click="copy('curl -fsSL https://cli.late.sh/install.sh | bash')"
             class="group w-full text-left border border-gray-800 hover:border-green-950 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
@@ -525,6 +510,30 @@
             </div>
             <div class="mt-2 text-xs text-gray-600">
                 full-screen viewer with pan, zoom, and per-cell author info
+            </div>
+        </a>
+    </div>
+
+    <div class="stagger stagger-5 mb-4 text-xs leading-relaxed">
+        <div class="text-gray-600 mb-3"><span class="text-gray-700">#</span> play</div>
+        <div class="text-gray-500">a <span class="text-green-600">read-only peek</span> at the TUI in your browser.</div>
+        <div class="text-gray-500">tab around, see what's inside.</div>
+        <div class="text-gray-600 mt-3">no typing, no chat, no games &mdash; just a window</div>
+        <div class="text-gray-600">into a shared demo session.</div>
+        <div class="text-gray-600 mt-3">for the real thing, <span class="text-gray-400">ssh late.sh</span>.</div>
+    </div>
+
+    <div class="stagger stagger-5 mb-14">
+        <a href="/play"
+            class="group block w-full text-left border border-gray-700 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/40">
+            <div class="flex items-center justify-between gap-4">
+                <span class="text-lg min-w-0 truncate">
+                    <span class="text-gray-100">/play</span>
+                </span>
+                <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">peek &rarr;</span>
+            </div>
+            <div class="mt-2 text-xs text-gray-600">
+                live demo session, navigation only
             </div>
         </a>
     </div>

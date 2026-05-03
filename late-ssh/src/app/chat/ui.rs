@@ -17,7 +17,6 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
-    markdown::wrap_plain_line,
     overlay::{Overlay, draw_overlay},
     theme,
 };
@@ -120,9 +119,11 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     }
 
     if let Some(author) = view.reply_author {
-        let long =
-            format!(" Reply to @{author} (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ");
-        let mid = format!(" Reply to @{author} (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ");
+        let long = format!(
+            " Reply to @{author} (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
+        );
+        let mid =
+            format!(" Reply to @{author} (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ");
         let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
         let minimal = format!(" Reply to @{author} (Esc) ");
         let name_only = format!(" Reply to @{author} ");
@@ -146,8 +147,8 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
         return pick_title_that_fits(
             block_width,
             &[
-                " Edit message (Enter save, Alt+S stay, Alt+Enter newline, Esc cancel) ",
-                " Edit message (⏎ save, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
+                " Edit message (Enter save, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+                " Edit message (⏎ save, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
                 " Edit message (⏎ save, Esc cancel) ",
                 " Edit message (Esc) ",
                 " Edit message ",
@@ -162,9 +163,9 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     pick_title_that_fits(
         block_width,
         &[
-            " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
-            " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
-            " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
+            " Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+            " (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+            " (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
             " (⏎ send, Esc cancel) ",
             " (Esc cancel) ",
             " Esc ",
@@ -360,54 +361,6 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
             },
         );
     }
-}
-
-pub(crate) fn dashboard_pinned_height(message_count: usize, available_height: u16) -> u16 {
-    if message_count == 0 {
-        return 0;
-    }
-    // +1 for the bottom border. Always leave 4 rows for chat below.
-    let desired = message_count.saturating_add(1) as u16;
-    desired.min(available_height.saturating_sub(4))
-}
-
-pub(crate) fn draw_dashboard_pinned_messages(
-    frame: &mut Frame,
-    area: Rect,
-    messages: &[ChatMessage],
-) {
-    if area.height == 0 || messages.is_empty() {
-        return;
-    }
-
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(theme::AMBER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 || inner.width == 0 {
-        return;
-    }
-
-    let amber = Style::default().fg(theme::AMBER());
-    let body_style = Style::default().fg(theme::CHAT_BODY());
-    let body_width = inner.width.saturating_sub(2).max(1) as usize;
-    let lines: Vec<Line<'static>> = messages
-        .iter()
-        .map(|msg| {
-            let first_line = msg.body.split('\n').next().unwrap_or("");
-            let body_text = wrap_plain_line(first_line, body_width)
-                .into_iter()
-                .next()
-                .unwrap_or_default();
-            Line::from(vec![
-                Span::styled("▌ ", amber),
-                Span::styled(body_text, body_style),
-            ])
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────
@@ -1722,9 +1675,9 @@ mod tests {
     fn composer_title_collapses_across_block_widths() {
         let ta = TextArea::default();
         let view = composer_view(&ta);
-        let full = " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
-        let long = " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
-        let short = " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ";
+        let full = " Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ";
+        let long = " (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ";
+        let short = " (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ";
         let minimal = " (⏎ send, Esc cancel) ";
         let cancel = " (Esc cancel) ";
         let esc = " Esc ";
@@ -1778,7 +1731,7 @@ mod tests {
         view.reply_author = Some("alice");
         assert_eq!(
             composer_title(&view, 100),
-            " Reply to @alice (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) "
+            " Reply to @alice (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
         );
         // Far too narrow for even the shortest reply form → drops to " Reply ".
         // " Reply " = 7 cols → needs block_w ≥ 9.

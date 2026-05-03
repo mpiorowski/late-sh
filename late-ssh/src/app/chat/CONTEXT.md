@@ -179,6 +179,14 @@ Dashboard favorite controls:
 - `g<digit>` jumps to slot 1..9.
 - The favorite strip renders only when at least two resolvable favorites exist.
 
+Dashboard box row:
+- The three dashboard boxes are always the top dashboard body when the content width/height can fit them, even if the stream/vote header is hidden.
+- `b` then `1` enters the left Blackjack room slot.
+- `b` then `2` launches the currently displayed unfinished daily game.
+- `b` then `3` opens the Chat screen with News selected and the currently displayed wire article selected.
+- The daily-game and wire-news boxes rotate every 60 seconds; the wire rotates through at most five articles.
+- Dashboard pinned messages have a single dashboard rendering path: the newest pinned message is embedded into the box-row rule. There is no separate pinned strip above dashboard chat.
+
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Dashboard, Chat, or Rooms screen, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, room, favorite, or active-room changes.
 
 There are separate `ChatRowsCache` instances on `App` for:
@@ -387,7 +395,6 @@ Full Chat layout:
 Dashboard chat:
 - Uses `DashboardChatView`.
 - Composer is capped at 5 visible lines.
-- Can show dashboard pinned messages above the chat card.
 
 Embedded Rooms chat:
 - Uses `EmbeddedRoomChatView`.

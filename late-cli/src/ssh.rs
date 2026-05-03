@@ -362,7 +362,7 @@ fn create_openssh_control_dir() -> Result<PathBuf> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos();
+        .as_secs();
 
     for attempt in 0..100 {
         let dir = base.join(format!("late-ssh-{}-{now}-{attempt}", std::process::id()));

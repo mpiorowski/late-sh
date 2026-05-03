@@ -1002,6 +1002,10 @@ impl ChatState {
         format_active_user_lines(self.active_users.as_ref())
     }
 
+    pub(crate) fn open_active_users_overlay(&mut self) {
+        self.open_overlay("Active Users", self.active_user_lines());
+    }
+
     pub fn submit_composer(&mut self, keep_open: bool, from_dashboard: bool) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
 
@@ -1061,7 +1065,7 @@ impl ChatState {
 
         if body.trim() == "/active" {
             self.clear_composer_after_submit();
-            self.open_overlay("Active Users", self.active_user_lines());
+            self.open_active_users_overlay();
             return None;
         }
 

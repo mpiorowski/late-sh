@@ -85,7 +85,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
             spans.extend([
                 Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" save & preview  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Alt+Enter", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled("Alt+Enter/Ctrl+J", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" newline  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(
@@ -357,7 +357,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Theme
         Constraint::Length(1), // Background
         Constraint::Length(1), // Stream + vote
-        Constraint::Length(1), // Room showcase
         Constraint::Length(1), // Right sidebar
         Constraint::Length(1), // Games sidebar
         Constraint::Length(1), // breathing room
@@ -387,9 +386,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             if state.editing_username() {
                 let typed = state.username_input().lines().join("");
                 if typed.is_empty() {
-                    value_span("typing…", theme::AMBER())
+                    value_span("█", theme::AMBER())
                 } else {
-                    value_span(format!("{}█", typed), theme::AMBER())
+                    value_span(
+                        text_with_caret(&typed, state.username_input().cursor().1),
+                        theme::AMBER(),
+                    )
                 }
             } else if state.draft().username.is_empty() {
                 value_span("not set", theme::TEXT_FAINT())
@@ -488,22 +490,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::DashboardRoomShowcases,
-            width,
-            "Room showcase",
-            toggle_span(state.draft().show_dashboard_room_showcases),
-        )),
-        sections[11],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
             Row::RightSidebar,
             width,
             "Right sidebar",
             toggle_span(state.draft().show_right_sidebar),
         )),
-        sections[12],
+        sections[11],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -513,10 +505,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Games sidebar",
             toggle_span(state.draft().show_games_sidebar),
         )),
-        sections[13],
+        sections[12],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Location")), sections[15]);
+    frame.render_widget(Paragraph::new(section_heading("Location")), sections[14]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -525,7 +517,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Country",
             value_with_picker_hint(country_label(state.draft().country.as_deref())),
         )),
-        sections[16],
+        sections[15],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -541,12 +533,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                     .unwrap_or_else(|| "not set".to_string()),
             ),
         )),
-        sections[17],
+        sections[16],
     );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[19],
+        sections[18],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -556,7 +548,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[20],
+        sections[19],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -566,7 +558,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[21],
+        sections[20],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -576,7 +568,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[22],
+        sections[21],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -586,7 +578,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[23],
+        sections[22],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -603,7 +595,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[24],
+        sections[23],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -616,7 +608,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[25],
+        sections[24],
     );
 }
 
@@ -1228,17 +1220,22 @@ fn value_span(text: impl Into<String>, color: ratatui::style::Color) -> ValueSpa
     }
 }
 
+fn text_with_caret(text: &str, cursor_col: usize) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    chars.insert(cursor_col.min(chars.len()), '█');
+    chars.into_iter().collect()
+}
+
 fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String>) -> ValueSpan {
     if state.editing_system_row(row) {
         let typed = state.system_input().lines().join("");
         if typed.is_empty() {
-            if row == Row::Langs {
-                value_span("rust, go, typescript…", theme::AMBER())
-            } else {
-                value_span("typing…", theme::AMBER())
-            }
+            value_span("█", theme::AMBER())
         } else {
-            value_span(format!("{}█", typed), theme::AMBER())
+            value_span(
+                text_with_caret(&typed, state.system_input().cursor().1),
+                theme::AMBER(),
+            )
         }
     } else {
         match value
@@ -1363,4 +1360,17 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .split(vertical[0]);
     horizontal[0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_with_caret_uses_cursor_column() {
+        assert_eq!(text_with_caret("abcd", 0), "█abcd");
+        assert_eq!(text_with_caret("abcd", 2), "ab█cd");
+        assert_eq!(text_with_caret("abcd", 4), "abcd█");
+        assert_eq!(text_with_caret("abcd", 99), "abcd█");
+    }
 }

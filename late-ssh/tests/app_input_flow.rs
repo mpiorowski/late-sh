@@ -42,7 +42,7 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
     app.handle_input(b"i");
     wait_for_render_contains(
         &mut app,
-        "Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel)",
+        "Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel)",
     )
     .await;
 
@@ -413,7 +413,7 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     wait_for_render_contains(&mut app, "2hey").await;
     wait_for_render_contains(
         &mut app,
-        "Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel)",
+        "Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel)",
     )
     .await;
 
