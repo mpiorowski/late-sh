@@ -216,6 +216,11 @@ impl State {
         }
     }
 
+    pub(crate) fn field_is_empty(&self, field: ComposerField) -> bool {
+        let lines = self.field_textarea(field).lines();
+        lines.len() == 1 && lines[0].is_empty()
+    }
+
     pub fn refresh_composer_theme(&mut self) {
         for field in [
             ComposerField::Headline,

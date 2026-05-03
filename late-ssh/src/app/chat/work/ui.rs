@@ -224,9 +224,9 @@ pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView
     let title = if !composing {
         " Work "
     } else if editing {
-        " Editing work profile - Tab/S+Tab switch - Enter submit - Alt+Enter newline - Esc cancel "
+        " Editing work profile - Tab/S+Tab switch - Enter submit - Alt+Enter/Ctrl+J newline - Esc cancel "
     } else {
-        " New work profile - Tab/S+Tab switch - Enter submit - Alt+Enter newline - Esc cancel "
+        " New work profile - Tab/S+Tab switch - Enter submit - Alt+Enter/Ctrl+J newline - Esc cancel "
     };
     let border_style = if composing {
         Style::default().fg(theme::BORDER_ACTIVE())
@@ -307,7 +307,35 @@ fn draw_field(
         split[0],
     );
     frame.render_widget(Paragraph::new(" "), split[1]);
-    frame.render_widget(state.field_textarea(field), split[2]);
+    if state.field_is_empty(field) {
+        draw_empty_placeholder(frame, split[2], field.placeholder(), is_active);
+    } else {
+        frame.render_widget(state.field_textarea(field), split[2]);
+    }
+}
+
+fn draw_empty_placeholder(frame: &mut Frame, area: Rect, placeholder: &str, active: bool) {
+    let mut chars = placeholder.chars();
+    let Some(first) = chars.next() else {
+        return;
+    };
+    let rest = chars.collect::<String>();
+    let first = if active {
+        Span::styled(
+            first.to_string(),
+            Style::default()
+                .fg(theme::BG_CANVAS())
+                .bg(theme::TEXT_DIM())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(first.to_string(), Style::default().fg(theme::TEXT_DIM()))
+    };
+    let line = Line::from(vec![
+        first,
+        Span::styled(rest, Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(line).wrap(Wrap { trim: false }), area);
 }
 
 #[cfg(test)]

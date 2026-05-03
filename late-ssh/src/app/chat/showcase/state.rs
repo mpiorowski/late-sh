@@ -43,6 +43,15 @@ impl ComposerField {
             Self::Description => "Description",
         }
     }
+
+    pub(crate) fn placeholder(self) -> &'static str {
+        match self {
+            Self::Title => "Project name",
+            Self::Url => "https://...",
+            Self::Tags => "rust, cli, game",
+            Self::Description => "What is it? Why should we look?",
+        }
+    }
 }
 
 pub struct State {
@@ -186,6 +195,11 @@ impl State {
             ComposerField::Tags => &self.tags,
             ComposerField::Description => &self.description,
         }
+    }
+
+    pub(crate) fn field_is_empty(&self, field: ComposerField) -> bool {
+        let lines = self.field_textarea(field).lines();
+        lines.len() == 1 && lines[0].is_empty()
     }
 
     pub fn refresh_composer_theme(&mut self) {

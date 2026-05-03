@@ -910,7 +910,7 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
     } else if view.showcase_selected {
         if view.showcase_composing { 8 } else { 1 }
     } else if view.work_selected {
-        if view.work_composing { 8 } else { 1 }
+        if view.work_composing { 9 } else { 1 }
     } else {
         chat_composer_lines_for_height(view.composer, composer_text_width).max(
             composer_placeholder_lines(&ComposerBlockView {
@@ -926,7 +926,12 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
             }),
         )
     };
-    let visible_composer_lines = total_composer_lines.min(8);
+    let max_composer_lines = if view.work_selected && view.work_composing {
+        9
+    } else {
+        8
+    };
+    let visible_composer_lines = total_composer_lines.min(max_composer_lines);
     let composer_height = visible_composer_lines as u16 + 2;
     let layout =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
@@ -988,6 +993,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
             && !view.notifications_selected
             && !view.discover_selected
             && !view.showcase_selected
+            && !view.work_selected
             && view.selected_room_id == Some(room_id)
     };
 

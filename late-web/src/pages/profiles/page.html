@@ -1,0 +1,233 @@
+{% extends "pages/app.html" %}
+
+{% block title %}@{{ username }} - {{ headline }} - late.sh{% endblock %}
+
+{% block content %}
+<style>
+    @keyframes cursor-blink {
+        0%, 49% { opacity: 1; }
+        50%, 100% { opacity: 0; }
+    }
+    .cursor-blink { animation: cursor-blink 1s step-end infinite; }
+
+    @keyframes fade-up {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .stagger { opacity: 0; animation: fade-up 0.4s ease forwards; }
+    .stagger-1 { animation-delay: 0s; }
+    .stagger-2 { animation-delay: 0.07s; }
+    .stagger-3 { animation-delay: 0.14s; }
+    .stagger-4 { animation-delay: 0.21s; }
+    .stagger-5 { animation-delay: 0.28s; }
+    .stagger-6 { animation-delay: 0.35s; }
+    .stagger-7 { animation-delay: 0.42s; }
+
+    @media (prefers-reduced-motion: reduce) {
+        .stagger { opacity: 1; animation: none; }
+    }
+
+    /* Status pill colors - tied to the work-room status enum */
+    .pill-open    { color: #22c55e; border-color: #14532d; background: rgba(20, 83, 45, 0.25); }
+    .pill-casual  { color: #eab308; border-color: #713f12; background: rgba(113, 63, 18, 0.25); }
+    .pill-not-looking { color: #6b7280; border-color: #1f2937; background: rgba(31, 41, 55, 0.4); }
+    .pill-unknown { color: #6b7280; border-color: #1f2937; background: rgba(31, 41, 55, 0.4); }
+
+    /* Live "open" status gets a pulsing dot */
+    .pulse-dot {
+        display: inline-block;
+        width: 0.45rem;
+        height: 0.45rem;
+        border-radius: 9999px;
+        background: currentColor;
+        margin-right: 0.55rem;
+        animation: pulse-dot 1.6s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 0.45; }
+        50% { opacity: 1; }
+    }
+</style>
+
+<div class="max-w-2xl mx-auto pt-8 sm:pt-14 pb-20" x-data="{ copied: null, copy(text){ navigator.clipboard.writeText(text); this.copied = text; setTimeout(()=>this.copied=null, 2000); } }">
+
+    <!-- ─── breadcrumb ─── -->
+    <div class="stagger stagger-1 mb-10 text-xs text-gray-600">
+        <a href="/" class="hover:text-gray-400 transition-colors">late.sh</a>
+        <span class="text-gray-700 mx-2">/</span>
+        <span class="text-gray-500">profiles</span>
+        <span class="text-gray-700 mx-2">/</span>
+        <span class="text-gray-400">{{ slug }}</span>
+    </div>
+
+    <!-- ─── hero ─── -->
+    <div class="stagger stagger-2 mb-3">
+        <div class="inline-flex items-center border px-2.5 py-1 text-[0.7rem] tracking-wide uppercase pill-{{ status_id }}">
+            {% if status_id == "open" %}<span class="pulse-dot"></span>{% endif %}
+            {{ status_label }}
+        </div>
+    </div>
+
+    <div class="stagger stagger-2 mb-2">
+        <h1 class="text-2xl sm:text-3xl text-gray-100 leading-snug tracking-tight">{{ headline }}</h1>
+    </div>
+
+    <div class="stagger stagger-3 mb-10 text-sm text-gray-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span class="text-green-500">@{{ username }}</span>
+        <span class="text-gray-700">·</span>
+        <span>{{ work_type }}</span>
+        <span class="text-gray-700">·</span>
+        <span>{{ location }}</span>
+    </div>
+
+    <!-- ─── summary ─── -->
+    {% if summary_paragraphs.is_empty() %}{% else %}
+    <div class="stagger stagger-3 mb-10 border-l-2 border-gray-800 pl-4 text-gray-300 text-sm leading-relaxed space-y-3">
+        {% for p in summary_paragraphs %}
+        <p>{{ p }}</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- ─── skills ─── -->
+    {% if skills.is_empty() %}{% else %}
+    <div class="stagger stagger-4 mb-10">
+        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> skills</div>
+        <div class="flex flex-wrap gap-x-3 gap-y-2 text-sm">
+            {% for skill in skills %}
+            <span class="text-green-600">#{{ skill }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ─── links ─── -->
+    {% if links.is_empty() %}{% else %}
+    <div class="stagger stagger-4 mb-12">
+        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> links</div>
+        <div class="space-y-2">
+            {% for link in links %}
+            <a href="{{ link }}" target="_blank" rel="noopener noreferrer"
+               class="group block w-full text-left border border-gray-800 hover:border-green-900 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
+                <div class="flex items-center justify-between gap-4">
+                    <span class="text-sm text-gray-300 group-hover:text-green-400 transition-colors min-w-0 truncate">
+                        <span class="text-gray-600">→ </span>{{ link }}
+                    </span>
+                    <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">open ↗</span>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ─── bio ─── -->
+    {% if show_bio %}
+    <div class="stagger stagger-5 mb-12">
+        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> bio</div>
+        <div class="border-l-2 border-gray-800 pl-4 text-gray-400 text-sm leading-relaxed space-y-3">
+            {% for p in bio_paragraphs %}
+            <p>{{ p }}</p>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ─── late.fetch ─── -->
+    {% if show_late_fetch %}
+    <div class="stagger stagger-5 mb-12">
+        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> late.fetch</div>
+        <div class="border border-gray-800 bg-gray-900/30 p-5 text-xs leading-relaxed">
+            <div class="grid grid-cols-2 gap-x-6 gap-y-2">
+                <div class="flex items-baseline gap-2">
+                    <span class="text-gray-600 w-20 shrink-0">created</span>
+                    <span class="text-gray-300">{{ fetch_created }}</span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span class="text-gray-600 w-20 shrink-0">theme</span>
+                    <span class="text-gray-300">{{ fetch_theme }}</span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span class="text-gray-600 w-20 shrink-0">ide</span>
+                    <span class="text-gray-300">{{ fetch_ide }}</span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span class="text-gray-600 w-20 shrink-0">terminal</span>
+                    <span class="text-gray-300">{{ fetch_terminal }}</span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span class="text-gray-600 w-20 shrink-0">os</span>
+                    <span class="text-gray-300">{{ fetch_os }}</span>
+                </div>
+                <div class="flex items-baseline gap-2 min-w-0">
+                    <span class="text-gray-600 w-20 shrink-0">langs</span>
+                    <span class="text-gray-300 truncate">
+                        {% if fetch_langs.is_empty() %}—{% else %}{{ fetch_langs|join(", ") }}{% endif %}
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ─── showcases ─── -->
+    {% if show_showcases %}
+    <div class="stagger stagger-6 mb-12">
+        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> showcase</div>
+        <div class="space-y-3">
+            {% for s in showcases %}
+            <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer"
+               class="group block w-full text-left border border-gray-800 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
+                <div class="flex items-center justify-between gap-4 mb-1">
+                    <span class="text-base text-gray-100 group-hover:text-green-400 transition-colors min-w-0 truncate">{{ s.title }}</span>
+                    <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">visit ↗</span>
+                </div>
+                <div class="text-xs text-gray-600 truncate mb-2">{{ s.url }}</div>
+                {% if s.description_paragraphs.is_empty() %}{% else %}
+                <div class="text-xs text-gray-500 leading-relaxed space-y-1.5 mb-2">
+                    {% for p in s.description_paragraphs %}
+                    <p>{{ p }}</p>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if s.tags.is_empty() %}{% else %}
+                <div class="flex flex-wrap gap-x-2.5 gap-y-1 text-[0.7rem] text-gray-700">
+                    {% for tag in s.tags %}
+                    <span>#{{ tag }}</span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ─── share / footer ─── -->
+    <div class="stagger stagger-7 mt-16 border-t border-gray-800 pt-5">
+        <button type="button"
+            @click="copy(window.location.href)"
+            class="group w-full text-left border border-gray-800 hover:border-green-950 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
+            <div class="flex items-center justify-between gap-4">
+                <span class="text-xs text-gray-400 min-w-0 truncate">
+                    <span class="text-gray-600">$ </span>
+                    <span class="text-gray-300">share /profiles/{{ slug }}</span>
+                </span>
+                <span class="shrink-0 text-right text-xs">
+                    <span x-cloak x-show="!copied" class="text-gray-700 group-hover:text-gray-500 transition-colors">copy link</span>
+                    <span x-cloak x-show="copied" class="text-green-600">copied</span>
+                </span>
+            </div>
+        </button>
+    </div>
+
+    <div class="stagger stagger-7 mt-6 flex items-center justify-between text-[0.7rem] text-gray-700">
+        <span>posted {{ created }}{% if updated != created %} · updated {{ updated }}{% endif %}</span>
+        <span>
+            reach out via
+            <a href="/" class="text-gray-500 hover:text-green-500 transition-colors">ssh late.sh</a>
+        </span>
+    </div>
+
+</div>
+{% endblock %}
