@@ -13,8 +13,10 @@ use super::data::{CountryOption, filter_countries, filter_timezones};
 use super::gem::GemState;
 
 const USERNAME_MAX_LEN: usize = 12;
+const DELETE_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
 const SYSTEM_FIELD_MAX_LEN: usize = 48;
 pub const BIO_MAX_LEN: usize = 500;
+pub const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PickerKind {
@@ -132,17 +134,19 @@ pub enum Tab {
     Bio,
     Themes,
     Favorites,
+    Account,
     /// Hidden until the user has filled out at least one of bio, country,
     /// or timezone. Currently houses the "Show settings on connect" toggle.
     Special,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Settings,
         Tab::Bio,
         Tab::Themes,
         Tab::Favorites,
+        Tab::Account,
         Tab::Special,
     ];
 
@@ -152,6 +156,7 @@ impl Tab {
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Favorites => "Favorites",
+            Tab::Account => "Account",
             Tab::Special => "Special",
         }
     }
@@ -178,6 +183,40 @@ pub struct PickerState {
     pub visible_height: Cell<usize>,
 }
 
+pub struct DeleteAccountDialogState {
+    open: bool,
+    input: TextArea<'static>,
+    status: Option<String>,
+    pending: bool,
+}
+
+impl DeleteAccountDialogState {
+    fn new() -> Self {
+        Self {
+            open: false,
+            input: new_short_textarea(false),
+            status: None,
+            pending: false,
+        }
+    }
+
+    pub fn open(&self) -> bool {
+        self.open
+    }
+
+    pub fn input(&self) -> &TextArea<'static> {
+        &self.input
+    }
+
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+
+    pub fn pending(&self) -> bool {
+        self.pending
+    }
+}
+
 pub struct SettingsModalState {
     profile_service: ProfileService,
     user_id: Uuid,
@@ -202,6 +241,7 @@ pub struct SettingsModalState {
     /// Cursor in the Favorites tab: 0..favorites.len() selects a favorite,
     /// the final slot (favorites.len()) selects the "Add favorite…" row.
     favorites_index: usize,
+    delete_account: DeleteAccountDialogState,
     /// Per-session gem easter egg on the Special tab. Persists across modal
     /// open/close cycles for the lifetime of the SSH session.
     gem: GemState,
@@ -229,6 +269,7 @@ impl SettingsModalState {
             picker: PickerState::default(),
             available_rooms: Vec::new(),
             favorites_index: 0,
+            delete_account: DeleteAccountDialogState::new(),
             gem: GemState::new(),
         }
     }
@@ -261,6 +302,7 @@ impl SettingsModalState {
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
         self.favorites_index = 0;
+        self.delete_account = DeleteAccountDialogState::new();
     }
 
     pub fn selected_tab(&self) -> Tab {
@@ -346,6 +388,99 @@ impl SettingsModalState {
 
     pub fn selected_row(&self) -> Row {
         Row::ALL[self.row_index]
+    }
+
+    pub fn delete_account_dialog(&self) -> &DeleteAccountDialogState {
+        &self.delete_account
+    }
+
+    pub fn open_delete_account_dialog(&mut self) {
+        self.delete_account.open = true;
+        self.delete_account.input = new_short_textarea(true);
+        self.delete_account.status = None;
+        self.delete_account.pending = false;
+    }
+
+    pub fn close_delete_account_dialog(&mut self) {
+        self.delete_account = DeleteAccountDialogState::new();
+    }
+
+    pub fn submit_delete_account_confirmation(&mut self) {
+        if self.delete_account.pending {
+            return;
+        }
+        let typed = self.delete_account_text();
+        if typed != self.draft.username {
+            self.delete_account.status = Some(DELETE_CONFIRM_MISMATCH.to_string());
+            return;
+        }
+        self.delete_account.pending = true;
+        self.delete_account.status = Some("Deleting account...".to_string());
+        self.profile_service.delete_account(self.user_id);
+    }
+
+    pub fn delete_account_push(&mut self, ch: char) {
+        if delete_account_char_count_for_input(&self.delete_account.input)
+            < DELETE_CONFIRM_USERNAME_MAX_LEN
+        {
+            self.delete_account.input.insert_char(ch);
+            self.delete_account.status = None;
+        }
+    }
+
+    pub fn delete_account_backspace(&mut self) {
+        self.delete_account.input.delete_char();
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_delete_right(&mut self) {
+        self.delete_account.input.delete_next_char();
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_delete_word_left(&mut self) {
+        self.delete_account.input.delete_word();
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_delete_word_right(&mut self) {
+        self.delete_account.input.delete_next_word();
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_cursor_left(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::Back);
+    }
+
+    pub fn delete_account_cursor_right(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::Forward);
+    }
+
+    pub fn delete_account_cursor_word_left(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::WordBack);
+    }
+
+    pub fn delete_account_cursor_word_right(&mut self) {
+        self.delete_account
+            .input
+            .move_cursor(CursorMove::WordForward);
+    }
+
+    pub fn delete_account_cursor_home(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::Head);
+    }
+
+    pub fn delete_account_cursor_end(&mut self) {
+        self.delete_account.input.move_cursor(CursorMove::End);
+    }
+
+    pub fn clear_delete_account_confirmation(&mut self) {
+        self.delete_account.input = new_short_textarea(true);
+        self.delete_account.status = None;
+    }
+
+    pub fn delete_account_text(&self) -> String {
+        self.delete_account.input.lines().join("")
     }
 
     pub fn move_row(&mut self, delta: isize) {
@@ -1210,6 +1345,10 @@ fn username_char_count_for_input(input: &TextArea<'static>) -> usize {
 }
 
 fn system_char_count_for_input(input: &TextArea<'static>) -> usize {
+    input.lines().iter().map(|l| l.chars().count()).sum()
+}
+
+fn delete_account_char_count_for_input(input: &TextArea<'static>) -> usize {
     input.lines().iter().map(|l| l.chars().count()).sum()
 }
 

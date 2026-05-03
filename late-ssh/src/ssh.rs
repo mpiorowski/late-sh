@@ -445,6 +445,14 @@ impl Drop for ClientHandler {
 
 impl ClientHandler {
     async fn ensure_cli_session(&mut self) -> Result<String> {
+        if let Some(user) = self.user.as_ref()
+            && self
+                .state
+                .account_deletions
+                .is_deleting(Some(user.id), &user.fingerprint)
+        {
+            anyhow::bail!("account deletion in progress");
+        }
         if let Some(token) = self.session_token.clone() {
             return Ok(token);
         }
@@ -503,6 +511,14 @@ impl russh::server::Handler for ClientHandler {
             return Ok(reject_publickey_only());
         }
         let fingerprint = key.fingerprint(keys::HashAlg::Sha256).to_string();
+        if self.state.account_deletions.is_deleting(None, &fingerprint) {
+            tracing::warn!(
+                fingerprint = %fingerprint,
+                peer_ip = ?self.peer_ip,
+                "account deletion in progress rejected SSH auth by fingerprint"
+            );
+            return Ok(reject_publickey_only());
+        }
         let client = match self.state.db.get().await {
             Ok(client) => client,
             Err(e) => {
@@ -527,6 +543,19 @@ impl russh::server::Handler for ClientHandler {
         }
         match User::find_by_fingerprint(&client, &fingerprint).await {
             Ok(Some(existing_user)) => {
+                if self
+                    .state
+                    .account_deletions
+                    .is_deleting(Some(existing_user.id), &fingerprint)
+                {
+                    tracing::warn!(
+                        username = %existing_user.username,
+                        fingerprint = %fingerprint,
+                        peer_ip = ?self.peer_ip,
+                        "account deletion in progress rejected SSH auth"
+                    );
+                    return Ok(reject_publickey_only());
+                }
                 match ServerBan::find_active_for_user_id(&client, existing_user.id).await {
                     Ok(Some(_)) => {
                         tracing::warn!(
@@ -559,6 +588,15 @@ impl russh::server::Handler for ClientHandler {
                     return Ok(reject_publickey_only());
                 }
             };
+        if self.state.account_deletions.is_deleting(Some(user.id), "") {
+            tracing::warn!(
+                username = %user.username,
+                fingerprint = %fingerprint,
+                peer_ip = ?self.peer_ip,
+                "account deletion in progress rejected SSH auth after user lookup"
+            );
+            return Ok(reject_publickey_only());
+        }
         self.is_new_user = is_new_user;
         if !self.active_user_incremented {
             let mut active_users = self.state.active_users.lock_recover();

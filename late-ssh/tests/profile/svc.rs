@@ -4,9 +4,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::helpers::new_test_db;
-use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::{
+    chat_room::ChatRoom,
+    profile::{Profile, ProfileParams},
+    server_ban::ServerBan,
+    user::{User, UserParams},
+};
 use late_core::test_utils::create_test_user;
 use late_ssh::app::profile::svc::{ProfileEvent, ProfileService};
+use late_ssh::state::AccountDeletionGate;
 use tokio::time::{Duration, timeout};
 
 fn default_active_users() -> late_ssh::state::ActiveUsers {
@@ -236,4 +242,191 @@ async fn creating_profiles_for_same_ssh_username_assigns_unique_handles() {
 
     assert_eq!(first_profile.username, "alice");
     assert_eq!(second_profile.username, "alice-2");
+}
+
+#[tokio::test]
+async fn delete_account_preserves_moderation_rows_and_allows_key_reuse() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "delete-actor").await;
+    let target = create_test_user(&test_db.db, "delete-target").await;
+    let room = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+
+    client
+        .execute(
+            "INSERT INTO moderation_audit_log
+             (actor_user_id, action, target_kind, target_id)
+             VALUES ($1, 'server_ban', 'user', $2)",
+            &[&actor.id, &target.id],
+        )
+        .await
+        .expect("insert audit row");
+    client
+        .execute(
+            "INSERT INTO room_bans
+             (room_id, target_user_id, actor_user_id)
+             VALUES ($1, $2, $3)",
+            &[&room.id, &target.id, &actor.id],
+        )
+        .await
+        .expect("insert room ban");
+    client
+        .execute(
+            "INSERT INTO server_bans
+             (target_user_id, actor_user_id)
+             VALUES ($1, $2)",
+            &[&target.id, &actor.id],
+        )
+        .await
+        .expect("insert server ban");
+    client
+        .execute(
+            "INSERT INTO artboard_bans
+             (target_user_id, actor_user_id)
+             VALUES ($1, $2)",
+            &[&target.id, &actor.id],
+        )
+        .await
+        .expect("insert artboard ban");
+
+    let gate = AccountDeletionGate::new();
+    let service = ProfileService::new(test_db.db.clone(), default_active_users())
+        .with_account_deletion_gate(gate.clone());
+    let mut events = service.subscribe_events();
+
+    service.delete_account(actor.id);
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    assert!(matches!(
+        event,
+        ProfileEvent::AccountDeleted { user_id } if user_id == actor.id
+    ));
+
+    let deleted = User::get(&client, actor.id)
+        .await
+        .expect("load deleted user");
+    assert!(deleted.is_none());
+    let audit_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM moderation_audit_log WHERE actor_user_id = $1",
+            &[&actor.id],
+        )
+        .await
+        .expect("count audit rows")
+        .get(0);
+    let room_ban_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM room_bans WHERE actor_user_id = $1",
+            &[&actor.id],
+        )
+        .await
+        .expect("count room bans")
+        .get(0);
+    let server_ban_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM server_bans WHERE actor_user_id = $1",
+            &[&actor.id],
+        )
+        .await
+        .expect("count server bans")
+        .get(0);
+    let artboard_ban_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM artboard_bans WHERE actor_user_id = $1",
+            &[&actor.id],
+        )
+        .await
+        .expect("count artboard bans")
+        .get(0);
+    assert_eq!(audit_count, 1);
+    assert_eq!(room_ban_count, 1);
+    assert_eq!(server_ban_count, 1);
+    assert_eq!(artboard_ban_count, 1);
+    assert!(!gate.is_deleting(Some(actor.id), &actor.fingerprint));
+
+    let recreated = User::create(
+        &client,
+        UserParams {
+            fingerprint: actor.fingerprint.clone(),
+            username: "delete-actor-again".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("recreate user with same fingerprint");
+    assert_ne!(recreated.id, actor.id);
+}
+
+#[tokio::test]
+async fn delete_account_preserves_server_ban_against_deleted_target() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "target-delete-ban-actor").await;
+    let target = create_test_user(&test_db.db, "target-delete-banned").await;
+    let banned_ip = "203.0.113.77";
+
+    client
+        .execute(
+            "INSERT INTO server_bans
+             (target_user_id, fingerprint, ip_address, snapshot_username, actor_user_id)
+             VALUES ($1, $2, $3, $4, $5)",
+            &[
+                &target.id,
+                &target.fingerprint,
+                &banned_ip,
+                &target.username,
+                &actor.id,
+            ],
+        )
+        .await
+        .expect("insert server ban");
+
+    let gate = AccountDeletionGate::new();
+    let service = ProfileService::new(test_db.db.clone(), default_active_users())
+        .with_account_deletion_gate(gate.clone());
+    let mut events = service.subscribe_events();
+
+    service.delete_account(target.id);
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    assert!(matches!(
+        event,
+        ProfileEvent::AccountDeleted { user_id } if user_id == target.id
+    ));
+
+    let deleted = User::get(&client, target.id)
+        .await
+        .expect("load deleted user");
+    assert!(deleted.is_none());
+
+    let ban_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM server_bans WHERE target_user_id = $1",
+            &[&target.id],
+        )
+        .await
+        .expect("count server bans")
+        .get(0);
+    assert_eq!(ban_count, 1);
+    assert!(
+        ServerBan::find_active_for_fingerprint(&client, &target.fingerprint)
+            .await
+            .expect("lookup fingerprint ban")
+            .is_some()
+    );
+    assert!(
+        ServerBan::find_active_for_ip_address(&client, banned_ip)
+            .await
+            .expect("lookup ip ban")
+            .is_some()
+    );
+    assert!(!gate.is_deleting(Some(target.id), &target.fingerprint));
 }
