@@ -108,6 +108,9 @@ resource "kubernetes_daemon_set_v1" "ipv6_proxy" {
 
           security_context {
             allow_privilege_escalation = false
+            run_as_non_root            = false
+            run_as_user                = 0
+            run_as_group               = 0
 
             capabilities {
               add  = ["NET_BIND_SERVICE"]
