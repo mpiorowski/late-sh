@@ -6,7 +6,7 @@ use crate::app::{
         cli_install,
         primitives::{Banner, Screen},
     },
-    dashboard::ui::{DASHBOARD_DAILY_CYCLE_SECONDS, DASHBOARD_WIRE_CYCLE_SECONDS},
+    dashboard::ui::{DASHBOARD_DAILY_CYCLE_SECONDS, wire_current_article},
     rooms::svc::GameKind,
     state::{
         App, DashboardGameToggleTarget, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
@@ -31,7 +31,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return launch_current_dashboard_daily(app);
             }
             if slot == 2 {
-                return open_current_dashboard_wire_item(app);
+                return copy_current_dashboard_wire_link(app);
             }
             return enter_blackjack_room_slot(app, slot);
         }
@@ -291,38 +291,20 @@ fn current_dashboard_daily_game(app: &App) -> Option<DailyGame> {
     unfinished.get(idx).copied()
 }
 
-fn open_current_dashboard_wire_item(app: &mut App) -> bool {
-    match current_dashboard_wire_item() {
-        DashboardWireItem::News => {
-            app.chat.close_overlay();
-            app.set_screen(Screen::Chat);
-            app.chat.select_news();
-        }
-        DashboardWireItem::ActiveUsers => {
-            app.chat.open_active_users_overlay();
-        }
-        DashboardWireItem::Tip => {
-            app.help_modal_state
-                .open(crate::app::help_modal::data::HelpTopic::Overview);
-            app.show_help = true;
-        }
+fn copy_current_dashboard_wire_link(app: &mut App) -> bool {
+    let articles = app.chat.news.all_articles();
+    let Some(item) = wire_current_article(articles, dashboard_cycle_secs()) else {
+        app.banner = Some(Banner::error("no headline to copy"));
+        return true;
+    };
+    let url = item.article.url.clone();
+    if url.is_empty() {
+        app.banner = Some(Banner::error("headline has no link"));
+        return true;
     }
+    app.pending_clipboard = Some(url);
+    app.banner = Some(Banner::success("link copied"));
     true
-}
-
-#[derive(Clone, Copy)]
-enum DashboardWireItem {
-    News,
-    ActiveUsers,
-    Tip,
-}
-
-fn current_dashboard_wire_item() -> DashboardWireItem {
-    match (dashboard_cycle_secs() / DASHBOARD_WIRE_CYCLE_SECONDS) % 3 {
-        0 => DashboardWireItem::News,
-        1 => DashboardWireItem::ActiveUsers,
-        _ => DashboardWireItem::Tip,
-    }
 }
 
 fn dashboard_cycle_secs() -> u64 {

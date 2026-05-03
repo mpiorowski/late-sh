@@ -25,7 +25,9 @@ use crate::{
     app::vote::svc::{Genre, VoteCount},
     app::vote::ui::{VoteCardView, draw_vote_card},
 };
-use late_core::models::{chat_message::ChatMessage, leaderboard::DailyGame};
+use late_core::models::{
+    article::ArticleFeedItem, chat_message::ChatMessage, leaderboard::DailyGame,
+};
 
 // `draw_dashboard` receives the content pane after the outer app border and the
 // fixed 24-column sidebar are removed. A 77-column terminal yields 51 columns
@@ -44,9 +46,13 @@ const BLACKJACK_GRID_MIN_CHAT_HEIGHT: u16 = 6;
 const BLACKJACK_GRID_COLUMNS: usize = 3;
 const BLACKJACK_GRID_TEXT_ROWS: u16 = 2;
 const BLACKJACK_GRID_HEIGHT: u16 = BLACKJACK_GRID_TEXT_ROWS + 1; // + bottom rule
-const DASHBOARD_GRID_PINNED_STRIP_HEIGHT: u16 = 1;
+const BLACKJACK_GRID_HEIGHT_WITH_TOP: u16 = BLACKJACK_GRID_HEIGHT + 1; // + top rule
 pub(crate) const DASHBOARD_DAILY_CYCLE_SECONDS: u64 = 10;
-pub(crate) const DASHBOARD_WIRE_CYCLE_SECONDS: u64 = 6;
+/// 10 minutes per wire headline. The wire is meant as a slow ambient feed —
+/// you might glance at the dashboard every few minutes and see something new
+/// without it churning into noise.
+pub(crate) const WIRE_NEWS_CYCLE_SECONDS: u64 = 600;
+pub(crate) const WIRE_NEWS_MAX_ITEMS: usize = 10;
 const AUDIO_BUTTON_PREFIX: &str = "No audio? ";
 const CLI_BUTTON_TEXT: &str = "[B] CLI";
 const PAIR_BUTTON_TEXT: &str = "[P] web";
@@ -78,9 +84,9 @@ pub struct DashboardRenderInput<'a> {
     pub blackjack_snapshots: &'a std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     pub blackjack_prefix_armed: bool,
     pub daily_statuses: &'a [DashboardDailyStatus],
-    pub wire_news_headline: Option<&'a str>,
-    pub wire_active_count: usize,
-    pub wire_tips: &'a [String],
+    /// Latest articles for the wire box, freshest first. Up to
+    /// `WIRE_NEWS_MAX_ITEMS` are rotated; extras are ignored.
+    pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
     pub chat_view: DashboardChatView<'a>,
 }
@@ -136,77 +142,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 
 fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     let rooms = dashboard_blackjack_rooms(view.rooms_snapshot, view.blackjack_snapshots);
-    if view.show_room_showcases
-        && let Some(grid_height) = blackjack_grid_height(area)
-    {
-        let pinned_above_grid = !view.pinned_messages.is_empty()
-            && area.height
-                >= grid_height
-                    .saturating_add(DASHBOARD_GRID_PINNED_STRIP_HEIGHT)
-                    .saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT);
-        if pinned_above_grid {
-            let split = Layout::vertical([
-                Constraint::Length(DASHBOARD_GRID_PINNED_STRIP_HEIGHT),
-                Constraint::Length(grid_height),
-                Constraint::Fill(1),
-            ])
-            .split(area);
-            draw_dashboard_pinned_strip_above_grid(frame, split[0], view.pinned_messages);
-            draw_blackjack_grid(
-                frame,
-                split[1],
-                &rooms,
-                view.blackjack_snapshots,
-                view.blackjack_prefix_armed,
-                &[],
-                view.daily_statuses,
-                view.wire_news_headline,
-                view.wire_active_count,
-                view.wire_tips,
-                view.dashboard_cycle_secs,
-            );
-            draw_chat_section(frame, split[2], &[], view.favorites_strip, view.chat_view);
-            return;
-        }
-
-        if !view.pinned_messages.is_empty()
-            && area.height < grid_height.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT)
-        {
-            draw_chat_section(
-                frame,
-                area,
-                view.pinned_messages,
-                view.favorites_strip,
-                view.chat_view,
-            );
-            return;
-        }
-
-        let split =
-            Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
-        let pinned_in_rule =
-            if area.height >= grid_height.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT) {
-                view.pinned_messages
-            } else {
-                &[]
-            };
-        draw_blackjack_grid(
-            frame,
-            split[0],
-            &rooms,
-            view.blackjack_snapshots,
-            view.blackjack_prefix_armed,
-            pinned_in_rule,
-            view.daily_statuses,
-            view.wire_news_headline,
-            view.wire_active_count,
-            view.wire_tips,
-            view.dashboard_cycle_secs,
-        );
-        // Newest pinned now lives in the grid's bottom rule, so skip the
-        // separate strip above chat to keep this layout compact.
-        draw_chat_section(frame, split[1], &[], view.favorites_strip, view.chat_view);
-    } else {
+    let Some(grid_height) = blackjack_grid_height(area).filter(|_| view.show_room_showcases) else {
         draw_chat_section(
             frame,
             area,
@@ -214,7 +150,68 @@ fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: Dashboar
             view.favorites_strip,
             view.chat_view,
         );
+        return;
+    };
+
+    // Three layouts ordered by available height:
+    //   1. Roomy: pinned msg embedded in a TOP rule above the grid (own row,
+    //      tied to columns by `┌┬┬┐` junctions)
+    //   2. Standard: grid only, pinned msg falls into the BOTTOM rule
+    //   3. Tight: skip the grid entirely and show the regular chat strip
+    let pinned_present = !view.pinned_messages.is_empty();
+    let has_room_for_top_rule = area.height
+        >= BLACKJACK_GRID_HEIGHT_WITH_TOP.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT);
+    let has_room_for_grid =
+        area.height >= grid_height.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT);
+
+    if pinned_present && has_room_for_top_rule {
+        let split = Layout::vertical([
+            Constraint::Length(BLACKJACK_GRID_HEIGHT_WITH_TOP),
+            Constraint::Fill(1),
+        ])
+        .split(area);
+        draw_blackjack_grid(
+            frame,
+            split[0],
+            &rooms,
+            view.blackjack_snapshots,
+            view.blackjack_prefix_armed,
+            view.pinned_messages.first(),
+            None,
+            view.daily_statuses,
+            view.wire_news_articles,
+            view.dashboard_cycle_secs,
+        );
+        draw_chat_section(frame, split[1], &[], view.favorites_strip, view.chat_view);
+        return;
     }
+
+    if pinned_present && !has_room_for_grid {
+        draw_chat_section(
+            frame,
+            area,
+            view.pinned_messages,
+            view.favorites_strip,
+            view.chat_view,
+        );
+        return;
+    }
+
+    let split =
+        Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
+    draw_blackjack_grid(
+        frame,
+        split[0],
+        &rooms,
+        view.blackjack_snapshots,
+        view.blackjack_prefix_armed,
+        None,
+        view.pinned_messages.first(),
+        view.daily_statuses,
+        view.wire_news_articles,
+        view.dashboard_cycle_secs,
+    );
+    draw_chat_section(frame, split[1], &[], view.favorites_strip, view.chat_view);
 }
 
 fn blackjack_grid_height(area: Rect) -> Option<u16> {
@@ -268,22 +265,34 @@ fn draw_blackjack_grid(
     rooms: &[&RoomListItem],
     snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     prefix_armed: bool,
-    pinned_messages: &[ChatMessage],
+    top_rule_pinned: Option<&ChatMessage>,
+    bottom_rule_pinned: Option<&ChatMessage>,
     daily_statuses: &[DashboardDailyStatus],
-    wire_news_headline: Option<&str>,
-    wire_active_count: usize,
-    wire_tips: &[String],
+    wire_news_articles: &[ArticleFeedItem],
     cycle_secs: u64,
 ) {
-    if area.height < BLACKJACK_GRID_HEIGHT {
+    let has_top_rule = top_rule_pinned.is_some();
+    let required_height = if has_top_rule {
+        BLACKJACK_GRID_HEIGHT_WITH_TOP
+    } else {
+        BLACKJACK_GRID_HEIGHT
+    };
+    if area.height < required_height {
         return;
     }
 
-    let chunks = Layout::vertical([
-        Constraint::Length(BLACKJACK_GRID_TEXT_ROWS),
-        Constraint::Length(1),
-    ])
-    .split(area);
+    let mut constraints: Vec<Constraint> = Vec::with_capacity(3);
+    if has_top_rule {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Length(BLACKJACK_GRID_TEXT_ROWS));
+    constraints.push(Constraint::Length(1));
+    let chunks = Layout::vertical(constraints).split(area);
+    let (top_rule_area, text_area, bottom_rule_area) = if has_top_rule {
+        (Some(chunks[0]), chunks[1], chunks[2])
+    } else {
+        (None, chunks[0], chunks[1])
+    };
 
     // 7-track horizontal layout: vert | col1 | vert | col2 | vert | col3 | vert
     let cols = Layout::horizontal([
@@ -295,7 +304,7 @@ fn draw_blackjack_grid(
         Constraint::Fill(1),
         Constraint::Length(1),
     ])
-    .split(chunks[0]);
+    .split(text_area);
 
     let border_style = Style::default().fg(theme::BORDER_DIM());
     for &vert_idx in &[0usize, 2, 4, 6] {
@@ -332,30 +341,40 @@ fn draw_blackjack_grid(
                 loading,
             ),
             1 => draw_dailies_slot(frame, padded, daily_statuses, prefix_armed, cycle_secs),
-            2 => draw_wire_slot(
-                frame,
-                padded,
-                wire_news_headline,
-                wire_active_count,
-                wire_tips,
-                prefix_armed,
-                cycle_secs,
-            ),
+            2 => draw_wire_slot(frame, padded, wire_news_articles, prefix_armed, cycle_secs),
             _ => {}
         }
     }
 
-    let rule_area = chunks[1];
-    let junctions = [
-        (cols[0].x.saturating_sub(rule_area.x) as usize, '└'),
-        (cols[2].x.saturating_sub(rule_area.x) as usize, '┴'),
-        (cols[4].x.saturating_sub(rule_area.x) as usize, '┴'),
-        (cols[6].x.saturating_sub(rule_area.x) as usize, '┘'),
+    if let Some(top_area) = top_rule_area {
+        let top_junctions = [
+            (cols[0].x.saturating_sub(top_area.x) as usize, '┌'),
+            (cols[2].x.saturating_sub(top_area.x) as usize, '┬'),
+            (cols[4].x.saturating_sub(top_area.x) as usize, '┬'),
+            (cols[6].x.saturating_sub(top_area.x) as usize, '┐'),
+        ];
+        draw_blackjack_rule(frame, top_area, &top_junctions, top_rule_pinned);
+    }
+
+    let bottom_junctions = [
+        (cols[0].x.saturating_sub(bottom_rule_area.x) as usize, '└'),
+        (cols[2].x.saturating_sub(bottom_rule_area.x) as usize, '┴'),
+        (cols[4].x.saturating_sub(bottom_rule_area.x) as usize, '┴'),
+        (cols[6].x.saturating_sub(bottom_rule_area.x) as usize, '┘'),
     ];
-    draw_blackjack_bottom_rule(frame, rule_area, &junctions, pinned_messages.first());
+    draw_blackjack_rule(
+        frame,
+        bottom_rule_area,
+        &bottom_junctions,
+        bottom_rule_pinned,
+    );
 }
 
-fn draw_blackjack_bottom_rule(
+/// Renders one horizontal row of the grid chrome (top OR bottom). Junction
+/// chars are positioned at column splits; if `newest_pinned` is `Some`, the
+/// message is centered between rule chars in the row, with junctions
+/// preserved wherever the message doesn't cover them.
+fn draw_blackjack_rule(
     frame: &mut Frame,
     area: Rect,
     junctions: &[(usize, char)],
@@ -436,49 +455,6 @@ fn draw_blackjack_bottom_rule(
     );
 }
 
-fn draw_dashboard_pinned_strip_above_grid(
-    frame: &mut Frame,
-    area: Rect,
-    pinned_messages: &[ChatMessage],
-) {
-    if area.width == 0 {
-        return;
-    }
-
-    let Some(msg) = pinned_messages.first() else {
-        return;
-    };
-    let first_line = msg.body.split('\n').next().unwrap_or("").trim();
-    if first_line.is_empty() {
-        return;
-    }
-
-    let chrome_w = 3usize; // leading space + amber bar + gap
-    let body = truncate(
-        first_line,
-        (area.width as usize).saturating_sub(chrome_w).max(1),
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                "▌",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            Span::styled(
-                body,
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])),
-        area,
-    );
-}
-
 fn draw_dailies_slot(
     frame: &mut Frame,
     area: Rect,
@@ -540,11 +516,7 @@ fn draw_dailies_slot(
     };
 
     let line1 = line_with_key(
-        &format!(
-            "{} {} · today",
-            daily_game_icon(status.game),
-            daily_game_name(status.game)
-        ),
+        &format!("{} · today", daily_game_name(status.game)),
         key_tag,
         inner_width,
         Style::default()
@@ -564,9 +536,7 @@ fn draw_dailies_slot(
 fn draw_wire_slot(
     frame: &mut Frame,
     area: Rect,
-    news_headline: Option<&str>,
-    active_count: usize,
-    tips: &[String],
+    articles: &[ArticleFeedItem],
     prefix_armed: bool,
     cycle_secs: u64,
 ) {
@@ -574,41 +544,47 @@ fn draw_wire_slot(
         return;
     }
 
-    let key_tag = dashboard_key_tag(2, prefix_armed, true);
     let inner_width = area.width as usize;
-    let cycle = (cycle_secs / DASHBOARD_WIRE_CYCLE_SECONDS) % 3;
-    let (label, body, body_style) = match cycle {
-        0 => (
-            "wire · news",
-            news_headline.unwrap_or("news loading").to_string(),
-            Style::default().fg(theme::TEXT_BRIGHT()),
-        ),
-        1 => (
-            "wire · live",
-            format!("⚡ {active_count} online"),
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ),
-        _ => (
-            "wire · tip",
-            wire_tip_for_cycle(tips, cycle_secs)
-                .unwrap_or("Press ? outside chat for keys")
-                .to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
+    let has_articles = wire_current_article(articles, cycle_secs).is_some();
+    let key_tag = dashboard_key_tag(2, prefix_armed, has_articles);
+
+    let label_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+
+    let Some(item) = wire_current_article(articles, cycle_secs) else {
+        let line1 = line_with_key("wire · news", key_tag, inner_width, label_style);
+        let line2 = Line::from(Span::styled(
+            "no headlines yet",
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+        frame.render_widget(Paragraph::new(vec![line1, line2]), area);
+        return;
     };
 
-    let line1 = line_with_key(
-        label,
-        key_tag,
-        inner_width,
+    let total = articles.len().min(WIRE_NEWS_MAX_ITEMS);
+    let idx = ((cycle_secs / WIRE_NEWS_CYCLE_SECONDS) as usize) % total.max(1);
+    let label = format!("wire · news {}/{}", idx + 1, total);
+    let line1 = line_with_key(&label, key_tag, inner_width, label_style);
+    let line2 = Line::from(Span::styled(
+        truncate(item.article.title.as_str(), inner_width),
         Style::default()
-            .fg(theme::AMBER_DIM())
+            .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD),
-    );
-    let line2 = Line::from(Span::styled(truncate(&body, inner_width), body_style));
+    ));
     frame.render_widget(Paragraph::new(vec![line1, line2]), area);
+}
+
+pub(crate) fn wire_current_article<'a>(
+    articles: &'a [ArticleFeedItem],
+    cycle_secs: u64,
+) -> Option<&'a ArticleFeedItem> {
+    let pool = &articles[..articles.len().min(WIRE_NEWS_MAX_ITEMS)];
+    if pool.is_empty() {
+        return None;
+    }
+    let idx = ((cycle_secs / WIRE_NEWS_CYCLE_SECONDS) as usize) % pool.len();
+    pool.get(idx)
 }
 
 fn dashboard_key_tag(slot: usize, prefix_armed: bool, enabled: bool) -> Span<'static> {
@@ -629,7 +605,7 @@ fn dashboard_key_tag(slot: usize, prefix_armed: bool, enabled: bool) -> Span<'st
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
-    Span::styled(format!("[b{key_char}]"), style)
+    Span::styled(format!("[b+{key_char}]"), style)
 }
 
 fn line_with_key(
@@ -641,9 +617,14 @@ fn line_with_key(
     let key_text = key_tag.content.as_ref();
     let key_w = UnicodeWidthStr::width(key_text);
     let label_budget = inner_width.saturating_sub(key_w + 1).max(1);
+    let truncated = truncate(label, label_budget);
+    let label_w = UnicodeWidthStr::width(truncated.as_str());
+    let pad_w = inner_width
+        .saturating_sub(label_w + key_w)
+        .max(1);
     Line::from(vec![
-        Span::styled(truncate(label, label_budget), label_style),
-        Span::raw(" "),
+        Span::styled(truncated, label_style),
+        Span::raw(" ".repeat(pad_w)),
         key_tag,
     ])
 }
@@ -655,24 +636,6 @@ fn daily_game_name(game: DailyGame) -> &'static str {
         DailyGame::Solitaire => "Solitaire",
         DailyGame::Minesweeper => "Minesweeper",
     }
-}
-
-fn daily_game_icon(game: DailyGame) -> &'static str {
-    match game {
-        DailyGame::Sudoku => "S",
-        DailyGame::Nonogram => "N",
-        DailyGame::Solitaire => "O",
-        DailyGame::Minesweeper => "M",
-    }
-}
-
-fn wire_tip_for_cycle(tips: &[String], cycle_secs: u64) -> Option<&str> {
-    if tips.is_empty() {
-        return None;
-    }
-    let cycle = cycle_secs / DASHBOARD_WIRE_CYCLE_SECONDS;
-    let idx = cycle.wrapping_mul(1_103_515_245).wrapping_add(12_345) as usize % tips.len();
-    tips.get(idx).map(String::as_str)
 }
 
 fn draw_blackjack_slot(
@@ -705,21 +668,19 @@ fn draw_blackjack_slot(
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
-    let key_tag = Span::styled(format!("[b{key_char}]"), key_style);
+    let key_tag = Span::styled(format!("[b+{key_char}]"), key_style);
 
     let inner_width = area.width as usize;
 
     let Some(room) = room else {
         let label = if loading { "loading…" } else { "open slot" };
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(label, Style::default().fg(theme::TEXT_FAINT())),
-                Span::raw(" "),
-                key_tag,
-            ]),
-            Line::from(""),
-        ];
-        frame.render_widget(Paragraph::new(lines), area);
+        let line1 = line_with_key(
+            label,
+            key_tag,
+            inner_width,
+            Style::default().fg(theme::TEXT_FAINT()),
+        );
+        frame.render_widget(Paragraph::new(vec![line1, Line::from("")]), area);
         return;
     };
 
@@ -738,26 +699,31 @@ fn draw_blackjack_slot(
         None => format!("?/{}", max_seats),
     };
 
-    // Line 1: "○○○○ 0/4 <name> [bN]" — single-space gaps so the name has room
-    // to breathe at the dashboard's narrow grid widths.
+    // Line 1: "○○○○ 0/4 <name>                       [b+1]"
+    // Seats / count / name flush left, key tag pushed to the slot's right edge.
     let seats_w = UnicodeWidthStr::width(seat_text.as_str());
     let count_w = UnicodeWidthStr::width(count_label.as_str());
-    let key_w = UnicodeWidthStr::width(format!("[b{key_char}]").as_str());
-    // 3 single-space gaps between the four pieces.
+    let key_w = UnicodeWidthStr::width(format!("[b+{key_char}]").as_str());
+    // Reserve room for: seats + " " + count + " " + name + " " + key
     let fixed_w = seats_w + 1 + count_w + 1 + 1 + key_w;
     let name_budget = inner_width.saturating_sub(fixed_w).max(2);
+    let truncated_name = truncate(&room.display_name, name_budget);
+    let name_w = UnicodeWidthStr::width(truncated_name.as_str());
+    let pad_w = inner_width
+        .saturating_sub(seats_w + 1 + count_w + 1 + name_w + key_w)
+        .max(1);
     let line1 = Line::from(vec![
         Span::styled(seat_text, Style::default().fg(theme::AMBER())),
         Span::raw(" "),
         Span::styled(count_label, Style::default().fg(theme::TEXT_DIM())),
         Span::raw(" "),
         Span::styled(
-            truncate(&room.display_name, name_budget),
+            truncated_name,
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" "),
+        Span::raw(" ".repeat(pad_w)),
         key_tag,
     ]);
 
@@ -1145,9 +1111,7 @@ mod tests {
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
                         daily_statuses: &[],
-                        wire_news_headline: None,
-                        wire_active_count: 0,
-                        wire_tips: &[],
+                        wire_news_articles: &[],
                         dashboard_cycle_secs: 0,
                         chat_view: DashboardChatView {
                             messages: &[],
@@ -1192,9 +1156,7 @@ mod tests {
         height: u16,
         pinned_messages: &[ChatMessage],
         daily_statuses: &[DashboardDailyStatus],
-        wire_news_headline: Option<&str>,
-        wire_active_count: usize,
-        wire_tips: &[String],
+        wire_news_articles: &[ArticleFeedItem],
         dashboard_cycle_secs: u64,
     ) -> Vec<String> {
         let backend = TestBackend::new(width, height);
@@ -1234,9 +1196,7 @@ mod tests {
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
                         daily_statuses,
-                        wire_news_headline,
-                        wire_active_count,
-                        wire_tips,
+                        wire_news_articles,
                         dashboard_cycle_secs,
                         chat_view: DashboardChatView {
                             messages: &[],
@@ -1286,6 +1246,22 @@ mod tests {
             room_id: Uuid::nil(),
             user_id: Uuid::nil(),
             body: body.to_string(),
+        }
+    }
+
+    fn test_article(title: &str, url: &str) -> ArticleFeedItem {
+        ArticleFeedItem {
+            article: late_core::models::article::Article {
+                id: Uuid::now_v7(),
+                created: chrono::Utc::now(),
+                updated: chrono::Utc::now(),
+                user_id: Uuid::nil(),
+                url: url.to_string(),
+                title: title.to_string(),
+                summary: String::new(),
+                ascii_art: String::new(),
+            },
+            author_username: String::new(),
         }
     }
 
@@ -1374,16 +1350,16 @@ mod tests {
         let lines = render_dashboard_with_size(100, 36);
         let rendered = lines.join("\n");
         assert!(rendered.contains("loading…"));
-        assert!(rendered.contains("b1"));
-        assert!(rendered.contains("b2"));
-        assert!(rendered.contains("b3"));
-        assert!(!rendered.contains("b4"));
+        assert!(rendered.contains("b+1"));
+        assert!(rendered.contains("b+2"));
+        assert!(rendered.contains("b+3"));
+        assert!(!rendered.contains("b+4"));
     }
 
     #[test]
-    fn dashboard_pinned_strip_renders_above_grid_when_roomy() {
+    fn dashboard_pinned_embeds_in_top_rule_when_roomy() {
         let pinned = vec![test_pinned_message("Pin this above the grid")];
-        let lines = render_dashboard_section(100, 10, &pinned, &[], None, 0, &[], 0);
+        let lines = render_dashboard_section(100, 10, &pinned, &[], &[], 0);
         let pinned_y = lines
             .iter()
             .position(|line| line.contains("Pin this above the grid"))
@@ -1393,13 +1369,16 @@ mod tests {
             .position(|line| line.contains("loading…"))
             .expect("grid row");
 
+        // Pinned msg sits in the top rule, above the slot text rows.
         assert!(pinned_y < grid_y);
+        // The top rule carries `┬` junctions where columns split.
+        assert!(lines[pinned_y].contains('┬'));
     }
 
     #[test]
     fn dashboard_pinned_falls_back_into_grid_rule_at_nine_rows() {
         let pinned = vec![test_pinned_message("Pin in the rule")];
-        let lines = render_dashboard_section(100, 9, &pinned, &[], None, 0, &[], 0);
+        let lines = render_dashboard_section(100, 9, &pinned, &[], &[], 0);
         let pinned_y = lines
             .iter()
             .position(|line| line.contains("Pin in the rule"))
@@ -1417,11 +1396,11 @@ mod tests {
         let statuses = unfinished_daily_statuses();
 
         let rendered_zero =
-            render_dashboard_section(100, 9, &[], &statuses, None, 0, &[], 0).join("\n");
+            render_dashboard_section(100, 9, &[], &statuses, &[], 0).join("\n");
         let rendered_ten =
-            render_dashboard_section(100, 9, &[], &statuses, None, 0, &[], 10).join("\n");
+            render_dashboard_section(100, 9, &[], &statuses, &[], 10).join("\n");
         let rendered_twenty =
-            render_dashboard_section(100, 9, &[], &statuses, None, 0, &[], 20).join("\n");
+            render_dashboard_section(100, 9, &[], &statuses, &[], 20).join("\n");
 
         assert!(rendered_zero.contains("Sudoku"));
         assert!(rendered_ten.contains("Nonogram"));
@@ -1429,36 +1408,40 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_wire_slot_rotates_news_active_and_tip() {
-        let tips = vec!["Try the daily boards".to_string()];
+    fn dashboard_wire_slot_rotates_through_news_articles() {
+        let articles = vec![
+            test_article("First story", "https://a.example"),
+            test_article("Second story", "https://b.example"),
+        ];
 
-        let rendered_news =
-            render_dashboard_section(100, 9, &[], &[], Some("Global launch notes"), 42, &tips, 0)
-                .join("\n");
-        let rendered_active =
-            render_dashboard_section(100, 9, &[], &[], Some("Global launch notes"), 42, &tips, 6)
-                .join("\n");
-        let rendered_tip =
-            render_dashboard_section(100, 9, &[], &[], Some("Global launch notes"), 42, &tips, 12)
+        let rendered_first =
+            render_dashboard_section(100, 9, &[], &[], &articles, 0).join("\n");
+        let rendered_second =
+            render_dashboard_section(100, 9, &[], &[], &articles, WIRE_NEWS_CYCLE_SECONDS)
                 .join("\n");
 
-        assert!(rendered_news.contains("Global launch notes"));
-        assert!(rendered_active.contains("42 online"));
-        assert!(rendered_tip.contains("Try the daily boards"));
+        assert!(rendered_first.contains("First story"));
+        assert!(rendered_first.contains("news 1/2"));
+        assert!(rendered_second.contains("Second story"));
+        assert!(rendered_second.contains("news 2/2"));
+    }
+
+    #[test]
+    fn dashboard_wire_slot_shows_placeholder_when_no_articles() {
+        let rendered = render_dashboard_section(100, 9, &[], &[], &[], 0).join("\n");
+        assert!(rendered.contains("no headlines yet"));
     }
 
     #[test]
     fn dashboard_grid_width_gate_remains_but_chat_height_gate_is_gone() {
         let too_narrow =
-            render_dashboard_section(BLACKJACK_GRID_MIN_WIDTH - 1, 20, &[], &[], None, 0, &[], 0)
+            render_dashboard_section(BLACKJACK_GRID_MIN_WIDTH - 1, 20, &[], &[], &[], 0)
                 .join("\n");
         let tight_height = render_dashboard_section(
             BLACKJACK_GRID_MIN_WIDTH,
             BLACKJACK_GRID_HEIGHT,
             &[],
             &[],
-            None,
-            0,
             &[],
             0,
         )
@@ -1508,9 +1491,7 @@ mod tests {
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
                         daily_statuses: &[],
-                        wire_news_headline: None,
-                        wire_active_count: 0,
-                        wire_tips: &[],
+                        wire_news_articles: &[],
                         dashboard_cycle_secs: 0,
                         chat_view: DashboardChatView {
                             messages: &[],
@@ -1599,9 +1580,7 @@ mod tests {
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
                         daily_statuses: &[],
-                        wire_news_headline: None,
-                        wire_active_count: 0,
-                        wire_tips: &[],
+                        wire_news_articles: &[],
                         dashboard_cycle_secs: 0,
                         chat_view: DashboardChatView {
                             messages: &[],

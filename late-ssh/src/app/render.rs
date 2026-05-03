@@ -292,20 +292,11 @@ impl App {
             .unwrap_or(0);
         let dashboard_daily_statuses =
             dashboard_daily_statuses(&dashboard_daily_completion, dashboard_daily_streak);
-        let dashboard_wire_tips: Vec<String> = super::common::splash_tips::tip_candidates(false)
-            .into_iter()
-            .map(|tip| tip.to_string())
-            .collect();
         let dashboard_cycle_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
-        let dashboard_news_headline = self
-            .chat
-            .news
-            .all_articles()
-            .first()
-            .map(|item| item.article.title.as_str());
+        let dashboard_wire_articles = self.chat.news.all_articles();
         let dashboard_messages = dashboard_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -323,9 +314,7 @@ impl App {
             blackjack_snapshots: &rooms_blackjack_snapshots,
             blackjack_prefix_armed: self.dashboard_blackjack_prefix_armed,
             daily_statuses: &dashboard_daily_statuses,
-            wire_news_headline: dashboard_news_headline,
-            wire_active_count: online_count,
-            wire_tips: &dashboard_wire_tips,
+            wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,

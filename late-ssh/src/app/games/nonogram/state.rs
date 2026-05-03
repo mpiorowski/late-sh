@@ -111,7 +111,7 @@ impl State {
             mode: Mode::Daily,
             cursor: (0, 0),
             library,
-            selected_pack: 0,
+            selected_pack: 1, // 15x15 — medium pack, matches Sudoku/Minesweeper default
             current_puzzle_id: String::new(),
             player_grid: Vec::new(),
             is_game_over: false,
