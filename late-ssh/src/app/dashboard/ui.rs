@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{cmp::Reverse, time::Duration};
 
 use ratatui::{
     Frame,
@@ -25,7 +25,7 @@ use crate::{
     app::vote::svc::{Genre, VoteCount},
     app::vote::ui::{VoteCardView, draw_vote_card},
 };
-use late_core::models::chat_message::ChatMessage;
+use late_core::models::{chat_message::ChatMessage, leaderboard::DailyGame};
 
 // `draw_dashboard` receives the content pane after the outer app border and the
 // fixed 24-column sidebar are removed. A 77-column terminal yields 51 columns
@@ -44,9 +44,20 @@ const BLACKJACK_GRID_MIN_CHAT_HEIGHT: u16 = 6;
 const BLACKJACK_GRID_COLUMNS: usize = 3;
 const BLACKJACK_GRID_TEXT_ROWS: u16 = 2;
 const BLACKJACK_GRID_HEIGHT: u16 = BLACKJACK_GRID_TEXT_ROWS + 1; // + bottom rule
+const DASHBOARD_GRID_PINNED_STRIP_HEIGHT: u16 = 1;
+const DASHBOARD_DAILY_CYCLE_SECONDS: u64 = 10;
+const DASHBOARD_WIRE_CYCLE_SECONDS: u64 = 6;
 const AUDIO_BUTTON_PREFIX: &str = "No audio? ";
 const CLI_BUTTON_TEXT: &str = "[B] CLI";
 const PAIR_BUTTON_TEXT: &str = "[P] web";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DashboardDailyStatus {
+    pub game: DailyGame,
+    pub completed_today: bool,
+    pub launch_key: char,
+    pub streak: u32,
+}
 
 pub struct DashboardRenderInput<'a> {
     pub now_playing: Option<&'a str>,
@@ -66,6 +77,11 @@ pub struct DashboardRenderInput<'a> {
     pub rooms_snapshot: &'a RoomsSnapshot,
     pub blackjack_snapshots: &'a std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     pub blackjack_prefix_armed: bool,
+    pub daily_statuses: &'a [DashboardDailyStatus],
+    pub wire_news_headline: Option<&'a str>,
+    pub wire_active_count: usize,
+    pub wire_tips: &'a [String],
+    pub dashboard_cycle_secs: u64,
     pub chat_view: DashboardChatView<'a>,
 }
 
@@ -119,19 +135,73 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 }
 
 fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
-    let rooms = dashboard_blackjack_rooms(view.rooms_snapshot);
+    let rooms = dashboard_blackjack_rooms(view.rooms_snapshot, view.blackjack_snapshots);
     if view.show_room_showcases
         && let Some(grid_height) = blackjack_grid_height(area)
     {
+        let pinned_above_grid = !view.pinned_messages.is_empty()
+            && area.height
+                >= grid_height
+                    .saturating_add(DASHBOARD_GRID_PINNED_STRIP_HEIGHT)
+                    .saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT);
+        if pinned_above_grid {
+            let split = Layout::vertical([
+                Constraint::Length(DASHBOARD_GRID_PINNED_STRIP_HEIGHT),
+                Constraint::Length(grid_height),
+                Constraint::Fill(1),
+            ])
+            .split(area);
+            draw_dashboard_pinned_strip_above_grid(frame, split[0], view.pinned_messages);
+            draw_blackjack_grid(
+                frame,
+                split[1],
+                &rooms,
+                view.blackjack_snapshots,
+                view.blackjack_prefix_armed,
+                &[],
+                view.daily_statuses,
+                view.wire_news_headline,
+                view.wire_active_count,
+                view.wire_tips,
+                view.dashboard_cycle_secs,
+            );
+            draw_chat_section(frame, split[2], &[], view.favorites_strip, view.chat_view);
+            return;
+        }
+
+        if !view.pinned_messages.is_empty()
+            && area.height < grid_height.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT)
+        {
+            draw_chat_section(
+                frame,
+                area,
+                view.pinned_messages,
+                view.favorites_strip,
+                view.chat_view,
+            );
+            return;
+        }
+
         let split =
             Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
+        let pinned_in_rule =
+            if area.height >= grid_height.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT) {
+                view.pinned_messages
+            } else {
+                &[]
+            };
         draw_blackjack_grid(
             frame,
             split[0],
             &rooms,
             view.blackjack_snapshots,
             view.blackjack_prefix_armed,
-            view.pinned_messages,
+            pinned_in_rule,
+            view.daily_statuses,
+            view.wire_news_headline,
+            view.wire_active_count,
+            view.wire_tips,
+            view.dashboard_cycle_secs,
         );
         // Newest pinned now lives in the grid's bottom rule, so skip the
         // separate strip above chat to keep this layout compact.
@@ -152,20 +222,44 @@ fn blackjack_grid_height(area: Rect) -> Option<u16> {
         return None;
     }
 
-    if area.height >= BLACKJACK_GRID_HEIGHT.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT) {
-        Some(BLACKJACK_GRID_HEIGHT)
-    } else {
-        None
-    }
+    Some(BLACKJACK_GRID_HEIGHT)
 }
 
-fn dashboard_blackjack_rooms(snapshot: &RoomsSnapshot) -> Vec<&RoomListItem> {
-    snapshot
+fn dashboard_blackjack_rooms<'a>(
+    snapshot: &'a RoomsSnapshot,
+    snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+) -> Vec<&'a RoomListItem> {
+    let mut rooms: Vec<&RoomListItem> = snapshot
         .rooms
         .iter()
         .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
-        .take(BLACKJACK_GRID_COLUMNS)
-        .collect()
+        .collect();
+    rooms.sort_by_key(|room| {
+        let snapshot = snapshots.get(&room.id);
+        let occupied = snapshot
+            .map(|snap| {
+                snap.seats
+                    .iter()
+                    .filter(|seat| seat.user_id.is_some())
+                    .count()
+            })
+            .unwrap_or(0);
+        (
+            Reverse(occupied),
+            Reverse(blackjack_phase_priority(snapshot)),
+        )
+    });
+    rooms.truncate(BLACKJACK_GRID_COLUMNS);
+    rooms
+}
+
+fn blackjack_phase_priority(snapshot: Option<&BlackjackSnapshot>) -> u8 {
+    use crate::app::rooms::blackjack::state::Phase;
+    match snapshot.map(|snap| snap.phase) {
+        Some(Phase::PlayerTurn | Phase::DealerTurn) => 2,
+        Some(Phase::Betting) => 1,
+        _ => 0,
+    }
 }
 
 fn draw_blackjack_grid(
@@ -175,6 +269,11 @@ fn draw_blackjack_grid(
     snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     prefix_armed: bool,
     pinned_messages: &[ChatMessage],
+    daily_statuses: &[DashboardDailyStatus],
+    wire_news_headline: Option<&str>,
+    wire_active_count: usize,
+    wire_tips: &[String],
+    cycle_secs: u64,
 ) {
     if area.height < BLACKJACK_GRID_HEIGHT {
         return;
@@ -212,7 +311,6 @@ fn draw_blackjack_grid(
         .enumerate()
         .take(BLACKJACK_GRID_COLUMNS)
     {
-        let room = rooms.get(slot).copied();
         // 1-char left/right padding inside each column.
         let padded = if area.width >= 4 {
             Rect {
@@ -223,7 +321,28 @@ fn draw_blackjack_grid(
         } else {
             area
         };
-        draw_blackjack_slot(frame, padded, slot, room, snapshots, prefix_armed, loading);
+        match slot {
+            0 => draw_blackjack_slot(
+                frame,
+                padded,
+                slot,
+                rooms.first().copied(),
+                snapshots,
+                prefix_armed,
+                loading,
+            ),
+            1 => draw_dailies_slot(frame, padded, daily_statuses, prefix_armed, cycle_secs),
+            2 => draw_wire_slot(
+                frame,
+                padded,
+                wire_news_headline,
+                wire_active_count,
+                wire_tips,
+                prefix_armed,
+                cycle_secs,
+            ),
+            _ => {}
+        }
     }
 
     let rule_area = chunks[1];
@@ -315,6 +434,245 @@ fn draw_blackjack_bottom_rule(
         ])),
         area,
     );
+}
+
+fn draw_dashboard_pinned_strip_above_grid(
+    frame: &mut Frame,
+    area: Rect,
+    pinned_messages: &[ChatMessage],
+) {
+    if area.width == 0 {
+        return;
+    }
+
+    let Some(msg) = pinned_messages.first() else {
+        return;
+    };
+    let first_line = msg.body.split('\n').next().unwrap_or("").trim();
+    if first_line.is_empty() {
+        return;
+    }
+
+    let chrome_w = 3usize; // leading space + amber bar + gap
+    let body = truncate(
+        first_line,
+        (area.width as usize).saturating_sub(chrome_w).max(1),
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "▌",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                body,
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        area,
+    );
+}
+
+fn draw_dailies_slot(
+    frame: &mut Frame,
+    area: Rect,
+    statuses: &[DashboardDailyStatus],
+    prefix_armed: bool,
+    cycle_secs: u64,
+) {
+    if area.width < 10 || area.height < BLACKJACK_GRID_TEXT_ROWS {
+        return;
+    }
+
+    let key_tag = dashboard_key_tag(1, prefix_armed, true);
+    let inner_width = area.width as usize;
+
+    if statuses.is_empty() {
+        let line1 = line_with_key(
+            "dailies loading",
+            key_tag,
+            inner_width,
+            Style::default().fg(theme::TEXT_FAINT()),
+        );
+        let line2 = Line::from(Span::styled(
+            "streak 0 · [3] arcade",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        frame.render_widget(Paragraph::new(vec![line1, line2]), area);
+        return;
+    }
+
+    let unfinished: Vec<DashboardDailyStatus> = statuses
+        .iter()
+        .copied()
+        .filter(|status| !status.completed_today)
+        .collect();
+
+    let Some(status) = unfinished
+        .get(((cycle_secs / DASHBOARD_DAILY_CYCLE_SECONDS) as usize) % unfinished.len().max(1))
+        .copied()
+    else {
+        let streak = statuses
+            .iter()
+            .map(|status| status.streak)
+            .max()
+            .unwrap_or(0);
+        let line1 = line_with_key(
+            &format!("All dailies ✓ · streak {streak}"),
+            key_tag,
+            inner_width,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        );
+        let line2 = Line::from(Span::styled(
+            "today complete",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        frame.render_widget(Paragraph::new(vec![line1, line2]), area);
+        return;
+    };
+
+    let line1 = line_with_key(
+        &format!(
+            "{} {} · today",
+            daily_game_icon(status.game),
+            daily_game_name(status.game)
+        ),
+        key_tag,
+        inner_width,
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    );
+    let line2 = Line::from(Span::styled(
+        truncate(
+            &format!("streak {} · [{}] play", status.streak, status.launch_key),
+            inner_width,
+        ),
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    frame.render_widget(Paragraph::new(vec![line1, line2]), area);
+}
+
+fn draw_wire_slot(
+    frame: &mut Frame,
+    area: Rect,
+    news_headline: Option<&str>,
+    active_count: usize,
+    tips: &[String],
+    prefix_armed: bool,
+    cycle_secs: u64,
+) {
+    if area.width < 10 || area.height < BLACKJACK_GRID_TEXT_ROWS {
+        return;
+    }
+
+    let key_tag = dashboard_key_tag(2, prefix_armed, true);
+    let inner_width = area.width as usize;
+    let cycle = (cycle_secs / DASHBOARD_WIRE_CYCLE_SECONDS) % 3;
+    let (label, body, body_style) = match cycle {
+        0 => (
+            "wire · news",
+            news_headline.unwrap_or("news loading").to_string(),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ),
+        1 => (
+            "wire · live",
+            format!("⚡ {active_count} online"),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ),
+        _ => (
+            "wire · tip",
+            wire_tip_for_cycle(tips, cycle_secs)
+                .unwrap_or("Press ? outside chat for keys")
+                .to_string(),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    };
+
+    let line1 = line_with_key(
+        label,
+        key_tag,
+        inner_width,
+        Style::default()
+            .fg(theme::AMBER_DIM())
+            .add_modifier(Modifier::BOLD),
+    );
+    let line2 = Line::from(Span::styled(truncate(&body, inner_width), body_style));
+    frame.render_widget(Paragraph::new(vec![line1, line2]), area);
+}
+
+fn dashboard_key_tag(slot: usize, prefix_armed: bool, enabled: bool) -> Span<'static> {
+    let key_char = match slot {
+        0 => '1',
+        1 => '2',
+        2 => '3',
+        _ => '?',
+    };
+    let style = if prefix_armed {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else if enabled {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    Span::styled(format!("[b{key_char}]"), style)
+}
+
+fn line_with_key(
+    label: &str,
+    key_tag: Span<'static>,
+    inner_width: usize,
+    label_style: Style,
+) -> Line<'static> {
+    let key_text = key_tag.content.as_ref();
+    let key_w = UnicodeWidthStr::width(key_text);
+    let label_budget = inner_width.saturating_sub(key_w + 1).max(1);
+    Line::from(vec![
+        Span::styled(truncate(label, label_budget), label_style),
+        Span::raw(" "),
+        key_tag,
+    ])
+}
+
+fn daily_game_name(game: DailyGame) -> &'static str {
+    match game {
+        DailyGame::Sudoku => "Sudoku",
+        DailyGame::Nonogram => "Nonogram",
+        DailyGame::Solitaire => "Solitaire",
+        DailyGame::Minesweeper => "Minesweeper",
+    }
+}
+
+fn daily_game_icon(game: DailyGame) -> &'static str {
+    match game {
+        DailyGame::Sudoku => "S",
+        DailyGame::Nonogram => "N",
+        DailyGame::Solitaire => "O",
+        DailyGame::Minesweeper => "M",
+    }
+}
+
+fn wire_tip_for_cycle(tips: &[String], cycle_secs: u64) -> Option<&str> {
+    if tips.is_empty() {
+        return None;
+    }
+    let cycle = cycle_secs / DASHBOARD_WIRE_CYCLE_SECONDS;
+    let idx = cycle.wrapping_mul(1_103_515_245).wrapping_add(12_345) as usize % tips.len();
+    tips.get(idx).map(String::as_str)
 }
 
 fn draw_blackjack_slot(
@@ -786,6 +1144,11 @@ mod tests {
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
+                        daily_statuses: &[],
+                        wire_news_headline: None,
+                        wire_active_count: 0,
+                        wire_tips: &[],
+                        dashboard_cycle_secs: 0,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,
@@ -822,6 +1185,137 @@ mod tests {
                 out
             })
             .collect()
+    }
+
+    fn render_dashboard_section(
+        width: u16,
+        height: u16,
+        pinned_messages: &[ChatMessage],
+        daily_statuses: &[DashboardDailyStatus],
+        wire_news_headline: Option<&str>,
+        wire_active_count: usize,
+        wire_tips: &[String],
+        dashboard_cycle_secs: u64,
+    ) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let vote_counts = VoteCount {
+            lofi: 3,
+            ambient: 2,
+            classic: 1,
+            jazz: 0,
+        };
+        let mut rows_cache = ChatRowsCache::default();
+        let usernames: HashMap<Uuid, String> = HashMap::new();
+        let countries: HashMap<Uuid, String> = HashMap::new();
+        let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
+        let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let message_reactions = HashMap::new();
+        let composer = ratatui_textarea::TextArea::default();
+        let rooms_snapshot = RoomsSnapshot::default();
+        let blackjack_snapshots: HashMap<Uuid, BlackjackSnapshot> = HashMap::new();
+
+        terminal
+            .draw(|frame| {
+                draw_blackjack_and_chat_section(
+                    frame,
+                    Rect::new(0, 0, width, height),
+                    DashboardRenderInput {
+                        now_playing: Some("Boards of Canada"),
+                        vote_counts: &vote_counts,
+                        current_genre: Genre::Lofi,
+                        next_switch_in: Duration::from_secs(95),
+                        my_vote: Some(Genre::Ambient),
+                        show_header: true,
+                        favorites_strip: None,
+                        pinned_messages,
+                        show_room_showcases: true,
+                        rooms_snapshot: &rooms_snapshot,
+                        blackjack_snapshots: &blackjack_snapshots,
+                        blackjack_prefix_armed: false,
+                        daily_statuses,
+                        wire_news_headline,
+                        wire_active_count,
+                        wire_tips,
+                        dashboard_cycle_secs,
+                        chat_view: DashboardChatView {
+                            messages: &[],
+                            overlay: None,
+                            rows_cache: &mut rows_cache,
+                            usernames: &usernames,
+                            countries: &countries,
+                            badges: &badges,
+                            message_reactions: &message_reactions,
+                            current_user_id: Uuid::nil(),
+                            selected_message_id: None,
+                            highlighted_message_id: None,
+                            reaction_picker_active: false,
+                            composer: &composer,
+                            composing: false,
+                            mention_matches: &[],
+                            mention_selected: 0,
+                            mention_active: false,
+                            reply_author: None,
+                            is_editing: false,
+                            bonsai_glyphs: &bonsai_glyphs,
+                        },
+                    },
+                );
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                let mut out = String::new();
+                for x in 0..width {
+                    out.push_str(buffer[(x, y)].symbol());
+                }
+                out
+            })
+            .collect()
+    }
+
+    fn test_pinned_message(body: &str) -> ChatMessage {
+        ChatMessage {
+            id: Uuid::now_v7(),
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            pinned: true,
+            reply_to_message_id: None,
+            room_id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            body: body.to_string(),
+        }
+    }
+
+    fn unfinished_daily_statuses() -> [DashboardDailyStatus; 4] {
+        [
+            DashboardDailyStatus {
+                game: DailyGame::Sudoku,
+                completed_today: false,
+                launch_key: 's',
+                streak: 3,
+            },
+            DashboardDailyStatus {
+                game: DailyGame::Nonogram,
+                completed_today: false,
+                launch_key: 'n',
+                streak: 3,
+            },
+            DashboardDailyStatus {
+                game: DailyGame::Solitaire,
+                completed_today: false,
+                launch_key: 'o',
+                streak: 3,
+            },
+            DashboardDailyStatus {
+                game: DailyGame::Minesweeper,
+                completed_today: false,
+                launch_key: 'm',
+                streak: 3,
+            },
+        ]
     }
 
     #[test]
@@ -887,6 +1381,94 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_pinned_strip_renders_above_grid_when_roomy() {
+        let pinned = vec![test_pinned_message("Pin this above the grid")];
+        let lines = render_dashboard_section(100, 10, &pinned, &[], None, 0, &[], 0);
+        let pinned_y = lines
+            .iter()
+            .position(|line| line.contains("Pin this above the grid"))
+            .expect("pinned strip");
+        let grid_y = lines
+            .iter()
+            .position(|line| line.contains("loading…"))
+            .expect("grid row");
+
+        assert!(pinned_y < grid_y);
+    }
+
+    #[test]
+    fn dashboard_pinned_falls_back_into_grid_rule_at_nine_rows() {
+        let pinned = vec![test_pinned_message("Pin in the rule")];
+        let lines = render_dashboard_section(100, 9, &pinned, &[], None, 0, &[], 0);
+        let pinned_y = lines
+            .iter()
+            .position(|line| line.contains("Pin in the rule"))
+            .expect("pinned rule");
+        let grid_y = lines
+            .iter()
+            .position(|line| line.contains("loading…"))
+            .expect("grid row");
+
+        assert!(pinned_y > grid_y);
+    }
+
+    #[test]
+    fn dashboard_dailies_slot_cycles_unfinished_games() {
+        let statuses = unfinished_daily_statuses();
+
+        let rendered_zero =
+            render_dashboard_section(100, 9, &[], &statuses, None, 0, &[], 0).join("\n");
+        let rendered_ten =
+            render_dashboard_section(100, 9, &[], &statuses, None, 0, &[], 10).join("\n");
+        let rendered_twenty =
+            render_dashboard_section(100, 9, &[], &statuses, None, 0, &[], 20).join("\n");
+
+        assert!(rendered_zero.contains("Sudoku"));
+        assert!(rendered_ten.contains("Nonogram"));
+        assert!(rendered_twenty.contains("Solitaire"));
+    }
+
+    #[test]
+    fn dashboard_wire_slot_rotates_news_active_and_tip() {
+        let tips = vec!["Try the daily boards".to_string()];
+
+        let rendered_news =
+            render_dashboard_section(100, 9, &[], &[], Some("Global launch notes"), 42, &tips, 0)
+                .join("\n");
+        let rendered_active =
+            render_dashboard_section(100, 9, &[], &[], Some("Global launch notes"), 42, &tips, 6)
+                .join("\n");
+        let rendered_tip =
+            render_dashboard_section(100, 9, &[], &[], Some("Global launch notes"), 42, &tips, 12)
+                .join("\n");
+
+        assert!(rendered_news.contains("Global launch notes"));
+        assert!(rendered_active.contains("42 online"));
+        assert!(rendered_tip.contains("Try the daily boards"));
+    }
+
+    #[test]
+    fn dashboard_grid_width_gate_remains_but_chat_height_gate_is_gone() {
+        let too_narrow =
+            render_dashboard_section(BLACKJACK_GRID_MIN_WIDTH - 1, 20, &[], &[], None, 0, &[], 0)
+                .join("\n");
+        let tight_height = render_dashboard_section(
+            BLACKJACK_GRID_MIN_WIDTH,
+            BLACKJACK_GRID_HEIGHT,
+            &[],
+            &[],
+            None,
+            0,
+            &[],
+            0,
+        )
+        .join("\n");
+
+        assert!(!too_narrow.contains("loading…"));
+        assert!(tight_height.contains("loading…"));
+    }
+
+    #[test]
     fn dashboard_hides_stream_and_vote_when_header_setting_disabled() {
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -925,6 +1507,11 @@ mod tests {
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
+                        daily_statuses: &[],
+                        wire_news_headline: None,
+                        wire_active_count: 0,
+                        wire_tips: &[],
+                        dashboard_cycle_secs: 0,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,
@@ -1011,6 +1598,11 @@ mod tests {
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
+                        daily_statuses: &[],
+                        wire_news_headline: None,
+                        wire_active_count: 0,
+                        wire_tips: &[],
+                        dashboard_cycle_secs: 0,
                         chat_view: DashboardChatView {
                             messages: &[],
                             overlay: None,

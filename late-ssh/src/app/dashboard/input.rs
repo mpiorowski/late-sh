@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+
 use crate::app::{
     chat,
     common::{
@@ -21,6 +23,9 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         app.dashboard_blackjack_prefix_armed = false;
         if let Some(slot) = blackjack_slot_for_key(byte) {
             return enter_blackjack_room_slot(app, slot);
+        }
+        if matches!(byte, b'2' | b'3') {
+            return true;
         }
         // Any non-slot key disarms and continues through normal handling so
         // the second keystroke still does what the user typed.
@@ -141,14 +146,7 @@ fn dashboard_blackjack_room_count(app: &App) -> usize {
 }
 
 fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
-    let Some(room) = app
-        .rooms_snapshot
-        .rooms
-        .iter()
-        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
-        .nth(slot)
-        .cloned()
-    else {
+    let Some(room) = sorted_dashboard_blackjack_rooms(app).into_iter().nth(slot) else {
         return false;
     };
 
@@ -157,6 +155,44 @@ fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
         true
     } else {
         false
+    }
+}
+
+fn sorted_dashboard_blackjack_rooms(app: &App) -> Vec<crate::app::rooms::svc::RoomListItem> {
+    let snapshots = app.blackjack_table_manager.table_snapshots();
+    let mut rooms: Vec<crate::app::rooms::svc::RoomListItem> = app
+        .rooms_snapshot
+        .rooms
+        .iter()
+        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
+        .cloned()
+        .collect();
+    rooms.sort_by_key(|room| {
+        let snapshot = snapshots.get(&room.id);
+        let occupied = snapshot
+            .map(|snap| {
+                snap.seats
+                    .iter()
+                    .filter(|seat| seat.user_id.is_some())
+                    .count()
+            })
+            .unwrap_or(0);
+        (
+            Reverse(occupied),
+            Reverse(blackjack_phase_priority(snapshot)),
+        )
+    });
+    rooms
+}
+
+fn blackjack_phase_priority(
+    snapshot: Option<&crate::app::rooms::blackjack::state::BlackjackSnapshot>,
+) -> u8 {
+    use crate::app::rooms::blackjack::state::Phase;
+    match snapshot.map(|snap| snap.phase) {
+        Some(Phase::PlayerTurn | Phase::DealerTurn) => 2,
+        Some(Phase::Betting) => 1,
+        _ => 0,
     }
 }
 
@@ -195,7 +231,7 @@ fn enter_last_game_room(app: &mut App) -> bool {
 
 pub(crate) fn blackjack_slot_for_key(byte: u8) -> Option<usize> {
     match byte {
-        b'1'..=b'3' => Some((byte - b'1') as usize),
+        b'1' => Some(0),
         _ => None,
     }
 }

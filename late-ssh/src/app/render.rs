@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear},
 };
 
-use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::leaderboard::{DailyCompletionStatus, DailyGame, LeaderboardData};
 
 use super::{
     artboard, bonsai, chat,
@@ -86,6 +86,38 @@ fn dashboard_header_enabled(
     } else {
         profile_enabled
     }
+}
+
+fn dashboard_daily_statuses(
+    completion: &DailyCompletionStatus,
+    streak: u32,
+) -> [dashboard::ui::DashboardDailyStatus; 4] {
+    [
+        dashboard::ui::DashboardDailyStatus {
+            game: DailyGame::Sudoku,
+            completed_today: completion.completed(DailyGame::Sudoku),
+            launch_key: 's',
+            streak,
+        },
+        dashboard::ui::DashboardDailyStatus {
+            game: DailyGame::Nonogram,
+            completed_today: completion.completed(DailyGame::Nonogram),
+            launch_key: 'n',
+            streak,
+        },
+        dashboard::ui::DashboardDailyStatus {
+            game: DailyGame::Solitaire,
+            completed_today: completion.completed(DailyGame::Solitaire),
+            launch_key: 'o',
+            streak,
+        },
+        dashboard::ui::DashboardDailyStatus {
+            game: DailyGame::Minesweeper,
+            completed_today: completion.completed(DailyGame::Minesweeper),
+            launch_key: 'm',
+            streak,
+        },
+    ]
 }
 
 struct DrawContext<'a> {
@@ -241,6 +273,39 @@ impl App {
         let dashboard_active_room = self.dashboard_active_room_id();
         let dashboard_strip_pins = self.dashboard_strip_pins();
         let rooms_blackjack_snapshots = self.blackjack_table_manager.table_snapshots();
+        let online_count = self
+            .active_users
+            .as_ref()
+            .map(|active_users| active_users.lock_recover().len())
+            .unwrap_or(0);
+        let dashboard_daily_completion = self
+            .leaderboard
+            .user_daily_statuses
+            .get(&self.user_id)
+            .cloned()
+            .unwrap_or_default();
+        let dashboard_daily_streak = self
+            .leaderboard
+            .user_streaks
+            .get(&self.user_id)
+            .copied()
+            .unwrap_or(0);
+        let dashboard_daily_statuses =
+            dashboard_daily_statuses(&dashboard_daily_completion, dashboard_daily_streak);
+        let dashboard_wire_tips: Vec<String> = super::common::splash_tips::tip_candidates(false)
+            .into_iter()
+            .map(|tip| tip.to_string())
+            .collect();
+        let dashboard_cycle_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let dashboard_news_headline = self
+            .chat
+            .news
+            .all_articles()
+            .first()
+            .map(|item| item.article.title.as_str());
         let dashboard_messages = dashboard_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -257,6 +322,11 @@ impl App {
             rooms_snapshot: &self.rooms_snapshot,
             blackjack_snapshots: &rooms_blackjack_snapshots,
             blackjack_prefix_armed: self.dashboard_blackjack_prefix_armed,
+            daily_statuses: &dashboard_daily_statuses,
+            wire_news_headline: dashboard_news_headline,
+            wire_active_count: online_count,
+            wire_tips: &dashboard_wire_tips,
+            dashboard_cycle_secs,
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
@@ -371,11 +441,6 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                 });
-        let online_count = self
-            .active_users
-            .as_ref()
-            .map(|active_users| active_users.lock_recover().len())
-            .unwrap_or(0);
         let terminal = &mut self.terminal;
 
         terminal

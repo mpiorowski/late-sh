@@ -29,6 +29,7 @@ impl State {
     pub fn new(article_service: ArticleService, user_id: Uuid, is_admin: bool) -> Self {
         let snapshot_rx = article_service.subscribe_snapshot();
         let event_rx = article_service.subscribe_events();
+        article_service.list_articles_task();
         article_service.refresh_unread_count_task(user_id);
         Self {
             article_service,
