@@ -14,7 +14,7 @@ use super::gem::GemState;
 
 const USERNAME_MAX_LEN: usize = 12;
 const SYSTEM_FIELD_MAX_LEN: usize = 48;
-pub const BIO_MAX_LEN: usize = 500;
+pub const BIO_MAX_LEN: usize = 1000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PickerKind {
