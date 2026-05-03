@@ -41,12 +41,14 @@ const DASHBOARD_HIDE_STREAM_AT_WIDTH: u16 = 39;
 // Below this many rows the fixed 5-row stream card plus chat card no longer
 // fit cleanly, so we collapse to chat-only rather than render clipped blocks.
 const DASHBOARD_MIN_FULL_HEIGHT: u16 = 16;
-const BLACKJACK_GRID_MIN_WIDTH: u16 = 48;
-const BLACKJACK_GRID_MIN_CHAT_HEIGHT: u16 = 6;
+const BLACKJACK_GRID_MIN_WIDTH: u16 = 52;
 const BLACKJACK_GRID_COLUMNS: usize = 3;
 const BLACKJACK_GRID_TEXT_ROWS: u16 = 2;
 const BLACKJACK_GRID_HEIGHT: u16 = BLACKJACK_GRID_TEXT_ROWS + 1; // + bottom rule
 const BLACKJACK_GRID_HEIGHT_WITH_TOP: u16 = BLACKJACK_GRID_HEIGHT + 1; // + top rule
+// Keep the top pinned-rule variant for roomy panes so tight layouts keep the
+// pin in the bottom rule and preserve the old scan order.
+const BLACKJACK_GRID_TOP_RULE_MIN_HEIGHT: u16 = 10;
 pub(crate) const DASHBOARD_DAILY_CYCLE_SECONDS: u64 = 10;
 /// 10 minutes per wire headline. The wire is meant as a slow ambient feed —
 /// you might glance at the dashboard every few minutes and see something new
@@ -152,16 +154,12 @@ fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: Dashboar
         return;
     };
 
-    // Three layouts ordered by available height:
+    // Two layouts ordered by available height:
     //   1. Roomy: pinned msg embedded in a TOP rule above the grid (own row,
     //      tied to columns by `┌┬┬┐` junctions)
     //   2. Standard: grid only, pinned msg falls into the BOTTOM rule
-    //   3. Tight: skip the grid entirely and show the regular chat strip
     let pinned_present = !view.pinned_messages.is_empty();
-    let has_room_for_top_rule = area.height
-        >= BLACKJACK_GRID_HEIGHT_WITH_TOP.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT);
-    let has_room_for_grid =
-        area.height >= grid_height.saturating_add(BLACKJACK_GRID_MIN_CHAT_HEIGHT);
+    let has_room_for_top_rule = area.height >= BLACKJACK_GRID_TOP_RULE_MIN_HEIGHT;
 
     if pinned_present && has_room_for_top_rule {
         let split = Layout::vertical([
@@ -185,17 +183,6 @@ fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: Dashboar
         return;
     }
 
-    if pinned_present && !has_room_for_grid {
-        draw_chat_section(
-            frame,
-            area,
-            view.pinned_messages,
-            view.favorites_strip,
-            view.chat_view,
-        );
-        return;
-    }
-
     let split =
         Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
     draw_blackjack_grid(
@@ -214,7 +201,7 @@ fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: Dashboar
 }
 
 fn blackjack_grid_height(area: Rect) -> Option<u16> {
-    if area.width < BLACKJACK_GRID_MIN_WIDTH {
+    if area.width < BLACKJACK_GRID_MIN_WIDTH || area.height < BLACKJACK_GRID_HEIGHT {
         return None;
     }
 
