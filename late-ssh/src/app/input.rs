@@ -1163,7 +1163,6 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                 content_area,
                 app.profile_state.profile().show_dashboard_header,
                 &pins,
-                app.chat.pinned_messages().len(),
                 x,
                 y,
             );

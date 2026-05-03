@@ -10,10 +10,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::chat::ui::{
-        DashboardChatView, dashboard_pinned_height, draw_dashboard_chat_card,
-        draw_dashboard_pinned_messages,
-    },
+    app::chat::ui::{DashboardChatView, draw_dashboard_chat_card},
     app::common::{
         primitives::{format_duration_mmss, genre_label},
         theme,
@@ -49,11 +46,11 @@ const BLACKJACK_GRID_HEIGHT_WITH_TOP: u16 = BLACKJACK_GRID_HEIGHT + 1; // + top 
 // Keep the top pinned-rule variant for roomy panes so tight layouts keep the
 // pin in the bottom rule and preserve the old scan order.
 const BLACKJACK_GRID_TOP_RULE_MIN_HEIGHT: u16 = 10;
-pub(crate) const DASHBOARD_DAILY_CYCLE_SECONDS: u64 = 10;
-/// 10 minutes per wire headline. The wire is meant as a slow ambient feed —
+pub(crate) const DASHBOARD_DAILY_CYCLE_SECONDS: u64 = 60;
+/// 1 minute per wire headline. The wire is meant as a slow ambient feed —
 /// you might glance at the dashboard every few minutes and see something new
 /// without it churning into noise.
-pub(crate) const WIRE_NEWS_CYCLE_SECONDS: u64 = 600;
+pub(crate) const WIRE_NEWS_CYCLE_SECONDS: u64 = 60;
 pub(crate) const WIRE_NEWS_MAX_ITEMS: usize = 5;
 const AUDIO_BUTTON_PREFIX: &str = "No audio? ";
 const CLI_BUTTON_TEXT: &str = "[B] CLI";
@@ -78,8 +75,8 @@ pub struct DashboardRenderInput<'a> {
     /// quick-switch strip directly above the chat card. Each entry is
     /// `(room_id, label, is_active, unread_count)`. `None` hides the strip.
     pub favorites_strip: Option<&'a [(uuid::Uuid, String, bool, i64)]>,
-    /// Pinned chat messages visible to this user; rendered as a slim amber
-    /// strip above the favorites strip. Empty slice = no strip.
+    /// Pinned chat messages visible to this user; the newest pin is embedded
+    /// into the dashboard box rule when the box row is visible.
     pub pinned_messages: &'a [ChatMessage],
     pub rooms_snapshot: &'a RoomsSnapshot,
     pub blackjack_snapshots: &'a std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
@@ -93,31 +90,17 @@ pub struct DashboardRenderInput<'a> {
 }
 
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
-    if !view.show_header {
-        draw_chat_section(
-            frame,
-            area,
-            view.pinned_messages,
-            view.favorites_strip,
-            view.chat_view,
-        );
-        return;
-    }
-
     let stream_props = StreamCardProps {
         now_playing: view.now_playing.unwrap_or("Waiting for stream..."),
         current_genre: view.current_genre,
         leading_genre: view.vote_counts.winner_or(view.current_genre),
         next_switch_in: view.next_switch_in,
     };
-    if area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH || area.height < DASHBOARD_MIN_FULL_HEIGHT {
-        draw_chat_section(
-            frame,
-            area,
-            view.pinned_messages,
-            view.favorites_strip,
-            view.chat_view,
-        );
+    if !view.show_header
+        || area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH
+        || area.height < DASHBOARD_MIN_FULL_HEIGHT
+    {
+        draw_blackjack_and_chat_section(frame, area, view);
         return;
     }
 
@@ -144,13 +127,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     let rooms = dashboard_blackjack_rooms(view.rooms_snapshot, view.blackjack_snapshots);
     let Some(grid_height) = blackjack_grid_height(area) else {
-        draw_chat_section(
-            frame,
-            area,
-            view.pinned_messages,
-            view.favorites_strip,
-            view.chat_view,
-        );
+        draw_chat_section(frame, area, view.favorites_strip, view.chat_view);
         return;
     };
 
@@ -181,7 +158,7 @@ fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: Dashboar
                 cycle_secs: view.dashboard_cycle_secs,
             },
         );
-        draw_chat_section(frame, split[1], &[], view.favorites_strip, view.chat_view);
+        draw_chat_section(frame, split[1], view.favorites_strip, view.chat_view);
         return;
     }
 
@@ -201,7 +178,7 @@ fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: Dashboar
             cycle_secs: view.dashboard_cycle_secs,
         },
     );
-    draw_chat_section(frame, split[1], &[], view.favorites_strip, view.chat_view);
+    draw_chat_section(frame, split[1], view.favorites_strip, view.chat_view);
 }
 
 fn blackjack_grid_height(area: Rect) -> Option<u16> {
@@ -783,11 +760,10 @@ pub(crate) fn favorites_strip_hit_test(
     area: Rect,
     show_header: bool,
     pins: &[(uuid::Uuid, String, bool, i64)],
-    pinned_count: usize,
     x: u16,
     y: u16,
 ) -> Option<uuid::Uuid> {
-    let strip_area = favorites_strip_area(area, show_header, pins, pinned_count)?;
+    let strip_area = favorites_strip_area(area, show_header, pins)?;
     if y != strip_area.y || x < strip_area.x || x >= strip_area.right() {
         return None;
     }
@@ -832,25 +808,15 @@ pub(crate) fn browser_pair_button_hit_test(area: Rect, show_header: bool, x: u16
     y == button_area.y && x >= button_area.x && x < button_area.right()
 }
 
-/// Draws the chat card with two optional strips stacked above it: pinned
-/// messages first (admin-curated), then the favorites pill strip. Each is
-/// only inserted when present and there's room for a useful chat card below.
+/// Draws the chat card with the optional favorites pill strip above it when
+/// there is room for a useful chat card below.
 fn draw_chat_section(
     frame: &mut Frame,
     area: Rect,
-    pinned_messages: &[ChatMessage],
     favorites_strip: Option<&[(uuid::Uuid, String, bool, i64)]>,
     chat_view: DashboardChatView<'_>,
 ) {
     let mut remaining = area;
-
-    let pinned_height = dashboard_pinned_height(pinned_messages.len(), remaining.height);
-    if pinned_height > 0 {
-        let split = Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)])
-            .split(remaining);
-        draw_dashboard_pinned_messages(frame, split[0], pinned_messages);
-        remaining = split[1];
-    }
 
     if let Some(pins) = favorites_strip
         && pins.len() >= 2
@@ -868,7 +834,6 @@ fn favorites_strip_area(
     area: Rect,
     show_header: bool,
     pins: &[(uuid::Uuid, String, bool, i64)],
-    pinned_count: usize,
 ) -> Option<Rect> {
     if pins.len() < 2 {
         return None;
@@ -884,19 +849,11 @@ fn favorites_strip_area(
         area
     };
 
-    let pinned_height = dashboard_pinned_height(pinned_count, chat_area.height);
-    let after_pinned = if pinned_height > 0 {
-        Layout::vertical([Constraint::Length(pinned_height), Constraint::Fill(1)]).split(chat_area)
-            [1]
-    } else {
-        chat_area
-    };
-
-    if after_pinned.height < 6 {
+    if chat_area.height < 6 {
         return None;
     }
 
-    Some(Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(after_pinned)[0])
+    Some(Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(chat_area)[0])
 }
 
 fn draw_favorites_strip(frame: &mut Frame, area: Rect, pins: &[(uuid::Uuid, String, bool, i64)]) {
@@ -1625,14 +1582,14 @@ mod tests {
         let area = Rect::new(1, 1, 74, 30);
 
         assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, 0, 10, 6),
+            favorites_strip_hit_test(area, true, &pins, 10, 6),
             Some(rust_room)
         );
         assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, 0, 18, 6),
+            favorites_strip_hit_test(area, true, &pins, 18, 6),
             Some(go_room)
         );
-        assert_eq!(favorites_strip_hit_test(area, true, &pins, 0, 40, 6), None);
+        assert_eq!(favorites_strip_hit_test(area, true, &pins, 40, 6), None);
     }
 
     #[test]
@@ -1641,7 +1598,7 @@ mod tests {
         let pins = vec![(room, "#rust".to_string(), true, 0)];
 
         assert_eq!(
-            favorites_strip_hit_test(Rect::new(1, 1, 74, 30), true, &pins, 0, 5, 7),
+            favorites_strip_hit_test(Rect::new(1, 1, 74, 30), true, &pins, 5, 7),
             None
         );
         assert_eq!(
@@ -1652,7 +1609,6 @@ mod tests {
                     (room, "#rust".to_string(), true, 0),
                     (Uuid::now_v7(), "#go".to_string(), false, 0)
                 ],
-                0,
                 5,
                 1
             ),
