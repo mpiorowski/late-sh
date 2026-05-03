@@ -1163,7 +1163,6 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                 content_area,
                 app.profile_state.profile().show_dashboard_header,
                 &pins,
-                app.chat.pinned_messages().len(),
                 x,
                 y,
             );
@@ -1436,7 +1435,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     // switcher. Let them fall through to dashboard::input::handle_key.
     if ctx.screen == Screen::Dashboard
         && app.dashboard_blackjack_prefix_armed
-        && dashboard::input::blackjack_slot_for_key(byte).is_some()
+        && dashboard::input::dashboard_box_slot_for_key(byte).is_some()
     {
         return false;
     }
