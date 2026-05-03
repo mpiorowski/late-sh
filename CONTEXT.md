@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-03 (CLI details in `late-cli/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
+- Last updated: 2026-05-03 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, and a shared multi-user ASCII Artboard. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, and a shared multi-user ASCII Artboard. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -63,7 +63,8 @@ The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-
 
 **Integration tests (`late-ssh/tests/`, `late-web/tests/`, `late-core/tests/`):**
 - MUST use testcontainers for database access — always go through `late_core::test_utils::test_db()` (or the `helpers::new_test_db()` wrapper in `late-ssh`).
-- NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings in integration tests.
+- NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings as a substitute for real DB access in integration tests.
+- Exception: `late-web` route smoke tests that instantiate `AppState` but do not exercise DB-backed routes may use an inert `Db::new(&DbConfig::default())`; the moment a test hits `/gallery`, `/profiles`, or any DB code path, use `late_core::test_utils::test_db()`.
 - `late-core::test_utils` owns shared test infrastructure: `test_db()`, `create_test_user()`. Use these everywhere instead of rolling per-test user creation — except in `late-core` model tests that are testing `User::create` itself.
 - `late-ssh/tests/helpers/mod.rs` re-exports `create_test_user` from `late-core` and adds ssh-specific helpers (`test_config`, `test_app_state`, `make_app`, etc.). Domain test directories access these via `#[path = "../helpers/mod.rs"] mod helpers;` in their `main.rs`.
 - Any test that touches DB, services, network, or cross-module orchestration belongs here.
@@ -491,11 +492,12 @@ late-sh/
 │   ├── CONTEXT.md              # Companion CLI details: SSH modes, pairing, audio, installers
 │   └── src/                    # Standalone CLI: main + config, identity, raw_mode, pty, ssh, ws, audio/{decoder,resampler,output,decoder_thread,analyzer}
 ├── late-web/
+│   ├── CONTEXT.md              # Web routes, browser protocols, stream proxy, profiles/gallery, tests
 │   ├── src/
 │   │   ├── main.rs / lib.rs    # Web entrypoint + router
 │   │   ├── config.rs           # Web config
 │   │   ├── error.rs            # App error mapping
-│   │   └── pages/              # Landing, connect flow, stream proxy, dashboard
+│   │   └── pages/              # Connect/landing, chat, gallery, play, profiles, stream, dashboard
 │   └── static/                 # Tailwind output/source
 └── infra/
     ├── icecast/icecast.xml     # Icecast config
@@ -525,12 +527,18 @@ late-sh/
 - `{ "event": "volume_down" }`
 
 **Web routes (late-web, port 3000):**
-- `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA (click-to-copy), feature list, now-playing/listeners via htmx
-- `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume control, Web Audio analyzer for TUI visualizer, now-playing via htmx
-- `GET /status?pairing={bool}` - htmx fragment: now-playing track + listener count (fetched from SSH API internally). `pairing=false` for landing footer, `pairing=true` for pairing detail view. Polled every 5s.
-- `GET /dashboard` - Live metrics page (HTMX, internal/testing)
+- `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA, CLI install/build copy actions, and links to gallery/play/profiles
+- `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume control, Web Audio analyzer for TUI visualizer
+- `GET /status?pairing={bool}` - HTMX fragment: now-playing track + listener count (fetched from SSH API internally). `pairing=false` for landing footer, `pairing=true` for pairing detail view. Polled every 5s.
+- `GET /chat/{token}` - Browser chat page; connects to `late-ssh` `/api/ws/chat`
+- `GET /dashboard`, `/dashboard/now-playing`, `/dashboard/status` - Internal/demo dashboard and HTMX partials
+- `GET /gallery?key=...` - Read-only Artboard snapshot gallery backed by saved DB snapshots
+- `GET /play`, `/play/listeners` - Browser xterm.js TUI demo through `late-ssh` `/api/ws/tunnel`
+- `GET /profiles`, `/profiles/{slug}` - Public work profile index/detail pages
+- `GET /stream` - `audio/mpeg` stream proxy to Icecast with bundled silence fallback
 - `GET /test` - Error simulation endpoint
 - All other routes → redirect to `/`
+- Detailed web route, template, runtime config, browser protocol, and stream-proxy notes live in `late-web/CONTEXT.md`.
 
 **Service stream contracts (internal):**
 - `VoteService::subscribe_state()` (in `app::vote::svc`) → shared `watch::Receiver<VoteSnapshot>` (durable latest state)
@@ -575,7 +583,7 @@ late-sh/
 | UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (floor=100), `last_stipend_date` DATE |
 | Showcase | `showcases` | `user_id` FK; `title` 1-120, `url` 1-2000, `description` 1-800, `tags` TEXT[] (lowercased, ≤8). Listed newest-first, edit/delete restricted to author or admin |
 | ShowcaseFeedRead | `showcase_feed_reads` | `user_id` PK/FK, `last_read_at` timestamp cursor for per-user Showcase unread counts |
-| WorkProfile | `work_profiles` | `user_id` UNIQUE FK; `slug` UNIQUE (`w_` + 12 lowercase alnum), `headline`, status (`open`, `casual`, `not-looking`), type/location, links, skills, summary, include flags. Listed latest-update-first, edit/delete restricted to author or admin |
+| WorkProfile | `work_profiles` | `user_id` UNIQUE FK; `slug` UNIQUE (`w_` + 12 lowercase alnum), `headline`, status (`open`, `casual`, `not-looking`), type/location, links, skills, summary. Listed latest-update-first, edit/delete restricted to author or admin |
 | WorkFeedRead | `work_feed_reads` | `user_id` PK/FK, `last_read_at` timestamp cursor for per-user Work unread counts |
 | GameRoom | `game_rooms` | Generic game-room registry. `id` UUIDv7, `chat_room_id` UNIQUE FK to `chat_rooms`, `game_kind` TEXT, `slug` UNIQUE, `display_name` non-empty, `status` IN (`open`, `in_round`, `paused`, `closed`), `settings` JSONB, optional `created_by`. `GameKind` is a Rust enum over text, not a Postgres enum. |
 | ArtboardSnapshot | `artboard_snapshots` | `board_key` UNIQUE (`main`, `daily:YYYY-MM-DD`, `monthly:YYYY-MM`), `canvas` JSONB, `provenance` JSONB. Runtime contracts live in `late-ssh/src/app/artboard/CONTEXT.md`. |
@@ -606,7 +614,7 @@ late-sh/
 - **Metrics (`VictoriaMetrics`):** Custom metrics (e.g., counters) pushed directly via OTLP PeriodicReader, alongside the RED metrics generated by the Collector.
 - **HTTP server spans:** `late-web` wraps the router with request middleware that emits `otel.kind=server` spans and records `http.request.method`, `http.route`, `url.path`, and `http.response.status_code`; 5xx responses set `otel.status_code=ERROR`.
 - **Trace propagation:** `late-core::telemetry::init_telemetry()` installs the W3C Trace Context propagator. `late-web` injects trace headers on outbound `/api/now-playing` requests, and `late-ssh` extracts incoming headers on API requests so cross-service traces can form real parent/child relationships.
-- **Dashboard playground metric:** The interactive dashboard counter posts to `/dashboard/counter`, which emits `dashboard_counter_actions_total{action=...}` for Grafana testing.
+- **Web metrics:** `late_web_page_views_total{page,has_token}` and `late_web_now_playing_fetch_total{result}` are emitted when `late-web` is built with the optional `otel` feature; metrics are no-ops without it.
 - **Grafana provisioning invariant:** The metrics datasource uses the stable UID `victoriametrics`; provisioned dashboards must reference that UID instead of Grafana-generated datasource IDs.
 - **Console Output:** Local dev uses `tracing_subscriber::fmt` with `RUST_LOG=info,late_web=debug,late_ssh=debug,late_core=debug`.
 - **DB health:** `GET /api/health` endpoint, `Db::health()` method

@@ -161,6 +161,14 @@ pub(crate) struct PendingNotification {
     pub body: String,
 }
 
+pub(crate) struct ChatServices {
+    pub chat: ChatService,
+    pub notifications: NotificationService,
+    pub articles: news::svc::ArticleService,
+    pub showcases: showcase::svc::ShowcaseService,
+    pub work: work::svc::WorkService,
+}
+
 impl Drop for ChatState {
     fn drop(&mut self) {
         self.bg_task.abort();
@@ -168,16 +176,19 @@ impl Drop for ChatState {
 }
 
 impl ChatState {
-    pub fn new(
-        service: ChatService,
-        notification_service: NotificationService,
+    pub(crate) fn new(
+        services: ChatServices,
         user_id: Uuid,
         permissions: Permissions,
         active_users: Option<ActiveUsers>,
-        article_service: news::svc::ArticleService,
-        showcase_service: showcase::svc::ShowcaseService,
-        work_service: work::svc::WorkService,
     ) -> Self {
+        let ChatServices {
+            chat: service,
+            notifications: notification_service,
+            articles: article_service,
+            showcases: showcase_service,
+            work: work_service,
+        } = services;
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();

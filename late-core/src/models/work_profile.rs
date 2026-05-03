@@ -17,9 +17,6 @@ crate::user_scoped_model! {
         pub links: Vec<String>,
         pub skills: Vec<String>,
         pub summary: String,
-        pub include_bio: bool,
-        pub include_late_fetch: bool,
-        pub include_showcases: bool,
     }
 }
 

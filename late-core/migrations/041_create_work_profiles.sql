@@ -11,9 +11,6 @@ CREATE TABLE work_profiles (
     links TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] CHECK (cardinality(links) BETWEEN 1 AND 6),
     skills TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] CHECK (cardinality(skills) <= 12),
     summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 1000),
-    include_bio BOOLEAN NOT NULL DEFAULT true,
-    include_late_fetch BOOLEAN NOT NULL DEFAULT true,
-    include_showcases BOOLEAN NOT NULL DEFAULT true,
     UNIQUE (user_id)
 );
 

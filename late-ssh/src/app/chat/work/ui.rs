@@ -360,7 +360,6 @@ pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(1),
         Constraint::Min(2),
     ];
     let rows = Layout::default()
@@ -374,8 +373,7 @@ pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView
     draw_field(frame, rows[3], view.state, ComposerField::Location, active);
     draw_field(frame, rows[4], view.state, ComposerField::Links, active);
     draw_field(frame, rows[5], view.state, ComposerField::Skills, active);
-    draw_field(frame, rows[6], view.state, ComposerField::Includes, active);
-    draw_field(frame, rows[7], view.state, ComposerField::Summary, active);
+    draw_field(frame, rows[6], view.state, ComposerField::Summary, active);
 }
 
 fn draw_field(

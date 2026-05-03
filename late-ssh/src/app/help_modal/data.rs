@@ -205,7 +205,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  i                  create/edit your own profile",
         "  e                  edit your own profile (admin: any)",
         "  d                  delete your own profile (admin: any)",
-        "  Fields             headline, status, type, location, links, skills, include flags, summary",
+        "  Fields             headline, status, type, location, links, skills, summary",
         "  Status             open, casual, or not-looking",
         "  Tab / Shift+Tab    cycle composer fields",
         "  Enter              submit",

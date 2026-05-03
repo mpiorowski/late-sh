@@ -412,7 +412,7 @@ pub fn parse_words(input: &str, limit: usize) -> Vec<String> {
 pub fn parse_links(input: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for raw in input.split(|c: char| c == ',' || c == '\n' || c == '\r') {
+    for raw in input.split([',', '\n', '\r']) {
         let link = raw.trim().trim_matches(['<', '>']).to_string();
         if !looks_like_url(&link) || link.len() > 2000 {
             continue;

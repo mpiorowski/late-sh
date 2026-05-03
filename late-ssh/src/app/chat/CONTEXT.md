@@ -359,11 +359,11 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Backed by persisted `work_profiles` and `work_feed_reads`.
 - It is a separate feed and does not mirror posts into chat messages.
 - Each user has at most one work profile; creating again updates the existing profile and preserves its public random slug (`w_` plus 12 lowercase alphanumeric chars).
-- Composer fields: headline, status, type, location, links, skills, include flags, summary.
+- Composer fields: headline, status, type, location, links, skills, summary.
 - Status must be `open`, `casual`, or `not-looking`; aliases normalize in `work/state.rs`.
 - Links require `http://` or `https://`, cap at 6, and are stored for later web rendering.
 - Skills normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each skill at 24 chars and total skills at 12.
-- Include flags default to bio + late.fetch + showcases; text containing `bio`, `fetch`/`late.fetch`, or `showcase` enables those sections.
+- Public profiles show bio and showcases when the author has data for them. The composer does not expose include toggles.
 - `i` creates or edits the caller's own profile; `e` edits selected owned/admin entry; `d` deletes owned/admin entry; Enter or `c` copies a recruiter-friendly profile summary when not composing.
 - Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`.
 

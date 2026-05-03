@@ -113,30 +113,21 @@ async fn handler(
         .await
         .context("failed to load author profile")?;
 
-    let bio_paragraphs = if work.include_bio {
-        split_paragraphs(&user_profile.bio)
-    } else {
-        Vec::new()
-    };
-    let show_bio = work.include_bio && !bio_paragraphs.is_empty();
+    let bio_paragraphs = split_paragraphs(&user_profile.bio);
+    let show_bio = !bio_paragraphs.is_empty();
 
-    let showcases = if work.include_showcases {
-        let entries = Showcase::list_by_user_id(&client, work.user_id)
-            .await
-            .context("failed to load author showcases")?;
-        entries
-            .into_iter()
-            .map(|s| ShowcaseItem {
-                title: s.title,
-                url: s.url,
-                description_paragraphs: split_paragraphs(&s.description),
-                tags: s.tags,
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    let show_showcases = work.include_showcases && !showcases.is_empty();
+    let showcases = Showcase::list_by_user_id(&client, work.user_id)
+        .await
+        .context("failed to load author showcases")?
+        .into_iter()
+        .map(|s| ShowcaseItem {
+            title: s.title,
+            url: s.url,
+            description_paragraphs: split_paragraphs(&s.description),
+            tags: s.tags,
+        })
+        .collect::<Vec<_>>();
+    let show_showcases = !showcases.is_empty();
 
     let page = Page {
         headline: work.headline,
@@ -153,7 +144,7 @@ async fn handler(
         updated: format_date(work.updated),
         show_bio,
         bio_paragraphs,
-        show_late_fetch: work.include_late_fetch,
+        show_late_fetch: true,
         fetch_created: user_profile
             .created_at
             .map(format_date)

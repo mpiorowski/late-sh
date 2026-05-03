@@ -16,7 +16,6 @@ pub(crate) enum ComposerField {
     Location,
     Links,
     Skills,
-    Includes,
     Summary,
 }
 
@@ -28,8 +27,7 @@ impl ComposerField {
             Self::Type => Self::Location,
             Self::Location => Self::Links,
             Self::Links => Self::Skills,
-            Self::Skills => Self::Includes,
-            Self::Includes => Self::Summary,
+            Self::Skills => Self::Summary,
             Self::Summary => Self::Headline,
         }
     }
@@ -42,8 +40,7 @@ impl ComposerField {
             Self::Location => Self::Type,
             Self::Links => Self::Location,
             Self::Skills => Self::Links,
-            Self::Includes => Self::Skills,
-            Self::Summary => Self::Includes,
+            Self::Summary => Self::Skills,
         }
     }
 
@@ -55,7 +52,6 @@ impl ComposerField {
             Self::Location => "Location",
             Self::Links => "Links",
             Self::Skills => "Skills",
-            Self::Includes => "Include",
             Self::Summary => "Summary",
         }
     }
@@ -68,7 +64,6 @@ impl ComposerField {
             Self::Location => "EU remote, Warsaw, US overlap",
             Self::Links => "https://github.com/you, https://cv.example",
             Self::Skills => "rust, postgres, axum",
-            Self::Includes => "bio, fetch, showcases",
             Self::Summary => "What work are you looking for?",
         }
     }
@@ -92,7 +87,6 @@ pub struct State {
     location: TextArea<'static>,
     links: TextArea<'static>,
     skills: TextArea<'static>,
-    includes: TextArea<'static>,
     summary: TextArea<'static>,
     submitted: bool,
     unread_count: i64,
@@ -129,7 +123,6 @@ impl State {
             location: new_single_line(ComposerField::Location.placeholder()),
             links: new_single_line(ComposerField::Links.placeholder()),
             skills: new_single_line(ComposerField::Skills.placeholder()),
-            includes: new_single_line(ComposerField::Includes.placeholder()),
             summary: new_multi_line(ComposerField::Summary.placeholder()),
             submitted: false,
             unread_count: 0,
@@ -211,7 +204,6 @@ impl State {
             ComposerField::Location => &self.location,
             ComposerField::Links => &self.links,
             ComposerField::Skills => &self.skills,
-            ComposerField::Includes => &self.includes,
             ComposerField::Summary => &self.summary,
         }
     }
@@ -229,7 +221,6 @@ impl State {
             ComposerField::Location,
             ComposerField::Links,
             ComposerField::Skills,
-            ComposerField::Includes,
             ComposerField::Summary,
         ] {
             let active = self.composing && field == self.field;
@@ -276,12 +267,6 @@ impl State {
         self.location.insert_str(profile.location);
         self.links.insert_str(profile.links.join(", "));
         self.skills.insert_str(profile.skills.join(", "));
-        let includes = include_flags_text(
-            profile.include_bio,
-            profile.include_late_fetch,
-            profile.include_showcases,
-        );
-        self.includes.insert_str(includes);
         self.summary.insert_str(profile.summary);
         self.composing = true;
         self.editing_id = Some(id);
@@ -305,7 +290,6 @@ impl State {
         self.location = new_single_line(ComposerField::Location.placeholder());
         self.links = new_single_line(ComposerField::Links.placeholder());
         self.skills = new_single_line(ComposerField::Skills.placeholder());
-        self.includes = new_single_line(ComposerField::Includes.placeholder());
         self.summary = new_multi_line(ComposerField::Summary.placeholder());
         self.refresh_composer_theme();
     }
@@ -336,8 +320,6 @@ impl State {
         let location = self.location.lines().join(" ").trim().to_string();
         let links = svc::parse_links(&self.links.lines().join(","));
         let skills = svc::parse_words(&self.skills.lines().join(","), 12);
-        let (include_bio, include_late_fetch, include_showcases) =
-            parse_includes(&self.includes.lines().join(","));
         let summary = self.summary.lines().join("\n").trim().to_string();
 
         if headline.is_empty() {
@@ -390,9 +372,6 @@ impl State {
             links,
             skills,
             summary,
-            include_bio,
-            include_late_fetch,
-            include_showcases,
         };
 
         if let Some(id) = self.editing_id {
@@ -525,7 +504,6 @@ impl State {
             ComposerField::Location => &mut self.location,
             ComposerField::Links => &mut self.links,
             ComposerField::Skills => &mut self.skills,
-            ComposerField::Includes => &mut self.includes,
             ComposerField::Summary => &mut self.summary,
         }
     }
@@ -564,33 +542,6 @@ pub fn status_label(status: &str) -> &'static str {
     }
 }
 
-fn parse_includes(input: &str) -> (bool, bool, bool) {
-    let raw = input.trim();
-    if raw.is_empty() {
-        return (true, true, true);
-    }
-    let lower = raw.to_ascii_lowercase();
-    (
-        lower.contains("bio"),
-        lower.contains("fetch") || lower.contains("late.fetch"),
-        lower.contains("showcase"),
-    )
-}
-
-fn include_flags_text(bio: bool, fetch: bool, showcases: bool) -> String {
-    let mut out = Vec::new();
-    if bio {
-        out.push("bio");
-    }
-    if fetch {
-        out.push("fetch");
-    }
-    if showcases {
-        out.push("showcases");
-    }
-    out.join(", ")
-}
-
 fn generate_public_slug() -> String {
     let id = Uuid::now_v7().simple().to_string();
     format!("w_{}", &id[..12])
@@ -613,7 +564,7 @@ fn move_index(current: usize, delta: isize, len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComposerField, normalize_status, parse_includes};
+    use super::{ComposerField, normalize_status};
 
     #[test]
     fn field_cycles_forward_and_back() {
@@ -628,11 +579,5 @@ mod tests {
         assert_eq!(normalize_status("maybe"), Some("casual"));
         assert_eq!(normalize_status("not looking"), Some("not-looking"));
         assert_eq!(normalize_status("busy"), None);
-    }
-
-    #[test]
-    fn includes_default_to_everything() {
-        assert_eq!(parse_includes(""), (true, true, true));
-        assert_eq!(parse_includes("bio, showcases"), (true, false, true));
     }
 }

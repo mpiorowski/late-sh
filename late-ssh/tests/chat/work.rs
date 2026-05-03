@@ -22,9 +22,6 @@ fn params(user_id: Uuid, headline: &str, summary: &str, slug: &str) -> WorkProfi
         links: vec!["https://github.com/late-sh".to_string()],
         skills: vec!["rust".to_string(), "postgres".to_string()],
         summary: summary.to_string(),
-        include_bio: true,
-        include_late_fetch: true,
-        include_showcases: true,
     }
 }
 
