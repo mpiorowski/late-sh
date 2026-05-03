@@ -1436,7 +1436,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     // switcher. Let them fall through to dashboard::input::handle_key.
     if ctx.screen == Screen::Dashboard
         && app.dashboard_blackjack_prefix_armed
-        && dashboard::input::blackjack_slot_for_key(byte).is_some()
+        && dashboard::input::dashboard_box_slot_for_key(byte).is_some()
     {
         return false;
     }

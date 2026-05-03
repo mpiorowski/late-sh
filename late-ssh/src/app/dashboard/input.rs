@@ -6,10 +6,15 @@ use crate::app::{
         cli_install,
         primitives::{Banner, Screen},
     },
+    dashboard::ui::{DASHBOARD_DAILY_CYCLE_SECONDS, DASHBOARD_WIRE_CYCLE_SECONDS},
     rooms::svc::GameKind,
-    state::{App, DashboardGameToggleTarget},
+    state::{
+        App, DashboardGameToggleTarget, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
+        GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
+    },
     vote,
 };
+use late_core::models::leaderboard::DailyGame;
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     let Some(room_id) = app.dashboard_active_room_id() else {
@@ -21,11 +26,14 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.dashboard_blackjack_prefix_armed {
         app.dashboard_blackjack_prefix_armed = false;
-        if let Some(slot) = blackjack_slot_for_key(byte) {
+        if let Some(slot) = dashboard_box_slot_for_key(byte) {
+            if slot == 1 {
+                return launch_current_dashboard_daily(app);
+            }
+            if slot == 2 {
+                return open_current_dashboard_wire_item(app);
+            }
             return enter_blackjack_room_slot(app, slot);
-        }
-        if matches!(byte, b'2' | b'3') {
-            return true;
         }
         // Any non-slot key disarms and continues through normal handling so
         // the second keystroke still does what the user typed.
@@ -229,9 +237,108 @@ fn enter_last_game_room(app: &mut App) -> bool {
     true
 }
 
-pub(crate) fn blackjack_slot_for_key(byte: u8) -> Option<usize> {
+pub(crate) fn dashboard_box_slot_for_key(byte: u8) -> Option<usize> {
     match byte {
-        b'1' => Some(0),
+        b'1'..=b'3' => Some((byte - b'1') as usize),
         _ => None,
     }
+}
+
+fn launch_current_dashboard_daily(app: &mut App) -> bool {
+    let Some(game) = current_dashboard_daily_game(app) else {
+        app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
+        app.is_playing_game = false;
+        app.set_screen(Screen::Games);
+        app.banner = Some(Banner::success("All dailies complete."));
+        return true;
+    };
+
+    match game {
+        DailyGame::Sudoku => {
+            app.sudoku_state.show_daily();
+            app.game_selection = GAME_SELECTION_SUDOKU;
+        }
+        DailyGame::Nonogram => {
+            if !app.nonogram_state.has_puzzles() {
+                app.banner = Some(Banner::error("No nonogram packs loaded."));
+                return true;
+            }
+            app.nonogram_state.show_daily();
+            app.game_selection = GAME_SELECTION_NONOGRAMS;
+        }
+        DailyGame::Solitaire => {
+            app.solitaire_state.show_daily();
+            app.game_selection = GAME_SELECTION_SOLITAIRE;
+        }
+        DailyGame::Minesweeper => {
+            app.minesweeper_state.show_daily();
+            app.game_selection = GAME_SELECTION_MINESWEEPER;
+        }
+    }
+
+    app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
+    app.is_playing_game = true;
+    app.set_screen(Screen::Games);
+    true
+}
+
+fn current_dashboard_daily_game(app: &App) -> Option<DailyGame> {
+    let completion = app.leaderboard.user_daily_statuses.get(&app.user_id);
+    let unfinished: Vec<DailyGame> = [
+        DailyGame::Sudoku,
+        DailyGame::Nonogram,
+        DailyGame::Solitaire,
+        DailyGame::Minesweeper,
+    ]
+    .into_iter()
+    .filter(|game| !completion.is_some_and(|status| status.completed(*game)))
+    .collect();
+
+    if unfinished.is_empty() {
+        return None;
+    }
+
+    let idx = (dashboard_cycle_secs() / DASHBOARD_DAILY_CYCLE_SECONDS) as usize % unfinished.len();
+    unfinished.get(idx).copied()
+}
+
+fn open_current_dashboard_wire_item(app: &mut App) -> bool {
+    match current_dashboard_wire_item() {
+        DashboardWireItem::News => {
+            app.chat.close_overlay();
+            app.set_screen(Screen::Chat);
+            app.chat.select_news();
+        }
+        DashboardWireItem::ActiveUsers => {
+            app.chat.open_active_users_overlay();
+        }
+        DashboardWireItem::Tip => {
+            app.help_modal_state
+                .open(crate::app::help_modal::data::HelpTopic::Overview);
+            app.show_help = true;
+        }
+    }
+    true
+}
+
+#[derive(Clone, Copy)]
+enum DashboardWireItem {
+    News,
+    ActiveUsers,
+    Tip,
+}
+
+fn current_dashboard_wire_item() -> DashboardWireItem {
+    match (dashboard_cycle_secs() / DASHBOARD_WIRE_CYCLE_SECONDS) % 3 {
+        0 => DashboardWireItem::News,
+        1 => DashboardWireItem::ActiveUsers,
+        _ => DashboardWireItem::Tip,
+    }
+}
+
+fn dashboard_cycle_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
