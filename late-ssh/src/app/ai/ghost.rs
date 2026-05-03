@@ -7,7 +7,6 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         game_room::{GameKind, GameRoom},
-        profile::{Profile, ProfileParams},
         user::{User, UserParams},
     },
 };
@@ -144,22 +143,6 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply n
     Vary the opener, vary the close, do not repeat catchphrases. \
     Never be cruel, never go after a real person's identity. The complaint is the tooling, not the human.";
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
-const GRAYBEARD_BIO: &str = "## graybeard, senior in residence\n\n\
-Burned-out senior developer. Still haunting `#general` to complain about framework churn, cloud bills, \
-and kids letting autocomplete write their code.\n\n\
-> back in my day the tools were worse, the bugs were stranger, and somehow the software was still smaller.\n\n\
-- currently grumbling about: React Server Components, YAML, and any startup that says \"AI-native\"\n\
-- happiest when: the docs are a man page and the config fits on one screen\n\
-- spiritual home: `ssh`, `tmux`, `grep`, and a shell history full of crimes\n\n\
-Favorite reading:\n\
-1. [The C Programming Language](https://en.wikipedia.org/wiki/The_C_Programming_Language)\n\
-2. [Structure and Interpretation of Computer Programs](https://en.wikipedia.org/wiki/Structure_and_Interpretation_of_Computer_Programs)\n\
-3. [The UNIX Programming Environment](https://en.wikipedia.org/wiki/The_Unix_Programming_Environment)\n\n\
-If you mention him, expect one of the following:\n\
-- reluctant wisdom\n\
-- accurate criticism\n\
-- emotional damage\n\n\
-`works on my machine`";
 
 impl GhostService {
     pub fn new(
@@ -997,11 +980,8 @@ impl GhostService {
     }
 
     async fn ensure_graybeard_user(&self) -> Result<BotUser> {
-        let graybeard = self
-            .ensure_user(GRAYBEARD_FINGERPRINT, GRAYBEARD_USERNAME)
-            .await?;
-        self.ensure_profile_bio(graybeard.id, GRAYBEARD_BIO).await?;
-        Ok(graybeard)
+        self.ensure_user(GRAYBEARD_FINGERPRINT, GRAYBEARD_USERNAME)
+            .await
     }
 
     async fn ensure_dealer_user(&self) -> Result<BotUser> {
@@ -1047,43 +1027,6 @@ impl GhostService {
             id: user.id,
             username: username.to_string(),
         })
-    }
-
-    async fn ensure_profile_bio(&self, user_id: Uuid, bio: &str) -> Result<()> {
-        let client = self.db.get().await?;
-        let profile = Profile::load(&client, user_id).await?;
-        if profile.bio == bio {
-            return Ok(());
-        }
-
-        Profile::update(
-            &client,
-            user_id,
-            ProfileParams {
-                username: profile.username,
-                bio: bio.to_string(),
-                country: profile.country,
-                timezone: profile.timezone,
-                ide: profile.ide,
-                terminal: profile.terminal,
-                os: profile.os,
-                langs: profile.langs,
-                notify_kinds: profile.notify_kinds,
-                notify_bell: profile.notify_bell,
-                notify_cooldown_mins: profile.notify_cooldown_mins,
-                notify_format: profile.notify_format,
-                theme_id: profile.theme_id,
-                enable_background_color: profile.enable_background_color,
-                show_dashboard_header: profile.show_dashboard_header,
-                show_right_sidebar: profile.show_right_sidebar,
-                show_games_sidebar: profile.show_games_sidebar,
-                show_settings_on_connect: profile.show_settings_on_connect,
-                favorite_room_ids: profile.favorite_room_ids,
-            },
-        )
-        .await?;
-
-        Ok(())
     }
 }
 

@@ -31,7 +31,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return launch_current_dashboard_daily(app);
             }
             if slot == 2 {
-                return copy_current_dashboard_wire_link(app);
+                return open_current_dashboard_wire_article(app);
             }
             return enter_blackjack_room_slot(app, slot);
         }
@@ -291,19 +291,18 @@ fn current_dashboard_daily_game(app: &App) -> Option<DailyGame> {
     unfinished.get(idx).copied()
 }
 
-fn copy_current_dashboard_wire_link(app: &mut App) -> bool {
+fn open_current_dashboard_wire_article(app: &mut App) -> bool {
     let articles = app.chat.news.all_articles();
     let Some(item) = wire_current_article(articles, dashboard_cycle_secs()) else {
-        app.banner = Some(Banner::error("no headline to copy"));
+        app.banner = Some(Banner::error("no headline to open"));
         return true;
     };
-    let url = item.article.url.clone();
-    if url.is_empty() {
-        app.banner = Some(Banner::error("headline has no link"));
-        return true;
-    }
-    app.pending_clipboard = Some(url);
-    app.banner = Some(Banner::success("link copied"));
+    let article_id = item.article.id;
+
+    app.chat.close_overlay();
+    app.set_screen(Screen::Chat);
+    app.chat.select_news();
+    app.chat.news.select_article_by_id(article_id);
     true
 }
 

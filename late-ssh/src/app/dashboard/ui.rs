@@ -54,7 +54,7 @@ pub(crate) const DASHBOARD_DAILY_CYCLE_SECONDS: u64 = 10;
 /// you might glance at the dashboard every few minutes and see something new
 /// without it churning into noise.
 pub(crate) const WIRE_NEWS_CYCLE_SECONDS: u64 = 600;
-pub(crate) const WIRE_NEWS_MAX_ITEMS: usize = 10;
+pub(crate) const WIRE_NEWS_MAX_ITEMS: usize = 5;
 const AUDIO_BUTTON_PREFIX: &str = "No audio? ";
 const CLI_BUTTON_TEXT: &str = "[B] CLI";
 const PAIR_BUTTON_TEXT: &str = "[P] web";
@@ -170,14 +170,16 @@ fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: Dashboar
         draw_blackjack_grid(
             frame,
             split[0],
-            &rooms,
-            view.blackjack_snapshots,
-            view.blackjack_prefix_armed,
-            view.pinned_messages.first(),
-            None,
-            view.daily_statuses,
-            view.wire_news_articles,
-            view.dashboard_cycle_secs,
+            BlackjackGridView {
+                rooms: &rooms,
+                snapshots: view.blackjack_snapshots,
+                prefix_armed: view.blackjack_prefix_armed,
+                top_rule_pinned: view.pinned_messages.first(),
+                bottom_rule_pinned: None,
+                daily_statuses: view.daily_statuses,
+                wire_news_articles: view.wire_news_articles,
+                cycle_secs: view.dashboard_cycle_secs,
+            },
         );
         draw_chat_section(frame, split[1], &[], view.favorites_strip, view.chat_view);
         return;
@@ -188,14 +190,16 @@ fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: Dashboar
     draw_blackjack_grid(
         frame,
         split[0],
-        &rooms,
-        view.blackjack_snapshots,
-        view.blackjack_prefix_armed,
-        None,
-        view.pinned_messages.first(),
-        view.daily_statuses,
-        view.wire_news_articles,
-        view.dashboard_cycle_secs,
+        BlackjackGridView {
+            rooms: &rooms,
+            snapshots: view.blackjack_snapshots,
+            prefix_armed: view.blackjack_prefix_armed,
+            top_rule_pinned: None,
+            bottom_rule_pinned: view.pinned_messages.first(),
+            daily_statuses: view.daily_statuses,
+            wire_news_articles: view.wire_news_articles,
+            cycle_secs: view.dashboard_cycle_secs,
+        },
     );
     draw_chat_section(frame, split[1], &[], view.favorites_strip, view.chat_view);
 }
@@ -245,19 +249,19 @@ fn blackjack_phase_priority(snapshot: Option<&BlackjackSnapshot>) -> u8 {
     }
 }
 
-fn draw_blackjack_grid(
-    frame: &mut Frame,
-    area: Rect,
-    rooms: &[&RoomListItem],
-    snapshots: &std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
+struct BlackjackGridView<'a> {
+    rooms: &'a [&'a RoomListItem],
+    snapshots: &'a std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     prefix_armed: bool,
-    top_rule_pinned: Option<&ChatMessage>,
-    bottom_rule_pinned: Option<&ChatMessage>,
-    daily_statuses: &[DashboardDailyStatus],
-    wire_news_articles: &[ArticleFeedItem],
+    top_rule_pinned: Option<&'a ChatMessage>,
+    bottom_rule_pinned: Option<&'a ChatMessage>,
+    daily_statuses: &'a [DashboardDailyStatus],
+    wire_news_articles: &'a [ArticleFeedItem],
     cycle_secs: u64,
-) {
-    let has_top_rule = top_rule_pinned.is_some();
+}
+
+fn draw_blackjack_grid(frame: &mut Frame, area: Rect, view: BlackjackGridView<'_>) {
+    let has_top_rule = view.top_rule_pinned.is_some();
     let required_height = if has_top_rule {
         BLACKJACK_GRID_HEIGHT_WITH_TOP
     } else {
@@ -299,7 +303,7 @@ fn draw_blackjack_grid(
     }
 
     let slot_areas = [cols[1], cols[3], cols[5]];
-    let loading = rooms.is_empty();
+    let loading = view.rooms.is_empty();
     for (slot, area) in slot_areas
         .iter()
         .copied()
@@ -321,13 +325,25 @@ fn draw_blackjack_grid(
                 frame,
                 padded,
                 slot,
-                rooms.first().copied(),
-                snapshots,
-                prefix_armed,
+                view.rooms.first().copied(),
+                view.snapshots,
+                view.prefix_armed,
                 loading,
             ),
-            1 => draw_dailies_slot(frame, padded, daily_statuses, prefix_armed, cycle_secs),
-            2 => draw_wire_slot(frame, padded, wire_news_articles, prefix_armed, cycle_secs),
+            1 => draw_dailies_slot(
+                frame,
+                padded,
+                view.daily_statuses,
+                view.prefix_armed,
+                view.cycle_secs,
+            ),
+            2 => draw_wire_slot(
+                frame,
+                padded,
+                view.wire_news_articles,
+                view.prefix_armed,
+                view.cycle_secs,
+            ),
             _ => {}
         }
     }
@@ -339,7 +355,7 @@ fn draw_blackjack_grid(
             (cols[4].x.saturating_sub(top_area.x) as usize, '┬'),
             (cols[6].x.saturating_sub(top_area.x) as usize, '┐'),
         ];
-        draw_blackjack_rule(frame, top_area, &top_junctions, top_rule_pinned);
+        draw_blackjack_rule(frame, top_area, &top_junctions, view.top_rule_pinned);
     }
 
     let bottom_junctions = [
@@ -352,7 +368,7 @@ fn draw_blackjack_grid(
         frame,
         bottom_rule_area,
         &bottom_junctions,
-        bottom_rule_pinned,
+        view.bottom_rule_pinned,
     );
 }
 
@@ -561,10 +577,10 @@ fn draw_wire_slot(
     frame.render_widget(Paragraph::new(vec![line1, line2]), area);
 }
 
-pub(crate) fn wire_current_article<'a>(
-    articles: &'a [ArticleFeedItem],
+pub(crate) fn wire_current_article(
+    articles: &[ArticleFeedItem],
     cycle_secs: u64,
-) -> Option<&'a ArticleFeedItem> {
+) -> Option<&ArticleFeedItem> {
     let pool = &articles[..articles.len().min(WIRE_NEWS_MAX_ITEMS)];
     if pool.is_empty() {
         return None;

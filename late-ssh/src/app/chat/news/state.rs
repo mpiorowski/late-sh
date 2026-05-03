@@ -66,6 +66,16 @@ impl State {
         clamp_index(self.selected, self.articles.len())
     }
 
+    pub fn select_article_by_id(&mut self, article_id: Uuid) {
+        if let Some(index) = self
+            .articles
+            .iter()
+            .position(|item| item.article.id == article_id)
+        {
+            self.selected = index;
+        }
+    }
+
     pub fn move_selection(&mut self, delta: isize) {
         self.selected = move_index(self.selected_index(), delta, self.articles.len());
     }
