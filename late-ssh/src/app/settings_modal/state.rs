@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
+use late_core::models::profile::{normalize_profile_tags, Profile, ProfileParams};
 use late_core::models::user::sanitize_username_input;
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::app::common::theme;
 use crate::app::profile::svc::ProfileService;
 
-use super::data::{CountryOption, filter_countries, filter_timezones};
+use super::data::{filter_countries, filter_timezones, CountryOption};
 use super::gem::GemState;
 
 const USERNAME_MAX_LEN: usize = 12;
@@ -45,7 +45,6 @@ pub enum Row {
     BackgroundColor,
     DashboardHeader,
     RightSidebar,
-    GamesSidebar,
     Country,
     Timezone,
     DirectMessages,
@@ -57,7 +56,7 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 18] = [
+    pub const ALL: [Row; 17] = [
         Row::Username,
         Row::Ide,
         Row::Terminal,
@@ -67,7 +66,6 @@ impl Row {
         Row::BackgroundColor,
         Row::DashboardHeader,
         Row::RightSidebar,
-        Row::GamesSidebar,
         Row::Country,
         Row::Timezone,
         Row::DirectMessages,
@@ -1066,10 +1064,6 @@ impl SettingsModalState {
             }
             Row::RightSidebar => {
                 self.draft.show_right_sidebar ^= true;
-                true
-            }
-            Row::GamesSidebar => {
-                self.draft.show_games_sidebar ^= true;
                 true
             }
             Row::DirectMessages => {

@@ -1,4 +1,4 @@
-use crate::app::input::{MouseButton, MouseEventKind, ParsedInput, sanitize_paste_markers};
+use crate::app::input::{sanitize_paste_markers, MouseButton, MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
 use super::gem::GemKey;
@@ -235,7 +235,6 @@ fn activate_selected_row(app: &mut App) {
         | Row::BackgroundColor
         | Row::DashboardHeader
         | Row::RightSidebar
-        | Row::GamesSidebar
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents
