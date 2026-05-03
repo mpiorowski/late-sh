@@ -405,33 +405,9 @@ impl State {
         None
     }
 
-    pub fn copy_selected_summary(&self) -> Option<String> {
+    pub fn copy_selected_profile_url(&self, base_url: &str) -> Option<String> {
         let item = self.selected_item()?;
-        let p = &item.profile;
-        let mut lines = vec![
-            format!("@{} - {}", item.author_username, p.headline),
-            format!(
-                "{} - {} - {}",
-                status_label(&p.status),
-                p.work_type,
-                p.location
-            ),
-        ];
-        if !p.skills.is_empty() {
-            lines.push(format!(
-                "Skills: {}",
-                p.skills
-                    .iter()
-                    .map(|skill| format!("#{skill}"))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ));
-        }
-        lines.push(format!("Work slug: {}", p.slug));
-        lines.extend(p.links.iter().cloned());
-        lines.push(String::new());
-        lines.push(p.summary.clone());
-        Some(lines.join("\n"))
+        Some(profile_url(base_url, &item.profile.slug))
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
@@ -618,6 +594,10 @@ fn include_flags_text(bio: bool, fetch: bool, showcases: bool) -> String {
 fn generate_public_slug() -> String {
     let id = Uuid::now_v7().simple().to_string();
     format!("w_{}", &id[..12])
+}
+
+pub(crate) fn profile_url(base_url: &str, slug: &str) -> String {
+    format!("{}/profiles/{slug}", base_url.trim_end_matches('/'))
 }
 
 fn clamp_index(index: usize, len: usize) -> usize {

@@ -90,9 +90,13 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         b'\r' | b'\n' | b'c' | b'C' => {
-            if let Some(summary) = app.chat.work.copy_selected_summary() {
-                app.pending_clipboard = Some(summary);
-                app.banner = Some(Banner::success("Work profile copied!"));
+            let base_url = app
+                .connect_url
+                .rsplit_once('/')
+                .map_or(&*app.connect_url, |p| p.0);
+            if let Some(url) = app.chat.work.copy_selected_profile_url(base_url) {
+                app.pending_clipboard = Some(url);
+                app.banner = Some(Banner::success("Work profile link copied!"));
             }
             true
         }

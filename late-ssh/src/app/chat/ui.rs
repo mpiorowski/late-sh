@@ -1654,6 +1654,7 @@ mod tests {
                 current_user_id: Uuid::nil(),
                 is_admin: false,
                 marker_read_at: None,
+                profile_base_url: "http://localhost:3000",
             },
             work_state: None,
             work_composing: false,

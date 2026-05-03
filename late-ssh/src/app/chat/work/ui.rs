@@ -8,9 +8,12 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 use super::state::{ComposerField, State, status_label};
 use super::svc::WorkFeedItem;
+
+const META_SEP: &str = " · ";
 
 pub struct WorkListView<'a> {
     pub items: &'a [WorkFeedItem],
@@ -18,6 +21,7 @@ pub struct WorkListView<'a> {
     pub current_user_id: uuid::Uuid,
     pub is_admin: bool,
     pub marker_read_at: Option<DateTime<Utc>>,
+    pub profile_base_url: &'a str,
 }
 
 const ITEM_HEIGHT: u16 = 8;
@@ -89,93 +93,204 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
         frame.render_widget(item_block, item_area);
 
         let owner = p.user_id == view.current_user_id;
-        let mut title_spans = Vec::new();
-        if is_unread {
-            title_spans.push(Span::styled(
-                "* ",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
-        title_spans.push(Span::styled(
-            p.headline.as_str(),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
+        let inner_w = content_area.width as usize;
+        let mut lines: Vec<Line<'static>> = Vec::with_capacity(7);
+
+        // Row 1: title — `* Headline` left, `(yours)` right-aligned when owner.
+        lines.push(build_title_line(&p.headline, owner, is_unread, inner_w));
+
+        // Row 2: meta — `@user · status · type · location · just now`
+        lines.push(build_meta_line(
+            &item.author_username,
+            status_label(&p.status),
+            &p.work_type,
+            &p.location,
+            &format_relative_time(p.updated),
+            inner_w,
         ));
-        if owner {
-            title_spans.push(Span::styled(
-                "  (yours)",
-                Style::default().fg(theme::AMBER_DIM()),
-            ));
-        }
 
-        let mut lines = vec![
-            Line::from(title_spans),
-            Line::from(vec![
-                Span::styled("@", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled(
-                    item.author_username.as_str(),
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(
-                        " - {} - {} - {}",
-                        status_label(&p.status),
-                        p.work_type,
-                        p.location
-                    ),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ]),
-        ];
-
-        let (mut summary_lines, truncated) =
-            summary_lines(&p.summary, content_area.width as usize, SUMMARY_LINES);
-        if truncated && let Some(last) = summary_lines.last_mut() {
-            apply_inline_ellipsis(last, content_area.width as usize);
+        // Rows 3-4: summary (up to SUMMARY_LINES)
+        let (mut summary_rows, truncated) = summary_lines(&p.summary, inner_w, SUMMARY_LINES);
+        if truncated && let Some(last) = summary_rows.last_mut() {
+            apply_inline_ellipsis(last, inner_w);
         }
-        for line in summary_lines {
+        for row in summary_rows {
             lines.push(Line::from(Span::styled(
-                line,
+                row,
                 Style::default().fg(theme::TEXT()),
             )));
         }
 
+        // Row 5: skills, joined and truncated. Skipped entirely when empty.
         if !p.skills.is_empty() {
+            let skills_text = p
+                .skills
+                .iter()
+                .map(|s| format!("#{s}"))
+                .collect::<Vec<_>>()
+                .join(" ");
             lines.push(Line::from(Span::styled(
-                p.skills
-                    .iter()
-                    .map(|skill| format!("#{skill}"))
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                truncate_to_width(&skills_text, inner_w),
                 Style::default().fg(theme::AMBER_DIM()),
             )));
         }
 
-        let first_link = p.links.first().map(String::as_str).unwrap_or("");
-        lines.push(Line::from(vec![
-            Span::styled("link ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                first_link.to_string(),
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::styled(
-                format!(" - {} - {}", p.slug, format_relative_time(p.updated)),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ]));
+        // Row 6: ALL links — protocol stripped, joined with ` · `.
+        if !p.links.is_empty() {
+            let links_text = p
+                .links
+                .iter()
+                .map(|link| display_link(link))
+                .collect::<Vec<_>>()
+                .join(META_SEP);
+            lines.push(Line::from(vec![
+                Span::styled("↗ ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(
+                    truncate_to_width(&links_text, inner_w.saturating_sub(2)),
+                    Style::default()
+                        .fg(theme::TEXT_FAINT())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
+
+        // Row 7: share footer — `late.sh/profiles/w_abc...` (protocol stripped).
+        let share_url = super::state::profile_url(view.profile_base_url, &p.slug);
+        let share_display = display_link(&share_url);
+        lines.push(Line::from(Span::styled(
+            truncate_to_width(&share_display, inner_w),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        )));
 
         frame.render_widget(
             Paragraph::new(lines).wrap(Wrap { trim: true }),
             content_area,
         );
     }
+}
+
+fn build_title_line(
+    headline: &str,
+    owner: bool,
+    is_unread: bool,
+    width: usize,
+) -> Line<'static> {
+    let unread_prefix = if is_unread { "* " } else { "" };
+    let unread_w = UnicodeWidthStr::width(unread_prefix);
+    let badge = if owner { "(yours)" } else { "" };
+    let badge_w = UnicodeWidthStr::width(badge);
+    // Keep at least one space between headline and badge; if width is so tight
+    // we can't fit the badge, drop it rather than crowd the headline.
+    let headline_budget = if owner {
+        width
+            .saturating_sub(unread_w)
+            .saturating_sub(badge_w + 1)
+            .max(4)
+    } else {
+        width.saturating_sub(unread_w).max(4)
+    };
+    let truncated = truncate_to_width(headline, headline_budget);
+    let truncated_w = UnicodeWidthStr::width(truncated.as_str());
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
+    if is_unread {
+        spans.push(Span::styled(
+            "* ",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans.push(Span::styled(
+        truncated,
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    if owner {
+        let used = unread_w + truncated_w;
+        let pad = width.saturating_sub(used + badge_w).max(1);
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::styled(
+            badge,
+            Style::default().fg(theme::AMBER_DIM()),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn build_meta_line(
+    username: &str,
+    status: &str,
+    work_type: &str,
+    location: &str,
+    relative_time: &str,
+    width: usize,
+) -> Line<'static> {
+    // Build meta as a single styled string then truncate. The username keeps
+    // its own color span; everything after collapses into one dim trailing
+    // span so truncation stays simple.
+    let trailing = format!(
+        "{sep}{status}{sep}{work_type}{sep}{location}{sep}{time}",
+        sep = META_SEP,
+        status = status,
+        work_type = work_type,
+        location = location,
+        time = relative_time,
+    );
+    let prefix = format!("@{username}");
+    let prefix_w = UnicodeWidthStr::width(prefix.as_str());
+    let trailing_budget = width.saturating_sub(prefix_w);
+    let trailing_truncated = truncate_to_width(&trailing, trailing_budget);
+
+    Line::from(vec![
+        Span::styled(
+            prefix,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            trailing_truncated,
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])
+}
+
+fn display_link(url: &str) -> String {
+    let stripped = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    stripped.trim_end_matches('/').to_string()
+}
+
+fn truncate_to_width(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_string();
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+    let budget = width - 1; // reserve one cell for the ellipsis
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + cw > budget {
+            break;
+        }
+        out.push(ch);
+        used += cw;
+    }
+    out.push('…');
+    out
 }
 
 fn apply_inline_ellipsis(line: &mut String, width: usize) {
@@ -340,12 +455,27 @@ fn draw_empty_placeholder(frame: &mut Frame, area: Rect, placeholder: &str, acti
 
 #[cfg(test)]
 mod tests {
-    use super::summary_lines;
+    use super::{display_link, summary_lines, truncate_to_width};
 
     #[test]
     fn summary_lines_wrap_to_budget() {
         let (lines, truncated) = summary_lines("hello wide world", 8, 2);
         assert_eq!(lines, vec!["hello", "wide"]);
         assert!(truncated);
+    }
+
+    #[test]
+    fn display_link_strips_protocol_and_trailing_slash() {
+        assert_eq!(display_link("https://github.com/me/"), "github.com/me");
+        assert_eq!(display_link("http://cv.example/"), "cv.example");
+        assert_eq!(display_link("ftp://no-strip"), "ftp://no-strip");
+    }
+
+    #[test]
+    fn truncate_to_width_appends_ellipsis_when_overflowing() {
+        assert_eq!(truncate_to_width("hello", 10), "hello");
+        assert_eq!(truncate_to_width("hello world", 8), "hello w…");
+        assert_eq!(truncate_to_width("hello", 0), "");
+        assert_eq!(truncate_to_width("hello", 1), "…");
     }
 }

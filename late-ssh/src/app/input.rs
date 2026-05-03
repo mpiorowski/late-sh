@@ -1276,6 +1276,10 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                         current_user_id: app.user_id,
                         is_admin: app.chat.work.is_admin(),
                         marker_read_at: app.chat.work.marker_read_at(),
+                        profile_base_url: app
+                            .connect_url
+                            .rsplit_once('/')
+                            .map_or(&*app.connect_url, |p| p.0),
                     },
                     work_state: Some(&app.chat.work),
                     work_composing: app.chat.work.composing(),
