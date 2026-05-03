@@ -66,10 +66,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return enter_last_game_room(app);
     }
 
-    if byte == b'b'
-        && app.profile_state.profile().show_dashboard_room_showcases
-        && dashboard_blackjack_room_count(app) > 0
-    {
+    if byte == b'b' && app.profile_state.profile().show_dashboard_room_showcases {
         app.dashboard_blackjack_prefix_armed = true;
         return true;
     }
@@ -143,14 +140,6 @@ pub(crate) fn open_browser_pairing_qr(app: &mut App) {
     app.web_chat_qr_url = Some(app.connect_url.clone());
     app.show_cli_install_modal = false;
     app.show_web_chat_qr = true;
-}
-
-fn dashboard_blackjack_room_count(app: &App) -> usize {
-    app.rooms_snapshot
-        .rooms
-        .iter()
-        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
-        .count()
 }
 
 fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
