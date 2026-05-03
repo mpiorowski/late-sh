@@ -120,9 +120,11 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     }
 
     if let Some(author) = view.reply_author {
-        let long =
-            format!(" Reply to @{author} (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ");
-        let mid = format!(" Reply to @{author} (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ");
+        let long = format!(
+            " Reply to @{author} (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
+        );
+        let mid =
+            format!(" Reply to @{author} (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ");
         let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
         let minimal = format!(" Reply to @{author} (Esc) ");
         let name_only = format!(" Reply to @{author} ");
@@ -146,8 +148,8 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
         return pick_title_that_fits(
             block_width,
             &[
-                " Edit message (Enter save, Alt+S stay, Alt+Enter newline, Esc cancel) ",
-                " Edit message (⏎ save, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
+                " Edit message (Enter save, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+                " Edit message (⏎ save, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
                 " Edit message (⏎ save, Esc cancel) ",
                 " Edit message (Esc) ",
                 " Edit message ",
@@ -162,9 +164,9 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     pick_title_that_fits(
         block_width,
         &[
-            " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
-            " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
-            " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
+            " Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+            " (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+            " (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
             " (⏎ send, Esc cancel) ",
             " (Esc cancel) ",
             " Esc ",
@@ -1672,9 +1674,9 @@ mod tests {
     fn composer_title_collapses_across_block_widths() {
         let ta = TextArea::default();
         let view = composer_view(&ta);
-        let full = " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
-        let long = " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
-        let short = " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ";
+        let full = " Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ";
+        let long = " (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ";
+        let short = " (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ";
         let minimal = " (⏎ send, Esc cancel) ";
         let cancel = " (Esc cancel) ";
         let esc = " Esc ";
@@ -1728,7 +1730,7 @@ mod tests {
         view.reply_author = Some("alice");
         assert_eq!(
             composer_title(&view, 100),
-            " Reply to @alice (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) "
+            " Reply to @alice (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
         );
         // Far too narrow for even the shortest reply form → drops to " Reply ".
         // " Reply " = 7 cols → needs block_w ≥ 9.

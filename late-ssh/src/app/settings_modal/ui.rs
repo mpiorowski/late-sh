@@ -85,7 +85,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
             spans.extend([
                 Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" save & preview  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Alt+Enter", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled("Alt+Enter/Ctrl+J", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" newline  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(

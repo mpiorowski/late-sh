@@ -1066,7 +1066,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
 | `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/system fields/bio, cycle a setting, or open the country/timezone picker |
-| `Alt+Enter` | Settings modal (bio editing) | Insert newline |
+| `Alt+Enter` / `Ctrl+J` | Settings modal (bio editing) | Insert newline |
 | `?` | Settings modal | Open help modal on top |
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |
 | `Esc` / `q` | Read-only profile modal | Close |

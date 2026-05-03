@@ -195,7 +195,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  Composer fields    title (≤120) · url · tags (comma-sep, ≤8) · description (≤800)",
         "  Tab / Shift+Tab    cycle composer fields",
         "  Enter              submit",
-        "  Alt+Enter          newline (description only)",
+        "  Alt+Enter / Ctrl+J newline (description only)",
         "  Esc                cancel compose",
     ]
     .into_iter()
