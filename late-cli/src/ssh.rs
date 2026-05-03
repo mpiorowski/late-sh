@@ -362,7 +362,7 @@ fn create_openssh_control_dir() -> Result<PathBuf> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos();
+        .as_secs();
 
     for attempt in 0..100 {
         let dir = base.join(format!("late-ssh-{}-{now}-{attempt}", std::process::id()));
@@ -675,7 +675,8 @@ async fn spawn_native_ssh(
         ..Default::default()
     });
 
-    let mut session = client::connect(client_config, (target.host.as_str(), target.port), handler)
+    let stream = crate::ipv4::connect_ipv4_only(&target.host, target.port).await?;
+    let mut session = client::connect_stream(client_config, stream, handler)
         .await
         .with_context(|| format!("failed to connect to {}:{}", target.host, target.port))?;
 
