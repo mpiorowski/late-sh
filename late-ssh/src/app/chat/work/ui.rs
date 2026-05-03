@@ -171,12 +171,7 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
     }
 }
 
-fn build_title_line(
-    headline: &str,
-    owner: bool,
-    is_unread: bool,
-    width: usize,
-) -> Line<'static> {
+fn build_title_line(headline: &str, owner: bool, is_unread: bool, width: usize) -> Line<'static> {
     let unread_prefix = if is_unread { "* " } else { "" };
     let unread_w = UnicodeWidthStr::width(unread_prefix);
     let badge = if owner { "(yours)" } else { "" };
@@ -214,10 +209,7 @@ fn build_title_line(
         let used = unread_w + truncated_w;
         let pad = width.saturating_sub(used + badge_w).max(1);
         spans.push(Span::raw(" ".repeat(pad)));
-        spans.push(Span::styled(
-            badge,
-            Style::default().fg(theme::AMBER_DIM()),
-        ));
+        spans.push(Span::styled(badge, Style::default().fg(theme::AMBER_DIM())));
     }
     Line::from(spans)
 }
@@ -253,10 +245,7 @@ fn build_meta_line(
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            trailing_truncated,
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
+        Span::styled(trailing_truncated, Style::default().fg(theme::TEXT_DIM())),
     ])
 }
 

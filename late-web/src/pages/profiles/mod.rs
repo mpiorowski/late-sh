@@ -11,10 +11,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use late_core::models::{
-    profile::Profile,
-    showcase::Showcase,
-    user::User,
-    work_profile::WorkProfile,
+    profile::Profile, showcase::Showcase, user::User, work_profile::WorkProfile,
 };
 
 use crate::{AppState, error::AppError, metrics};
@@ -108,9 +105,7 @@ async fn handler(
         .await
         .context("failed to load work profile by slug")?
     else {
-        let page = NotFound {
-            slug: slug.clone(),
-        };
+        let page = NotFound { slug: slug.clone() };
         return Ok((StatusCode::NOT_FOUND, Html(page.render()?)).into_response());
     };
 
@@ -253,10 +248,7 @@ fn status_priority(status: &str) -> u8 {
 }
 
 fn summary_preview(text: &str, max_chars: usize) -> String {
-    let collapsed = text
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.chars().count() <= max_chars {
         return collapsed;
     }

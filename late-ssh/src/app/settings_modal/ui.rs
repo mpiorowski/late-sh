@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Flex, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
-    Frame,
 };
 
 use crate::app::common::{markdown::render_body_to_lines, theme};
@@ -11,7 +11,7 @@ use crate::app::common::{markdown::render_body_to_lines, theme};
 use super::{
     data::country_label,
     gem::{GemPosition, GemState, MoveDirection},
-    state::{PickerKind, Row, SettingsModalState, Tab, ThemeTreeRow, BIO_MAX_LEN},
+    state::{BIO_MAX_LEN, PickerKind, Row, SettingsModalState, Tab, ThemeTreeRow},
 };
 
 pub const MODAL_WIDTH: u16 = 96;

@@ -29,11 +29,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         status: status_line(vec![
             ("mode", mode_str, theme::AMBER_GLOW()),
             ("diff", state.difficulty_key().to_string(), theme::SUCCESS()),
-            (
-                "draw",
-                state.draw_count().to_string(),
-                theme::TEXT_BRIGHT(),
-            ),
+            ("draw", state.draw_count().to_string(), theme::TEXT_BRIGHT()),
             ("score", format!("{}/52", state.score()), theme::SUCCESS()),
             ("stock", state.stock.len().to_string(), theme::TEXT_BRIGHT()),
             ("sel", state.selection_label(), theme::TEXT_BRIGHT()),

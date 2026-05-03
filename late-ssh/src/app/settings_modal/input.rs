@@ -1,4 +1,4 @@
-use crate::app::input::{sanitize_paste_markers, MouseButton, MouseEventKind, ParsedInput};
+use crate::app::input::{MouseButton, MouseEventKind, ParsedInput, sanitize_paste_markers};
 use crate::app::state::App;
 
 use super::gem::GemKey;

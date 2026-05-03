@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use late_core::models::profile::{normalize_profile_tags, Profile, ProfileParams};
+use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::user::sanitize_username_input;
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::app::common::theme;
 use crate::app::profile::svc::ProfileService;
 
-use super::data::{filter_countries, filter_timezones, CountryOption};
+use super::data::{CountryOption, filter_countries, filter_timezones};
 use super::gem::GemState;
 
 const USERNAME_MAX_LEN: usize = 12;
