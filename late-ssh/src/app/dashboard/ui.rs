@@ -79,7 +79,6 @@ pub struct DashboardRenderInput<'a> {
     /// Pinned chat messages visible to this user; rendered as a slim amber
     /// strip above the favorites strip. Empty slice = no strip.
     pub pinned_messages: &'a [ChatMessage],
-    pub show_room_showcases: bool,
     pub rooms_snapshot: &'a RoomsSnapshot,
     pub blackjack_snapshots: &'a std::collections::HashMap<uuid::Uuid, BlackjackSnapshot>,
     pub blackjack_prefix_armed: bool,
@@ -142,7 +141,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 
 fn draw_blackjack_and_chat_section(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     let rooms = dashboard_blackjack_rooms(view.rooms_snapshot, view.blackjack_snapshots);
-    let Some(grid_height) = blackjack_grid_height(area).filter(|_| view.show_room_showcases) else {
+    let Some(grid_height) = blackjack_grid_height(area) else {
         draw_chat_section(
             frame,
             area,
@@ -619,9 +618,7 @@ fn line_with_key(
     let label_budget = inner_width.saturating_sub(key_w + 1).max(1);
     let truncated = truncate(label, label_budget);
     let label_w = UnicodeWidthStr::width(truncated.as_str());
-    let pad_w = inner_width
-        .saturating_sub(label_w + key_w)
-        .max(1);
+    let pad_w = inner_width.saturating_sub(label_w + key_w).max(1);
     Line::from(vec![
         Span::styled(truncated, label_style),
         Span::raw(" ".repeat(pad_w)),
@@ -1106,7 +1103,6 @@ mod tests {
                         show_header: true,
                         favorites_strip: None,
                         pinned_messages: &[],
-                        show_room_showcases: true,
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
@@ -1191,7 +1187,6 @@ mod tests {
                         show_header: true,
                         favorites_strip: None,
                         pinned_messages,
-                        show_room_showcases: true,
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
@@ -1395,12 +1390,9 @@ mod tests {
     fn dashboard_dailies_slot_cycles_unfinished_games() {
         let statuses = unfinished_daily_statuses();
 
-        let rendered_zero =
-            render_dashboard_section(100, 9, &[], &statuses, &[], 0).join("\n");
-        let rendered_ten =
-            render_dashboard_section(100, 9, &[], &statuses, &[], 10).join("\n");
-        let rendered_twenty =
-            render_dashboard_section(100, 9, &[], &statuses, &[], 20).join("\n");
+        let rendered_zero = render_dashboard_section(100, 9, &[], &statuses, &[], 0).join("\n");
+        let rendered_ten = render_dashboard_section(100, 9, &[], &statuses, &[], 10).join("\n");
+        let rendered_twenty = render_dashboard_section(100, 9, &[], &statuses, &[], 20).join("\n");
 
         assert!(rendered_zero.contains("Sudoku"));
         assert!(rendered_ten.contains("Nonogram"));
@@ -1414,8 +1406,7 @@ mod tests {
             test_article("Second story", "https://b.example"),
         ];
 
-        let rendered_first =
-            render_dashboard_section(100, 9, &[], &[], &articles, 0).join("\n");
+        let rendered_first = render_dashboard_section(100, 9, &[], &[], &articles, 0).join("\n");
         let rendered_second =
             render_dashboard_section(100, 9, &[], &[], &articles, WIRE_NEWS_CYCLE_SECONDS)
                 .join("\n");
@@ -1435,8 +1426,7 @@ mod tests {
     #[test]
     fn dashboard_grid_width_gate_remains_but_chat_height_gate_is_gone() {
         let too_narrow =
-            render_dashboard_section(BLACKJACK_GRID_MIN_WIDTH - 1, 20, &[], &[], &[], 0)
-                .join("\n");
+            render_dashboard_section(BLACKJACK_GRID_MIN_WIDTH - 1, 20, &[], &[], &[], 0).join("\n");
         let tight_height = render_dashboard_section(
             BLACKJACK_GRID_MIN_WIDTH,
             BLACKJACK_GRID_HEIGHT,
@@ -1486,7 +1476,6 @@ mod tests {
                         show_header: false,
                         favorites_strip: None,
                         pinned_messages: &[],
-                        show_room_showcases: true,
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,
@@ -1575,7 +1564,6 @@ mod tests {
                             (go_room, "#go".to_string(), false, 0),
                         ]),
                         pinned_messages: &[],
-                        show_room_showcases: true,
                         rooms_snapshot: &rooms_snapshot,
                         blackjack_snapshots: &blackjack_snapshots,
                         blackjack_prefix_armed: false,

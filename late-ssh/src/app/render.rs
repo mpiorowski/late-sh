@@ -238,13 +238,6 @@ impl App {
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
         );
-        let show_dashboard_room_showcases = if self.show_settings {
-            self.settings_modal_state
-                .draft()
-                .show_dashboard_room_showcases
-        } else {
-            self.profile_state.profile().show_dashboard_room_showcases
-        };
         let show_games_sidebar = games_sidebar_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_games_sidebar,
@@ -309,7 +302,6 @@ impl App {
             show_header: show_dashboard_header,
             favorites_strip: dashboard_strip_pins.as_deref(),
             pinned_messages: self.chat.pinned_messages(),
-            show_room_showcases: show_dashboard_room_showcases,
             rooms_snapshot: &self.rooms_snapshot,
             blackjack_snapshots: &rooms_blackjack_snapshots,
             blackjack_prefix_armed: self.dashboard_blackjack_prefix_armed,

@@ -66,7 +66,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return enter_last_game_room(app);
     }
 
-    if byte == b'b' && app.profile_state.profile().show_dashboard_room_showcases {
+    if byte == b'b' {
         app.dashboard_blackjack_prefix_armed = true;
         return true;
     }
