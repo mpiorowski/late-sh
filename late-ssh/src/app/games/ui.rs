@@ -606,27 +606,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         );
     }
 
-    push_game_section(&mut lines, "─── Multiplayer ───");
-    lines.push(Line::from(""));
-
-    for (name, desc) in [
-        (
-            "Blackjack",
-            "Live blackjack tables moved to Rooms, with chat and spectators.",
-        ),
-        ("Texas Hold'em", "The ultimate late-night poker table."),
-        (
-            "Bridge",
-            "Classic trick-taking for four. Deep strategy, cozy pace.",
-        ),
-        (
-            "Thousand",
-            "Polish card classic. Bid, meld, and outsmart your rivals.",
-        ),
-    ] {
-        draw_coming_soon_entry(&mut lines, name, desc);
-    }
-
     // Scroll so the selected game stays at the vertical center of the viewport.
     // No scrolling until the selection passes the midpoint.
     let visible = area.height as usize;
@@ -706,24 +685,6 @@ fn draw_game_entry(
             Span::styled((*description).to_string(), entry.description_style),
         ]));
     }
-    lines.push(Line::from(""));
-}
-
-fn draw_coming_soon_entry<'a>(lines: &mut Vec<Line<'a>>, name: &'a str, desc: &'a str) {
-    let padding_len = 16_usize.saturating_sub(name.len() + 4);
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            format!("[ {} ]", name),
-            Style::default().fg(theme::TEXT_MUTED()),
-        ),
-        Span::raw(" ".repeat(padding_len)),
-        Span::styled("Coming Soon", Style::default().fg(theme::TEXT_DIM())),
-    ]));
-    lines.push(Line::from(vec![
-        Span::raw("      "),
-        Span::styled(desc, Style::default().fg(theme::TEXT_MUTED())),
-    ]));
     lines.push(Line::from(""));
 }
 

@@ -348,7 +348,6 @@ fn arcade_help_lines() -> Vec<String> {
         "Games in rotation",
         "  High score: 2048, Tetris",
         "  Daily: Sudoku, Nonograms, Minesweeper, Solitaire",
-        "  Multiplayer: Blackjack (admin-gated)",
         "",
         "Hub controls",
         "  j / k             browse games",
