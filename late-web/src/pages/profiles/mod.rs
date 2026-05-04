@@ -336,10 +336,12 @@ fn contact_href(value: &str) -> String {
     if value.starts_with("http://") || value.starts_with("https://") {
         return value.to_string();
     }
-    if let Some((local, domain)) = value.split_once('@') {
-        if !local.is_empty() && domain.contains('.') && !value.contains(char::is_whitespace) {
-            return format!("mailto:{value}");
-        }
+    if let Some((local, domain)) = value.split_once('@')
+        && !local.is_empty()
+        && domain.contains('.')
+        && !value.contains(char::is_whitespace)
+    {
+        return format!("mailto:{value}");
     }
     String::new()
 }
