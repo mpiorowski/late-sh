@@ -1940,6 +1940,9 @@ impl ChatState {
             if let Some(message) = moderation_server_toast(&event) {
                 banner = Some(Banner::success(&message));
             }
+            if matches!(event, ModerationEvent::RoomRenamed { .. }) {
+                self.request_list();
+            }
         }
         banner
     }

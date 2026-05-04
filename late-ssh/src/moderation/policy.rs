@@ -38,6 +38,7 @@ bitflags! {
         const REVOKE_MOD = 1 << 12;
         const OPEN_MOD_SURFACE = 1 << 13;
         const VIEW_STAFF_INFO = 1 << 14;
+        const RENAME_ROOM = 1 << 15;
     }
 }
 

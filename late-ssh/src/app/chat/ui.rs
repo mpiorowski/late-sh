@@ -30,7 +30,7 @@ const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 fn custom_badge_for_username(username: &str) -> Option<&'static str> {
     match username.trim().to_ascii_lowercase().as_str() {
         "mevanlc" | "yawner" => Some(" 🔧"),
-        "kirii.md" => Some(" 🎨"),
+        "kirii.md" | "kirii.exe" | "kirii.tar" => Some(" 🎨"),
         _ => None,
     }
 }
@@ -391,6 +391,7 @@ fn chat_rows_fingerprint(
     let mut hasher = DefaultHasher::new();
     width.hash(&mut hasher);
     ctx.current_user_id.hash(&mut hasher);
+    theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
     (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
 
@@ -1558,6 +1559,44 @@ mod tests {
     fn effective_chat_scroll_keeps_selected_message_off_bottom_edge() {
         let scroll = effective_chat_scroll(40, 10, Some((29, 31)));
         assert_eq!(scroll, 3);
+    }
+
+    #[test]
+    fn chat_rows_fingerprint_changes_when_theme_changes() {
+        let room_id = Uuid::from_u128(1);
+        let user_id = Uuid::from_u128(2);
+        let message = ChatMessage {
+            id: Uuid::from_u128(3),
+            created: Utc::now(),
+            updated: Utc::now(),
+            pinned: false,
+            reply_to_message_id: None,
+            room_id,
+            user_id,
+            body: "hello".to_string(),
+        };
+        let usernames = HashMap::from([(user_id, "alice".to_string())]);
+        let countries = HashMap::new();
+        let badges = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let message_reactions = HashMap::new();
+
+        let messages = vec![&message];
+        let ctx = ChatRowsContext {
+            current_user_id: user_id,
+            usernames: &usernames,
+            countries: &countries,
+            badges: &badges,
+            bonsai_glyphs: &bonsai_glyphs,
+            message_reactions: &message_reactions,
+        };
+
+        theme::set_current_by_id("late");
+        let late_fingerprint = chat_rows_fingerprint(&messages, &ctx, 80);
+        theme::set_current_by_id("contrast");
+        let contrast_fingerprint = chat_rows_fingerprint(&messages, &ctx, 80);
+
+        assert_ne!(late_fingerprint, contrast_fingerprint);
     }
 
     fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {

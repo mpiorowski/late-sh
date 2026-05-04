@@ -1,7 +1,7 @@
 use ratatui::style::Color;
-use std::cell::Cell;
+use std::{cell::Cell, hash::Hash};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ThemeKind {
     Late = 0,
     Contrast = 1,
@@ -2162,6 +2162,10 @@ pub fn normalize_id(id: &str) -> &'static str {
 
 pub fn set_current_by_id(id: &str) {
     CURRENT_THEME.with(|current| current.set(option_by_id(id).kind));
+}
+
+pub fn current_kind() -> ThemeKind {
+    CURRENT_THEME.with(|current| current.get())
 }
 
 pub fn cycle_id(current_id: &str, forward: bool) -> &'static str {

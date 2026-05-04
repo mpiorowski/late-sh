@@ -15,6 +15,10 @@ pub(crate) enum ModCommand {
     Audit {
         limit: i64,
     },
+    RenameRoom {
+        slug: String,
+        new_slug: String,
+    },
     RoomAction {
         action: RoomModAction,
         slug: String,
@@ -161,6 +165,7 @@ pub(crate) fn parse_mod_command(input: &str) -> Result<ModCommand> {
         }),
         "bans" => parse_bans_mod_command(&rest),
         "audit" => parse_audit_mod_command(&rest),
+        "rename-room" => parse_rename_room_mod_command(&rest),
         "room" => parse_room_mod_command(&rest),
         "server" => parse_server_mod_command(&rest),
         "artboard" => parse_artboard_mod_command(&rest),
@@ -228,6 +233,16 @@ fn parse_audit_mod_command(parts: &[&str]) -> Result<ModCommand> {
     }
     Ok(ModCommand::Audit {
         limit: optional_limit(parts.first().copied())?,
+    })
+}
+
+fn parse_rename_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    if parts.len() != 2 {
+        anyhow::bail!("usage: rename-room #old #new");
+    }
+    Ok(ModCommand::RenameRoom {
+        slug: required_slug(parts.first().copied(), "usage: rename-room #old #new")?,
+        new_slug: required_slug(parts.get(1).copied(), "usage: rename-room #old #new")?,
     })
 }
 
@@ -462,6 +477,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "user @name",
             "bans [server|artboard|room #slug] [limit]",
             "audit [limit]",
+            "rename-room #old #new",
             "room kick #slug @name [reason...]",
             "room ban #slug @name [duration] [reason...]",
             "room unban #slug @name",
@@ -506,6 +522,11 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "audit [limit]",
             "Lists recent moderation audit log entries.",
             "limit: optional positive number; capped at 100; default 25.",
+        ],
+        "rename-room" => &[
+            "rename-room #old #new",
+            "Renames a non-DM room by changing its #slug.",
+            "Admin only. #general is reserved and cannot be renamed.",
         ],
         "room" => &[
             "room <kick|ban|unban> #slug @name",
@@ -686,6 +707,26 @@ mod tests {
                 reason: "cleanup".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn parses_rename_room_command() {
+        assert_eq!(
+            parse_mod_command("rename-room #Old_Room #New.Room").unwrap(),
+            ModCommand::RenameRoom {
+                slug: "Old_Room".to_string(),
+                new_slug: "New.Room".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("rename-room #old #new").unwrap(),
+            ModCommand::RenameRoom {
+                slug: "old".to_string(),
+                new_slug: "new".to_string(),
+            }
+        );
+        assert!(parse_mod_command("rename-room #old").is_err());
+        assert!(parse_mod_command("rename-room #old #new extra").is_err());
     }
 
     #[test]

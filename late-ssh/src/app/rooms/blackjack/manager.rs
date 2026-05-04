@@ -10,8 +10,11 @@ use uuid::Uuid;
 use crate::app::{
     games::chips::svc::ChipService,
     rooms::{
-        backend::{ActiveRoomBackend, DirectoryHints, DirectoryMeta, RoomGameManager},
+        backend::{
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager,
+        },
         blackjack::{
+            create_modal::BlackjackCreateModal,
             player::BlackjackPlayerDirectory,
             settings::BlackjackTableSettings,
             state::{BlackjackSnapshot, Phase, State},
@@ -111,6 +114,10 @@ impl RoomGameManager for BlackjackTableManager {
 
     fn default_settings(&self) -> serde_json::Value {
         BlackjackTableSettings::default().to_json()
+    }
+
+    fn open_create_modal(&self) -> Box<dyn CreateRoomModal> {
+        Box::new(BlackjackCreateModal::new(self.default_room_name()))
     }
 
     fn directory_meta(&self, room: &RoomListItem) -> DirectoryMeta {
