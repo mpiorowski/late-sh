@@ -354,6 +354,20 @@ impl App {
         };
         let showcase_unread_count = self.chat.showcase.unread_count();
         let showcase_composing = self.chat.showcase.composing();
+        let web_base_url = self
+            .connect_url
+            .rsplit_once('/')
+            .map_or(&*self.connect_url, |p| p.0);
+        let work_view = chat::work::ui::WorkListView {
+            items: self.chat.work.all_items(),
+            selected_index: self.chat.work.selected_index(),
+            current_user_id: self.user_id,
+            is_admin: self.chat.work.is_admin(),
+            marker_read_at: self.chat.work.marker_read_at(),
+            profile_base_url: web_base_url,
+        };
+        let work_unread_count = self.chat.work.unread_count();
+        let work_composing = self.chat.work.composing();
         let chat_view = chat::ui::ChatRenderInput {
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),
@@ -394,6 +408,11 @@ impl App {
             showcase_view,
             showcase_state: Some(&self.chat.showcase),
             showcase_composing,
+            work_selected: self.chat.work_selected,
+            work_unread_count,
+            work_view,
+            work_state: Some(&self.chat.work),
+            work_composing,
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);

@@ -95,6 +95,16 @@ pub fn selected_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Opti
     })
 }
 
+pub fn selected_chat_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
+    selected_icon(state, catalog).map(|icon| {
+        if state.tab == IconPickerTab::Kaomoji {
+            format!("`{icon}`")
+        } else {
+            icon
+        }
+    })
+}
+
 pub fn click_list(state: &mut IconPickerState, catalog: &IconCatalogData, x: u16, y: u16) -> bool {
     let list = state.list_inner.get();
     if list.height == 0 || y < list.y || y >= list.y + list.height || x < list.x {
@@ -516,6 +526,34 @@ mod tests {
         assert_eq!(entry_at_selectable(&sections, 2).unwrap().name, "b0");
         assert_eq!(entry_at_selectable(&sections, 4).unwrap().name, "b2");
         assert!(entry_at_selectable(&sections, 5).is_none());
+    }
+
+    #[test]
+    fn selected_chat_icon_wraps_kaomoji_as_inline_code() {
+        let catalog = IconCatalogData::load();
+        let mut state = IconPickerState::default();
+        state.set_tab(IconPickerTab::Kaomoji);
+        for ch in "happy smile".chars() {
+            state.search_insert_char(ch);
+        }
+
+        assert_eq!(
+            selected_icon(&state, &catalog).as_deref(),
+            Some("(* ^ ω ^)")
+        );
+        assert_eq!(
+            selected_chat_icon(&state, &catalog).as_deref(),
+            Some("`(* ^ ω ^)`")
+        );
+    }
+
+    #[test]
+    fn selected_chat_icon_leaves_non_kaomoji_raw() {
+        let catalog = IconCatalogData::load();
+        let state = IconPickerState::default();
+
+        assert_eq!(selected_icon(&state, &catalog).as_deref(), Some("👍"));
+        assert_eq!(selected_chat_icon(&state, &catalog).as_deref(), Some("👍"));
     }
 
     #[test]

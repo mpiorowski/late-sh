@@ -325,14 +325,10 @@ fn draw_blackjack_grid(frame: &mut Frame, area: Rect, view: BlackjackGridView<'_
         }
     }
 
-    if let Some(top_area) = top_rule_area {
-        let top_junctions = [
-            (cols[0].x.saturating_sub(top_area.x) as usize, '┌'),
-            (cols[2].x.saturating_sub(top_area.x) as usize, '┬'),
-            (cols[4].x.saturating_sub(top_area.x) as usize, '┬'),
-            (cols[6].x.saturating_sub(top_area.x) as usize, '┐'),
-        ];
-        draw_blackjack_rule(frame, top_area, &top_junctions, view.top_rule_pinned);
+    if let Some(top_area) = top_rule_area
+        && let Some(msg) = view.top_rule_pinned
+    {
+        draw_pin_strip(frame, top_area, msg, view.prefix_armed);
     }
 
     let bottom_junctions = [
@@ -346,6 +342,7 @@ fn draw_blackjack_grid(frame: &mut Frame, area: Rect, view: BlackjackGridView<'_
         bottom_rule_area,
         &bottom_junctions,
         view.bottom_rule_pinned,
+        view.prefix_armed,
     );
 }
 
@@ -358,6 +355,7 @@ fn draw_blackjack_rule(
     area: Rect,
     junctions: &[(usize, char)],
     newest_pinned: Option<&ChatMessage>,
+    prefix_armed: bool,
 ) {
     let total_w = area.width as usize;
     if total_w == 0 {
@@ -399,20 +397,25 @@ fn draw_blackjack_rule(
     let chrome_w = outer_pad * 2;
     let min_pad = 3usize;
     let min_body = 3usize;
-    let min_required = min_pad * 2 + chrome_w + min_body;
+    let key_tag = dashboard_key_tag(3, prefix_armed, true);
+    let key_text = key_tag.content.as_ref();
+    let key_w = UnicodeWidthStr::width(key_text);
+    let key_gap = 1usize;
+    let min_required = min_pad * 2 + chrome_w + min_body + key_gap + key_w;
     if total_w < min_required {
         render_plain_rule(frame);
         return;
     }
 
-    let max_body = total_w - min_pad * 2 - chrome_w;
+    let max_body = total_w - min_pad * 2 - chrome_w - key_gap - key_w;
     let body = truncate(first_line, max_body);
     let body_w = UnicodeWidthStr::width(body.as_str());
     let middle_w = chrome_w + body_w;
-    let left_rule_w = (total_w - middle_w) / 2;
+    let left_rule_w = (total_w - middle_w - key_gap - key_w) / 2;
+    let right_rule_w = total_w - left_rule_w - middle_w - key_gap - key_w;
 
     let left: String = (0..left_rule_w).map(make_rule_char).collect();
-    let right: String = (left_rule_w + middle_w..total_w)
+    let right: String = (left_rule_w + middle_w..left_rule_w + middle_w + right_rule_w)
         .map(make_rule_char)
         .collect();
     let outer_space: String = " ".repeat(outer_pad);
@@ -429,6 +432,74 @@ fn draw_blackjack_rule(
             ),
             Span::raw(outer_space),
             Span::styled(right, border_style),
+            Span::raw(" ".repeat(key_gap)),
+            key_tag,
+        ])),
+        area,
+    );
+}
+
+/// Renders the pinned-message strip that floats above the grid as its own
+/// detached element. Plain `─` rule chars (no column junctions) and an amber
+/// tint mark it as a pin rather than box chrome.
+fn draw_pin_strip(frame: &mut Frame, area: Rect, msg: &ChatMessage, prefix_armed: bool) {
+    let total_w = area.width as usize;
+    if total_w == 0 {
+        return;
+    }
+
+    let rule_style = Style::default().fg(theme::AMBER_DIM());
+
+    let render_plain_rule = |frame: &mut Frame| {
+        let rule: String = "─".repeat(total_w);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(rule, rule_style))),
+            area,
+        );
+    };
+
+    let first_line = msg.body.split('\n').next().unwrap_or("").trim();
+    if first_line.is_empty() {
+        render_plain_rule(frame);
+        return;
+    }
+
+    let outer_pad = 2usize;
+    let chrome_w = outer_pad * 2;
+    let min_pad = 3usize;
+    let min_body = 3usize;
+    let key_tag = dashboard_key_tag(3, prefix_armed, true);
+    let key_text = key_tag.content.as_ref();
+    let key_w = UnicodeWidthStr::width(key_text);
+    let key_gap = 1usize;
+    let min_required = min_pad * 2 + chrome_w + min_body + key_gap + key_w;
+    if total_w < min_required {
+        render_plain_rule(frame);
+        return;
+    }
+
+    let max_body = total_w - min_pad * 2 - chrome_w - key_gap - key_w;
+    let body = truncate(first_line, max_body);
+    let body_w = UnicodeWidthStr::width(body.as_str());
+    let middle_w = chrome_w + body_w;
+    let left_rule_w = (total_w - middle_w - key_gap - key_w) / 2;
+    let right_rule_w = total_w - left_rule_w - middle_w - key_gap - key_w;
+    let outer_space: String = " ".repeat(outer_pad);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("─".repeat(left_rule_w), rule_style),
+            Span::raw(outer_space.clone()),
+            Span::styled(
+                body,
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(outer_space),
+            Span::styled("─".repeat(right_rule_w), rule_style),
+            Span::raw(" ".repeat(key_gap)),
+            key_tag,
         ])),
         area,
     );
@@ -571,6 +642,7 @@ fn dashboard_key_tag(slot: usize, prefix_armed: bool, enabled: bool) -> Span<'st
         0 => '1',
         1 => '2',
         2 => '3',
+        3 => '4',
         _ => '?',
     };
     let style = if prefix_armed {
@@ -1312,7 +1384,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_pinned_embeds_in_top_rule_when_roomy() {
+    fn dashboard_pinned_floats_above_grid_when_roomy() {
         let pinned = vec![test_pinned_message("Pin this above the grid")];
         let lines = render_dashboard_section(100, 10, &pinned, &[], &[], 0);
         let pinned_y = lines
@@ -1324,10 +1396,13 @@ mod tests {
             .position(|line| line.contains("loading…"))
             .expect("grid row");
 
-        // Pinned msg sits in the top rule, above the slot text rows.
         assert!(pinned_y < grid_y);
-        // The top rule carries `┬` junctions where columns split.
-        assert!(lines[pinned_y].contains('┬'));
+        assert!(lines[pinned_y].contains("[b+4]"));
+        // Pin strip is detached from the grid: plain `─` rule, no column junctions.
+        assert!(lines[pinned_y].contains('─'));
+        assert!(!lines[pinned_y].contains('┬'));
+        assert!(!lines[pinned_y].contains('┌'));
+        assert!(!lines[pinned_y].contains('┐'));
     }
 
     #[test]
@@ -1344,6 +1419,7 @@ mod tests {
             .expect("grid row");
 
         assert!(pinned_y > grid_y);
+        assert!(lines[pinned_y].contains("[b+4]"));
     }
 
     #[test]

@@ -135,6 +135,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
         showcase_service: state.showcase_service.clone(),
+        work_service: state.work_service.clone(),
         profile_service: state.profile_service.clone(),
         twenty_forty_eight_service: state.twenty_forty_eight_service.clone(),
         initial_2048_game,

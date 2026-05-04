@@ -5,6 +5,7 @@ use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
+use crate::app::chat::work::svc::WorkService;
 use crate::app::games::chips::svc::ChipService;
 use crate::app::games::leaderboard::svc::LeaderboardService;
 use crate::app::games::minesweeper::svc::MinesweeperService;
@@ -67,6 +68,7 @@ pub struct State {
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub showcase_service: ShowcaseService,
+    pub work_service: WorkService,
     pub profile_service: ProfileService,
     pub twenty_forty_eight_service: TwentyFortyEightService,
     pub tetris_service: TetrisService,
