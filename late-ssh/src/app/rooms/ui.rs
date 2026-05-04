@@ -10,8 +10,7 @@ use crate::app::{
     chat::ui::EmbeddedRoomChatView,
     common::theme,
     rooms::{
-        backend::{ActiveRoomBackend, GameDrawCtx},
-        blackjack::settings::{PACE_OPTIONS, STAKE_OPTIONS},
+        backend::{ActiveRoomBackend, CreateRoomFlow, GameDrawCtx},
         filter::RoomsFilter,
         registry::RoomGameRegistry,
         svc::{RoomListItem, RoomsSnapshot},
@@ -21,12 +20,7 @@ use crate::app::{
 const NARROW_WIDTH: u16 = 80;
 
 pub struct RoomsPageView<'a> {
-    pub add_form_open: bool,
-    pub display_name: &'a str,
-    pub create_kind_index: usize,
-    pub create_focus_index: usize,
-    pub create_pace_index: usize,
-    pub create_stake_index: usize,
+    pub create_flow: Option<&'a CreateRoomFlow>,
     pub snapshot: &'a RoomsSnapshot,
     pub selected_index: usize,
     pub active_room: Option<&'a RoomListItem>,
@@ -86,8 +80,13 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_
 
     draw_footer(frame, layout[3], &view);
 
-    if view.add_form_open {
-        draw_create_room_modal(frame, area, &view);
+    if let Some(flow) = view.create_flow {
+        match flow {
+            CreateRoomFlow::Picker { kind_index } => {
+                draw_create_picker_modal(frame, area, &view, *kind_index);
+            }
+            CreateRoomFlow::Game { modal, .. } => modal.draw(frame, area),
+        }
     }
 }
 
@@ -165,20 +164,25 @@ fn draw_filter_bar(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-const CREATE_MODAL_WIDTH: u16 = 64;
-const CREATE_MODAL_HEIGHT: u16 = 16;
-const CREATE_LABEL_WIDTH: usize = 14;
+const PICKER_MODAL_WIDTH: u16 = 44;
 
-fn draw_create_room_modal(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
+fn draw_create_picker_modal(
+    frame: &mut Frame,
+    area: Rect,
+    view: &RoomsPageView<'_>,
+    kind_index: usize,
+) {
+    let kinds = view.room_game_registry.ordered_kinds();
+    let height = (kinds.len() as u16).saturating_add(5).max(7);
     let modal_area = centered_rect(
         area,
-        CREATE_MODAL_WIDTH.min(area.width),
-        CREATE_MODAL_HEIGHT.min(area.height),
+        PICKER_MODAL_WIDTH.min(area.width),
+        height.min(area.height),
     );
     frame.render_widget(Clear, modal_area);
 
     let block = Block::default()
-        .title(" New Game Room ")
+        .title(" New Room ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -189,223 +193,34 @@ fn draw_create_room_modal(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
-    let selected_kind = selected_create_kind(view);
-    let width = inner.width as usize;
-    if selected_kind == crate::app::rooms::svc::GameKind::Blackjack {
-        let layout = Layout::vertical([
-            Constraint::Length(1), // breathing
-            Constraint::Length(1), // section: Table
-            Constraint::Length(1), // breathing
-            Constraint::Length(1), // Name row
-            Constraint::Length(1), // Game row
-            Constraint::Length(1), // breathing
-            Constraint::Length(1), // section: Game
-            Constraint::Length(1), // breathing
-            Constraint::Length(1), // Pace row
-            Constraint::Length(1), // Stake row
-            Constraint::Min(0),    // flex spacer
-            Constraint::Length(1), // footer
-        ])
-        .split(inner);
-
-        frame.render_widget(Paragraph::new(create_section_heading("Table")), layout[1]);
-        frame.render_widget(Paragraph::new(create_name_row(view, width)), layout[3]);
-        frame.render_widget(Paragraph::new(create_game_kind_row(view, width)), layout[4]);
-
-        frame.render_widget(Paragraph::new(create_section_heading("Options")), layout[6]);
-        frame.render_widget(
-            Paragraph::new(create_option_row(
-                view.create_focus_index == 2,
-                "Pace",
-                PACE_OPTIONS
-                    .iter()
-                    .map(|pace| pace.label().to_string())
-                    .collect::<Vec<_>>(),
-                view.create_pace_index,
-                width,
-            )),
-            layout[8],
-        );
-        frame.render_widget(
-            Paragraph::new(create_option_row(
-                view.create_focus_index == 3,
-                "Stake",
-                STAKE_OPTIONS
-                    .iter()
-                    .map(|stake| stake.to_string())
-                    .collect::<Vec<_>>(),
-                view.create_stake_index,
-                width,
-            )),
-            layout[9],
-        );
-
-        frame.render_widget(Paragraph::new(create_footer_line()), layout[11]);
-    } else {
-        let layout = Layout::vertical([
-            Constraint::Length(1), // breathing
-            Constraint::Length(1), // section: Table
-            Constraint::Length(1), // breathing
-            Constraint::Length(1), // Name row
-            Constraint::Length(1), // Game row
-            Constraint::Min(0),    // flex spacer
-            Constraint::Length(1), // footer
-        ])
-        .split(inner);
-
-        frame.render_widget(Paragraph::new(create_section_heading("Table")), layout[1]);
-        frame.render_widget(Paragraph::new(create_name_row(view, width)), layout[3]);
-        frame.render_widget(Paragraph::new(create_game_kind_row(view, width)), layout[4]);
-        frame.render_widget(Paragraph::new(create_footer_line()), layout[6]);
-    }
-}
-
-fn create_section_heading(title: &str) -> Line<'static> {
-    let dim = Style::default().fg(theme::BORDER());
-    let accent = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-    Line::from(vec![
-        Span::styled("  ── ", dim),
-        Span::styled(title.to_string(), accent),
-        Span::styled(" ──", dim),
-    ])
-}
-
-fn create_name_row(view: &RoomsPageView<'_>, width: usize) -> Line<'static> {
-    let focused = view.create_focus_index == 0;
-    let (value_text, value_color) = if focused {
-        (format!("{}█", view.display_name), theme::AMBER())
-    } else if view.display_name.trim().is_empty() {
-        ("not set".to_string(), theme::TEXT_FAINT())
-    } else {
-        (view.display_name.to_string(), theme::TEXT_BRIGHT())
-    };
-
-    let (prefix_style, label_style, mut value_style, trailing_style) = row_styles(focused);
-    value_style = value_style.fg(value_color);
-
-    let marker = if focused { "›" } else { " " };
-    let prefix = format!(" {marker} ");
-    let label_text = format!("{:<width$}", "Name", width = CREATE_LABEL_WIDTH);
-    let used = prefix.chars().count() + label_text.chars().count() + value_text.chars().count();
-    let padding = width.saturating_sub(used);
-
-    Line::from(vec![
-        Span::styled(prefix, prefix_style),
-        Span::styled(label_text, label_style),
-        Span::styled(value_text, value_style),
-        Span::styled(" ".repeat(padding), trailing_style),
-    ])
-}
-
-fn create_game_kind_row(view: &RoomsPageView<'_>, width: usize) -> Line<'static> {
-    let options = view
-        .room_game_registry
-        .ordered_kinds()
-        .iter()
-        .map(|kind| view.room_game_registry.label(*kind).to_string())
-        .collect::<Vec<_>>();
-    create_option_row(
-        view.create_focus_index == 1,
-        "Game",
-        options,
-        view.create_kind_index,
-        width,
-    )
-}
-
-fn selected_create_kind(view: &RoomsPageView<'_>) -> crate::app::rooms::svc::GameKind {
-    view.room_game_registry
-        .ordered_kinds()
-        .get(view.create_kind_index)
-        .copied()
-        .unwrap_or(crate::app::rooms::svc::GameKind::Blackjack)
-}
-
-fn create_option_row(
-    focused: bool,
-    label: &str,
-    options: Vec<String>,
-    selected_index: usize,
-    width: usize,
-) -> Line<'static> {
-    let (prefix_style, label_style, _, trailing_style) = row_styles(focused);
-
-    let marker = if focused { "›" } else { " " };
-    let prefix = format!(" {marker} ");
-    let label_text = format!("{:<width$}", label, width = CREATE_LABEL_WIDTH);
-
-    let mut spans = vec![
-        Span::styled(prefix.clone(), prefix_style),
-        Span::styled(label_text.clone(), label_style),
-    ];
-    let mut used = prefix.chars().count() + label_text.chars().count();
-
-    for (index, option) in options.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled("  ", trailing_style));
-            used += 2;
-        }
-        let pill = format!(" {} ", option);
-        used += pill.chars().count();
-        let selected = index == selected_index;
+    let mut lines: Vec<Line> = Vec::with_capacity(kinds.len() + 2);
+    for (index, kind) in kinds.iter().enumerate() {
+        let selected = index == kind_index;
         let style = if selected {
-            Style::default()
-                .fg(theme::BG_SELECTION())
-                .bg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else if focused {
-            Style::default()
-                .fg(theme::TEXT_DIM())
-                .bg(theme::BG_SELECTION())
-        } else {
-            Style::default().fg(theme::TEXT_DIM())
-        };
-        spans.push(Span::styled(pill, style));
-    }
-
-    let padding = width.saturating_sub(used);
-    spans.push(Span::styled(" ".repeat(padding), trailing_style));
-    Line::from(spans)
-}
-
-fn row_styles(focused: bool) -> (Style, Style, Style, Style) {
-    if focused {
-        (
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD),
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD),
-            Style::default().bg(theme::BG_SELECTION()),
-            Style::default().bg(theme::BG_SELECTION()),
-        )
-    } else {
-        (
-            Style::default().fg(theme::TEXT_FAINT()),
-            Style::default().fg(theme::TEXT_DIM()),
-            Style::default(),
-            Style::default(),
-        )
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let pointer = if selected { "› " } else { "  " };
+        lines.push(Line::from(vec![
+            Span::styled(pointer, Style::default().fg(theme::AMBER())),
+            Span::styled(view.room_game_registry.label(*kind), style),
+        ]));
     }
-}
-
-fn create_footer_line() -> Line<'static> {
-    Line::from(vec![
-        Span::raw("  "),
-        Span::styled("Tab", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" field  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" select  ", Style::default().fg(theme::TEXT_DIM())),
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("↑/↓", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" create  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(" open  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
-    ])
+    ]));
+
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
@@ -440,13 +255,11 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
     lines.push(divider_line(inner.width));
 
     let visible = (inner.height as usize).saturating_sub(2);
-    let mut real_index: usize = 0;
 
-    for row in rows.iter().take(visible) {
+    for (real_index, row) in rows.iter().take(visible).enumerate() {
         let Row::Real(room) = row;
         let selected = real_index == view.selected_index;
         lines.push(real_row_wide(room, selected, view));
-        real_index += 1;
     }
 
     frame.render_widget(Paragraph::new(lines), inner);
@@ -534,10 +347,9 @@ fn draw_room_list_narrow(
     }
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut real_index: usize = 0;
     let visible_lines = inner.height as usize;
 
-    for row in rows {
+    for (real_index, row) in rows.iter().enumerate() {
         if lines.len() + 2 > visible_lines {
             break;
         }
@@ -546,7 +358,6 @@ fn draw_room_list_narrow(
         let (a, b) = real_card_narrow(room, selected, view);
         lines.push(a);
         lines.push(b);
-        real_index += 1;
     }
 
     frame.render_widget(Paragraph::new(lines), inner);

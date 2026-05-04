@@ -89,34 +89,35 @@ fn draw_board(frame: &mut Frame, area: Rect, state: &State) {
 
 fn draw_side(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<Uuid, String>) {
     let snapshot = state.snapshot();
-    let mut lines = Vec::new();
-    lines.push(Line::from(status_text(state)));
-    lines.push(Line::raw(""));
-    lines.push(player_line("X", snapshot.seats[0], usernames));
-    lines.push(player_line("O", snapshot.seats[1], usernames));
-    lines.push(Line::raw(""));
-    lines.push(Line::from(vec![
-        Span::styled("1-9", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" place direct", Style::default().fg(theme::TEXT_DIM())),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Space/Enter", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" place cursor", Style::default().fg(theme::TEXT_DIM())),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("w/a/d/x", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" move cursor", Style::default().fg(theme::TEXT_DIM())),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("s", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" sit  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("l", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" leave", Style::default().fg(theme::TEXT_DIM())),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("n", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" new round", Style::default().fg(theme::TEXT_DIM())),
-    ]));
+    let lines = vec![
+        Line::from(status_text(state)),
+        Line::raw(""),
+        player_line("X", snapshot.seats[0], usernames),
+        player_line("O", snapshot.seats[1], usernames),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("1-9", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" place direct", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        Line::from(vec![
+            Span::styled("Space/Enter", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" place cursor", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        Line::from(vec![
+            Span::styled("w/a/d/x", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" move cursor", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        Line::from(vec![
+            Span::styled("s", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" sit  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("l", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" leave", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        Line::from(vec![
+            Span::styled("n", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" new round", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+    ];
     frame.render_widget(Paragraph::new(lines), area);
 }
 

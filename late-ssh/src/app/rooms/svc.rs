@@ -172,7 +172,14 @@ impl RoomsService {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc
-                .create_game_room(user_id, game_kind, slug_prefix, label, &display_name, settings)
+                .create_game_room(
+                    user_id,
+                    game_kind,
+                    slug_prefix,
+                    label,
+                    &display_name,
+                    settings,
+                )
                 .await
             {
                 Ok(room) => {

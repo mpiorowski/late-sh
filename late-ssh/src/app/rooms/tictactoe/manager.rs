@@ -7,9 +7,10 @@ use late_core::MutexRecover;
 use uuid::Uuid;
 
 use crate::app::rooms::{
-    backend::{ActiveRoomBackend, DirectoryHints, DirectoryMeta, RoomGameManager},
+    backend::{ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager},
     svc::{GameKind, RoomListItem},
     tictactoe::{
+        create_modal::TicTacToeCreateModal,
         state::{State, Winner},
         svc::TicTacToeService,
     },
@@ -61,6 +62,10 @@ impl RoomGameManager for TicTacToeTableManager {
 
     fn default_settings(&self) -> serde_json::Value {
         serde_json::json!({})
+    }
+
+    fn open_create_modal(&self) -> Box<dyn CreateRoomModal> {
+        Box::new(TicTacToeCreateModal::new(self.default_room_name()))
     }
 
     fn directory_meta(&self, _room: &RoomListItem) -> DirectoryMeta {
