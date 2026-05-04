@@ -1,9 +1,9 @@
 //! Wire protocol for the bastion ⇄ late-ssh `/tunnel` WebSocket.
 //!
-//! Per `devdocs/LATE-CONNECTION-BASTION.md` §4: binary frames carry opaque
-//! PTY bytes (no inspection); text frames carry a small JSON control
-//! vocabulary. Today the only control variant is `resize`, used to forward
-//! SSH `window-change` requests.
+//! Per `devdocs/LATE-CONNECTION-BASTION.md` §4 and
+//! `devdocs/EXEC-TUNNELING.md`: binary frames carry opaque PTY bytes once
+//! the shell is running; text frames carry a small JSON control vocabulary
+//! for ordered setup, exec, and resize events.
 //!
 //! Defined here (rather than in `late-ssh` or `late-bastion`) so both ends
 //! stay in lockstep on the wire format.
@@ -36,10 +36,27 @@ pub const TUNNEL_CLOSE_ABNORMAL: u16 = 1006;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "t")]
 pub enum ControlFrame {
+    /// PTY metadata captured from SSH `pty-req`. Sent before `shell_start`.
+    #[serde(rename = "pty")]
+    Pty { term: String, cols: u16, rows: u16 },
+    /// Starts the interactive shell/TUI phase. Binary frames become valid after this.
+    #[serde(rename = "shell_start")]
+    ShellStart,
     /// Forward of SSH `window-change` (RFC 4254 §6.7). Bastion sends this
     /// whenever the user-SSH client's terminal is resized.
     #[serde(rename = "resize")]
     Resize { cols: u16, rows: u16 },
+    /// Bounded UTF-8 exec request. MVP supports one pre-shell exec with no stdin.
+    #[serde(rename = "exec_request")]
+    ExecRequest { id: String, command: String },
+    /// Bounded UTF-8 exec response. Backend sends this to bastion.
+    #[serde(rename = "exec_response")]
+    ExecResponse {
+        id: String,
+        stdout: String,
+        stderr: String,
+        exit_status: u32,
+    },
 }
 
 /// In-process event flowing from "russh handler dispatched a message"
@@ -112,6 +129,46 @@ mod tests {
         assert!(json.contains(r#""t":"resize""#), "actual: {}", json);
         assert!(json.contains(r#""cols":80"#), "actual: {}", json);
         assert!(json.contains(r#""rows":24"#), "actual: {}", json);
+    }
+
+    #[test]
+    fn pty_round_trips() {
+        let frame = ControlFrame::Pty {
+            term: "xterm-256color".to_string(),
+            cols: 120,
+            rows: 40,
+        };
+        let parsed = ControlFrame::from_json(&frame.to_json().unwrap()).unwrap();
+        assert_eq!(parsed, frame);
+    }
+
+    #[test]
+    fn shell_start_round_trips() {
+        let frame = ControlFrame::ShellStart;
+        let parsed = ControlFrame::from_json(&frame.to_json().unwrap()).unwrap();
+        assert_eq!(parsed, frame);
+    }
+
+    #[test]
+    fn exec_request_round_trips() {
+        let frame = ControlFrame::ExecRequest {
+            id: "exec-1".to_string(),
+            command: "late-cli-token-v1".to_string(),
+        };
+        let parsed = ControlFrame::from_json(&frame.to_json().unwrap()).unwrap();
+        assert_eq!(parsed, frame);
+    }
+
+    #[test]
+    fn exec_response_round_trips() {
+        let frame = ControlFrame::ExecResponse {
+            id: "exec-1".to_string(),
+            stdout: "{\"session_token\":\"tok\"}".to_string(),
+            stderr: String::new(),
+            exit_status: 0,
+        };
+        let parsed = ControlFrame::from_json(&frame.to_json().unwrap()).unwrap();
+        assert_eq!(parsed, frame);
     }
 
     #[test]

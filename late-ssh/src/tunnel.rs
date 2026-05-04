@@ -58,8 +58,8 @@ const WS_OUT_BUFFER: usize = 8;
 // backend reference the same constants. Re-exported here so existing
 // imports (`late_ssh::tunnel::HEADER_*`) keep working.
 pub use late_core::tunnel_protocol::{
-    HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT_REASON, HEADER_ROWS,
-    HEADER_SECRET, HEADER_SESSION_ID, HEADER_TERM, HEADER_USERNAME, HEADER_VIA,
+    HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT_REASON, HEADER_SECRET, HEADER_SESSION_ID,
+    HEADER_USERNAME, HEADER_VIA,
 };
 
 /// Validated handshake. Phase 2c will hand this to the session bootstrap.
@@ -68,9 +68,6 @@ pub struct TunnelHandshake {
     pub fingerprint: String,
     pub username: String,
     pub peer_ip: IpAddr,
-    pub term: String,
-    pub cols: u16,
-    pub rows: u16,
     pub reconnect_reason: Option<u16>,
     pub session_id: Option<String>,
 }
@@ -134,18 +131,6 @@ pub fn validate_handshake(
         .ok_or(HandshakeReject::BadHeader(HEADER_PEER_IP))?
         .parse()
         .map_err(|_| HandshakeReject::BadHeader(HEADER_PEER_IP))?;
-    let term = header_str(headers, HEADER_TERM)
-        .ok_or(HandshakeReject::BadHeader(HEADER_TERM))?
-        .to_string();
-    let cols: u16 = header_str(headers, HEADER_COLS)
-        .ok_or(HandshakeReject::BadHeader(HEADER_COLS))?
-        .parse()
-        .map_err(|_| HandshakeReject::BadHeader(HEADER_COLS))?;
-    let rows: u16 = header_str(headers, HEADER_ROWS)
-        .ok_or(HandshakeReject::BadHeader(HEADER_ROWS))?
-        .parse()
-        .map_err(|_| HandshakeReject::BadHeader(HEADER_ROWS))?;
-
     let reconnect_reason = header_str(headers, HEADER_RECONNECT_REASON)
         .map(str::parse::<u16>)
         .transpose()
@@ -156,9 +141,6 @@ pub fn validate_handshake(
         fingerprint,
         username,
         peer_ip: peer_ip_asserted,
-        term,
-        cols,
-        rows,
         reconnect_reason,
         session_id,
     })
@@ -484,9 +466,6 @@ async fn tunnel_handler(
         asserted_ip = %handshake.peer_ip,
         username = %user.username,
         fingerprint = %handshake.fingerprint,
-        term = %handshake.term,
-        cols = handshake.cols,
-        rows = handshake.rows,
         reconnect_reason = ?handshake.reconnect_reason,
         session_id = ?handshake.session_id,
         is_new_user,
@@ -508,6 +487,150 @@ async fn tunnel_handler(
     })
 }
 
+#[derive(Debug, Clone)]
+struct TunnelPty {
+    term: String,
+    cols: u16,
+    rows: u16,
+}
+
+struct TunnelShell {
+    app: Arc<TokioMutex<crate::app::state::App>>,
+    input_tx: mpsc::Sender<SshInputEvent>,
+    signal: Arc<RenderSignal>,
+    render: tokio::task::JoinHandle<()>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_tunnel_shell(
+    state: &State,
+    user: User,
+    is_new_user: bool,
+    pty: TunnelPty,
+    session_token: String,
+    session_rx: mpsc::Receiver<crate::session::SessionMessage>,
+    reconnect_reason: Option<u16>,
+    out_tx: mpsc::Sender<Message>,
+    frame_drop_log_every: u64,
+) -> Option<TunnelShell> {
+    tracing::debug!(
+        term = %pty.term,
+        cols = pty.cols,
+        rows = pty.rows,
+        "tunnel: shell_start accepted"
+    );
+
+    let (input_tx, input_rx) = mpsc::channel::<SshInputEvent>(INPUT_QUEUE_CAP);
+    let session_config = build_session_config(
+        state,
+        SessionBootstrapInputs {
+            user,
+            is_new_user,
+            cols: pty.cols,
+            rows: pty.rows,
+            session_token,
+            session_rx: Some(session_rx),
+            activity_feed_rx: Some(state.activity_feed.subscribe()),
+            supports_reconnect_on_drain: true,
+            reconnect_reason,
+        },
+    )
+    .await;
+
+    let app = match crate::app::state::App::new(session_config) {
+        Ok(app) => Arc::new(TokioMutex::new(app)),
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to initialize tunnel app");
+            return None;
+        }
+    };
+
+    // Initial alt-screen enter, mirroring shell_request's pre-loop write.
+    let _ = out_tx
+        .send(Message::Binary(
+            crate::app::state::App::enter_alt_screen().into(),
+        ))
+        .await;
+
+    let signal = Arc::new(RenderSignal::new());
+    let render = tokio::spawn(run_session(
+        Arc::clone(&app),
+        input_rx,
+        WsFrameSink::new(out_tx),
+        frame_drop_log_every,
+        Arc::clone(&signal),
+    ));
+
+    if let Err(err) =
+        signal
+            .dirty
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+    {
+        let _ = err;
+    }
+    signal.notify.notify_one();
+
+    Some(TunnelShell {
+        app,
+        input_tx,
+        signal,
+        render,
+    })
+}
+
+async fn queue_input(shell: &TunnelShell, event: SshInputEvent) -> bool {
+    match shell.input_tx.try_reserve() {
+        Ok(permit) => {
+            permit.send(event);
+            shell.signal.dirty.store(true, Ordering::Release);
+            shell.signal.notify.notify_one();
+            true
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            tracing::warn!(
+                queue_cap = INPUT_QUEUE_CAP,
+                "tunnel input queue full; dropping inbound event"
+            );
+            true
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            tracing::debug!("tunnel input queue closed; render loop ended");
+            false
+        }
+    }
+}
+
+async fn send_exec_response(
+    out_tx: &mpsc::Sender<Message>,
+    id: String,
+    response: crate::exec::ExecResponse,
+) {
+    let frame = ControlFrame::ExecResponse {
+        id,
+        stdout: response.stdout,
+        stderr: response.stderr,
+        exit_status: response.exit_status,
+    };
+    match frame.to_json() {
+        Ok(payload) => {
+            let _ = out_tx.send(Message::Text(payload.into())).await;
+        }
+        Err(err) => {
+            tracing::warn!(error = ?err, "failed to encode tunnel exec response");
+            send_protocol_close(out_tx, "bad exec response").await;
+        }
+    }
+}
+
+async fn send_protocol_close(out_tx: &mpsc::Sender<Message>, reason: &'static str) {
+    let _ = out_tx
+        .send(Message::Close(Some(CloseFrame {
+            code: TUNNEL_CLOSE_PROTOCOL_ERROR,
+            reason: reason.into(),
+        })))
+        .await;
+}
+
 async fn handle_session(
     socket: WebSocket,
     handshake: TunnelHandshake,
@@ -518,37 +641,16 @@ async fn handle_session(
     _tunnel_permit: TunnelSessionPermit,
 ) {
     let frame_drop_log_every = state.config.frame_drop_log_every;
-    let activity_feed_rx = Some(state.activity_feed.subscribe());
     let session_token = handshake
         .session_id
         .clone()
         .unwrap_or_else(crate::session::new_session_token);
-
-    let (input_tx, input_rx) = mpsc::channel::<SshInputEvent>(INPUT_QUEUE_CAP);
-
-    let session_config = build_session_config(
-        &state,
-        SessionBootstrapInputs {
-            user,
-            is_new_user,
-            cols: handshake.cols,
-            rows: handshake.rows,
-            session_token,
-            session_rx: None,
-            activity_feed_rx,
-            supports_reconnect_on_drain: true,
-            reconnect_reason: handshake.reconnect_reason,
-        },
-    )
-    .await;
-
-    let app = match crate::app::state::App::new(session_config) {
-        Ok(app) => Arc::new(TokioMutex::new(app)),
-        Err(err) => {
-            tracing::error!(error = ?err, "failed to initialize tunnel app");
-            return;
-        }
-    };
+    let (session_tx, session_rx) = mpsc::channel(64);
+    state
+        .session_registry
+        .register(session_token.clone(), session_tx)
+        .await;
+    let mut session_rx = Some(session_rx);
 
     // Split the WS so the render loop's writer task and the receive loop
     // can run concurrently without holding a single `&mut WebSocket`.
@@ -574,43 +676,12 @@ async fn handle_session(
         let _ = ws_sink.close().await;
     });
 
-    // Initial alt-screen enter, mirroring shell_request's pre-loop write.
-    // The russh path explicitly pushes `App::enter_alt_screen()` bytes
-    // through the SSH channel before spawning the render loop; the
-    // tunnel path needs to do the same, otherwise the TUI's first paint
-    // lands in the user's normal scrollback instead of alt-screen.
-    // (Just dirtying the render signal isn't enough — ratatui's first
-    // paint diffs forward from an empty terminal and never emits the
-    // `\x1b[?1049h` toggle on its own.)
-    let _ = out_tx
-        .send(Message::Binary(
-            crate::app::state::App::enter_alt_screen().into(),
-        ))
-        .await;
+    let mut pty: Option<TunnelPty> = None;
+    let mut shell: Option<TunnelShell> = None;
+    let mut exec_seen = false;
 
-    let signal = Arc::new(RenderSignal::new());
-    let render = tokio::spawn(run_session(
-        Arc::clone(&app),
-        input_rx,
-        WsFrameSink::new(out_tx.clone()),
-        frame_drop_log_every,
-        Arc::clone(&signal),
-    ));
-
-    // Wake the render loop so its first paint goes out promptly without
-    // waiting for input.
-    if let Err(err) =
-        signal
-            .dirty
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-    {
-        // Already dirty (e.g. resize fired before we got here); fine.
-        let _ = err;
-    }
-    signal.notify.notify_one();
-
-    // Receive loop: input bytes (binary), resize control frames (text), and
-    // clean close from the client. Existing tunnel sessions intentionally
+    // Receive loop: ordered setup/control frames, input bytes after shell_start,
+    // and clean close from the client. Existing tunnel sessions intentionally
     // keep running after the acceptor begins graceful shutdown.
     loop {
         tokio::select! {
@@ -626,55 +697,100 @@ async fn handle_session(
                 };
 
                 match msg {
-                    Message::Binary(bytes) => match input_tx.try_reserve() {
-                        Ok(permit) => {
-                            permit.send(SshInputEvent::Bytes(bytes.into()));
-                            signal.dirty.store(true, Ordering::Release);
-                            signal.notify.notify_one();
-                        }
-                        Err(mpsc::error::TrySendError::Full(_)) => {
-                            tracing::warn!(
-                                queue_cap = INPUT_QUEUE_CAP,
-                                "tunnel input queue full; dropping inbound bytes"
-                            );
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            tracing::debug!("tunnel input queue closed; render loop ended");
+                    Message::Binary(bytes) => {
+                        let Some(shell) = shell.as_ref() else {
+                            tracing::warn!("tunnel: binary frame before shell_start");
+                            send_protocol_close(&out_tx, "binary before shell_start").await;
+                            break;
+                        };
+                        if !queue_input(shell, SshInputEvent::Bytes(bytes.into())).await {
                             break;
                         }
-                    },
-                    // Resize is queued on the same FIFO as Bytes so the
-                    // render loop applies them in WS-arrival order, not
-                    // in app-lock-acquisition order.
+                    }
                     Message::Text(text) => match ControlFrame::from_json(text.as_str()) {
-                        Ok(ControlFrame::Resize { cols, rows }) => match input_tx.try_reserve() {
-                            Ok(permit) => {
-                                permit.send(SshInputEvent::Resize { cols, rows });
-                                signal.dirty.store(true, Ordering::Release);
-                                signal.notify.notify_one();
-                            }
-                            Err(mpsc::error::TrySendError::Full(_)) => {
-                                tracing::warn!(
-                                    queue_cap = INPUT_QUEUE_CAP,
-                                    cols,
-                                    rows,
-                                    "tunnel input queue full; dropping resize event"
-                                );
-                            }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
-                                tracing::debug!("tunnel input queue closed; render loop ended");
+                        Ok(ControlFrame::Pty { term, cols, rows }) => {
+                            if shell.is_some() {
+                                tracing::warn!("tunnel: pty after shell_start");
+                                send_protocol_close(&out_tx, "pty after shell_start").await;
                                 break;
                             }
-                        },
+                            pty = Some(TunnelPty { term, cols, rows });
+                        }
+                        Ok(ControlFrame::ShellStart) => {
+                            if shell.is_some() {
+                                tracing::warn!("tunnel: duplicate shell_start");
+                                send_protocol_close(&out_tx, "duplicate shell_start").await;
+                                break;
+                            }
+                            let Some(pty) = pty.clone() else {
+                                tracing::warn!("tunnel: shell_start before pty");
+                                send_protocol_close(&out_tx, "shell_start before pty").await;
+                                break;
+                            };
+                            let Some(rx) = session_rx.take() else {
+                                tracing::warn!("tunnel: shell_start without session receiver");
+                                send_protocol_close(&out_tx, "session receiver missing").await;
+                                break;
+                            };
+                            match start_tunnel_shell(
+                                &state,
+                                user.clone(),
+                                is_new_user,
+                                pty,
+                                session_token.clone(),
+                                rx,
+                                handshake.reconnect_reason,
+                                out_tx.clone(),
+                                frame_drop_log_every,
+                            ).await {
+                                Some(runtime) => shell = Some(runtime),
+                                None => break,
+                            }
+                        }
+                        Ok(ControlFrame::Resize { cols, rows }) => {
+                            if let Some(shell) = shell.as_ref() {
+                                if !queue_input(shell, SshInputEvent::Resize { cols, rows }).await {
+                                    break;
+                                }
+                            } else if let Some(pty) = pty.as_mut() {
+                                pty.cols = cols;
+                                pty.rows = rows;
+                            } else {
+                                tracing::debug!(cols, rows, "tunnel: resize before pty; stashed nowhere");
+                            }
+                        }
+                        Ok(ControlFrame::ExecRequest { id, command }) => {
+                            let response = if shell.is_some() {
+                                crate::exec::ExecResponse::failure(
+                                    "exec requests are only supported before shell_start".to_string(),
+                                )
+                            } else if exec_seen {
+                                crate::exec::ExecResponse::failure(
+                                    "only one exec request is supported before shell_start".to_string(),
+                                )
+                            } else {
+                                exec_seen = true;
+                                match crate::exec::handle_exec_command(&command, &session_token) {
+                                    Ok(response) => response,
+                                    Err(err) => {
+                                        tracing::warn!(error = ?err, command = %command, "tunnel exec handler failed");
+                                        crate::exec::ExecResponse::failure(
+                                            "exec command failed".to_string(),
+                                        )
+                                    }
+                                }
+                            };
+                            send_exec_response(&out_tx, id, response).await;
+                        }
+                        Ok(ControlFrame::ExecResponse { .. }) => {
+                            tracing::warn!("tunnel: unexpected exec_response from bastion");
+                            send_protocol_close(&out_tx, "unexpected exec_response").await;
+                            break;
+                        }
                         Err(err) => {
                             let sample: String = text.chars().take(200).collect();
                             tracing::warn!(error = ?err, payload = ?sample, "tunnel: bad control frame");
-                            let _ = out_tx
-                                .send(Message::Close(Some(CloseFrame {
-                                    code: TUNNEL_CLOSE_PROTOCOL_ERROR,
-                                    reason: "bad control frame".into(),
-                                })))
-                                .await;
+                            send_protocol_close(&out_tx, "bad control frame").await;
                             break;
                         }
                     },
@@ -688,18 +804,21 @@ async fn handle_session(
         }
     }
 
-    // Tell the render loop to stop, then drain the spawn handles. The
-    // render loop calls `clean_disconnect`/`eof_close`, which sends a
-    // `Message::Close` down the writer mpsc; the writer task forwards
-    // it and exits.
-    {
-        let mut app_guard = app.lock().await;
-        // Peer already closed; no backend close-code signal remains to send.
-        app_guard.running = false;
-    }
-    signal.notify.notify_one();
+    state.session_registry.unregister(&session_token).await;
 
-    let _ = render.await;
+    if let Some(shell) = shell {
+        // Tell the render loop to stop, then drain the spawn handle. The
+        // render loop calls `clean_disconnect`/`eof_close`, which sends a
+        // `Message::Close` down the writer mpsc; the writer task forwards
+        // it and exits.
+        {
+            let mut app_guard = shell.app.lock().await;
+            // Peer already closed; no backend close-code signal remains to send.
+            app_guard.running = false;
+        }
+        shell.signal.notify.notify_one();
+        let _ = shell.render.await;
+    }
     let _ = writer.await;
 
     tracing::info!(
@@ -740,9 +859,6 @@ mod tests {
         h.insert(HEADER_FINGERPRINT, HeaderValue::from_static("SHA256:abc"));
         h.insert(HEADER_USERNAME, HeaderValue::from_static("alice"));
         h.insert(HEADER_PEER_IP, HeaderValue::from_static("203.0.113.7"));
-        h.insert(HEADER_TERM, HeaderValue::from_static("xterm-256color"));
-        h.insert(HEADER_COLS, HeaderValue::from_static("120"));
-        h.insert(HEADER_ROWS, HeaderValue::from_static("40"));
         h
     }
 
@@ -758,8 +874,6 @@ mod tests {
         .unwrap();
         assert_eq!(result.fingerprint, "SHA256:abc");
         assert_eq!(result.username, "alice");
-        assert_eq!(result.cols, 120);
-        assert_eq!(result.rows, 40);
         assert_eq!(result.reconnect_reason, None);
         assert!(result.session_id.is_none());
     }
@@ -844,16 +958,6 @@ mod tests {
             validate_handshake(&h, "10.42.0.5".parse().unwrap(), &trusted, "hunter2").unwrap_err();
         assert_eq!(err, HandshakeReject::BadHeader(HEADER_FINGERPRINT));
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn bad_cols_rejected() {
-        let mut h = full_headers();
-        h.insert(HEADER_COLS, HeaderValue::from_static("notanumber"));
-        let trusted = cidrs(&["10.42.0.0/16"]);
-        let err =
-            validate_handshake(&h, "10.42.0.5".parse().unwrap(), &trusted, "hunter2").unwrap_err();
-        assert_eq!(err, HandshakeReject::BadHeader(HEADER_COLS));
     }
 
     #[test]

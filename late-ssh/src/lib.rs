@@ -3,6 +3,7 @@ pub mod app;
 pub mod authz;
 pub mod config;
 pub mod dartboard;
+pub mod exec;
 pub mod metrics;
 pub mod moderation;
 pub mod session;

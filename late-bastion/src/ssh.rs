@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::handshake::HandshakeContext;
-use crate::proxy::{INPUT_QUEUE_CAP, run_session};
+use crate::proxy::{INPUT_QUEUE_CAP, TunnelConnection, run_session};
 
 /// How long to wait for an upstream proxy to finish writing its PROXY v1
 /// header. Mirrors the late-ssh `:2222` listener's value (250ms).
@@ -71,6 +71,9 @@ pub struct ClientHandler {
     login_username: Option<String>,
     fingerprint: Option<String>,
     term: Option<String>,
+    /// Stable id for this user SSH connection. Reused by pre-shell exec
+    /// and the later shell tunnel so the backend can associate them.
+    session_id: String,
     /// Latest known PTY dimensions. Updated on `pty_request` and on
     /// every `window_change_request` (a resize CAN fire between the
     /// pty and shell requests).
@@ -86,6 +89,13 @@ pub struct ClientHandler {
     /// `tokio::select!` between two queues. Stays `None` until
     /// `shell_request` spawns the proxy task.
     input_tx: Option<mpsc::Sender<SshInputEvent>>,
+    /// Backend `/tunnel` WebSocket for this user SSH connection before
+    /// the interactive shell has started. A late-cli exec can initialize
+    /// over it, and the later shell setup reuses the same socket.
+    tunnel: Option<TunnelConnection>,
+    /// Best-effort label for stdin bytes sent on an exec channel. MVP execs do
+    /// not support stdin, but rogue clients may still send data.
+    active_exec_command: Option<String>,
 }
 
 impl Server {
@@ -116,13 +126,33 @@ impl Server {
             login_username: None,
             fingerprint: None,
             term: None,
+            session_id: Uuid::now_v7().to_string(),
             cols: 0,
             rows: 0,
             over_limit,
             _permit: permit,
             channel: None,
             input_tx: None,
+            tunnel: None,
+            active_exec_command: None,
         }
+    }
+}
+
+impl ClientHandler {
+    fn handshake_context(&self) -> Option<HandshakeContext> {
+        let fingerprint = self.fingerprint.clone()?;
+        let peer_addr = self.peer_addr?;
+        Some(HandshakeContext {
+            fingerprint,
+            username: self.login_username.clone().unwrap_or_default(),
+            peer_ip: peer_addr.ip(),
+            term: self.term.clone().unwrap_or_else(|| "xterm-256color".into()),
+            cols: self.cols,
+            rows: self.rows,
+            reconnect_reason: None,
+            session_id: self.session_id.clone(),
+        })
     }
 }
 
@@ -195,6 +225,15 @@ impl russh::server::Handler for ClientHandler {
         if self.over_limit {
             return Ok(false);
         }
+        if self.input_tx.is_some() || self.channel.is_some() {
+            tracing::warn!(
+                channel_id = ?channel.id(),
+                shell_active = self.input_tx.is_some(),
+                pending_channel = self.channel.is_some(),
+                "rejecting extra session channel"
+            );
+            return Ok(false);
+        }
         tracing::debug!(channel_id = ?channel.id(), "session channel opened");
         self.channel = Some(channel);
         Ok(true)
@@ -248,10 +287,92 @@ impl russh::server::Handler for ClientHandler {
     async fn exec_request(
         &mut self,
         channel: ChannelId,
-        _data: &[u8],
+        data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        fail_channel_request(session, channel, "exec");
+        let command = String::from_utf8_lossy(data).trim().to_string();
+        if command.is_empty() {
+            fail_channel_request(session, channel, "exec");
+            return Ok(());
+        }
+        if self.input_tx.is_some() {
+            tracing::warn!(
+                ?channel,
+                command = %command,
+                "exec_request after shell tunnel is active; closing channel"
+            );
+            fail_channel_request(session, channel, "exec");
+            let _ = session.handle().close(channel).await;
+            return Ok(());
+        }
+        self.active_exec_command = Some(command.clone());
+        if let Err(e) = session.channel_success(channel) {
+            tracing::warn!(error = ?e, ?channel, "exec channel_success failed");
+        }
+
+        let Some(chan) = self.channel.take() else {
+            tracing::warn!(?channel, "exec_request without an open channel");
+            let _ = session.handle().close(channel).await;
+            return Ok(());
+        };
+        let response = match self.handshake_context() {
+            Some(ctx) => {
+                let mut connect_failure = None;
+                if let Some(tunnel) = self.tunnel.as_mut() {
+                    tunnel.update_context(ctx.clone());
+                } else {
+                    match TunnelConnection::connect(
+                        self.config.backend_tunnel_url.clone(),
+                        self.config.backend_shared_secret.clone(),
+                        ctx,
+                        self.shutdown.clone(),
+                    )
+                    .await
+                    {
+                        Ok(tunnel) => {
+                            self.tunnel = Some(tunnel);
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = ?err, command = %command, "tunnel connect for exec failed");
+                            connect_failure = Some(return_exec_failure("tunnel exec failed"));
+                        }
+                    }
+                }
+
+                if let Some(response) = connect_failure {
+                    response
+                } else {
+                    match self.tunnel.as_mut() {
+                        Some(tunnel) => {
+                            match tunnel.exec(command.clone(), self.shutdown.clone()).await {
+                                Ok(response) => response,
+                                Err(err) => {
+                                    tracing::warn!(error = ?err, command = %command, "tunnel exec failed");
+                                    self.tunnel = None;
+                                    return_exec_failure("tunnel exec failed")
+                                }
+                            }
+                        }
+                        None => return_exec_failure("tunnel exec failed"),
+                    }
+                }
+            }
+            None => {
+                tracing::warn!(?channel, "exec_request before auth/peer metadata");
+                return_exec_failure("exec request missing authenticated session metadata")
+            }
+        };
+
+        if !response.stdout.is_empty() {
+            chan.data(response.stdout.as_bytes()).await?;
+        }
+        if !response.stderr.is_empty() {
+            chan.extended_data(1, response.stderr.as_bytes()).await?;
+        }
+        let _ = chan.exit_status(response.exit_status).await;
+        let _ = chan.eof().await;
+        let _ = chan.close().await;
+        self.active_exec_command = None;
         Ok(())
     }
 
@@ -270,6 +391,15 @@ impl russh::server::Handler for ClientHandler {
         channel_id: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.input_tx.is_some() {
+            tracing::warn!(
+                ?channel_id,
+                "duplicate shell_request while shell tunnel is active"
+            );
+            fail_channel_request(session, channel_id, "shell");
+            let _ = session.handle().close(channel_id).await;
+            return Ok(());
+        }
         if let Err(e) = session.channel_success(channel_id) {
             tracing::warn!(error = ?e, "channel_success failed");
         }
@@ -279,28 +409,10 @@ impl russh::server::Handler for ClientHandler {
             let _ = session.handle().close(channel_id).await;
             return Ok(());
         };
-        let Some(fingerprint) = self.fingerprint.clone() else {
-            tracing::warn!(?channel_id, "shell_request before auth_publickey");
+        let Some(ctx) = self.handshake_context() else {
+            tracing::warn!(?channel_id, "shell_request before auth/peer metadata");
             let _ = session.handle().close(channel_id).await;
             return Ok(());
-        };
-        let username = self.login_username.clone().unwrap_or_default();
-        let term = self.term.clone().unwrap_or_else(|| "xterm-256color".into());
-        let Some(peer_addr) = self.peer_addr else {
-            tracing::warn!(?channel_id, "shell_request without a peer address");
-            let _ = session.handle().close(channel_id).await;
-            return Ok(());
-        };
-
-        let ctx = HandshakeContext {
-            fingerprint,
-            username,
-            peer_ip: peer_addr.ip(),
-            term,
-            cols: self.cols,
-            rows: self.rows,
-            reconnect_reason: None,
-            session_id: Uuid::now_v7().to_string(),
         };
 
         let (input_tx, input_rx) = mpsc::channel::<SshInputEvent>(INPUT_QUEUE_CAP);
@@ -311,6 +423,10 @@ impl russh::server::Handler for ClientHandler {
         let handle = session.handle();
         let session_id = ctx.session_id.clone();
         let shutdown = self.shutdown.clone();
+        let mut existing_tunnel = self.tunnel.take();
+        if let Some(tunnel) = existing_tunnel.as_mut() {
+            tunnel.update_context(ctx.clone());
+        }
 
         tracing::info!(
             ?channel_id,
@@ -320,11 +436,16 @@ impl russh::server::Handler for ClientHandler {
             peer_ip = %ctx.peer_ip,
             cols = ctx.cols,
             rows = ctx.rows,
+            reused_tunnel = existing_tunnel.is_some(),
             "shell_request — spawning tunnel proxy"
         );
 
         tokio::spawn(async move {
-            if let Err(e) = run_session(channel, ws_url, secret, ctx, input_rx, shutdown).await {
+            let result = match existing_tunnel {
+                Some(tunnel) => tunnel.run_shell(channel, input_rx, shutdown).await,
+                None => run_session(channel, ws_url, secret, ctx, input_rx, shutdown).await,
+            };
+            if let Err(e) = result {
                 tracing::warn!(error = ?e, session_id = %session_id, "tunnel proxy session failed");
             }
             // Either path (Ok or Err): drop the SSH channel by closing
@@ -415,6 +536,18 @@ impl russh::server::Handler for ClientHandler {
         // queue and resize_tx used to be muxed by `tokio::select!`,
         // which has no fairness guarantee.
         let Some(tx) = &self.input_tx else {
+            if let Some(command) = self.active_exec_command.as_ref() {
+                tracing::warn!(
+                    bytes = data.len(),
+                    command = %command,
+                    "discarding stdin bytes on exec"
+                );
+            } else {
+                tracing::debug!(
+                    bytes = data.len(),
+                    "discarding ssh data before shell tunnel is active"
+                );
+            }
             return Ok(());
         };
         if let Err(e) = tx.send(SshInputEvent::Bytes(data.to_vec())).await {
@@ -442,6 +575,10 @@ impl russh::server::Handler for ClientHandler {
         self.input_tx = None;
         Ok(())
     }
+}
+
+fn return_exec_failure(stderr: impl Into<String>) -> crate::proxy::ExecTunnelResponse {
+    crate::proxy::ExecTunnelResponse::failure(stderr)
 }
 
 fn fail_channel_request(session: &mut Session, channel: ChannelId, request: &'static str) {

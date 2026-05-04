@@ -20,8 +20,8 @@ use late_ssh::app::state::App;
 use late_ssh::config::Config;
 use late_ssh::state::State;
 use late_ssh::tunnel::{
-    HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_ROWS, HEADER_SECRET, HEADER_TERM,
-    HEADER_USERNAME, run_tunnel_server_with_listener,
+    HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_SECRET, HEADER_USERNAME,
+    run_tunnel_server_with_listener,
 };
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
@@ -32,6 +32,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 const TEST_SECRET: &str = "test-secret";
 
@@ -92,10 +93,37 @@ fn make_request(
     );
     h.insert(HEADER_USERNAME, HeaderValue::from_str(username).unwrap());
     h.insert(HEADER_PEER_IP, HeaderValue::from_static("127.0.0.1"));
-    h.insert(HEADER_TERM, HeaderValue::from_static("xterm-256color"));
-    h.insert(HEADER_COLS, HeaderValue::from_static("80"));
-    h.insert(HEADER_ROWS, HeaderValue::from_static("24"));
     req
+}
+
+async fn send_shell_start(ws: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) {
+    let pty = ControlFrame::Pty {
+        term: "xterm-256color".to_string(),
+        cols: 80,
+        rows: 24,
+    }
+    .to_json()
+    .expect("encode pty");
+    ws.send(Message::Text(pty.into())).await.expect("send pty");
+    ws.send(Message::Text(
+        ControlFrame::ShellStart
+            .to_json()
+            .expect("encode shell_start")
+            .into(),
+    ))
+    .await
+    .expect("send shell_start");
+}
+
+async fn start_shell_and_wait_first(
+    ws: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+) -> Message {
+    send_shell_start(ws).await;
+    timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("first frame timeout")
+        .expect("stream ended")
+        .expect("ws error")
 }
 
 #[tokio::test]
@@ -115,11 +143,7 @@ async fn tunnel_happy_path_yields_initial_frame_and_accepts_resize() {
 
     // The first bytes must enter alt-screen before any rendered TUI
     // frame, otherwise the initial paint can land in normal scrollback.
-    let first = timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("frame timeout")
-        .expect("stream ended")
-        .expect("ws error");
+    let first = start_shell_and_wait_first(&mut ws).await;
     match first {
         Message::Binary(bytes) => assert_eq!(bytes.as_ref(), App::enter_alt_screen().as_slice()),
         other => panic!("expected Binary, got {other:?}"),
@@ -148,6 +172,59 @@ async fn tunnel_happy_path_yields_initial_frame_and_accepts_resize() {
             .expect("post-resize stream ended")
             .expect("post-resize ws error");
         assert!(matches!(msg, Message::Binary(_)));
+    }
+
+    let _ = ws.close(None).await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn tunnel_exec_request_returns_cli_token_response() {
+    let (addr, _state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
+
+    let req = make_request(addr, "exec-user");
+    let (mut ws, response) = timeout(
+        Duration::from_secs(5),
+        tokio_tungstenite::connect_async(req),
+    )
+    .await
+    .expect("connect_async timeout")
+    .expect("connect_async");
+    assert_eq!(response.status().as_u16(), 101);
+
+    let request = ControlFrame::ExecRequest {
+        id: "exec-1".to_string(),
+        command: "late-cli-token-v1".to_string(),
+    }
+    .to_json()
+    .expect("encode exec request");
+    ws.send(Message::Text(request.into()))
+        .await
+        .expect("send exec request");
+
+    let response = timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("exec response timeout")
+        .expect("stream ended")
+        .expect("ws error");
+    match response {
+        Message::Text(text) => {
+            match ControlFrame::from_json(text.as_str()).expect("parse exec response") {
+                ControlFrame::ExecResponse {
+                    id,
+                    stdout,
+                    stderr,
+                    exit_status,
+                } => {
+                    assert_eq!(id, "exec-1");
+                    assert_eq!(exit_status, 0);
+                    assert!(stderr.is_empty());
+                    assert!(stdout.contains(r#""session_token""#));
+                }
+                other => panic!("expected exec_response, got {other:?}"),
+            }
+        }
+        other => panic!("expected exec_response Text, got {other:?}"),
     }
 
     let _ = ws.close(None).await;
@@ -191,9 +268,7 @@ async fn tunnel_session_registers_active_user_and_unregisters_on_close() {
     // Wait for the first frame. By the time bytes arrive, the registration
     // block in `tunnel_handler` has already run — it's synchronous before
     // `ws.on_upgrade`.
-    let _ = timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("first frame timeout");
+    let _ = start_shell_and_wait_first(&mut ws).await;
 
     {
         let active = state.active_users.lock_recover();
@@ -307,19 +382,13 @@ async fn tunnel_bad_control_frame_closes_with_4003() {
         .expect("connect");
     assert_eq!(response.status().as_u16(), 101);
 
-    let _ = timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("first frame timeout");
+    let _ = start_shell_and_wait_first(&mut ws).await;
 
     ws.send(Message::Text("{\"t\":\"bad\"}".into()))
         .await
         .expect("send bad control frame");
 
-    let close = timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("close timeout")
-        .expect("stream ended")
-        .expect("ws error");
+    let close = next_close(&mut ws).await;
     match close {
         Message::Close(Some(frame)) => {
             assert_eq!(u16::from(frame.code), TUNNEL_CLOSE_PROTOCOL_ERROR)
@@ -328,6 +397,22 @@ async fn tunnel_bad_control_frame_closes_with_4003() {
     }
 
     server.abort();
+}
+
+async fn next_close(ws: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) -> Message {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let now = tokio::time::Instant::now();
+        assert!(now < deadline, "close timeout");
+        let msg = timeout(deadline - now, ws.next())
+            .await
+            .expect("close timeout")
+            .expect("stream ended")
+            .expect("ws error");
+        if matches!(msg, Message::Close(_)) {
+            return msg;
+        }
+    }
 }
 
 #[tokio::test]
@@ -344,9 +429,7 @@ async fn tunnel_returns_503_when_global_conn_limit_reached() {
     let (mut ws1, _) = tokio_tungstenite::connect_async(req1)
         .await
         .expect("connect 1");
-    let _ = timeout(Duration::from_secs(5), ws1.next())
-        .await
-        .expect("first frame timeout");
+    let _ = start_shell_and_wait_first(&mut ws1).await;
 
     let status = raw_upgrade_status(addr, &[]).await;
     assert_eq!(status, 503, "second attempt should hit global cap");
@@ -367,9 +450,7 @@ async fn tunnel_returns_429_when_per_ip_conn_limit_reached() {
     let (mut ws1, _) = tokio_tungstenite::connect_async(req1)
         .await
         .expect("connect 1");
-    let _ = timeout(Duration::from_secs(5), ws1.next())
-        .await
-        .expect("first frame timeout");
+    let _ = start_shell_and_wait_first(&mut ws1).await;
 
     let status = raw_upgrade_status(addr, &[]).await;
     assert_eq!(
@@ -394,11 +475,7 @@ async fn tunnel_drain_leaves_existing_session_open() {
     // Drain the first frame to confirm the session is live before we
     // trigger shutdown — otherwise we could race the cancel against
     // upgrade completion.
-    let _ = timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("first frame timeout")
-        .expect("stream ended")
-        .expect("ws error");
+    let _ = start_shell_and_wait_first(&mut ws).await;
 
     state.is_draining.store(true, Ordering::Release);
 
@@ -461,9 +538,6 @@ async fn raw_upgrade_status(addr: SocketAddr, header_overrides: &[(&str, &str)])
         (HEADER_FINGERPRINT, "SHA256:smoke-fp"),
         (HEADER_USERNAME, "smoke-user"),
         (HEADER_PEER_IP, "127.0.0.1"),
-        (HEADER_TERM, "xterm-256color"),
-        (HEADER_COLS, "80"),
-        (HEADER_ROWS, "24"),
     ];
     for (name, value) in header_overrides {
         if let Some(slot) = headers.iter_mut().find(|(n, _)| n == name) {
@@ -481,9 +555,6 @@ async fn raw_upgrade_status_omit(addr: SocketAddr, omit: &str) -> u16 {
         (HEADER_FINGERPRINT, "SHA256:smoke-fp"),
         (HEADER_USERNAME, "smoke-user"),
         (HEADER_PEER_IP, "127.0.0.1"),
-        (HEADER_TERM, "xterm-256color"),
-        (HEADER_COLS, "80"),
-        (HEADER_ROWS, "24"),
     ]
     .into_iter()
     .filter(|(n, _)| *n != omit)

@@ -28,8 +28,8 @@ use late_bastion::config::Config;
 use late_bastion::ssh::{Server, load_or_generate_key};
 use late_core::shutdown::CancellationToken;
 use late_core::tunnel_protocol::{
-    ControlFrame, HEADER_COLS, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT_REASON,
-    HEADER_ROWS, HEADER_SECRET, HEADER_SESSION_ID, HEADER_TERM,
+    ControlFrame, HEADER_FINGERPRINT, HEADER_PEER_IP, HEADER_RECONNECT_REASON, HEADER_SECRET,
+    HEADER_SESSION_ID,
 };
 use russh::client::{self as russh_client, Handler as ClientHandler};
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, signature::rand_core::UnwrapErr};
@@ -189,6 +189,33 @@ impl MockBackend {
         timeout(Duration::from_secs(5), self.received_rx.recv())
             .await
             .expect("frame recv timeout")
+    }
+
+    async fn expect_setup_frames(&mut self, term: &str, cols: u16, rows: u16) {
+        let pty = self.next_frame().await.expect("pty frame");
+        match pty {
+            WsMessage::Text(text) => {
+                let parsed = ControlFrame::from_json(text.as_str()).expect("parse pty");
+                assert_eq!(
+                    parsed,
+                    ControlFrame::Pty {
+                        term: term.to_string(),
+                        cols,
+                        rows
+                    }
+                );
+            }
+            other => panic!("expected pty Text frame, got {other:?}"),
+        }
+
+        let shell_start = self.next_frame().await.expect("shell_start frame");
+        match shell_start {
+            WsMessage::Text(text) => {
+                let parsed = ControlFrame::from_json(text.as_str()).expect("parse shell_start");
+                assert_eq!(parsed, ControlFrame::ShellStart);
+            }
+            other => panic!("expected shell_start Text frame, got {other:?}"),
+        }
     }
 
     async fn send(&self, msg: WsMessage) {
@@ -360,9 +387,6 @@ async fn bastion_proxies_ssh_to_tunnel_with_full_handshake_and_byte_flow() {
         &user_fingerprint,
         "fingerprint mismatch"
     );
-    assert_eq!(headers.get(HEADER_TERM).unwrap(), "xterm-256color");
-    assert_eq!(headers.get(HEADER_COLS).unwrap(), "100");
-    assert_eq!(headers.get(HEADER_ROWS).unwrap(), "30");
     // Loopback: peer_ip captured by bastion is 127.0.0.1 (no PROXY v1).
     assert_eq!(headers.get(HEADER_PEER_IP).unwrap(), "127.0.0.1");
     // session_id is a UUID — just assert the header is present and non-empty.
@@ -372,6 +396,7 @@ async fn bastion_proxies_ssh_to_tunnel_with_full_handshake_and_byte_flow() {
         .to_str()
         .unwrap();
     assert!(!sid.is_empty(), "session id non-empty");
+    backend.expect_setup_frames("xterm-256color", 100, 30).await;
 
     // Take the channel as a stream and exchange bytes.
     let stream = channel.into_stream();
@@ -410,6 +435,121 @@ async fn bastion_proxies_ssh_to_tunnel_with_full_handshake_and_byte_flow() {
     // calling `Channel::window_change` is no longer available.
     drop(user_reader);
     drop(user_writer);
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_reuses_exec_tunnel_for_shell_setup() {
+    let mut backend = MockBackend::spawn().await.expect("backend");
+    let bastion = TestBastion::spawn(backend.ws_url()).await.expect("bastion");
+
+    let user_key =
+        PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519).expect("key");
+    let client_config = Arc::new(russh_client::Config::default());
+    let mut session = russh_client::connect(client_config, bastion.addr, AnyHostKey)
+        .await
+        .expect("client connect");
+    let auth = session
+        .authenticate_publickey(
+            "alice",
+            PrivateKeyWithHashAlg::new(Arc::new(user_key), None),
+        )
+        .await
+        .expect("authenticate_publickey");
+    assert!(auth.success(), "auth not accepted");
+
+    let mut channel = session
+        .channel_open_session()
+        .await
+        .expect("channel_open_session");
+    channel
+        .exec(true, "late-cli-token-v1")
+        .await
+        .expect("exec request");
+
+    let headers = backend.wait_for_handshake().await;
+    let sid = headers
+        .get(HEADER_SESSION_ID)
+        .expect("session id header")
+        .to_str()
+        .unwrap();
+    assert!(!sid.is_empty(), "session id non-empty");
+
+    let exec_id = match backend.next_frame().await.expect("exec frame") {
+        WsMessage::Text(text) => {
+            match ControlFrame::from_json(text.as_str()).expect("parse exec") {
+                ControlFrame::ExecRequest { id, command } => {
+                    assert_eq!(command, "late-cli-token-v1");
+                    id
+                }
+                other => panic!("expected exec_request, got {other:?}"),
+            }
+        }
+        other => panic!("expected exec_request Text frame, got {other:?}"),
+    };
+
+    let response = ControlFrame::ExecResponse {
+        id: exec_id,
+        stdout: r#"{"session_token":"tok"}"#.to_string(),
+        stderr: String::new(),
+        exit_status: 0,
+    }
+    .to_json()
+    .expect("encode exec response");
+    backend.send(WsMessage::Text(response.into())).await;
+
+    let mut stdout = Vec::new();
+    let mut exit_status = None;
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            russh::ChannelMsg::Data { data } => stdout.extend_from_slice(data.as_ref()),
+            russh::ChannelMsg::ExitStatus { exit_status: code } => exit_status = Some(code),
+            russh::ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        String::from_utf8(stdout).unwrap(),
+        r#"{"session_token":"tok"}"#
+    );
+    assert_eq!(exit_status, Some(0));
+
+    let shell = session
+        .channel_open_session()
+        .await
+        .expect("shell channel_open_session");
+    shell
+        .request_pty(true, "xterm-256color", 120, 40, 0, 0, &[])
+        .await
+        .expect("shell request_pty");
+    shell
+        .request_shell(true)
+        .await
+        .expect("shell request_shell");
+
+    backend.expect_setup_frames("xterm-256color", 120, 40).await;
+
+    let stream = shell.into_stream();
+    let (_user_reader, mut user_writer) = tokio::io::split(stream);
+    user_writer
+        .write_all(b"after-exec")
+        .await
+        .expect("user write");
+    user_writer.flush().await.ok();
+
+    loop {
+        let frame = backend.next_frame().await.expect("backend frame");
+        match frame {
+            WsMessage::Binary(bytes) => {
+                assert_eq!(bytes.as_ref(), b"after-exec");
+                break;
+            }
+            WsMessage::Ping(_) | WsMessage::Pong(_) => {}
+            other => panic!("expected post-shell user bytes as Binary, got {other:?}"),
+        }
+    }
+
     bastion.shutdown();
 }
 
@@ -498,6 +638,7 @@ async fn bastion_forwards_window_change_as_resize_text_frame() {
 
     // Drain handshake.
     let _ = backend.wait_for_handshake().await;
+    backend.expect_setup_frames("xterm-256color", 80, 24).await;
 
     // Trigger a resize. The Channel<Msg> handle is still in scope here
     // — we haven't consumed it via into_stream — so we can call
@@ -551,6 +692,7 @@ async fn bastion_preserves_data_resize_data_order() {
 
     let (_session, channel) = open_user_session(bastion.addr).await;
     let _headers = backend.wait_for_handshake().await;
+    backend.expect_setup_frames("xterm-256color", 80, 24).await;
 
     // Issue the three operations serially from one task. russh's
     // per-connection task dispatches the resulting SSH messages in

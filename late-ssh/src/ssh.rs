@@ -33,7 +33,6 @@ static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
-const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
 pub(crate) const INPUT_QUEUE_CAP: usize = 256;
 
@@ -631,7 +630,7 @@ impl russh::server::Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         let command = String::from_utf8_lossy(data);
         let preview: String = command.chars().take(128).collect();
-        if command.trim() == CLI_TOKEN_REQUEST {
+        if command.trim() == crate::exec::CLI_TOKEN_REQUEST {
             tracing::info!("serving cli token exec request");
             match session.channel_success(channel) {
                 Ok(()) => tracing::debug!("exec token channel_success sent"),
@@ -639,8 +638,8 @@ impl russh::server::Handler for ClientHandler {
             }
 
             let token = self.ensure_cli_session().await?;
-            let payload = serde_json::to_vec(&json!({ "session_token": token }))
-                .context("failed to encode cli token exec response")?;
+            let response = crate::exec::handle_exec_command(command.trim(), &token)?;
+            let payload = response.stdout.into_bytes();
 
             if let Some(chan) = self.channel.take() {
                 // `channel_open_session` populates `self.channel` immediately before this
@@ -648,7 +647,7 @@ impl russh::server::Handler for ClientHandler {
                 // channel we are replying on. The fallback below writes via `Session` if that
                 // invariant ever stops holding.
                 chan.data(payload.as_slice()).await?;
-                let _ = chan.exit_status(0).await;
+                let _ = chan.exit_status(response.exit_status).await;
                 let _ = chan.eof().await;
                 let _ = chan.close().await;
             } else {
