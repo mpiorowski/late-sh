@@ -1156,6 +1156,36 @@ fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
     }
 }
 
+fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
+    if y != 0 {
+        return None;
+    }
+
+    match x {
+        // Top title text starts immediately after the left border. The digit
+        // cells in " late.sh | 1 2 3 4 5 | ..." land on these columns.
+        12 => Some(Screen::Dashboard),
+        14 => Some(Screen::Chat),
+        16 => Some(Screen::Games),
+        18 => Some(Screen::Rooms),
+        20 => Some(Screen::Artboard),
+        _ => None,
+    }
+}
+
+fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
+    if target == current {
+        return;
+    }
+
+    reset_composers_for_page_change(app);
+    if target == Screen::Rooms {
+        app.rooms_active_room = None;
+    }
+    app.set_screen(target);
+    app.chat.clear_message_selection();
+}
+
 fn with_chat_render_input<R>(
     app: &App,
     f: impl FnOnce(&crate::app::chat::ui::ChatRenderInput<'_>) -> R,
@@ -1265,6 +1295,11 @@ fn handle_mouse_scroll_over_screen(
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
+    if let Some(target) = topbar_screen_hit_test(x, y) {
+        select_screen_from_topbar(app, screen, target);
+        return true;
+    }
+
     let content_area = app_content_area(app);
     let over_room_list = with_chat_render_input(app, |view| {
         crate::app::chat::ui::room_list_panel_contains(content_area, view, x, y)
@@ -1918,6 +1953,17 @@ mod tests {
         assert!(compose_room_switch_allowed(Screen::Chat));
         assert!(!compose_room_switch_allowed(Screen::Dashboard));
         assert!(!compose_room_switch_allowed(Screen::Games));
+    }
+
+    #[test]
+    fn topbar_screen_hit_test_maps_screen_digits() {
+        assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
+        assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Chat));
+        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Games));
+        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Rooms));
+        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
+        assert_eq!(topbar_screen_hit_test(13, 0), None);
+        assert_eq!(topbar_screen_hit_test(12, 1), None);
     }
 
     #[test]
