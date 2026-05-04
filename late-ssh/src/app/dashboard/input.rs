@@ -159,7 +159,7 @@ fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
 }
 
 fn sorted_dashboard_blackjack_rooms(app: &App) -> Vec<crate::app::rooms::svc::RoomListItem> {
-    let snapshots = app.blackjack_table_manager.table_snapshots();
+    let snapshots = app.room_game_registry.blackjack().table_snapshots();
     let mut rooms: Vec<crate::app::rooms::svc::RoomListItem> = app
         .rooms_snapshot
         .rooms

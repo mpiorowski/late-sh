@@ -152,7 +152,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         minesweeper_service: state.minesweeper_service.clone(),
         initial_minesweeper_games,
         rooms_service: state.rooms_service.clone(),
-        blackjack_table_manager: state.blackjack_table_manager.clone(),
+        room_game_registry: state.room_game_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),
         dartboard_provenance: state.dartboard_provenance.clone(),
         artboard_snapshot_service: ArtboardSnapshotService::new(state.db.clone()),
