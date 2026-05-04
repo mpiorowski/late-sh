@@ -1296,6 +1296,20 @@ pub(crate) fn room_list_hit_test(
     room_rows.hit_slots.get(row_index).copied().flatten()
 }
 
+pub(crate) fn room_list_panel_contains(
+    area: Rect,
+    view: &ChatRenderInput<'_>,
+    x: u16,
+    y: u16,
+) -> bool {
+    if view.chat_rooms.is_empty() {
+        return false;
+    }
+
+    let (_, rooms_area, _, _) = chat_layout(area, view);
+    x >= rooms_area.x && x < rooms_area.right() && y >= rooms_area.y && y < rooms_area.bottom()
+}
+
 pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let chat_rooms = view.chat_rooms;
     let usernames = view.usernames;
@@ -2109,5 +2123,17 @@ mod tests {
             Some(RoomSlot::Room(rust.id))
         );
         assert_eq!(room_list_hit_test(area, &view, inner.x, inner.y), None);
+        assert!(room_list_panel_contains(
+            area,
+            &view,
+            rooms_area.x,
+            rooms_area.y
+        ));
+        assert!(!room_list_panel_contains(
+            area,
+            &view,
+            rooms_area.right(),
+            rooms_area.y
+        ));
     }
 }
