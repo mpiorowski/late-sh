@@ -184,8 +184,9 @@ Dashboard box row:
 - `b` then `1` enters the left Blackjack room slot.
 - `b` then `2` launches the currently displayed unfinished daily game.
 - `b` then `3` opens the Chat screen with News selected and the currently displayed wire article selected.
+- `b` then `4` opens the Chat screen with `#announcements` selected; its chip renders on pinned dashboard messages.
 - The daily-game and wire-news boxes rotate every 60 seconds; the wire rotates through at most five articles.
-- Dashboard pinned messages have a single dashboard rendering path: the newest pinned message is embedded into the box-row rule. There is no separate pinned strip above dashboard chat.
+- Dashboard pinned messages render with the dashboard box row: a detached top pin strip when roomy, otherwise embedded into the bottom grid rule. There is no separate pinned strip above dashboard chat.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Dashboard, Chat, or Rooms screen, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, room, favorite, or active-room changes.
 
@@ -359,7 +360,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Backed by persisted `work_profiles` and `work_feed_reads`.
 - It is a separate feed and does not mirror posts into chat messages.
 - Each user has at most one work profile; creating again updates the existing profile and preserves its public random slug (`w_` plus 12 lowercase alphanumeric chars).
-- Composer fields: headline, status, type, location, links, skills, summary.
+- Composer fields: headline, status, type, location, contact, links, skills, summary.
 - Status must be `open`, `casual`, or `not-looking`; aliases normalize in `work/state.rs`.
 - Links require `http://` or `https://`, cap at 6, and are stored for later web rendering.
 - Skills normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each skill at 24 chars and total skills at 12.

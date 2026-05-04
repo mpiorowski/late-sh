@@ -14,6 +14,7 @@ pub(crate) enum ComposerField {
     Status,
     Type,
     Location,
+    Contact,
     Links,
     Skills,
     Summary,
@@ -25,7 +26,8 @@ impl ComposerField {
             Self::Headline => Self::Status,
             Self::Status => Self::Type,
             Self::Type => Self::Location,
-            Self::Location => Self::Links,
+            Self::Location => Self::Contact,
+            Self::Contact => Self::Links,
             Self::Links => Self::Skills,
             Self::Skills => Self::Summary,
             Self::Summary => Self::Headline,
@@ -38,7 +40,8 @@ impl ComposerField {
             Self::Status => Self::Headline,
             Self::Type => Self::Status,
             Self::Location => Self::Type,
-            Self::Links => Self::Location,
+            Self::Contact => Self::Location,
+            Self::Links => Self::Contact,
             Self::Skills => Self::Links,
             Self::Summary => Self::Skills,
         }
@@ -50,6 +53,7 @@ impl ComposerField {
             Self::Status => "Status",
             Self::Type => "Type",
             Self::Location => "Location",
+            Self::Contact => "Contact",
             Self::Links => "Links",
             Self::Skills => "Skills",
             Self::Summary => "Summary",
@@ -62,6 +66,7 @@ impl ComposerField {
             Self::Status => "open | casual | not-looking",
             Self::Type => "contract, full-time, freelance",
             Self::Location => "EU remote, Warsaw, US overlap",
+            Self::Contact => "email@example.com, @handle, or DM on late.sh",
             Self::Links => "https://github.com/you, https://cv.example",
             Self::Skills => "rust, postgres, axum",
             Self::Summary => "What work are you looking for?",
@@ -85,6 +90,7 @@ pub struct State {
     status: TextArea<'static>,
     work_type: TextArea<'static>,
     location: TextArea<'static>,
+    contact: TextArea<'static>,
     links: TextArea<'static>,
     skills: TextArea<'static>,
     summary: TextArea<'static>,
@@ -121,6 +127,7 @@ impl State {
             status: new_single_line(ComposerField::Status.placeholder()),
             work_type: new_single_line(ComposerField::Type.placeholder()),
             location: new_single_line(ComposerField::Location.placeholder()),
+            contact: new_single_line(ComposerField::Contact.placeholder()),
             links: new_single_line(ComposerField::Links.placeholder()),
             skills: new_single_line(ComposerField::Skills.placeholder()),
             summary: new_multi_line(ComposerField::Summary.placeholder()),
@@ -202,6 +209,7 @@ impl State {
             ComposerField::Status => &self.status,
             ComposerField::Type => &self.work_type,
             ComposerField::Location => &self.location,
+            ComposerField::Contact => &self.contact,
             ComposerField::Links => &self.links,
             ComposerField::Skills => &self.skills,
             ComposerField::Summary => &self.summary,
@@ -219,6 +227,7 @@ impl State {
             ComposerField::Status,
             ComposerField::Type,
             ComposerField::Location,
+            ComposerField::Contact,
             ComposerField::Links,
             ComposerField::Skills,
             ComposerField::Summary,
@@ -265,6 +274,7 @@ impl State {
         self.status.insert_str(profile.status);
         self.work_type.insert_str(profile.work_type);
         self.location.insert_str(profile.location);
+        self.contact.insert_str(profile.contact);
         self.links.insert_str(profile.links.join(", "));
         self.skills.insert_str(profile.skills.join(", "));
         self.summary.insert_str(profile.summary);
@@ -288,6 +298,7 @@ impl State {
         self.status = new_single_line(ComposerField::Status.placeholder());
         self.work_type = new_single_line(ComposerField::Type.placeholder());
         self.location = new_single_line(ComposerField::Location.placeholder());
+        self.contact = new_single_line(ComposerField::Contact.placeholder());
         self.links = new_single_line(ComposerField::Links.placeholder());
         self.skills = new_single_line(ComposerField::Skills.placeholder());
         self.summary = new_multi_line(ComposerField::Summary.placeholder());
@@ -318,6 +329,7 @@ impl State {
         let status = normalize_status(&self.status.lines().join(" "));
         let work_type = self.work_type.lines().join(" ").trim().to_string();
         let location = self.location.lines().join(" ").trim().to_string();
+        let contact = self.contact.lines().join(" ").trim().to_string();
         let links = svc::parse_links(&self.links.lines().join(","));
         let skills = svc::parse_words(&self.skills.lines().join(","), 12);
         let summary = self.summary.lines().join("\n").trim().to_string();
@@ -345,6 +357,14 @@ impl State {
             self.refresh_composer_theme();
             return Some(Banner::error("location required"));
         }
+        if contact.is_empty() {
+            self.field = ComposerField::Contact;
+            self.refresh_composer_theme();
+            return Some(Banner::error("contact required"));
+        }
+        if contact.chars().count() > 200 {
+            return Some(Banner::error("contact too long (max 200)"));
+        }
         if links.is_empty() {
             self.field = ComposerField::Links;
             self.refresh_composer_theme();
@@ -369,6 +389,7 @@ impl State {
             status: status.expect("status validated above").to_string(),
             work_type,
             location,
+            contact,
             links,
             skills,
             summary,
@@ -502,6 +523,7 @@ impl State {
             ComposerField::Status => &mut self.status,
             ComposerField::Type => &mut self.work_type,
             ComposerField::Location => &mut self.location,
+            ComposerField::Contact => &mut self.contact,
             ComposerField::Links => &mut self.links,
             ComposerField::Skills => &mut self.skills,
             ComposerField::Summary => &mut self.summary,

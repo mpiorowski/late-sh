@@ -8,6 +8,7 @@ CREATE TABLE work_profiles (
     status TEXT NOT NULL CHECK (status IN ('open', 'casual', 'not-looking')),
     work_type TEXT NOT NULL CHECK (length(work_type) BETWEEN 1 AND 80),
     location TEXT NOT NULL CHECK (length(location) BETWEEN 1 AND 120),
+    contact TEXT NOT NULL DEFAULT '' CHECK (length(contact) <= 200),
     links TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] CHECK (cardinality(links) BETWEEN 1 AND 6),
     skills TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] CHECK (cardinality(skills) <= 12),
     summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 1000),

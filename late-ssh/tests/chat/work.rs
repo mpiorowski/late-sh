@@ -19,6 +19,7 @@ fn params(user_id: Uuid, headline: &str, summary: &str, slug: &str) -> WorkProfi
         status: "open".to_string(),
         work_type: "full-time".to_string(),
         location: "remote".to_string(),
+        contact: "work@example.com".to_string(),
         links: vec!["https://github.com/late-sh".to_string()],
         skills: vec!["rust".to_string(), "postgres".to_string()],
         summary: summary.to_string(),
@@ -26,10 +27,17 @@ fn params(user_id: Uuid, headline: &str, summary: &str, slug: &str) -> WorkProfi
 }
 
 async fn recv_work_event(events: &mut tokio::sync::broadcast::Receiver<WorkEvent>) -> WorkEvent {
-    timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("work event timeout")
-        .expect("work event")
+    timeout(Duration::from_secs(2), async {
+        loop {
+            match events.recv().await.expect("work event") {
+                WorkEvent::UnreadCountUpdated { .. }
+                | WorkEvent::NewWorkProfilesAvailable { .. } => continue,
+                event => return event,
+            }
+        }
+    })
+    .await
+    .expect("work event timeout")
 }
 
 #[tokio::test]

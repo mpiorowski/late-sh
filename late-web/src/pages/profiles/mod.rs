@@ -31,6 +31,8 @@ struct Page {
     status_label: &'static str,
     work_type: String,
     location: String,
+    show_contact: bool,
+    contact: String,
     skills: Vec<String>,
     links: Vec<String>,
     summary_paragraphs: Vec<String>,
@@ -129,6 +131,8 @@ async fn handler(
         .collect::<Vec<_>>();
     let show_showcases = !showcases.is_empty();
 
+    let show_contact = !work.contact.trim().is_empty();
+
     let page = Page {
         headline: work.headline,
         username: user_profile.username.clone(),
@@ -136,6 +140,8 @@ async fn handler(
         status_label: status_label(&work.status),
         work_type: work.work_type,
         location: work.location,
+        show_contact,
+        contact: work.contact,
         skills: work.skills,
         links: work.links,
         summary_paragraphs: split_paragraphs(&work.summary),

@@ -24,7 +24,7 @@ pub struct WorkListView<'a> {
     pub profile_base_url: &'a str,
 }
 
-const ITEM_HEIGHT: u16 = 8;
+const ITEM_HEIGHT: u16 = 9;
 const SUMMARY_LINES: usize = 2;
 
 pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
@@ -94,7 +94,7 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
 
         let owner = p.user_id == view.current_user_id;
         let inner_w = content_area.width as usize;
-        let mut lines: Vec<Line<'static>> = Vec::with_capacity(7);
+        let mut lines: Vec<Line<'static>> = Vec::with_capacity(8);
 
         // Row 1: title — `* Headline` left, `(yours)` right-aligned when owner.
         lines.push(build_title_line(&p.headline, owner, is_unread, inner_w));
@@ -154,7 +154,16 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
             ]));
         }
 
-        // Row 7: share footer — `late.sh/profiles/w_abc...` (protocol stripped).
+        // Row 7: contact.
+        if !p.contact.trim().is_empty() {
+            let contact_text = format!("contact: {}", p.contact.trim());
+            lines.push(Line::from(Span::styled(
+                truncate_to_width(&contact_text, inner_w),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )));
+        }
+
+        // Row 8: share footer — `late.sh/profiles/w_abc...` (protocol stripped).
         let share_url = super::state::profile_url(view.profile_base_url, &p.slug);
         let share_display = display_link(&share_url);
         lines.push(Line::from(Span::styled(
@@ -360,6 +369,7 @@ pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Min(2),
     ];
     let rows = Layout::default()
@@ -371,9 +381,10 @@ pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView
     draw_field(frame, rows[1], view.state, ComposerField::Status, active);
     draw_field(frame, rows[2], view.state, ComposerField::Type, active);
     draw_field(frame, rows[3], view.state, ComposerField::Location, active);
-    draw_field(frame, rows[4], view.state, ComposerField::Links, active);
-    draw_field(frame, rows[5], view.state, ComposerField::Skills, active);
-    draw_field(frame, rows[6], view.state, ComposerField::Summary, active);
+    draw_field(frame, rows[4], view.state, ComposerField::Contact, active);
+    draw_field(frame, rows[5], view.state, ComposerField::Links, active);
+    draw_field(frame, rows[6], view.state, ComposerField::Skills, active);
+    draw_field(frame, rows[7], view.state, ComposerField::Summary, active);
 }
 
 fn draw_field(

@@ -14,6 +14,7 @@ crate::user_scoped_model! {
         pub status: String,
         pub work_type: String,
         pub location: String,
+        pub contact: String,
         pub links: Vec<String>,
         pub skills: Vec<String>,
         pub summary: String,

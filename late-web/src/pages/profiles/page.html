@@ -101,6 +101,20 @@
     </div>
     {% endif %}
 
+    <!-- ─── contact ─── -->
+    {% if show_contact %}
+    <div class="stagger stagger-4 mb-10">
+        <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> contact</div>
+        <div class="border border-gray-800 px-4 py-3 bg-gray-900/20">
+            <div class="flex items-center justify-between gap-4">
+                <span class="text-sm text-gray-300 min-w-0 truncate">
+                    <span class="text-gray-600">→ </span>{{ contact }}
+                </span>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- ─── links ─── -->
     {% if links.is_empty() %}{% else %}
     <div class="stagger stagger-4 mb-12">
@@ -223,10 +237,16 @@
 
     <div class="stagger stagger-7 mt-6 flex items-center justify-between text-[0.7rem] text-gray-700">
         <span>posted {{ created }}{% if updated != created %} · updated {{ updated }}{% endif %}</span>
+        {% if show_contact %}
+        <span>
+            reach out via <span class="text-gray-500">{{ contact }}</span>
+        </span>
+        {% else %}
         <span>
             reach out via
             <a href="/" class="text-gray-500 hover:text-green-500 transition-colors">ssh late.sh</a>
         </span>
+        {% endif %}
     </div>
 
 </div>
