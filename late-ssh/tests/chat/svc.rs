@@ -1581,6 +1581,97 @@ async fn mod_room_ban_command_bans_kicks_and_audits() {
 }
 
 #[tokio::test]
+async fn mod_rename_room_command_updates_slug_and_audits() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let mut moderation_events = service.subscribe_moderation_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let actor = create_test_user(&test_db.db, "rename_room_actor").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "rename-room-old")
+        .await
+        .expect("create room");
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(true, false),
+        request_id,
+        "rename-room #rename-room-old #rename_room_new".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            user_id,
+            request_id: got_request,
+            lines,
+            success,
+        } => {
+            assert_eq!(user_id, actor.id);
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines, vec!["renamed #rename-room-old to #rename-room-new"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let renamed = ChatRoom::find_non_dm_by_slug(&client, "rename-room-new")
+        .await
+        .expect("renamed room lookup")
+        .expect("renamed room");
+    assert_eq!(renamed.id, room.id);
+    assert!(
+        ChatRoom::find_non_dm_by_slug(&client, "rename-room-old")
+            .await
+            .expect("old room lookup")
+            .is_none()
+    );
+
+    let moderation_event = timeout(Duration::from_secs(2), moderation_events.recv())
+        .await
+        .expect("moderation event timeout")
+        .expect("moderation event");
+    match moderation_event {
+        ModerationEvent::RoomRenamed {
+            actor_user_id,
+            room_id,
+            old_slug,
+            new_slug,
+        } => {
+            assert_eq!(actor_user_id, actor.id);
+            assert_eq!(room_id, room.id);
+            assert_eq!(old_slug, "rename-room-old");
+            assert_eq!(new_slug, "rename-room-new");
+        }
+        other => panic!("expected room renamed moderation event, got {other:?}"),
+    }
+
+    let audit_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM moderation_audit_log
+             WHERE actor_user_id = $1
+               AND action = 'rename_room'
+               AND target_kind = 'room'
+               AND target_id = $2
+               AND metadata->>'old_slug' = 'rename-room-old'
+               AND metadata->>'new_slug' = 'rename-room-new'",
+            &[&actor.id, &room.id],
+        )
+        .await
+        .expect("audit count")
+        .get(0);
+    assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
 async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");

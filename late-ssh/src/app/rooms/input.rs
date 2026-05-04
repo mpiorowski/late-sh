@@ -187,12 +187,11 @@ fn handle_create_flow_event(app: &mut App, event: &ParsedInput) -> bool {
         return handle_create_picker_event(app, *kind_index, event);
     }
 
-    let Some((kind, action)) = app.rooms_create_flow.as_mut().and_then(|flow| match flow {
-        CreateRoomFlow::Game { kind, modal } => Some((*kind, modal.handle_event(event))),
-        CreateRoomFlow::Picker { .. } => None,
-    }) else {
+    let Some(CreateRoomFlow::Game { kind, modal }) = app.rooms_create_flow.as_mut() else {
         return false;
     };
+    let kind = *kind;
+    let action = modal.handle_event(event);
 
     match action {
         CreateModalAction::Continue => true,

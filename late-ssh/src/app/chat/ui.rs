@@ -30,7 +30,7 @@ const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 fn custom_badge_for_username(username: &str) -> Option<&'static str> {
     match username.trim().to_ascii_lowercase().as_str() {
         "mevanlc" | "yawner" => Some(" 🔧"),
-        "kirii.md" => Some(" 🎨"),
+        "kirii.md" | "kirii.exe" | "kirii.tar" => Some(" 🎨"),
         _ => None,
     }
 }
