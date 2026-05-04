@@ -17,7 +17,7 @@ Included here:
 - Main chat rooms, DMs, public/private topic rooms, and game-backed room chat.
 - Dashboard chat and embedded Rooms chat surfaces.
 - Message composer, replies, edits, deletes, reactions, pinned messages, ignores, overlays, and autocomplete.
-- Synthetic chat entries: News, Mentions/Notifications, Showcase, and Discover.
+- Synthetic chat entries: News, Mentions/Notifications, Showcase, Work, and Discover.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
 
 Global SSH, audio, games, profile, rooms/blackjack, observability, and repo-wide test policy stay in the root context.
@@ -37,7 +37,8 @@ late-ssh/src/app/chat/
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- news/                        # Synthetic News entry: articles + #general announcement
 |-- notifications/               # Synthetic Mentions entry: mention notifications
-`-- showcase/                    # Synthetic Showcase entry: user project links
+|-- showcase/                    # Synthetic Showcase entry: user project links
+`-- work/                        # Synthetic Work entry: one public work profile per user
 ```
 
 Related tests:
@@ -48,13 +49,15 @@ late-ssh/tests/chat/
 |-- svc.rs                       # Broad ChatService integration coverage
 |-- news.rs                      # ArticleService integration coverage
 |-- showcase.rs                  # ShowcaseService integration coverage
+|-- work.rs                      # WorkService integration coverage
 `-- state.rs                     # Placeholder; direct ChatState integration tests need more accessors
 ```
 
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
-`notification.rs`, `article.rs`, `article_feed_read.rs`, `showcase.rs`, and
-`showcase_feed_read.rs`. Chat-owned moderation commands also use `room_ban.rs`,
+`notification.rs`, `article.rs`, `article_feed_read.rs`, `showcase.rs`,
+`showcase_feed_read.rs`, `work_profile.rs`, and `work_feed_read.rs`.
+Chat-owned moderation commands also use `room_ban.rs`,
 `server_ban.rs`, `artboard_ban.rs`, and `moderation_audit_log.rs`.
 
 ---
@@ -139,18 +142,19 @@ Notifications:
 
 ## 6. Rooms And Selection
 
-`RoomSlot` represents either a real room or one of the synthetic entries: News, Notifications, Discover, or Showcase.
+`RoomSlot` represents either a real room or one of the synthetic entries: News, Notifications, Discover, Showcase, or Work.
 
 Visual order is defined in `state.rs` and mirrored by room-list rendering in `ui.rs`:
 1. Core permanent rooms: `general`, `announcements`, `suggestions`, `bugs`.
 2. Other permanent rooms.
 3. News.
 4. Showcase.
-5. Notifications/Mentions.
-6. Discover.
-7. Public topic rooms, sorted by slug.
-8. Private topic rooms, sorted by slug.
-9. DMs, sorted by peer display name.
+5. Work.
+6. Notifications/Mentions.
+7. Discover.
+8. Public topic rooms, sorted by slug.
+9. Private topic rooms, sorted by slug.
+10. DMs, sorted by peer display name.
 
 Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_room` hides them from the main Chat room list/navigation and favorite-room picker.
 
@@ -158,7 +162,7 @@ Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
 - `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`. Jumping to the already selected room/synthetic entry still re-runs the entry's read/list side effects so stale unread badges clear.
 - While composing on the Chat page, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
-- Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`), not `selected_room_id`.
+- Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`, `work_selected`), not `selected_room_id`.
 
 ---
 
@@ -180,8 +184,9 @@ Dashboard box row:
 - `b` then `1` enters the left Blackjack room slot.
 - `b` then `2` launches the currently displayed unfinished daily game.
 - `b` then `3` opens the Chat screen with News selected and the currently displayed wire article selected.
+- `b` then `4` opens the Chat screen with `#announcements` selected; its chip renders on pinned dashboard messages.
 - The daily-game and wire-news boxes rotate every 60 seconds; the wire rotates through at most five articles.
-- Dashboard pinned messages have a single dashboard rendering path: the newest pinned message is embedded into the box-row rule. There is no separate pinned strip above dashboard chat.
+- Dashboard pinned messages render with the dashboard box row: a detached top pin strip when roomy, otherwise embedded into the bottom grid rule. There is no separate pinned strip above dashboard chat.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Dashboard, Chat, or Rooms screen, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, room, favorite, or active-room changes.
 
@@ -350,6 +355,19 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Tags normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each tag at 24 chars and total tags at 8.
 - Snapshot is global and lists recent showcases; unread count is per user through `showcase_feed_reads`.
 
+### Work
+
+- Backed by persisted `work_profiles` and `work_feed_reads`.
+- It is a separate feed and does not mirror posts into chat messages.
+- Each user has at most one work profile; creating again updates the existing profile and preserves its public random slug (`w_` plus 12 lowercase alphanumeric chars).
+- Composer fields: headline, status, type, location, contact, links, skills, summary.
+- Status must be `open`, `casual`, or `not-looking`; aliases normalize in `work/state.rs`.
+- Links require `http://` or `https://`, cap at 6, and are stored for later web rendering.
+- Skills normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each skill at 24 chars and total skills at 12.
+- Public profiles show bio and showcases when the author has data for them. The composer does not expose include toggles.
+- `i` creates or edits the caller's own profile; `e` edits selected owned/admin entry; `d` deletes owned/admin entry; Enter or `c` copies a recruiter-friendly profile summary when not composing.
+- Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`.
+
 ### Notifications / Mentions
 
 - Backed by `notifications` joined with actor, room, and message preview data.
@@ -412,15 +430,15 @@ Cache:
 | `Space` | Room-jump mode |
 | `j` / `k` / arrows | Move message selection or synthetic-list selection |
 | `Ctrl+D` / `Ctrl+U` | Approximate half-page message selection |
-| `i` | Start composing in selected room, or start News/Showcase composer when selected |
+| `i` | Start composing in selected room, or start News/Showcase/Work composer when selected |
 | `/` | Start command composer in selected room |
-| `Enter` | Submit composer; jump reply target; copy URL in News/Showcase; join Discover; jump Mention |
+| `Enter` | Submit composer; jump reply target; copy URL in News/Showcase; copy Work summary; join Discover; jump Mention |
 | `Alt+Enter` / `Ctrl+J` | Insert newline in main chat composer |
 | `Alt+S` | Submit main chat composer and keep it open |
 | `Esc` | Cancel compose/overlay/autocomplete/room jump |
 | `r` | Reply to selected message |
-| `e` | Edit selected own/admin message, or Showcase entry when Showcase is selected |
-| `d` | Delete selected own/admin message, News article, or Showcase entry |
+| `e` | Edit selected own/admin message, Showcase entry, or Work profile |
+| `d` | Delete selected own/admin message, News article, Showcase entry, or Work profile |
 | `p` | Open selected author's read-only profile |
 | `c` | Copy selected message body |
 | `f` then `1..8` | React to selected message |
@@ -447,6 +465,7 @@ Cache:
 |-------|------|
 | News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `Esc` cancel |
 | Showcase | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields, `Esc` cancel |
+| Work | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy profile summary, Tab cycle fields, `Esc` cancel |
 | Mentions | `j/k` navigate, Enter jump to referenced room/message |
 | Discover | `j/k` navigate, Enter join selected public room |
 
@@ -523,6 +542,7 @@ Existing integration coverage:
 - `tests/chat/svc.rs`: send, reactions, pins, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore.
 - `tests/chat/news.rs`: article snapshots, empty list, author resolution, duplicate URL failure, direct DB inserts appearing after list refresh.
 - `tests/chat/showcase.rs`: create event/snapshot, non-owner update failure, admin delete, unread cursor behavior.
+- `tests/chat/work.rs`: profile create/update snapshot behavior, public slug preservation, non-owner update failure, admin delete, unread cursor behavior.
 - `tests/chat/state.rs`: placeholder; direct `ChatState` tests need accessors or indirect UI/input tests.
 
 Existing unit coverage:
@@ -534,7 +554,7 @@ Existing unit coverage:
 
 Test gaps:
 - Dedicated notification-service integration tests for mention creation/list/mark-read.
-- Direct input-handler tests for News/Showcase/Notifications/Discover.
+- Direct input-handler tests for News/Showcase/Work/Notifications/Discover.
 - Direct `ChatState` synthetic-panel integration tests.
 - Full News process success path is hard to cover because extraction depends on AI/search/network behavior.
 
@@ -556,5 +576,5 @@ Test gaps:
 - Room visual order must stay consistent between state and UI hit-testing/row-building.
 - Mouse hit-testing reconstructs a temporary `ChatRenderInput`; room-list layout changes must keep hit tests in sync.
 - News payload fields must sanitize the separator and newlines.
-- Showcase posts do not create chat messages; News posts do.
+- Showcase and Work posts do not create chat messages; News posts do.
 - Game rooms must remain opt-in and `auto_join=false`.

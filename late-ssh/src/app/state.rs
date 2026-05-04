@@ -114,6 +114,7 @@ pub struct SessionConfig {
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub showcase_service: crate::app::chat::showcase::svc::ShowcaseService,
+    pub work_service: crate::app::chat::work::svc::WorkService,
     pub profile_service: ProfileService,
     pub twenty_forty_eight_service:
         crate::app::games::twenty_forty_eight::svc::TwentyFortyEightService,
@@ -709,13 +710,16 @@ impl App {
             artboard_ban_expires_at: config.artboard_ban_expires_at,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
-                config.chat_service,
-                config.notification_service,
+                chat::state::ChatServices {
+                    chat: config.chat_service,
+                    notifications: config.notification_service,
+                    articles: config.article_service.clone(),
+                    showcases: config.showcase_service.clone(),
+                    work: config.work_service.clone(),
+                },
                 config.user_id,
                 config.permissions,
                 active_users.clone(),
-                config.article_service.clone(),
-                config.showcase_service.clone(),
             ),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),

@@ -20,6 +20,7 @@ struct InputContext {
     chat_ac_active: bool,
     news_composing: bool,
     showcase_composing: bool,
+    work_composing: bool,
 }
 
 impl InputContext {
@@ -30,6 +31,7 @@ impl InputContext {
             chat_ac_active: app.chat.is_autocomplete_active(),
             news_composing: app.chat.news.composing(),
             showcase_composing: app.chat.showcase.composing(),
+            work_composing: app.chat.work.composing(),
         }
     }
 
@@ -40,7 +42,8 @@ impl InputContext {
             return false;
         }
         chat_screen
-            || (self.screen == Screen::Chat && (self.news_composing || self.showcase_composing))
+            || (self.screen == Screen::Chat
+                && (self.news_composing || self.showcase_composing || self.work_composing))
     }
 }
 
@@ -54,6 +57,7 @@ enum PasteTarget {
     ChatComposer,
     NewsComposer,
     ShowcaseComposer,
+    WorkComposer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -660,6 +664,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 app.chat.update_autocomplete();
             } else if ctx.screen == Screen::Chat && ctx.showcase_composing {
                 app.chat.showcase.field_newline();
+            } else if ctx.screen == Screen::Chat && ctx.work_composing {
+                app.chat.work.field_newline();
             }
         }
         ParsedInput::AltS => {
@@ -693,10 +699,16 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 app.chat.showcase.cycle_field(false);
                 return;
             }
+            if ctx.screen == Screen::Chat && ctx.work_composing {
+                app.chat.work.cycle_field(false);
+                return;
+            }
             if is_chat_composer_context(ctx) {
                 return;
             }
-            if ctx.screen == Screen::Chat && (ctx.news_composing || ctx.showcase_composing) {
+            if ctx.screen == Screen::Chat
+                && (ctx.news_composing || ctx.showcase_composing || ctx.work_composing)
+            {
                 return;
             }
             if ctx.screen == Screen::Games && app.is_playing_game {
@@ -795,6 +807,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         {
             let _ = chat::showcase::input::handle_arrow(app, key);
         }
+        ParsedInput::CtrlArrow(key) | ParsedInput::AltArrow(key)
+            if ctx.screen == Screen::Chat && ctx.work_composing =>
+        {
+            let _ = chat::work::input::handle_arrow(app, key);
+        }
         ParsedInput::Delete
         | ParsedInput::CtrlArrow(_)
         | ParsedInput::AltArrow(_)
@@ -831,6 +848,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
             if ctx.screen == Screen::Chat && ctx.showcase_composing {
                 let _ = chat::showcase::input::handle_arrow(app, key);
+                return;
+            }
+            if ctx.screen == Screen::Chat && ctx.work_composing {
+                let _ = chat::work::input::handle_arrow(app, key);
                 return;
             }
 
@@ -907,6 +928,10 @@ fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
     }
     if ctx.screen == Screen::Chat && ctx.showcase_composing {
         app.chat.showcase.field_insert_char(ch);
+        return true;
+    }
+    if ctx.screen == Screen::Chat && ctx.work_composing {
+        app.chat.work.field_insert_char(ch);
         return true;
     }
     false
@@ -1048,6 +1073,9 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
         PasteTarget::ShowcaseComposer => {
             insert_pasted_text(pasted, |ch| app.chat.showcase.field_insert_char(ch));
         }
+        PasteTarget::WorkComposer => {
+            insert_pasted_text(pasted, |ch| app.chat.work.field_insert_char(ch));
+        }
         PasteTarget::None => {}
     }
 }
@@ -1059,6 +1087,8 @@ fn paste_target(ctx: InputContext) -> PasteTarget {
         PasteTarget::NewsComposer
     } else if ctx.screen == Screen::Chat && ctx.showcase_composing {
         PasteTarget::ShowcaseComposer
+    } else if ctx.screen == Screen::Chat && ctx.work_composing {
+        PasteTarget::WorkComposer
     } else {
         PasteTarget::None
     }
@@ -1238,6 +1268,21 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                     },
                     showcase_state: Some(&app.chat.showcase),
                     showcase_composing: app.chat.showcase.composing(),
+                    work_selected: app.chat.work_selected,
+                    work_unread_count: app.chat.work.unread_count(),
+                    work_view: crate::app::chat::work::ui::WorkListView {
+                        items: app.chat.work.all_items(),
+                        selected_index: app.chat.work.selected_index(),
+                        current_user_id: app.user_id,
+                        is_admin: app.chat.work.is_admin(),
+                        marker_read_at: app.chat.work.marker_read_at(),
+                        profile_base_url: app
+                            .connect_url
+                            .rsplit_once('/')
+                            .map_or(&*app.connect_url, |p| p.0),
+                    },
+                    work_state: Some(&app.chat.work),
+                    work_composing: app.chat.work.composing(),
                 };
                 crate::app::chat::ui::room_list_hit_test(content_area, &view, x, y)
             };
@@ -1342,6 +1387,11 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return true;
     }
 
+    if ctx.screen == Screen::Chat && ctx.work_composing {
+        chat::work::input::handle_composer_input(app, byte);
+        return true;
+    }
+
     false
 }
 
@@ -1350,7 +1400,11 @@ fn compose_room_switch_allowed(screen: Screen) -> bool {
 }
 
 fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
-    if app.chat.is_composing() || app.chat.news.composing() || app.chat.showcase.composing() {
+    if app.chat.is_composing()
+        || app.chat.news.composing()
+        || app.chat.showcase.composing()
+        || app.chat.work.composing()
+    {
         return false;
     }
 
@@ -1375,6 +1429,7 @@ fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.news.stop_composing();
     app.chat.showcase.stop_composing();
+    app.chat.work.stop_composing();
 }
 
 fn open_settings_modal_globally(app: &mut App) {
@@ -1415,6 +1470,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         && !ctx.chat_composing
         && !ctx.news_composing
         && !ctx.showcase_composing
+        && !ctx.work_composing
         && ctx.screen != Screen::Artboard
     {
         app.help_modal_state
@@ -1525,7 +1581,12 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'w' | b'W' if !ctx.chat_composing && !ctx.news_composing && !ctx.showcase_composing => {
+        b'w' | b'W'
+            if !ctx.chat_composing
+                && !ctx.news_composing
+                && !ctx.showcase_composing
+                && !ctx.work_composing =>
+        {
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_settings = false;
@@ -1774,6 +1835,7 @@ mod tests {
             chat_ac_active: false,
             news_composing: false,
             showcase_composing: false,
+            work_composing: false,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -1786,6 +1848,7 @@ mod tests {
             chat_ac_active: false,
             news_composing: false,
             showcase_composing: false,
+            work_composing: false,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -1798,6 +1861,7 @@ mod tests {
             chat_ac_active: false,
             news_composing: false,
             showcase_composing: false,
+            work_composing: false,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -1946,6 +2010,7 @@ mod tests {
             chat_ac_active: false,
             news_composing: true,
             showcase_composing: false,
+            work_composing: false,
         };
         assert_eq!(paste_target(ctx), PasteTarget::ChatComposer);
     }
@@ -1958,6 +2023,7 @@ mod tests {
             chat_ac_active: false,
             news_composing: true,
             showcase_composing: false,
+            work_composing: false,
         };
         assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
     }
@@ -1970,6 +2036,7 @@ mod tests {
             chat_ac_active: false,
             news_composing: false,
             showcase_composing: true,
+            work_composing: false,
         };
         assert_eq!(paste_target(ctx), PasteTarget::ShowcaseComposer);
     }
@@ -2290,6 +2357,7 @@ mod tests {
             chat_ac_active: true,
             news_composing: false,
             showcase_composing: false,
+            work_composing: false,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -2302,6 +2370,7 @@ mod tests {
             chat_ac_active: false,
             news_composing: false,
             showcase_composing: false,
+            work_composing: false,
         };
         assert!(ctx.blocks_arrow_sequence());
     }

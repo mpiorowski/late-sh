@@ -45,7 +45,6 @@ pub enum Row {
     BackgroundColor,
     DashboardHeader,
     RightSidebar,
-    GamesSidebar,
     Country,
     Timezone,
     DirectMessages,
@@ -57,7 +56,7 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 18] = [
+    pub const ALL: [Row; 17] = [
         Row::Username,
         Row::Ide,
         Row::Terminal,
@@ -67,7 +66,6 @@ impl Row {
         Row::BackgroundColor,
         Row::DashboardHeader,
         Row::RightSidebar,
-        Row::GamesSidebar,
         Row::Country,
         Row::Timezone,
         Row::DirectMessages,
@@ -1066,10 +1064,6 @@ impl SettingsModalState {
             }
             Row::RightSidebar => {
                 self.draft.show_right_sidebar ^= true;
-                true
-            }
-            Row::GamesSidebar => {
-                self.draft.show_games_sidebar ^= true;
                 true
             }
             Row::DirectMessages => {

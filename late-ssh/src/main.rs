@@ -19,6 +19,7 @@ use late_ssh::{
     app::chat::notifications::svc::NotificationService,
     app::chat::showcase::svc::ShowcaseService,
     app::chat::svc::ChatService,
+    app::chat::work::svc::WorkService,
     app::profile::svc::ProfileService,
     app::vote::svc::VoteService,
     config::Config,
@@ -132,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
     let profile_service = ProfileService::new(db.clone(), active_users.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let showcase_service = ShowcaseService::new(db.clone());
+    let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
         late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
     let tetris_service = late_ssh::app::games::tetris::svc::TetrisService::new(db.clone());
@@ -222,6 +224,7 @@ async fn main() -> anyhow::Result<()> {
         notification_service: notification_service.clone(),
         article_service,
         showcase_service,
+        work_service,
         profile_service,
         twenty_forty_eight_service,
         tetris_service,
