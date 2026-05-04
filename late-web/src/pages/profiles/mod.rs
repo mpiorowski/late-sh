@@ -33,6 +33,7 @@ struct Page {
     location: String,
     show_contact: bool,
     contact: String,
+    contacts: Vec<ContactItem>,
     skills: Vec<String>,
     links: Vec<String>,
     summary_paragraphs: Vec<String>,
@@ -40,7 +41,7 @@ struct Page {
     created: String,
     updated: String,
     show_bio: bool,
-    bio_paragraphs: Vec<String>,
+    bio_html: String,
     show_late_fetch: bool,
     fetch_created: String,
     fetch_theme: String,
@@ -63,6 +64,12 @@ struct ShowcaseItem {
     url: String,
     description_paragraphs: Vec<String>,
     tags: Vec<String>,
+}
+
+struct ContactItem {
+    value: String,
+    /// Empty when the entry isn't a recognised email/URL.
+    href: String,
 }
 
 #[derive(Template)]
@@ -115,8 +122,8 @@ async fn handler(
         .await
         .context("failed to load author profile")?;
 
-    let bio_paragraphs = split_paragraphs(&user_profile.bio);
-    let show_bio = !bio_paragraphs.is_empty();
+    let bio_html = render_markdown(&user_profile.bio);
+    let show_bio = !bio_html.is_empty();
 
     let showcases = Showcase::list_by_user_id(&client, work.user_id)
         .await
@@ -131,7 +138,8 @@ async fn handler(
         .collect::<Vec<_>>();
     let show_showcases = !showcases.is_empty();
 
-    let show_contact = !work.contact.trim().is_empty();
+    let contacts = parse_contacts(&work.contact);
+    let show_contact = !contacts.is_empty();
 
     let page = Page {
         headline: work.headline,
@@ -142,6 +150,7 @@ async fn handler(
         location: work.location,
         show_contact,
         contact: work.contact,
+        contacts,
         skills: work.skills,
         links: work.links,
         summary_paragraphs: split_paragraphs(&work.summary),
@@ -149,7 +158,7 @@ async fn handler(
         created: format_date(work.created),
         updated: format_date(work.updated),
         show_bio,
-        bio_paragraphs,
+        bio_html,
         show_late_fetch: true,
         fetch_created: user_profile
             .created_at
@@ -283,8 +292,56 @@ fn split_paragraphs(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Render a user-supplied markdown bio as HTML. Raw HTML in the source is
+/// stripped so an author can't smuggle <script> or other arbitrary tags.
+fn render_markdown(text: &str) -> String {
+    use pulldown_cmark::{Event, Options, Parser, html};
+
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
+    let parser = Parser::new_ext(trimmed, opts).filter(|event| {
+        !matches!(
+            event,
+            Event::Html(_) | Event::InlineHtml(_) | Event::FootnoteReference(_)
+        )
+    });
+
+    let mut out = String::with_capacity(trimmed.len() + 64);
+    html::push_html(&mut out, parser);
+    out
+}
+
 fn format_date(ts: DateTime<Utc>) -> String {
     ts.format("%Y-%m-%d").to_string()
+}
+
+/// Split a free-form contact string on commas. Each entry is trimmed; emails
+/// and URLs become clickable, anything else (e.g. "DM on late.sh") is plain text.
+fn parse_contacts(text: &str) -> Vec<ContactItem> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| ContactItem {
+            value: s.to_string(),
+            href: contact_href(s),
+        })
+        .collect()
+}
+
+fn contact_href(value: &str) -> String {
+    if value.starts_with("http://") || value.starts_with("https://") {
+        return value.to_string();
+    }
+    if let Some((local, domain)) = value.split_once('@') {
+        if !local.is_empty() && domain.contains('.') && !value.contains(char::is_whitespace) {
+            return format!("mailto:{value}");
+        }
+    }
+    String::new()
 }
 
 fn dash_or(value: Option<&str>) -> String {
@@ -298,7 +355,8 @@ fn dash_or(value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        dash_or, split_paragraphs, status_id, status_label, status_priority, summary_preview,
+        dash_or, parse_contacts, render_markdown, split_paragraphs, status_id, status_label,
+        status_priority, summary_preview,
     };
 
     #[test]
@@ -336,5 +394,50 @@ mod tests {
         );
         let preview = summary_preview("alpha beta gamma delta epsilon zeta", 18);
         assert_eq!(preview, "alpha beta gamma…");
+    }
+
+    #[test]
+    fn render_markdown_renders_headings_and_lists() {
+        let html = render_markdown("# Hi\n\n- one\n- two");
+        assert!(html.contains("<h1>Hi</h1>"));
+        assert!(html.contains("<li>one</li>"));
+    }
+
+    #[test]
+    fn render_markdown_strips_raw_html() {
+        // Raw HTML in source must not survive — author content is untrusted.
+        let html = render_markdown("hello <script>alert(1)</script> world");
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("hello"));
+        assert!(html.contains("world"));
+    }
+
+    #[test]
+    fn render_markdown_empty_returns_empty() {
+        assert_eq!(render_markdown(""), "");
+        assert_eq!(render_markdown("   \n  "), "");
+    }
+
+    #[test]
+    fn parse_contacts_splits_on_commas_and_trims() {
+        let items = parse_contacts("foo@bar.com, DM on late.sh ,  ");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].value, "foo@bar.com");
+        assert_eq!(items[0].href, "mailto:foo@bar.com");
+        assert_eq!(items[1].value, "DM on late.sh");
+        assert_eq!(items[1].href, "");
+    }
+
+    #[test]
+    fn parse_contacts_links_urls_but_not_bare_text() {
+        let items = parse_contacts("https://t.me/me, just say hi");
+        assert_eq!(items[0].href, "https://t.me/me");
+        assert_eq!(items[1].href, "");
+    }
+
+    #[test]
+    fn parse_contacts_empty_input_yields_empty_list() {
+        assert!(parse_contacts("").is_empty());
+        assert!(parse_contacts("   ,  , ").is_empty());
     }
 }

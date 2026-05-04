@@ -3,11 +3,13 @@ use chrono::{DateTime, Utc};
 use late_core::{
     db::Db,
     models::{
+        moderation_audit_log::ModerationAuditLog,
         user::User,
         work_feed_read::WorkFeedRead,
         work_profile::{WorkProfile, WorkProfileParams},
     },
 };
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, info_span};
@@ -212,6 +214,16 @@ impl WorkService {
                     {
                         anyhow::bail!("work profile update missed");
                     }
+                    ModerationAuditLog::record_if(
+                        &client,
+                        is_admin && owner_id != user_id,
+                        user_id,
+                        "work_profile_edit",
+                        "work_profile",
+                        Some(profile_id),
+                        json!({ "target_user_id": owner_id }),
+                    )
+                    .await?;
                     service.do_list().await?;
                     Ok::<_, anyhow::Error>(())
                 }
@@ -265,6 +277,16 @@ impl WorkService {
                     if count == 0 {
                         anyhow::bail!("work profile already deleted");
                     }
+                    ModerationAuditLog::record_if(
+                        &client,
+                        is_admin && existing.user_id != user_id,
+                        user_id,
+                        "work_profile_delete",
+                        "work_profile",
+                        Some(profile_id),
+                        json!({ "target_user_id": existing.user_id }),
+                    )
+                    .await?;
                     service.do_list().await?;
                     Ok::<_, anyhow::Error>(())
                 }

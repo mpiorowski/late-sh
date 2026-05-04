@@ -1,5 +1,6 @@
 use late_core::{
     models::{
+        moderation_audit_log::ModerationAuditLog,
         work_feed_read::WorkFeedRead,
         work_profile::{WorkProfile, WorkProfileParams},
     },
@@ -175,6 +176,66 @@ async fn non_owner_update_fails_and_leaves_work_profile_unchanged() {
 }
 
 #[tokio::test]
+async fn admin_update_of_other_users_work_profile_is_audited() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let owner = create_test_user(&test_db.db, "work-edit-owner").await;
+    let admin = create_test_user(&test_db.db, "work-edit-admin").await;
+    let original = WorkProfile::create_by_user_id(
+        &client,
+        owner.id,
+        params(
+            owner.id,
+            "Original profile",
+            "Original summary.",
+            "w_adminedit000",
+        ),
+    )
+    .await
+    .expect("seed work profile");
+
+    let service = WorkService::new(test_db.db.clone());
+    let mut events = service.subscribe_events();
+
+    service.update_task(
+        admin.id,
+        original.id,
+        params(
+            admin.id,
+            "Admin-edited profile",
+            "Updated by admin.",
+            "w_ignoredslug2",
+        ),
+        true,
+    );
+
+    match recv_work_event(&mut events).await {
+        WorkEvent::Updated { user_id } => assert_eq!(user_id, admin.id),
+        other => panic!("expected Updated event, got {other:?}"),
+    }
+
+    let reloaded = WorkProfile::get(&client, original.id)
+        .await
+        .expect("reload work profile")
+        .expect("work profile still exists");
+    assert_eq!(reloaded.user_id, owner.id);
+    assert_eq!(reloaded.headline, "Admin-edited profile");
+    assert_eq!(reloaded.slug, "w_adminedit000");
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].actor_user_id, admin.id);
+    assert_eq!(audit[0].action, "work_profile_edit");
+    assert_eq!(audit[0].target_kind, "work_profile");
+    assert_eq!(audit[0].target_id, Some(original.id));
+    let owner_id = owner.id.to_string();
+    assert_eq!(
+        audit[0].metadata["target_user_id"].as_str(),
+        Some(owner_id.as_str())
+    );
+}
+
+#[tokio::test]
 async fn admin_delete_removes_other_users_work_profile_and_refreshes_snapshot() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -215,6 +276,18 @@ async fn admin_delete_removes_other_users_work_profile_and_refreshes_snapshot() 
         .await
         .expect("reload deleted work profile");
     assert!(deleted.is_none());
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].actor_user_id, admin.id);
+    assert_eq!(audit[0].action, "work_profile_delete");
+    assert_eq!(audit[0].target_kind, "work_profile");
+    assert_eq!(audit[0].target_id, Some(profile.id));
+    let owner_id = owner.id.to_string();
+    assert_eq!(
+        audit[0].metadata["target_user_id"].as_str(),
+        Some(owner_id.as_str())
+    );
 }
 
 #[tokio::test]

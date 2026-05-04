@@ -8,11 +8,13 @@ use late_core::{
         article_feed_read::ArticleFeedRead,
         chat_message::ChatMessage,
         chat_room::ChatRoom,
+        moderation_audit_log::ModerationAuditLog,
         user::User,
     },
     telemetry::TracedExt,
 };
 use serde::Deserialize;
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
@@ -206,6 +208,16 @@ impl ArticleService {
                     if count == 0 {
                         anyhow::bail!("Article already deleted");
                     }
+                    ModerationAuditLog::record_if(
+                        &client,
+                        is_admin && article.user_id != user_id,
+                        user_id,
+                        "article_delete",
+                        "article",
+                        Some(article_id),
+                        json!({ "target_user_id": article.user_id, "url": article.url }),
+                    )
+                    .await?;
 
                     // Delete the news announcement from general chat
                     if let Err(e) = ChatMessage::delete_news_by_user_and_url(

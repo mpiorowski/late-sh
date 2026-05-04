@@ -47,6 +47,65 @@
         0%, 100% { opacity: 0.45; }
         50% { opacity: 1; }
     }
+
+    /* Markdown-rendered bio. Tailwind's typography plugin isn't loaded here,
+       so set the rhythm manually to match the rest of the page. */
+    .bio-prose > * + * { margin-top: 0.75rem; }
+    .bio-prose h1,
+    .bio-prose h2,
+    .bio-prose h3 {
+        color: #e5e7eb;
+        font-size: 0.95rem;
+        line-height: 1.4;
+        letter-spacing: -0.01em;
+    }
+    .bio-prose h1 { font-size: 1.05rem; }
+    .bio-prose * + h1,
+    .bio-prose * + h2,
+    .bio-prose * + h3 { margin-top: 1.25rem; }
+    .bio-prose p { color: #9ca3af; }
+    .bio-prose ul,
+    .bio-prose ol { padding-left: 1.1rem; color: #9ca3af; }
+    .bio-prose ul { list-style: none; padding-left: 0; }
+    .bio-prose ul > li { position: relative; padding-left: 1rem; }
+    .bio-prose ul > li::before {
+        content: "→";
+        position: absolute;
+        left: 0;
+        color: #4b5563;
+    }
+    .bio-prose ol { list-style: decimal; }
+    .bio-prose li + li { margin-top: 0.35rem; }
+    .bio-prose a {
+        color: #16a34a;
+        text-decoration: none;
+        border-bottom: 1px dashed rgba(22, 163, 74, 0.4);
+    }
+    .bio-prose a:hover { color: #4ade80; border-bottom-color: rgba(74, 222, 128, 0.6); }
+    .bio-prose code {
+        background: rgba(31, 41, 55, 0.6);
+        padding: 0.05rem 0.3rem;
+        border-radius: 2px;
+        color: #d1d5db;
+        font-size: 0.85em;
+    }
+    .bio-prose pre {
+        background: rgba(17, 24, 39, 0.6);
+        border: 1px solid #1f2937;
+        padding: 0.75rem 0.9rem;
+        overflow-x: auto;
+        font-size: 0.8rem;
+        color: #d1d5db;
+    }
+    .bio-prose pre code { background: transparent; padding: 0; font-size: inherit; }
+    .bio-prose blockquote {
+        border-left: 2px solid #1f2937;
+        padding-left: 0.75rem;
+        color: #9ca3af;
+    }
+    .bio-prose strong { color: #d1d5db; font-weight: 600; }
+    .bio-prose em { color: #d1d5db; font-style: italic; }
+    .bio-prose hr { border: 0; border-top: 1px solid #1f2937; margin: 1rem 0; }
 </style>
 
 <div class="max-w-2xl mx-auto pt-8 sm:pt-14 pb-20" x-data="{ copied: null, copy(text){ navigator.clipboard.writeText(text); this.copied = text; setTimeout(()=>this.copied=null, 2000); } }">
@@ -105,12 +164,27 @@
     {% if show_contact %}
     <div class="stagger stagger-4 mb-10">
         <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> contact</div>
-        <div class="border border-gray-800 px-4 py-3 bg-gray-900/20">
-            <div class="flex items-center justify-between gap-4">
-                <span class="text-sm text-gray-300 min-w-0 truncate">
-                    <span class="text-gray-600">→ </span>{{ contact }}
-                </span>
+        <div class="space-y-2">
+            {% for c in contacts %}
+            {% if c.href.is_empty() %}
+            <div class="border border-gray-800 px-4 py-3 bg-gray-900/20">
+                <div class="flex items-center justify-between gap-4">
+                    <span class="text-sm text-gray-300 min-w-0 break-words">
+                        <span class="text-gray-600">→ </span>{{ c.value }}
+                    </span>
+                </div>
             </div>
+            {% else %}
+            <a href="{{ c.href }}"
+               class="group block w-full text-left border border-gray-800 hover:border-green-900 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
+                <div class="flex items-center justify-between gap-4">
+                    <span class="text-sm text-gray-300 group-hover:text-green-400 transition-colors min-w-0 break-words">
+                        <span class="text-gray-600">→ </span>{{ c.value }}
+                    </span>
+                </div>
+            </a>
+            {% endif %}
+            {% endfor %}
         </div>
     </div>
     {% endif %}
@@ -139,10 +213,8 @@
     {% if show_bio %}
     <div class="stagger stagger-5 mb-12">
         <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> bio</div>
-        <div class="border-l-2 border-gray-800 pl-4 text-gray-400 text-sm leading-relaxed space-y-3">
-            {% for p in bio_paragraphs %}
-            <p>{{ p }}</p>
-            {% endfor %}
+        <div class="bio-prose border-l-2 border-gray-800 pl-4 text-sm leading-relaxed">
+            {{ bio_html|safe }}
         </div>
     </div>
     {% endif %}
@@ -152,7 +224,7 @@
     <div class="stagger stagger-5 mb-12">
         <div class="text-xs text-gray-600 mb-3"><span class="text-gray-700">#</span> late.fetch</div>
         <div class="border border-gray-800 bg-gray-900/30 p-5 text-xs leading-relaxed">
-            <div class="grid grid-cols-2 gap-x-6 gap-y-2">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
                 <div class="flex items-baseline gap-2">
                     <span class="text-gray-600 w-20 shrink-0">created</span>
                     <span class="text-gray-300">{{ fetch_created }}</span>
@@ -175,8 +247,8 @@
                 </div>
                 <div class="flex items-baseline gap-2 min-w-0">
                     <span class="text-gray-600 w-20 shrink-0">langs</span>
-                    <span class="text-gray-300 truncate">
-                        {% if fetch_langs.is_empty() %}—{% else %}{{ fetch_langs|join(", ") }}{% endif %}
+                    <span class="text-gray-300 min-w-0 break-words">
+                        {% if fetch_langs.is_empty() %}—{% else %}{{ fetch_langs|join(" · ") }}{% endif %}
                     </span>
                 </div>
             </div>
@@ -218,7 +290,7 @@
     {% endif %}
 
     <!-- ─── share / footer ─── -->
-    <div class="stagger stagger-7 mt-16 border-t border-gray-800 pt-5">
+    <div class="stagger stagger-7 mt-20 border-t border-gray-800 pt-5">
         <button type="button"
             @click="copy(window.location.href)"
             class="group w-full text-left border border-gray-800 hover:border-green-950 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
@@ -235,7 +307,7 @@
         </button>
     </div>
 
-    <div class="stagger stagger-7 mt-6 flex items-center justify-between text-[0.7rem] text-gray-700">
+    <div class="stagger stagger-7 mt-8 flex items-center justify-between text-[0.7rem] text-gray-700">
         <span>posted {{ created }}{% if updated != created %} · updated {{ updated }}{% endif %}</span>
         {% if show_contact %}
         <span>
