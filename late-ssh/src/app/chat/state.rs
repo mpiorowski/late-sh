@@ -34,6 +34,7 @@ use super::{
 };
 
 pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
+const USER_CREATED_CHANNEL_NAME_MAX_CHARS: usize = 16;
 const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
 const REACTION_OWNER_COLUMNS: usize = 3;
 
@@ -1128,14 +1129,20 @@ impl ChatState {
         }
 
         if let Some(room) = parse_room_command(&body, "/public") {
+            self.clear_composer_after_submit();
+            if user_created_channel_name_too_long(room) {
+                return Some(user_created_channel_name_length_error());
+            }
             self.service
                 .open_public_room_task(self.user_id, room.to_string());
-            self.clear_composer_after_submit();
             return Some(Banner::success(&format!("Opening public #{room}...")));
         }
 
         if let Some(room) = parse_room_command(&body, "/private") {
             self.clear_composer_after_submit();
+            if user_created_channel_name_too_long(room) {
+                return Some(user_created_channel_name_length_error());
+            }
             self.service
                 .create_private_room_task(self.user_id, room.to_string());
             return Some(Banner::success(&format!("Creating private #{room}...")));
@@ -2267,6 +2274,16 @@ fn parse_room_command<'a>(input: &'a str, command: &str) -> Option<&'a str> {
     Some(slug)
 }
 
+fn user_created_channel_name_too_long(slug: &str) -> bool {
+    slug.chars().count() > USER_CREATED_CHANNEL_NAME_MAX_CHARS
+}
+
+fn user_created_channel_name_length_error() -> Banner {
+    Banner::error(&format!(
+        "Channel names must be {USER_CREATED_CHANNEL_NAME_MAX_CHARS} characters or fewer"
+    ))
+}
+
 /// Parse `/create-room <slug>` from the composer text (admin only).
 fn parse_create_room_command(input: &str) -> Option<&str> {
     let rest = input.strip_prefix("/create-room ")?.trim_start();
@@ -3218,6 +3235,33 @@ mod tests {
     fn parse_private_room_not_command() {
         assert_eq!(parse_room_command("hello", "/private"), None);
         assert_eq!(parse_room_command("/privates foo", "/private"), None);
+    }
+
+    #[test]
+    fn user_created_channel_name_length_allows_16_chars() {
+        assert!(!user_created_channel_name_too_long("1234567890123456"));
+    }
+
+    #[test]
+    fn user_created_channel_name_length_rejects_more_than_16_chars() {
+        assert!(user_created_channel_name_too_long("12345678901234567"));
+    }
+
+    #[test]
+    fn user_created_channel_name_length_counts_chars_not_bytes() {
+        let sixteen = "界".repeat(16);
+        let seventeen = "界".repeat(17);
+
+        assert!(!user_created_channel_name_too_long(&sixteen));
+        assert!(user_created_channel_name_too_long(&seventeen));
+    }
+
+    #[test]
+    fn parse_room_command_keeps_legacy_long_slugs_parseable() {
+        assert_eq!(
+            parse_room_command("/public #very-long-legacy-channel", "/public"),
+            Some("very-long-legacy-channel")
+        );
     }
 
     #[test]
