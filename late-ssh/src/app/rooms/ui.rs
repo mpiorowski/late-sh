@@ -440,13 +440,11 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
     lines.push(divider_line(inner.width));
 
     let visible = (inner.height as usize).saturating_sub(2);
-    let mut real_index: usize = 0;
 
-    for row in rows.iter().take(visible) {
+    for (real_index, row) in rows.iter().take(visible).enumerate() {
         let Row::Real(room) = row;
         let selected = real_index == view.selected_index;
         lines.push(real_row_wide(room, selected, view));
-        real_index += 1;
     }
 
     frame.render_widget(Paragraph::new(lines), inner);
@@ -534,10 +532,9 @@ fn draw_room_list_narrow(
     }
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut real_index: usize = 0;
     let visible_lines = inner.height as usize;
 
-    for row in rows {
+    for (real_index, row) in rows.iter().enumerate() {
         if lines.len() + 2 > visible_lines {
             break;
         }
@@ -546,7 +543,6 @@ fn draw_room_list_narrow(
         let (a, b) = real_card_narrow(room, selected, view);
         lines.push(a);
         lines.push(b);
-        real_index += 1;
     }
 
     frame.render_widget(Paragraph::new(lines), inner);
