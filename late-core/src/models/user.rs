@@ -32,7 +32,6 @@ const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
-const SHOW_DASHBOARD_ROOM_SHOWCASES_KEY: &str = "show_dashboard_room_showcases";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const SHOW_GAMES_SIDEBAR_KEY: &str = "show_games_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
@@ -413,19 +412,12 @@ pub fn extract_enable_background_color(settings: &Value) -> bool {
     settings
         .get(ENABLE_BACKGROUND_COLOR_KEY)
         .and_then(Value::as_bool)
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 pub fn extract_show_dashboard_header(settings: &Value) -> bool {
     settings
         .get(SHOW_DASHBOARD_HEADER_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-}
-
-pub fn extract_show_dashboard_room_showcases(settings: &Value) -> bool {
-    settings
-        .get(SHOW_DASHBOARD_ROOM_SHOWCASES_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }
@@ -641,6 +633,18 @@ mod tests {
     fn extract_show_dashboard_header_defaults_to_true() {
         let settings = json!({});
         assert!(extract_show_dashboard_header(&settings));
+    }
+
+    #[test]
+    fn extract_enable_background_color_defaults_to_true() {
+        let settings = json!({});
+        assert!(extract_enable_background_color(&settings));
+    }
+
+    #[test]
+    fn extract_enable_background_color_reads_explicit_false() {
+        let settings = json!({ "enable_background_color": false });
+        assert!(!extract_enable_background_color(&settings));
     }
 
     #[test]

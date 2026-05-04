@@ -29,6 +29,7 @@ impl State {
     pub fn new(article_service: ArticleService, user_id: Uuid, is_admin: bool) -> Self {
         let snapshot_rx = article_service.subscribe_snapshot();
         let event_rx = article_service.subscribe_events();
+        article_service.list_articles_task();
         article_service.refresh_unread_count_task(user_id);
         Self {
             article_service,
@@ -63,6 +64,16 @@ impl State {
 
     pub fn selected_index(&self) -> usize {
         clamp_index(self.selected, self.articles.len())
+    }
+
+    pub fn select_article_by_id(&mut self, article_id: Uuid) {
+        if let Some(index) = self
+            .articles
+            .iter()
+            .position(|item| item.article.id == article_id)
+        {
+            self.selected = index;
+        }
     }
 
     pub fn move_selection(&mut self, delta: isize) {
@@ -115,7 +126,7 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = self.last_read_at;
+        self.marker_read_at = Some(Utc::now());
         self.unread_count = 0;
         self.article_service.mark_read_task(self.user_id);
     }
@@ -261,6 +272,9 @@ impl State {
                     } if self.user_id == user_id => {
                         self.unread_count = unread_count;
                         self.last_read_at = last_read_at;
+                        if unread_count == 0 {
+                            self.marker_read_at = last_read_at;
+                        }
                     }
                     ArticleEvent::NewArticlesAvailable {
                         user_id,

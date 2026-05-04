@@ -227,9 +227,9 @@ pub fn draw_showcase_composer(frame: &mut Frame, area: Rect, view: &ShowcaseComp
     let title = if !composing {
         " Showcase "
     } else if editing {
-        " Editing · Tab/S+Tab switch · Enter submit · Alt+Enter newline · Esc cancel "
+        " Editing · Tab/S+Tab switch · Enter submit · Alt+Enter/Ctrl+J newline · Esc cancel "
     } else {
-        " New showcase · Tab/S+Tab switch · Enter submit · Alt+Enter newline · Esc cancel "
+        " New showcase · Tab/S+Tab switch · Enter submit · Alt+Enter/Ctrl+J newline · Esc cancel "
     };
     let border_style = if composing {
         Style::default().fg(theme::BORDER_ACTIVE())

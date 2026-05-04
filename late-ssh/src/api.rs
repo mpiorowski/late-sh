@@ -89,6 +89,7 @@ pub async fn run_api_server_with_listener(
         .route("/api/now-playing", get(get_now_playing))
         .route("/api/status", get(get_status))
         .route("/api/ws/pair", get(ws_handler))
+        .route("/api/ws/tunnel", get(crate::web_tunnel::ws_handler))
         .route("/api/ws/chat", get(crate::web::ws_chat_handler))
         .layer(cors)
         .layer(middleware::from_fn(http_telemetry_middleware))
@@ -457,6 +458,35 @@ mod tests {
                 assert_eq!(client_kind, crate::session::ClientKind::Cli);
                 assert_eq!(ssh_mode, crate::session::ClientSshMode::Native);
                 assert_eq!(platform, crate::session::ClientPlatform::Android);
+                assert!(!muted);
+                assert_eq!(volume_percent, 30);
+            }
+            _ => panic!("expected ClientState"),
+        }
+    }
+
+    #[test]
+    fn ws_payload_openssh_client_state_parses() {
+        let json = r#"{
+            "event": "client_state",
+            "client_kind": "cli",
+            "ssh_mode": "openssh",
+            "platform": "linux",
+            "muted": false,
+            "volume_percent": 30
+        }"#;
+        let payload: WsPayload = serde_json::from_str(json).unwrap();
+        match payload {
+            WsPayload::ClientState {
+                client_kind,
+                ssh_mode,
+                platform,
+                muted,
+                volume_percent,
+            } => {
+                assert_eq!(client_kind, crate::session::ClientKind::Cli);
+                assert_eq!(ssh_mode, crate::session::ClientSshMode::OpenSsh);
+                assert_eq!(platform, crate::session::ClientPlatform::Linux);
                 assert!(!muted);
                 assert_eq!(volume_percent, 30);
             }

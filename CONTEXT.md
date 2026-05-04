@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-30 (Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
+- Last updated: 2026-05-03 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, and a shared multi-user ASCII Artboard. Detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, and a shared multi-user ASCII Artboard. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -63,7 +63,8 @@ The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-
 
 **Integration tests (`late-ssh/tests/`, `late-web/tests/`, `late-core/tests/`):**
 - MUST use testcontainers for database access — always go through `late_core::test_utils::test_db()` (or the `helpers::new_test_db()` wrapper in `late-ssh`).
-- NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings in integration tests.
+- NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings as a substitute for real DB access in integration tests.
+- Exception: `late-web` route smoke tests that instantiate `AppState` but do not exercise DB-backed routes may use an inert `Db::new(&DbConfig::default())`; the moment a test hits `/gallery`, `/profiles`, or any DB code path, use `late_core::test_utils::test_db()`.
 - `late-core::test_utils` owns shared test infrastructure: `test_db()`, `create_test_user()`. Use these everywhere instead of rolling per-test user creation — except in `late-core` model tests that are testing `User::create` itself.
 - `late-ssh/tests/helpers/mod.rs` re-exports `create_test_user` from `late-core` and adds ssh-specific helpers (`test_config`, `test_app_state`, `make_app`, etc.). Domain test directories access these via `#[path = "../helpers/mod.rs"] mod helpers;` in their `main.rs`.
 - Any test that touches DB, services, network, or cross-module orchestration belongs here.
@@ -421,21 +422,16 @@ Nonograms intentionally use an offline generation pipeline instead of generating
 Current invariant:
 - `late-ssh` is runtime-only for nonograms: read JSON assets, select a puzzle, render/play it, and persist per-user progress. Generation belongs in `late-core/src/bin/gen_nonograms.rs`, not in the SSH hot path.
 
-### 2.9 Local CLI MVP
+### 2.9 Local CLI
 
-`late-cli/src/main.rs` is the standalone local launcher (companion CLI).
+`late-cli` builds the `late` companion binary. It launches the SSH TUI, plays the audio stream locally, sends visualizer frames over `/api/ws/pair`, and receives paired mute/volume controls from the TUI.
 
-1. **Standalone crate** — `late-cli` has zero dependency on `late-core`. `AnalyzerConfig` is inlined so the crate can be built independently.
-2. **Single-process audio path** — It opens the audio stream once, decodes MP3 locally with symphonia, feeds local playback via `cpal`, and derives visualizer/analyzer data from that same decoded stream. Native output sample rate is preferred; otherwise it chooses the nearest supported device rate and applies in-process linear resampling.
-3. **SSH transport modes** — `late-cli` now has a runtime transport switch, but native is the default. `--ssh-mode old` preserves the original OpenSSH-through-pty path, while `--ssh-mode native` uses an embedded `russh` client. The old path still intercepts the one-line `LATE_SESSION_TOKEN=<base64url-uuid-v7>` banner from the PTY stream. The native path now does a dedicated `late-cli-token-v1` SSH `exec` request on a separate session channel, expects JSON `{ "session_token": "..." }`, and then opens the real PTY shell channel with no banner parsing and no fallback. In both modes stdin stays blocked until the token phase completes so pre-handshake keystrokes do not leak into the app.
-4. **Identity + host trust + pairing** — Client identity remains SSH-key based, but the interactive fallback now generates `~/.ssh/id_late_sh_ed25519` natively instead of shelling out to `ssh-keygen`. Operators can override the key path with `--key` or `LATE_KEY_FILE`; if the file does not exist and the terminal is interactive, the CLI offers to generate the key at that exact path. `LATE_IDENTITY_FILE` is still accepted as a legacy env fallback. Native mode verifies server keys against `~/.ssh/known_hosts` and learns first-seen keys with accept-new semantics. The CLI then uses `/api/ws/pair` to forward analyzer frames, accept paired control commands, and report `client_state { client_kind, ssh_mode, platform, muted, volume_percent }`.
-5. **Distribution + platform notes** — The landing page advertises both `curl -fsSL https://cli.late.sh/install.sh | bash` and a source build path. CLI releases go through `deploy_cli`. Audio playback is still `cpal`-based and requires a working local output device. The launcher now has a native SSH path intended to remove the hard OpenSSH dependency over time; on Unix it forwards resize via `SIGWINCH`, and on non-Unix it polls terminal size changes and emits SSH `window-change` requests. Repo helper scripts now include native-mode bash launchers plus PowerShell equivalents for local/prod flows. WSL-specific audio hints still check `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER`.
-
-Current invariants:
-- The installer defaults to `https://cli.late.sh`, and the CLI supports `-v` / `--verbose` for stderr debug logging.
-- Browser and CLI share the same paired-client protocol, so the TUI can show target kind plus live mute/volume state in the sidebar.
-- The CLI currently requires a working local audio output device to fully start.
-- Native SSH is now the default launcher path; `--ssh-mode old` remains the compatibility fallback. Native mode requires a server that supports the `late-cli-token-v1` SSH exec handshake.
+Root-level contracts:
+- `late-cli` is a standalone crate with no `late-core` dependency.
+- Browser and CLI share the paired-client WebSocket schema, so the TUI can show client kind plus live mute/volume state.
+- Native SSH is the default launcher path. `--ssh-mode old` remains the legacy OpenSSH-through-PTY compatibility path, and `--ssh-mode openssh` is the OpenSSH-managed path for hardware-backed keys.
+- Native and OpenSSH modes require server support for the `late-cli-token-v1` SSH exec handshake.
+- Detailed CLI architecture, flags/env vars, audio pipeline, installer behavior, SSH modes, and fragile invariants live in `late-cli/CONTEXT.md`.
 
 ### 2.10 Artboard (Shared ASCII Canvas) [STABLE]
 
@@ -493,13 +489,15 @@ late-sh/
 │   ├── assets/nonograms/       # Prebuilt puzzle packs
 │   └── tests/                  # Integration/smoke tests grouped by feature
 ├── late-cli/
+│   ├── CONTEXT.md              # Companion CLI details: SSH modes, pairing, audio, installers
 │   └── src/                    # Standalone CLI: main + config, identity, raw_mode, pty, ssh, ws, audio/{decoder,resampler,output,decoder_thread,analyzer}
 ├── late-web/
+│   ├── CONTEXT.md              # Web routes, browser protocols, stream proxy, profiles/gallery, tests
 │   ├── src/
 │   │   ├── main.rs / lib.rs    # Web entrypoint + router
 │   │   ├── config.rs           # Web config
 │   │   ├── error.rs            # App error mapping
-│   │   └── pages/              # Landing, connect flow, stream proxy, dashboard
+│   │   └── pages/              # Connect/landing, chat, gallery, play, profiles, stream, dashboard
 │   └── static/                 # Tailwind output/source
 └── infra/
     ├── icecast/icecast.xml     # Icecast config
@@ -521,7 +519,7 @@ late-sh/
 **WS payloads (client → server):**
 - `{ "event": "heartbeat" }`
 - `{ "event": "viz", "position_ms": u64, "bands": [f32; 8], "rms": f32 }`
-- `{ "event": "client_state", "client_kind": "browser" | "cli", "muted": bool, "volume_percent": u8 }`
+- `{ "event": "client_state", "client_kind": "browser" | "cli", "ssh_mode"?: "native" | "openssh" | "old", "platform"?: "android" | "linux" | "macos" | "windows", "muted": bool, "volume_percent": u8 }`
 
 **WS payloads (server → client):**
 - `{ "event": "toggle_mute" }`
@@ -529,16 +527,22 @@ late-sh/
 - `{ "event": "volume_down" }`
 
 **Web routes (late-web, port 3000):**
-- `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA (click-to-copy), feature list, now-playing/listeners via htmx
-- `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume control, Web Audio analyzer for TUI visualizer, now-playing via htmx
-- `GET /status?pairing={bool}` - htmx fragment: now-playing track + listener count (fetched from SSH API internally). `pairing=false` for landing footer, `pairing=true` for pairing detail view. Polled every 5s.
-- `GET /dashboard` - Live metrics page (HTMX, internal/testing)
+- `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA, CLI install/build copy actions, and links to gallery/play/profiles
+- `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume control, Web Audio analyzer for TUI visualizer
+- `GET /status?pairing={bool}` - HTMX fragment: now-playing track + listener count (fetched from SSH API internally). `pairing=false` for landing footer, `pairing=true` for pairing detail view. Polled every 5s.
+- `GET /chat/{token}` - Browser chat page; connects to `late-ssh` `/api/ws/chat`
+- `GET /dashboard`, `/dashboard/now-playing`, `/dashboard/status` - Internal/demo dashboard and HTMX partials
+- `GET /gallery?key=...` - Read-only Artboard snapshot gallery backed by saved DB snapshots
+- `GET /play`, `/play/listeners` - Browser xterm.js TUI demo through `late-ssh` `/api/ws/tunnel`
+- `GET /profiles`, `/profiles/{slug}` - Public work profile index/detail pages
+- `GET /stream` - `audio/mpeg` stream proxy to Icecast with bundled silence fallback
 - `GET /test` - Error simulation endpoint
 - All other routes → redirect to `/`
+- Detailed web route, template, runtime config, browser protocol, and stream-proxy notes live in `late-web/CONTEXT.md`.
 
 **Service stream contracts (internal):**
 - `VoteService::subscribe_state()` (in `app::vote::svc`) → shared `watch::Receiver<VoteSnapshot>` (durable latest state)
-- Chat service/news/notifications/showcase stream contracts live in `late-ssh/src/app/chat/CONTEXT.md`.
+- Chat service/news/notifications/showcase/work stream contracts live in `late-ssh/src/app/chat/CONTEXT.md`.
 - `ProfileService::subscribe_snapshot(user_id)` → per-user `watch::Receiver<...Snapshot>` (durable latest state)
 - `ProfileService::prune_user_snapshot_channel(user_id)` → explicit cleanup hook called from UI state `Drop`; removes idle per-user snapshot senders
 - `LeaderboardService::subscribe()` → `watch::Receiver<Arc<LeaderboardData>>` (shared, refreshed every 30s from DB; contains today's champions, streak leaders, per-user streak map for badge computation)
@@ -579,12 +583,14 @@ late-sh/
 | UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (floor=100), `last_stipend_date` DATE |
 | Showcase | `showcases` | `user_id` FK; `title` 1-120, `url` 1-2000, `description` 1-800, `tags` TEXT[] (lowercased, ≤8). Listed newest-first, edit/delete restricted to author or admin |
 | ShowcaseFeedRead | `showcase_feed_reads` | `user_id` PK/FK, `last_read_at` timestamp cursor for per-user Showcase unread counts |
+| WorkProfile | `work_profiles` | `user_id` UNIQUE FK; `slug` UNIQUE (`w_` + 12 lowercase alnum), `headline`, status (`open`, `casual`, `not-looking`), type/location, links, skills, summary. Listed latest-update-first, edit/delete restricted to author or admin |
+| WorkFeedRead | `work_feed_reads` | `user_id` PK/FK, `last_read_at` timestamp cursor for per-user Work unread counts |
 | GameRoom | `game_rooms` | Generic game-room registry. `id` UUIDv7, `chat_room_id` UNIQUE FK to `chat_rooms`, `game_kind` TEXT, `slug` UNIQUE, `display_name` non-empty, `status` IN (`open`, `in_round`, `paused`, `closed`), `settings` JSONB, optional `created_by`. `GameKind` is a Rust enum over text, not a Postgres enum. |
 | ArtboardSnapshot | `artboard_snapshots` | `board_key` UNIQUE (`main`, `daily:YYYY-MM-DD`, `monthly:YYYY-MM`), `canvas` JSONB, `provenance` JSONB. Runtime contracts live in `late-ssh/src/app/artboard/CONTEXT.md`. |
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Chat`, `Games`, `Rooms`, `Artboard` (cycle: `Dashboard -> Chat -> Games -> Rooms -> Artboard -> Dashboard`; News, Mentions, Discover, and Showcase are synthetic room-like entries within Chat, not separate screens. News, Mentions, and Showcase each carry persisted unread state; Showcase is a user-authored project showcase backed by the `showcases` table.)
+- `Screen`: `Dashboard`, `Chat`, `Games`, `Rooms`, `Artboard` (cycle: `Dashboard -> Chat -> Games -> Rooms -> Artboard -> Dashboard`; News, Mentions, Discover, Showcase, and Work are synthetic room-like entries within Chat, not separate screens. News, Mentions, Showcase, and Work each carry persisted unread state; Showcase is backed by `showcases`, and Work is one public work profile per user backed by `work_profiles`.)
 - `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 - `GameKind`: Rust enum in `late-core::models::game_room`; currently `Blackjack`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
@@ -608,7 +614,7 @@ late-sh/
 - **Metrics (`VictoriaMetrics`):** Custom metrics (e.g., counters) pushed directly via OTLP PeriodicReader, alongside the RED metrics generated by the Collector.
 - **HTTP server spans:** `late-web` wraps the router with request middleware that emits `otel.kind=server` spans and records `http.request.method`, `http.route`, `url.path`, and `http.response.status_code`; 5xx responses set `otel.status_code=ERROR`.
 - **Trace propagation:** `late-core::telemetry::init_telemetry()` installs the W3C Trace Context propagator. `late-web` injects trace headers on outbound `/api/now-playing` requests, and `late-ssh` extracts incoming headers on API requests so cross-service traces can form real parent/child relationships.
-- **Dashboard playground metric:** The interactive dashboard counter posts to `/dashboard/counter`, which emits `dashboard_counter_actions_total{action=...}` for Grafana testing.
+- **Web metrics:** `late_web_page_views_total{page,has_token}` and `late_web_now_playing_fetch_total{result}` are emitted when `late-web` is built with the optional `otel` feature; metrics are no-ops without it.
 - **Grafana provisioning invariant:** The metrics datasource uses the stable UID `victoriametrics`; provisioned dashboards must reference that UID instead of Grafana-generated datasource IDs.
 - **Console Output:** Local dev uses `tracing_subscriber::fmt` with `RUST_LOG=info,late_web=debug,late_ssh=debug,late_core=debug`.
 - **DB health:** `GET /api/health` endpoint, `Db::health()` method
@@ -635,7 +641,9 @@ Known gaps/risks:
 - Time remaining is approximate (up to 5s polling delay on track change)
 - No external metrics or alerting system
 - **Single-replica assumption:** Several structures are purely in-memory and not shared across processes (see multi-replica notes below)
+- **SSH pod drain window:** `infra/service-ssh.tf` sets `termination_grace_period_seconds = 21600` (6h) so rolling updates can stop new connections while allowing existing SSH sessions to drain for a long window before Kubernetes sends SIGKILL.
 - **SSH ingress reload risk:** `ssh late.sh` currently reaches `late-ssh` through RKE2 ingress-nginx TCP passthrough (`infra/ssh-tcp.tf`, port `22 -> service-ssh-sv:2222::PROXY`). Long-lived SSH sessions can be dropped after any ingress-nginx config reload because old workers are terminated after `worker_shutdown_timeout` (observed 2026-04-29 after cert-manager renewed `service-web-tls`: reload at `19:56:37Z`, mass SSH/WS disconnect at `20:00:38Z`, matching the 240s timeout). Future infra improvement: stop routing SSH through ingress-nginx; use a dedicated TCP LoadBalancer/NodePort/host proxy for SSH so HTTP/TLS reloads cannot kill SSH sessions. Short-term mitigation: increase ingress-nginx `worker-shutdown-timeout`, but that only delays the disconnect.
+- **IPv6 ingress status:** RKE2/CNI `hostPort` exposes the current ingress-nginx path for IPv4 only; do not switch the main ingress controller to `hostNetwork` without a rollout plan. Public IPv6 is handled by the separate `kube-system/ipv6-proxy` HAProxy DaemonSet in `infra/ipv6-proxy.tf`, binding `2a01:4f9:c013:2ae1::1` on `80`, `443`, and `22`; HTTP(S) forwards to localhost ingress hostPorts, while SSH forwards to `service-ssh-sv:2222` with PROXY protocol. Verified working externally on 2026-05-03; `Network is unreachable` during `ssh -6 late.sh` means the client lacks IPv6 egress.
 - **Stateful VT parsing in `late-ssh/src/app/input.rs`:** SSH input now runs through a persistent `vte::Parser`, so CSI/SS3 sequences and bracketed paste survive split russh reads instead of assuming the whole escape sequence lands in one chunk. That removes the old split-paste failure where `[200~` / `[201~` residue or embedded newlines could leak through as live keystrokes. The app still keeps two pragmatic layers on top: `is_likely_paste` heuristically treats large printable unmarked chunks as paste for terminals without bracketed paste, and `sanitize_paste_markers`/`strip_paste_markers` still scrub stored residue defensively when copying URLs from older polluted state. Standalone `Esc` is resolved on a short tick delay so split escape sequences are not mistaken for cancel keys.
 
 Roadmap ideas:
@@ -808,12 +816,9 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, dashboard favorite
 - **Web Audio `createMediaElementSource` is one-shot:** Can only be called once per `<audio>` element. AudioContext + source node must be created once and reused across play/pause cycles. Disconnect suspends the context (`audioCtx.suspend()`), replay resumes it — never close and recreate.
 - **Browser audio pairing status must not be stomped by WS:** WS `onclose`/`onerror` must check `status !== 'playing'` before setting `'disconnected'`, otherwise a WS drop kills the "streaming" UI while audio is still playing fine
 - **Paired-client control routing is latest-wins per token:** `PairedClientRegistry` stores one outbound sender/state entry per session token. If multiple browser/CLI clients pair against the same token, the most recent registration owns control/state until it disconnects.
-- **CLI visualizer follows audible output now:** The CLI analyzer ring must record post-mute/post-volume samples, not raw decoded samples, otherwise the TUI visualizer drifts from what the user actually hears.
-- **CLI output sample-rate fallback is device-driven:** Prefer native `44.1 kHz` playback when the output backend supports it; only resample when the chosen `cpal` device config requires a different rate such as `48 kHz`.
-- **Web/CLI Audio and WS Resiliency:** Both paired clients use a 10-attempt retry loop (2s delay) for WebSocket disconnections and audio stream failures. Web Audio reconstructs elements with cache-busting `?t=` URLs, and CLI re-probes `SymphoniaStreamDecoder` in place, so both recover seamlessly from `ERR_NETWORK_CHANGED` without dropping the session.
+- **Web/CLI Audio and WS Resiliency:** Both paired clients use bounded retry loops for WebSocket disconnections and audio stream failures. Web Audio reconstructs elements with cache-busting `?t=` URLs, and CLI stream/audio specifics live in `late-cli/CONTEXT.md`.
 - **Browser and CLI viz payloads share schema, not implementation:** Both paired clients send `{ event: "viz", position_ms, bands, rms }`, but the browser uses Web Audio `AnalyserNode` while the CLI uses an in-process Rust FFT over playback samples. Expect similar behavior, not identical numbers.
-- **CLI binary must forward local terminal resizes:** The `late` binary runs SSH inside a local PTY and must propagate `SIGWINCH` size changes into that PTY so side-by-side panes and split windows reflow correctly after startup.
-- **CLI must suppress pre-token input:** The local `late` binary must not forward stdin into the interactive SSH PTY until the pairing token exchange has completed. In subprocess mode that still means waiting for the server's `LATE_SESSION_TOKEN=` banner; in native mode it means waiting for the dedicated `late-cli-token-v1` SSH exec handshake response. Any keys typed during handshake/welcome race windows are intentionally discarded, and pending terminal input is flushed immediately before forwarding starts.
+- **CLI invariants live locally:** SSH modes, token handshakes, identity generation, local audio pipeline, terminal resize forwarding, and pre-token input gating are documented in `late-cli/CONTEXT.md`.
 - **Activity feed broadcast timing:** `broadcast::Receiver` only sees messages sent AFTER subscription. The receiver must be created in `auth_publickey` (before login event is sent), stored on `ClientHandler`, then `.take()`'d into `SessionConfig` in `pty_request`. Creating the receiver later misses the user's own login event.
 - **Leaderboard refresh is async, badges are eventually consistent:** `LeaderboardService` refreshes every 30s. A new daily win won't appear in the leaderboard or chat badges until the next refresh cycle. Activity feed callouts are immediate (fire-and-forget from `record_win_task`).
 - **Streak SQL uses gaps-and-islands:** A streak is "current" if its last day is today or yesterday. This means a user who hasn't played today still keeps their streak visible until midnight UTC tomorrow. The `UNION` across `sudoku_daily_wins` and `nonogram_daily_wins` deduplicates dates so playing both games on the same day counts as one streak day.
@@ -977,7 +982,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen with DMs, public/private rooms, mentions, News, Showcase, and Discover synthetic entries. Detailed commands, keybindings, service flow, and gotchas live in `late-ssh/src/app/chat/CONTEXT.md`. |
+| **Chat** | 2 | Active | Full room-list chat screen with DMs, public/private rooms, mentions, News, Showcase, Work, and Discover synthetic entries. Detailed commands, keybindings, service flow, and gotchas live in `late-ssh/src/app/chat/CONTEXT.md`. |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`) and daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`). Blackjack lives in Rooms. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
 | **Rooms** | 4 | Active | Persistent game-room directory plus active Blackjack table/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
 | **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
@@ -1038,6 +1043,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
+| `b` then `1` / `2` / `3` / `4` | Dashboard | Activate a dashboard chord: Blackjack room, current daily game, current News wire article, or `#announcements` |
 | `P` | Dashboard | Show browser-pairing QR (copies pairing URL) |
 | `B` | Dashboard | Open CLI install/build-source modal |
 | Dashboard chat keys | Dashboard | See `late-ssh/src/app/chat/CONTEXT.md`. |
@@ -1073,7 +1079,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
 | `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/system fields/bio, cycle a setting, or open the country/timezone picker |
-| `Alt+Enter` | Settings modal (bio editing) | Insert newline |
+| `Alt+Enter` / `Ctrl+J` | Settings modal (bio editing) | Insert newline |
 | `?` | Settings modal | Open help modal on top |
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |
 | `Esc` / `q` | Read-only profile modal | Close |

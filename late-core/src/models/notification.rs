@@ -85,6 +85,12 @@ impl Notification {
                  JOIN chat_rooms r ON r.id = n.room_id
                  JOIN chat_messages m ON m.id = n.message_id
                  WHERE n.user_id = $1
+                   AND r.kind <> 'game'
+                   AND (
+                        r.kind = 'dm'
+                        OR r.permanent = true
+                        OR r.visibility IN ('public', 'private')
+                   )
                  ORDER BY n.created DESC
                  LIMIT $2",
                 &[&user_id, &limit],
@@ -109,7 +115,24 @@ impl Notification {
 
     /// Count unread notifications for a user.
     pub async fn unread_count(client: &Client, user_id: Uuid) -> Result<i64> {
-        MentionFeedRead::unread_count_for_user(client, user_id).await
+        let row = client
+            .query_one(
+                "SELECT COUNT(n.id)::bigint AS unread_count
+                 FROM notifications n
+                 JOIN chat_rooms r ON r.id = n.room_id
+                 LEFT JOIN mention_feed_reads mfr ON mfr.user_id = $1
+                 WHERE n.user_id = $1
+                   AND n.created > COALESCE(mfr.last_read_at, '-infinity'::timestamptz)
+                   AND r.kind <> 'game'
+                   AND (
+                        r.kind = 'dm'
+                        OR r.permanent = true
+                        OR r.visibility IN ('public', 'private')
+                   )",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.get("unread_count"))
     }
 
     /// Mark all unread notifications as read for a user.
@@ -146,6 +169,7 @@ impl Notification {
                    ON m.room_id = r.id AND m.user_id = u.id \
                  WHERE LOWER(u.username) = ANY($1) \
                    AND u.id <> $2 \
+                   AND r.kind <> 'game' \
                    AND (
                         (r.kind = 'dm' AND u.id IN (r.dm_user_a, r.dm_user_b))
                         OR (r.kind <> 'dm' AND r.visibility = 'private' AND m.user_id IS NOT NULL)

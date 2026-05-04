@@ -42,7 +42,7 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
     app.handle_input(b"i");
     wait_for_render_contains(
         &mut app,
-        "Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel)",
+        "Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel)",
     )
     .await;
 
@@ -413,7 +413,7 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     wait_for_render_contains(&mut app, "2hey").await;
     wait_for_render_contains(
         &mut app,
-        "Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel)",
+        "Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel)",
     )
     .await;
 
@@ -553,8 +553,12 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     .await;
     let plain = render_plain(&mut app);
     assert!(
-        plain.contains("Type a message · j/k select"),
-        "message selection should clear after reacting: {plain:?}"
+        plain.contains("▸reaction target"),
+        "message selection should stay after reacting: {plain:?}"
+    );
+    assert!(
+        !plain.contains("1 👍"),
+        "reaction picker should close after reacting: {plain:?}"
     );
 }
 
@@ -857,8 +861,8 @@ async fn members_command_shows_room_members_without_persisting_message() {
     wait_for_render_contains(&mut app, " side").await;
 
     app.handle_input(b" ");
-    wait_for_render_contains(&mut app, "[h] side").await;
-    app.handle_input(b"h");
+    wait_for_render_contains(&mut app, "[j] side").await;
+    app.handle_input(b"j");
     wait_for_render_contains(&mut app, "> side").await;
 
     app.handle_input(b"i/members\r");

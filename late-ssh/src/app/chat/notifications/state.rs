@@ -43,7 +43,6 @@ impl State {
 
     pub fn list(&self) {
         self.service.list_task(self.user_id);
-        self.service.refresh_unread_count_task(self.user_id);
     }
 
     pub fn selected_index(&self) -> usize {
@@ -67,7 +66,7 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = self.last_read_at;
+        self.marker_read_at = Some(Utc::now());
         self.unread_count = 0;
         self.service.mark_all_read_task(self.user_id);
     }
@@ -99,6 +98,9 @@ impl State {
                     } if user_id == self.user_id => {
                         self.unread_count = unread_count;
                         self.last_read_at = last_read_at;
+                        if unread_count == 0 {
+                            self.marker_read_at = last_read_at;
+                        }
                     }
                     NotificationEvent::NewMention {
                         user_id,

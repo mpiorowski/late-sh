@@ -5,3 +5,4 @@ mod news;
 mod showcase;
 mod state;
 mod svc;
+mod work;

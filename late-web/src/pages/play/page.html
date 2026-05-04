@@ -1,0 +1,265 @@
+{% extends "pages/app.html" %}
+
+{% block title %}Play - late.sh{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+
+<style>
+    @font-face {
+        font-family: "Symbols Nerd Font";
+        src:
+            url("/static/fonts/SymbolsNerdFont-Regular.woff2") format("woff2"),
+            url("/static/fonts/SymbolsNerdFont-Regular.ttf") format("truetype");
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+    }
+
+    html,
+    body {
+        overflow: hidden !important;
+        overscroll-behavior: none;
+    }
+
+    .play-root {
+        position: fixed;
+        inset: 0;
+        background: #030712;
+        color: #e5e7eb;
+        display: flex;
+        flex-direction: column;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        z-index: 1;
+    }
+
+    .play-topbar {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.55rem 0.9rem;
+        border-bottom: 1px solid #1f2937;
+        background: #111827;
+        flex-shrink: 0;
+        font-size: 0.8rem;
+    }
+
+    .play-topbar a {
+        color: inherit;
+        text-decoration: none;
+    }
+
+    .play-topbar .crumb-sep {
+        color: #374151;
+    }
+
+    .play-topbar .meta {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: #6b7280;
+        font-size: 0.7rem;
+    }
+
+    .play-topbar .status-dot {
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 9999px;
+        background: #6b7280;
+        transition: background 0.15s ease;
+    }
+
+    .play-topbar .status-dot.is-connecting { background: #eab308; }
+    .play-topbar .status-dot.is-online { background: #22c55e; }
+    .play-topbar .status-dot.is-error { background: #ef4444; }
+
+    .play-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.9rem;
+        height: 1.9rem;
+        background: rgba(17, 24, 39, 0.85);
+        border: 1px solid #1f2937;
+        color: #9ca3af;
+        cursor: pointer;
+        font-family: inherit;
+        transition: color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .play-btn:hover {
+        color: #22c55e;
+        border-color: #14532d;
+    }
+
+    .play-btn svg { width: 14px; height: 14px; }
+
+    .play-body {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        padding: 0.6rem;
+        background: #030712;
+    }
+
+    .play-stage {
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        border: 1px solid #1f2937;
+        background: #030712;
+        box-shadow: 0 0 60px -10px rgba(34, 197, 94, 0.06);
+    }
+
+</style>
+
+<div class="play-root">
+    <header class="play-topbar">
+        <a href="/" class="text-green-500 tracking-tight">late.sh</a>
+        <span class="crumb-sep">/</span>
+        <span class="text-gray-400">play</span>
+
+        <div class="meta">
+            <span id="terminal-status-dot" class="status-dot"></span>
+            <span id="terminal-status">offline</span>
+            <span class="crumb-sep">·</span>
+            <span><span id="listener-count" hx-get="/play/listeners" hx-trigger="every 15s" hx-swap="innerHTML">{{ listeners_count }}</span> online</span>
+            <button id="terminal-reconnect" type="button" class="play-btn hidden" title="reconnect" aria-label="reconnect">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                    <path d="M3 3v5h5"></path>
+                    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+                    <path d="M16 16h5v5"></path>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <main class="play-body">
+        <div id="terminal-container" class="play-stage"></div>
+    </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script>
+(() => {
+    const tunnelUrl = {{ tunnel_url_json|safe }};
+    const container = document.getElementById("terminal-container");
+    const statusEl = document.getElementById("terminal-status");
+    const statusDot = document.getElementById("terminal-status-dot");
+    const reconnectButton = document.getElementById("terminal-reconnect");
+    const encoder = new TextEncoder();
+    let socket = null;
+    let fitTimer = null;
+
+    const term = new Terminal({
+        cursorBlink: true,
+        fontFamily: "\"Symbols Nerd Font\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", monospace",
+        fontSize: 14,
+        lineHeight: 1.1,
+        convertEol: false,
+        allowProposedApi: false,
+        theme: {
+            background: "#030712",
+            foreground: "#e5e7eb",
+            cursor: "#22c55e",
+            selectionBackground: "#1f2937",
+            black: "#0f172a",
+            red: "#f87171",
+            green: "#86efac",
+            yellow: "#fde68a",
+            blue: "#93c5fd",
+            magenta: "#d8b4fe",
+            cyan: "#67e8f9",
+            white: "#e5e7eb",
+            brightBlack: "#64748b",
+            brightRed: "#fca5a5",
+            brightGreen: "#bbf7d0",
+            brightYellow: "#fef3c7",
+            brightBlue: "#bfdbfe",
+            brightMagenta: "#e9d5ff",
+            brightCyan: "#a5f3fc",
+            brightWhite: "#ffffff"
+        }
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(container);
+
+    function setStatus(label, dotClass) {
+        statusEl.textContent = label;
+        statusDot.className = "status-dot " + dotClass;
+    }
+
+    function sendResize() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        socket.send(JSON.stringify({
+            t: "resize",
+            cols: term.cols,
+            rows: term.rows
+        }));
+    }
+
+    function fitAndResize() {
+        fitAddon.fit();
+        sendResize();
+    }
+
+    function scheduleFit() {
+        window.clearTimeout(fitTimer);
+        fitTimer = window.setTimeout(fitAndResize, 80);
+    }
+
+    function connect() {
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+        setStatus("connecting", "is-connecting");
+        reconnectButton.classList.add("hidden");
+        fitAddon.fit();
+        const url = new URL(tunnelUrl);
+        url.searchParams.set("cols", String(term.cols));
+        url.searchParams.set("rows", String(term.rows));
+        socket = new WebSocket(url);
+        socket.binaryType = "arraybuffer";
+
+        socket.addEventListener("open", () => {
+            term.focus();
+            setStatus("online", "is-online");
+            sendResize();
+        });
+
+        socket.addEventListener("message", event => {
+            if (event.data instanceof ArrayBuffer) {
+                term.write(new Uint8Array(event.data));
+            } else if (event.data instanceof Blob) {
+                event.data.arrayBuffer().then(buffer => term.write(new Uint8Array(buffer)));
+            }
+        });
+
+        socket.addEventListener("close", () => {
+            setStatus("closed", "");
+            reconnectButton.classList.remove("hidden");
+        });
+
+        socket.addEventListener("error", () => {
+            setStatus("error", "is-error");
+        });
+    }
+
+    term.onData(data => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(encoder.encode(data));
+        }
+    });
+
+    reconnectButton.addEventListener("click", connect);
+    window.addEventListener("resize", scheduleFit);
+    connect();
+})();
+</script>
+{% endblock %}

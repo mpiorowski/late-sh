@@ -9,7 +9,7 @@ use ratatui::{
 use super::state::State;
 use crate::app::common::theme;
 use crate::app::games::ui::{
-    centered_rect, draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint,
+    GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
 };
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
@@ -21,23 +21,22 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         .max()
         .unwrap_or(0);
 
-    let info_lines = vec![
-        info_tagline("Slide. Merge. Survive."),
-        Line::from(""),
-        info_label_value("Score", format!("{}", state.score), theme::AMBER_GLOW()),
-        info_label_value("Best", format!("{}", state.best_score), theme::SUCCESS()),
-        info_label_value(
-            "Best Tile",
-            format!("{}", top_tile.max(2)),
-            theme::TEXT_BRIGHT(),
-        ),
-        Line::from(""),
-        key_hint("h/j/k/l", "move"),
-        key_hint("r", "restart"),
-        key_hint("Esc", "exit"),
-    ];
+    let bottom = GameBottomBar {
+        status: status_line(vec![
+            ("score", state.score.to_string(), theme::AMBER_GLOW()),
+            ("best", state.best_score.to_string(), theme::SUCCESS()),
+            ("tile", top_tile.max(2).to_string(), theme::TEXT_BRIGHT()),
+        ]),
+        keys: keys_line(vec![
+            ("h/j/k/l", "move"),
+            ("r", "restart"),
+            ("`", "dashboard"),
+            ("Esc", "exit"),
+        ]),
+        tip: None,
+    };
 
-    let board_area = draw_game_frame(frame, area, "2048", info_lines, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "2048", bottom, show_sidebar);
 
     let game_area = centered_rect(
         board_area,

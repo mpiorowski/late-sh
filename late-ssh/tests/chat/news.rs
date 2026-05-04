@@ -1,5 +1,8 @@
-use late_core::models::article::ArticleEvent;
-use late_core::models::article::{Article, ArticleParams};
+use late_core::models::{
+    article::ArticleEvent,
+    article::{Article, ArticleParams},
+    moderation_audit_log::ModerationAuditLog,
+};
 use late_ssh::app::ai::svc::AiService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
@@ -8,12 +11,39 @@ use tokio::time::{Duration, timeout};
 
 use super::helpers::new_test_db;
 use late_core::test_utils::create_test_user;
+use uuid::Uuid;
 
 fn make_article_service(db: late_core::db::Db) -> ArticleService {
     let ai = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
     let notif = NotificationService::new(db.clone());
     let chat = ChatService::new(db.clone(), notif);
     ArticleService::new(db, ai, chat)
+}
+
+fn article_params(user_id: Uuid, url: &str, title: &str) -> ArticleParams {
+    ArticleParams {
+        user_id,
+        url: url.to_string(),
+        title: title.to_string(),
+        summary: "Summary".to_string(),
+        ascii_art: "...".to_string(),
+    }
+}
+
+async fn recv_article_event(
+    events: &mut tokio::sync::broadcast::Receiver<ArticleEvent>,
+) -> ArticleEvent {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            match events.recv().await.expect("article event") {
+                ArticleEvent::UnreadCountUpdated { .. }
+                | ArticleEvent::NewArticlesAvailable { .. } => continue,
+                event => return event,
+            }
+        }
+    })
+    .await
+    .expect("article event timeout")
 }
 
 #[tokio::test]
@@ -165,6 +195,52 @@ async fn process_url_emits_failed_event_for_duplicate_url() {
         }
         other => panic!("expected Failed event, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn admin_delete_of_other_users_article_is_audited() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let owner = create_test_user(&test_db.db, "article-delete-owner").await;
+    let admin = create_test_user(&test_db.db, "article-delete-admin").await;
+    let article = Article::create_by_user_id(
+        &client,
+        owner.id,
+        article_params(owner.id, "https://example.com/admin-delete", "Delete Me"),
+    )
+    .await
+    .expect("seed article");
+
+    let service = make_article_service(test_db.db.clone());
+    let mut events = service.subscribe_events();
+
+    service.delete_article(admin.id, article.id, true);
+
+    match recv_article_event(&mut events).await {
+        ArticleEvent::Deleted { user_id } => assert_eq!(user_id, admin.id),
+        other => panic!("expected Deleted event, got {other:?}"),
+    }
+
+    let deleted = Article::get(&client, article.id)
+        .await
+        .expect("reload deleted article");
+    assert!(deleted.is_none());
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].actor_user_id, admin.id);
+    assert_eq!(audit[0].action, "article_delete");
+    assert_eq!(audit[0].target_kind, "article");
+    assert_eq!(audit[0].target_id, Some(article.id));
+    let owner_id = owner.id.to_string();
+    assert_eq!(
+        audit[0].metadata["target_user_id"].as_str(),
+        Some(owner_id.as_str())
+    );
+    assert_eq!(
+        audit[0].metadata["url"].as_str(),
+        Some("https://example.com/admin-delete")
+    );
 }
 
 #[tokio::test]

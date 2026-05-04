@@ -44,6 +44,11 @@ const COMMON_EMOJI: &[&str] = &[
 
 // TODO: use kaomoji.json instead of hardcoding it here
 const COMMON_KAOMOJI: &[(&str, &str)] = &[
+    ("(╯`Д´)╯︵ ┻━┻", "table flip"),
+    ("(∩｀-´)⊃━☆ﾟ.*･｡ﾟ", "wizard"),
+    ("(˶ᵔᗜᵔ˶)ﾉﾞ", "waving"),
+    ("٩(◕‿◕｡)۶", "dancing"),
+    ("୧((#Φ益Φ#))୨", "angry"),
     ("(* ^ ω ^)", "happy smile"),
     ("*⸜( •ᴗ• )⸝*", "cheer yay"),
     ("(>⩊<)", "excited laugh"),
@@ -56,6 +61,32 @@ const COMMON_KAOMOJI: &[(&str, &str)] = &[
     ("( ` ω ´ )", "angry mad"),
     ("(｡•́︿•̀｡)", "sad pleading"),
     ("(っ˘̩╭╮˘̩)っ", "cry hug"),
+    ("ლ(ಠ_ಠ ლ)", "disapproval look"),
+    ("ʕ•ᴥ•ʔ", "bear"),
+    ("૮ ˶ᵔ ᵕ ᵔ˶ ა", "happy"),
+    ("(˶˃ ᵕ ˂˶) .ᐟ.ᐟ", "happy blush"),
+    ("₍₍⚞(˶ˆᗜˆ˵)⚟⁾⁾", "excited"),
+    ("ദ്ദി(˵ •̀ ᴗ - ˵ ) ✧", "proud confident"),
+    ("₍^. .^₎⟆", "kitty"),
+    ("(˵◝ ⩊  ◜˵マ", "roger"),
+    ("(ᵕ—ᴗ—)ᵕ", "content"),
+    ("ฅ^>⩊<^ ฅ", "happy cat"),
+    ("｡°(°¯᷄◠¯᷅°)°｡", "sobbing"),
+    ("(╥‸╥)", "crying"),
+    ("(ㆆ_ㆆ)", "speechless"),
+    ("(｡ᵕ ◞ _◟)", "sad"),
+    ("(˶°ㅁ°)!!", "shocked"),
+    (
+        "〜\u{2060}(\u{2060}꒪\u{2060}꒳\u{2060}꒪\u{2060})\u{2060}〜",
+        "vibing",
+    ),
+    ("( ◡̀_◡́)ᕤ", "strong flex"),
+    ("(๑>؂•̀๑)", "teheh"),
+    ("˶ˊᜊˋ˶", "singing"),
+    ("𓆝 ⋆｡𖦹°‧🫧", "fih."),
+    ("꒰⑅ᵕ༚ᵕ꒱˖", "happy blushing"),
+    ("ꉂ(˵˃ ᗜ ˂˵)", "happy laugh"),
+    ("(˶°▄°˶)", "skeptical"),
 ];
 
 const COMMON_NERD_NAMES: &[&str] = &[

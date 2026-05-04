@@ -94,6 +94,8 @@
 - The first confirmed bet starts a fixed 30s betting cap (`BETTING_LOCK_CAP_SECS`). It does not restart on later bets. If all seated players have locked bets, the round deals immediately.
 - Pending async chip debits can delay auto-deal; the service waits until no pending bets remain.
 - During `PlayerTurn`, all betting seats can hit/stand/double their own hands in parallel. Dealer resolution runs after every unresolved hand has stood, busted, or naturally settled.
+- Dealer resolution reveals/draws one card per step with a 900ms service-side delay (`DEALER_CARD_DELAY_MS`).
+- After settlement, next-hand input is blocked for 1200ms (`SETTLEMENT_MIN_VIEW_MS`) in both the service and per-session client state so everyone can see the result.
 - Double down is allowed only on an active two-card hand with a locked bet and enough chip balance for one extra wager equal to the original bet. The service marks the seat `SeatPhase::ActionPending` while the extra chip debit is pending, then doubles the recorded bet, draws exactly one card, and auto-stands or bust-settles the hand. Double-down settlement uses the doubled bet amount.
 - Action timeout auto-stands remaining hands when the pace-specific deadline expires, then removes those non-acting seats after settlement.
 - A seated player who misses 3 deals without a locked bet is removed from the table.

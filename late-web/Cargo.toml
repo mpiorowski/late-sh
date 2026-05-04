@@ -29,6 +29,7 @@ tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
 askama.workspace = true
 async-stream.workspace = true
+pulldown-cmark.workspace = true
 
 # Web / HTTP
 axum = { workspace = true }

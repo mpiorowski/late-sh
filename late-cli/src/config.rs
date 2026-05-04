@@ -10,6 +10,7 @@ pub(super) const DEFAULT_API_BASE_URL: &str = "https://api.late.sh";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SshMode {
     Subprocess,
+    OpenSsh,
     Native,
 }
 
@@ -141,7 +142,7 @@ fn print_help() {
            --ssh-port <port>          SSH port override\n\
            --ssh-user <user>          SSH username override\n\
            --key <path>               SSH identity file override\n\
-           --ssh-mode <mode>          SSH transport: native (default) or old\n\
+           --ssh-mode <mode>          SSH transport: native (default), openssh, or old\n\
            --ssh-bin <command>        SSH client command, including optional args (default: ssh)\n\
            --audio-base-url <url>     Audio base URL, without or with /stream\n\
            --api-base-url <url>       API base URL used for /api/ws/pair\n\
@@ -164,16 +165,24 @@ impl SshMode {
     fn parse(value: &str) -> Result<Self> {
         match value {
             "old" | "subprocess" => Ok(Self::Subprocess),
+            "openssh" => Ok(Self::OpenSsh),
             "native" => Ok(Self::Native),
-            other => anyhow::bail!("invalid ssh mode '{other}'; expected 'native' or 'old'"),
+            other => {
+                anyhow::bail!("invalid ssh mode '{other}'; expected 'native', 'openssh', or 'old'")
+            }
         }
     }
 
     pub(super) fn client_state_label(self) -> &'static str {
         match self {
             Self::Native => "native",
+            Self::OpenSsh => "openssh",
             Self::Subprocess => "old",
         }
+    }
+
+    pub(super) fn uses_cli_raw_mode(self) -> bool {
+        !matches!(self, Self::OpenSsh)
     }
 }
 
@@ -199,6 +208,7 @@ mod tests {
     fn ssh_mode_parser_accepts_supported_values() {
         assert_eq!(SshMode::parse("old").unwrap(), SshMode::Subprocess);
         assert_eq!(SshMode::parse("subprocess").unwrap(), SshMode::Subprocess);
+        assert_eq!(SshMode::parse("openssh").unwrap(), SshMode::OpenSsh);
         assert_eq!(SshMode::parse("native").unwrap(), SshMode::Native);
     }
 

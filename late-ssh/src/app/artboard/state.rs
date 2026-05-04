@@ -1956,6 +1956,9 @@ mod tests {
         state
             .glyph_picker_state_mut()
             .set_tab(icon_picker::IconPickerTab::Kaomoji);
+        for ch in "happy smile".chars() {
+            state.glyph_picker_state_mut().search_insert_char(ch);
+        }
 
         assert!(state.glyph_picker_insert(false, (80, 24)));
         assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 1 }), '(');

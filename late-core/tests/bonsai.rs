@@ -6,6 +6,8 @@ use late_core::{
     },
     test_utils::test_db,
 };
+use std::sync::Arc;
+use tokio::sync::Barrier;
 
 #[tokio::test]
 async fn ensure_and_find_by_user_round_trip() {
@@ -89,4 +91,54 @@ async fn tree_mutations_and_graveyard_round_trip() {
     assert_eq!(respawned.seed, 99);
     assert!(respawned.created >= old_created);
     assert!(respawned.updated >= respawned.created - Duration::seconds(1));
+}
+
+#[tokio::test]
+async fn concurrent_water_attempts_only_grant_growth_once() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = User::create(
+        &client,
+        UserParams {
+            fingerprint: "bonsai-model-concurrent-water".to_string(),
+            username: "bonsai-model-concurrent-water".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("create user");
+    let today = Utc::now().date_naive();
+
+    Tree::ensure(&client, user.id, 22).await.expect("ensure");
+
+    let task_count = 12;
+    let barrier = Arc::new(Barrier::new(task_count));
+    let mut handles = Vec::new();
+    for _ in 0..task_count {
+        let db = test_db.db.clone();
+        let barrier = Arc::clone(&barrier);
+        let user_id = user.id;
+        handles.push(tokio::spawn(async move {
+            let client = db.get().await.expect("db client");
+            barrier.wait().await;
+            Tree::water_and_add_growth_if_available(&client, user_id, today, false)
+                .await
+                .expect("water")
+        }));
+    }
+
+    let mut successful_waters = 0;
+    for handle in handles {
+        if handle.await.expect("join water task") {
+            successful_waters += 1;
+        }
+    }
+
+    let tree = Tree::find_by_user_id(&client, user.id)
+        .await
+        .expect("find tree")
+        .expect("tree");
+    assert_eq!(successful_waters, 1);
+    assert_eq!(tree.last_watered, Some(today));
+    assert_eq!(tree.growth_points, 10);
 }
