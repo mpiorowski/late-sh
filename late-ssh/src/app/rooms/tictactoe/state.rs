@@ -56,6 +56,10 @@ impl State {
         self.svc.room_id()
     }
 
+    pub fn is_self(&self, user_id: Uuid) -> bool {
+        self.user_id == user_id
+    }
+
     pub fn tick(&mut self) {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();

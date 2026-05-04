@@ -112,7 +112,8 @@ impl ActiveRoomBackend for State {
     }
 
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
-        area.height.saturating_mul(3) / 5
+        let scaled = area.height.saturating_mul(9) / 20;
+        scaled.min(19)
     }
 
     fn draw(

@@ -524,12 +524,12 @@ fn handle_active_room_arrow(app: &mut App, key: u8) -> bool {
     };
     let chat_room_id = room.chat_room_id;
     touch_active_room_activity(app);
-    if crate::app::chat::input::handle_message_arrow_in_room(app, chat_room_id, key) {
+    if let Some(game) = app.active_room_game.as_mut()
+        && game.handle_arrow(key)
+    {
         return true;
     }
-    app.active_room_game
-        .as_mut()
-        .is_some_and(|game| game.handle_arrow(key))
+    crate::app::chat::input::handle_message_arrow_in_room(app, chat_room_id, key)
 }
 
 fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
