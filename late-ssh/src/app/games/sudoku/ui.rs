@@ -9,7 +9,7 @@ use ratatui::{
 use super::state::{Mode, State};
 use crate::app::common::theme;
 use crate::app::games::ui::{
-    centered_rect, draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint,
+    GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
 };
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
@@ -25,32 +25,31 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         Mode::Personal => "personal",
     };
 
-    let info_lines = vec![
-        info_tagline("Classic newspaper logic."),
-        Line::from(""),
-        info_label_value("Mode", mode_str.to_string(), theme::AMBER_GLOW()),
-        info_label_value(
-            "Difficulty",
-            state.difficulty_key().to_string(),
-            theme::SUCCESS(),
-        ),
-        info_label_value("Progress", format!("{filled}/81"), theme::TEXT_BRIGHT()),
-        info_label_value(
-            "Cursor",
-            format!("{}{}", row_label(state.cursor.0), state.cursor.1 + 1),
-            theme::TEXT_BRIGHT(),
-        ),
-        Line::from(""),
-        key_hint("h/j/k/l", "move"),
-        key_hint("1-9", "place digit"),
-        key_hint("0/Bksp", "clear cell"),
-        key_hint("d/p/n", "daily/pers/new"),
-        key_hint("[ ]", "difficulty"),
-        key_hint("r", "reset board"),
-        key_hint("Esc", "exit"),
-    ];
+    let bottom = GameBottomBar {
+        status: status_line(vec![
+            ("mode", mode_str.to_string(), theme::AMBER_GLOW()),
+            ("diff", state.difficulty_key().to_string(), theme::SUCCESS()),
+            ("filled", format!("{filled}/81"), theme::TEXT_BRIGHT()),
+            (
+                "at",
+                format!("{}{}", row_label(state.cursor.0), state.cursor.1 + 1),
+                theme::TEXT_BRIGHT(),
+            ),
+        ]),
+        keys: keys_line(vec![
+            ("h/j/k/l", "move"),
+            ("1-9", "place"),
+            ("0", "clear"),
+            ("d/p/n", "daily/pers/new"),
+            ("[ ]", "diff"),
+            ("r", "reset"),
+            ("`", "dashboard"),
+            ("Esc", "exit"),
+        ]),
+        tip: None,
+    };
 
-    let board_area = draw_game_frame(frame, area, "Sudoku", info_lines, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "Sudoku", bottom, show_sidebar);
 
     let board_rect = centered_rect(
         board_area,

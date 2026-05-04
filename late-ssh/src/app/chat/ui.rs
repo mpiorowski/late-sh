@@ -779,6 +779,11 @@ pub struct ChatRenderInput<'a> {
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
     pub showcase_state: Option<&'a super::showcase::state::State>,
     pub showcase_composing: bool,
+    pub work_selected: bool,
+    pub work_unread_count: i64,
+    pub work_view: super::work::ui::WorkListView<'a>,
+    pub work_state: Option<&'a super::work::state::State>,
+    pub work_composing: bool,
 }
 
 pub struct EmbeddedRoomChatView<'a> {
@@ -904,6 +909,8 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
         chat_composer_lines_for_height(view.news_composer, composer_text_width)
     } else if view.showcase_selected {
         if view.showcase_composing { 8 } else { 1 }
+    } else if view.work_selected {
+        if view.work_composing { 9 } else { 1 }
     } else {
         chat_composer_lines_for_height(view.composer, composer_text_width).max(
             composer_placeholder_lines(&ComposerBlockView {
@@ -919,7 +926,12 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
             }),
         )
     };
-    let visible_composer_lines = total_composer_lines.min(8);
+    let max_composer_lines = if view.work_selected && view.work_composing {
+        9
+    } else {
+        8
+    };
+    let visible_composer_lines = total_composer_lines.min(max_composer_lines);
     let composer_height = visible_composer_lines as u16 + 2;
     let layout =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
@@ -981,6 +993,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
             && !view.notifications_selected
             && !view.discover_selected
             && !view.showcase_selected
+            && !view.work_selected
             && view.selected_room_id == Some(room_id)
     };
 
@@ -1075,6 +1088,28 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         Some(RoomSlot::Showcase),
         view.showcase_selected,
     );
+
+    let work_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.work_selected,
+        );
+        let style = if view.work_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.work_unread_count > 0 {
+            format!("{prefix}work ({})", view.work_unread_count)
+        } else {
+            format!("{prefix}work")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(work_line, Some(RoomSlot::Work), view.work_selected);
 
     let notifications_line = {
         let prefix = room_jump_prefix(
@@ -1309,6 +1344,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         super::discover::ui::draw_discover_list(frame, messages_area, &view.discover_view);
     } else if view.showcase_selected {
         super::showcase::ui::draw_showcase_list(frame, messages_area, &view.showcase_view);
+    } else if view.work_selected {
+        super::work::ui::draw_work_list(frame, messages_area, &view.work_view);
     } else if news_selected {
         super::news::ui::draw_article_list(frame, messages_area, &view.news_view);
     } else {
@@ -1409,6 +1446,14 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 &super::showcase::ui::ShowcaseComposerView {
                     state: showcase_state,
                 },
+            );
+        }
+    } else if view.work_selected {
+        if let Some(work_state) = view.work_state {
+            super::work::ui::draw_work_composer(
+                frame,
+                composer_area,
+                &super::work::ui::WorkComposerView { state: work_state },
             );
         }
     } else if view.discover_selected {
@@ -1601,6 +1646,18 @@ mod tests {
             },
             showcase_state: None,
             showcase_composing: false,
+            work_selected: false,
+            work_unread_count: 0,
+            work_view: crate::app::chat::work::ui::WorkListView {
+                items: &[],
+                selected_index: 0,
+                current_user_id: Uuid::nil(),
+                is_admin: false,
+                marker_read_at: None,
+                profile_base_url: "http://localhost:3000",
+            },
+            work_state: None,
+            work_composing: false,
         }
     }
 
@@ -1849,7 +1906,7 @@ mod tests {
     }
 
     #[test]
-    fn room_list_rows_place_showcases_before_mentions_and_discover() {
+    fn room_list_rows_place_work_after_showcases() {
         let rooms = Vec::new();
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
@@ -1882,6 +1939,7 @@ mod tests {
             vec![
                 RoomSlot::News,
                 RoomSlot::Showcase,
+                RoomSlot::Work,
                 RoomSlot::Notifications,
                 RoomSlot::Discover,
             ]

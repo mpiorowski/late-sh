@@ -1,0 +1,55 @@
+{% extends "pages/app.html" %}
+
+{% block title %}profile not found - late.sh{% endblock %}
+
+{% block content %}
+<style>
+    @keyframes fade-up {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .stagger { opacity: 0; animation: fade-up 0.4s ease forwards; }
+    .stagger-1 { animation-delay: 0s; }
+    .stagger-2 { animation-delay: 0.07s; }
+    .stagger-3 { animation-delay: 0.14s; }
+
+    @media (prefers-reduced-motion: reduce) {
+        .stagger { opacity: 1; animation: none; }
+    }
+</style>
+
+<div class="max-w-lg mx-auto pt-16 sm:pt-24">
+
+    <div class="stagger stagger-1 mb-10 text-xs text-gray-600">
+        <a href="/" class="hover:text-gray-400 transition-colors">late.sh</a>
+        <span class="text-gray-700 mx-2">/</span>
+        <a href="/profiles" class="text-gray-500 hover:text-gray-300 transition-colors">profiles</a>
+        <span class="text-gray-700 mx-2">/</span>
+        <span class="text-gray-400">{{ slug }}</span>
+    </div>
+
+    <div class="stagger stagger-2 mb-3">
+        <span class="text-yellow-500 text-xs uppercase tracking-wider">404</span>
+    </div>
+
+    <div class="stagger stagger-2 mb-4">
+        <h1 class="text-2xl text-gray-100 tracking-tight">no profile here</h1>
+    </div>
+
+    <div class="stagger stagger-3 mb-12 text-sm text-gray-500 leading-relaxed">
+        <p>the slug <span class="text-gray-300">{{ slug }}</span> doesn't match any work profile.</p>
+        <p class="mt-2 text-gray-600">it may have been deleted, or the link might be wrong.</p>
+    </div>
+
+    <div class="stagger stagger-3">
+        <a href="/"
+           class="group block w-full text-left border border-gray-800 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
+            <div class="flex items-center justify-between gap-4">
+                <span class="text-sm text-gray-300">← back to late.sh</span>
+                <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">home</span>
+            </div>
+        </a>
+    </div>
+
+</div>
+{% endblock %}

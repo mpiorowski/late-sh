@@ -7,12 +7,16 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GameKind {
     Blackjack,
+    TicTacToe,
 }
 
 impl GameKind {
+    pub const ALL: [Self; 2] = [Self::Blackjack, Self::TicTacToe];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Blackjack => "blackjack",
+            Self::TicTacToe => "tictactoe",
         }
     }
 }
@@ -29,6 +33,7 @@ impl TryFrom<&str> for GameKind {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "blackjack" => Ok(Self::Blackjack),
+            "tictactoe" => Ok(Self::TicTacToe),
             _ => Err(anyhow::anyhow!("unknown game kind: {}", value)),
         }
     }

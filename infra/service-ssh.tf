@@ -33,7 +33,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
       }
 
       spec {
-        termination_grace_period_seconds = 7200
+        termination_grace_period_seconds = 21600
 
         container {
           image = var.SSH_IMAGE_TAG

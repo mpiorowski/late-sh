@@ -183,6 +183,10 @@ struct DoubleDownSuccess {
 }
 
 impl BlackjackService {
+    pub fn room_id(&self) -> Uuid {
+        self.room_id
+    }
+
     pub fn new(
         room_id: Uuid,
         chip_svc: ChipService,
@@ -225,10 +229,6 @@ impl BlackjackService {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<BlackjackEvent> {
         self.event_tx.subscribe()
-    }
-
-    pub fn room_id(&self) -> Uuid {
-        self.room_id
     }
 
     pub fn current_snapshot(&self) -> BlackjackSnapshot {

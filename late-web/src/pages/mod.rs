@@ -6,6 +6,7 @@ pub mod connect;
 pub mod dashboard;
 pub mod gallery;
 pub mod play;
+pub mod profiles;
 pub mod shared;
 pub mod stream;
 
@@ -15,6 +16,7 @@ pub fn router() -> Router<AppState> {
         .merge(connect::router())
         .merge(gallery::router())
         .merge(play::router())
+        .merge(profiles::router())
         .merge(stream::router())
         .nest("/dashboard", dashboard::router())
 }

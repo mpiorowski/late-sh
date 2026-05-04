@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 
 use crate::app::{
-    chat,
+    chat::{self, state::RoomSlot},
     common::{
         cli_install,
         primitives::{Banner, Screen},
@@ -32,6 +32,9 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             }
             if slot == 2 {
                 return open_current_dashboard_wire_article(app);
+            }
+            if slot == 3 {
+                return open_announcements_room(app);
             }
             return enter_blackjack_room_slot(app, slot);
         }
@@ -156,7 +159,7 @@ fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
 }
 
 fn sorted_dashboard_blackjack_rooms(app: &App) -> Vec<crate::app::rooms::svc::RoomListItem> {
-    let snapshots = app.blackjack_table_manager.table_snapshots();
+    let snapshots = app.room_game_registry.blackjack().table_snapshots();
     let mut rooms: Vec<crate::app::rooms::svc::RoomListItem> = app
         .rooms_snapshot
         .rooms
@@ -228,7 +231,7 @@ fn enter_last_game_room(app: &mut App) -> bool {
 
 pub(crate) fn dashboard_box_slot_for_key(byte: u8) -> Option<usize> {
     match byte {
-        b'1'..=b'3' => Some((byte - b'1') as usize),
+        b'1'..=b'4' => Some((byte - b'1') as usize),
         _ => None,
     }
 }
@@ -306,9 +309,45 @@ fn open_current_dashboard_wire_article(app: &mut App) -> bool {
     true
 }
 
+fn open_announcements_room(app: &mut App) -> bool {
+    let Some(room_id) = app
+        .chat
+        .rooms
+        .iter()
+        .find(|(room, _)| room.slug.as_deref() == Some("announcements"))
+        .map(|(room, _)| room.id)
+    else {
+        app.chat.request_list();
+        app.banner = Some(Banner::error("#announcements not loaded yet."));
+        return true;
+    };
+
+    app.chat.close_overlay();
+    app.chat.reset_composer();
+    app.chat.select_room_slot(RoomSlot::Room(room_id));
+    app.set_screen(Screen::Chat);
+    app.sync_visible_chat_room();
+    app.chat.request_list();
+    true
+}
+
 fn dashboard_cycle_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dashboard_box_slot_for_key;
+
+    #[test]
+    fn dashboard_box_slot_accepts_announcements_chord() {
+        assert_eq!(dashboard_box_slot_for_key(b'1'), Some(0));
+        assert_eq!(dashboard_box_slot_for_key(b'2'), Some(1));
+        assert_eq!(dashboard_box_slot_for_key(b'3'), Some(2));
+        assert_eq!(dashboard_box_slot_for_key(b'4'), Some(3));
+        assert_eq!(dashboard_box_slot_for_key(b'5'), None);
+    }
 }
