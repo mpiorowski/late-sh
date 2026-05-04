@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-01
+- Last updated: 2026-05-04
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -128,6 +128,13 @@
 - `chat_rooms.kind = 'game'` stays in chat state so embedded room chat works.
 - Main Chat room-list rendering skips game rooms, so game-backed rooms do not appear as normal chat rooms or favorites.
 - Room entry requests a chat tail; live broadcasts then keep the embedded chat updated like other room-explicit chat flows.
+
+## Future: Asymmetric-Info Games (Poker-Shape)
+- Current games (Blackjack, TTT) publish one `watch::Sender<Snapshot>` and every session sees the same snapshot. Poker-style games where each user sees a different view (own hole cards visible, others hidden) are supported by the existing trait surface without changes.
+- Pattern: split the snapshot into a public part and a per-user private part. Service holds one `watch::Sender<PublicSnapshot>` plus a `HashMap<Uuid, watch::Sender<PrivateSnapshot>>` keyed by user_id. Per-session `State` caches both and drains both in `tick()`.
+- `RoomGameManager::enter` already receives `user_id`, so the manager can register a private channel for the entering user and bind the receiver into the returned `Box<dyn ActiveRoomBackend>`. Rooms layer never sees the split.
+- Cleanup of orphaned private channels (session disconnect drops the receiver but not the sender): prefer lazy GC inside the service's `publish` path — prune entries where `tx.receiver_count() == 0`.
+- Keep the deck/un-dealt cards inside `SharedState` only, never put them on any snapshot. Hole cards get sliced into the per-user private snapshot at publish time. Clients never receive secret state they aren't entitled to.
 
 ## Known Gaps
 - Blackjack table state is not durable across process restart.
