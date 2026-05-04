@@ -54,6 +54,7 @@ const COMMON_KAOMOJI: &[(&str, &str)] = &[
     ("(>⩊<)", "excited laugh"),
     ("(„• ᴗ •„)", "cute blush"),
     ("(*￣▽￣)b", "thumbs up good"),
+    ("¯\\_(ツ)_/¯", "shruggie shrug"),
     ("(´,,•ω•,,)♡", "love affection"),
     ("(⁄ ⁄•⁄ω⁄•⁄ ⁄)", "blush shy"),
     ("(⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄)", "embarrassed flustered"),
