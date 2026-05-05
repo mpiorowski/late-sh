@@ -1,4 +1,5 @@
 use anyhow::Result;
+use deadpool_postgres::GenericClient;
 use serde_json::Value;
 use std::time::Duration;
 use tokio_postgres::Client;
@@ -7,12 +8,16 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GameKind {
     Blackjack,
+    TicTacToe,
 }
 
 impl GameKind {
+    pub const ALL: [Self; 2] = [Self::Blackjack, Self::TicTacToe];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Blackjack => "blackjack",
+            Self::TicTacToe => "tictactoe",
         }
     }
 }
@@ -29,6 +34,7 @@ impl TryFrom<&str> for GameKind {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "blackjack" => Ok(Self::Blackjack),
+            "tictactoe" => Ok(Self::TicTacToe),
             _ => Err(anyhow::anyhow!("unknown game kind: {}", value)),
         }
     }
@@ -231,5 +237,21 @@ impl GameRoom {
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    pub async fn rename_by_chat_room_id(
+        client: &impl GenericClient,
+        chat_room_id: Uuid,
+        new_slug: &str,
+    ) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE game_rooms
+                 SET slug = $2, updated = current_timestamp
+                 WHERE chat_room_id = $1",
+                &[&chat_room_id, &new_slug],
+            )
+            .await?;
+        Ok(updated)
     }
 }

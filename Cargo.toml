@@ -60,6 +60,7 @@ ipnet = "2.11"
 late-core = { path = "late-core", default-features = false }
 nix = "0.29.0"
 pkcs5 = "=0.8.0-rc.13" # Temporary russh/pkcs8 compatibility pin; see CONTEXT.md.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 qrcodegen = "1.8.0"
 rand = "0.8"
 rand_core = "0.6"

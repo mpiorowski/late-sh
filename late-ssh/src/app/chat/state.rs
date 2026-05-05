@@ -30,6 +30,7 @@ use super::{
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
     ui_text::reaction_label,
+    work,
 };
 
 pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
@@ -74,10 +75,15 @@ pub(crate) enum RoomSlot {
     Notifications,
     Discover,
     Showcase,
+    Work,
 }
 
 pub(super) fn is_chat_list_room(room: &ChatRoom) -> bool {
-    room.kind != "game"
+    if room.kind == "game" {
+        return false;
+    }
+
+    room.kind == "dm" || room.permanent || matches!(room.visibility.as_str(), "public" | "private")
 }
 
 pub struct ChatState {
@@ -136,6 +142,8 @@ pub struct ChatState {
     pub(crate) discover: discover::state::State,
     pub(crate) showcase_selected: bool,
     pub(crate) showcase: showcase::state::State,
+    pub(crate) work_selected: bool,
+    pub(crate) work: work::state::State,
 
     /// Pending desktop notifications drained on render. `kind` matches the
     /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
@@ -153,6 +161,14 @@ pub(crate) struct PendingNotification {
     pub body: String,
 }
 
+pub(crate) struct ChatServices {
+    pub chat: ChatService,
+    pub notifications: NotificationService,
+    pub articles: news::svc::ArticleService,
+    pub showcases: showcase::svc::ShowcaseService,
+    pub work: work::svc::WorkService,
+}
+
 impl Drop for ChatState {
     fn drop(&mut self) {
         self.bg_task.abort();
@@ -160,15 +176,19 @@ impl Drop for ChatState {
 }
 
 impl ChatState {
-    pub fn new(
-        service: ChatService,
-        notification_service: NotificationService,
+    pub(crate) fn new(
+        services: ChatServices,
         user_id: Uuid,
         permissions: Permissions,
         active_users: Option<ActiveUsers>,
-        article_service: news::svc::ArticleService,
-        showcase_service: showcase::svc::ShowcaseService,
     ) -> Self {
+        let ChatServices {
+            chat: service,
+            notifications: notification_service,
+            articles: article_service,
+            showcases: showcase_service,
+            work: work_service,
+        } = services;
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
@@ -232,6 +252,8 @@ impl ChatState {
                 user_id,
                 permissions.is_admin(),
             ),
+            work_selected: false,
+            work: work::state::State::new(work_service, user_id, permissions.is_admin()),
             pending_notifications: Vec::new(),
             requested_help_topic: None,
             requested_settings_modal: false,
@@ -249,6 +271,7 @@ impl ChatState {
         composer::apply_themed_textarea_style(&mut self.composer, self.composing);
         self.news.refresh_composer_theme();
         self.showcase.refresh_composer_theme();
+        self.work.refresh_composer_theme();
     }
 
     pub fn is_composing(&self) -> bool {
@@ -403,6 +426,7 @@ impl ChatState {
         self.is_admin = permissions.is_admin();
         self.news.set_is_admin(self.is_admin);
         self.showcase.set_is_admin(self.is_admin);
+        self.work.set_is_admin(self.is_admin);
     }
 
     pub(crate) fn submit_mod_command(&mut self, command: String) -> Uuid {
@@ -461,6 +485,7 @@ impl ChatState {
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
+        self.work_selected = false;
         self.selected_room_id = Some(room_id);
         self.selected_message_id = Some(message_id);
         self.highlighted_message_id = Some(message_id);
@@ -717,8 +742,8 @@ impl ChatState {
     }
 
     /// Build the flat visual navigation order.
-    /// Order: core (general, announcements) → news → showcases → mentions
-    /// → discover → public rooms (alpha) → private rooms (alpha) → DMs
+    /// Order: core (general, announcements) → news → showcases → work
+    /// → mentions → discover → public rooms (alpha) → private rooms (alpha) → DMs
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
         visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames)
     }
@@ -765,6 +790,11 @@ impl ChatState {
                 self.select_showcase();
                 changed
             }
+            RoomSlot::Work => {
+                let changed = !self.work_selected;
+                self.select_work();
+                changed
+            }
             RoomSlot::Room(next_id) => {
                 if !self
                     .rooms
@@ -777,11 +807,13 @@ impl ChatState {
                     || self.notifications_selected
                     || self.discover_selected
                     || self.showcase_selected
+                    || self.work_selected
                     || self.selected_room_id != Some(next_id);
                 self.news_selected = false;
                 self.notifications_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
+                self.work_selected = false;
                 self.selected_room_id = Some(next_id);
                 if !changed {
                     self.mark_room_read(next_id);
@@ -826,6 +858,8 @@ impl ChatState {
             RoomSlot::Discover
         } else if self.showcase_selected {
             RoomSlot::Showcase
+        } else if self.work_selected {
+            RoomSlot::Work
         } else if self.news_selected {
             RoomSlot::News
         } else {
@@ -979,6 +1013,10 @@ impl ChatState {
         format_active_user_lines(self.active_users.as_ref())
     }
 
+    pub(crate) fn open_active_users_overlay(&mut self) {
+        self.open_overlay("Active Users", self.active_user_lines());
+    }
+
     pub fn submit_composer(&mut self, keep_open: bool, from_dashboard: bool) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
 
@@ -1038,7 +1076,7 @@ impl ChatState {
 
         if body.trim() == "/active" {
             self.clear_composer_after_submit();
-            self.open_overlay("Active Users", self.active_user_lines());
+            self.open_active_users_overlay();
             return None;
         }
 
@@ -1283,11 +1321,13 @@ impl ChatState {
         let news_banner = self.news.tick();
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
+        let work_banner = self.work.tick();
         moderation_banner
             .or(banner)
             .or(news_banner)
             .or(notif_banner)
             .or(showcase_banner)
+            .or(work_banner)
     }
 
     pub fn select_news(&mut self) {
@@ -1296,6 +1336,7 @@ impl ChatState {
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
+        self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.news.list_articles();
@@ -1312,6 +1353,7 @@ impl ChatState {
         self.news_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
+        self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.notifications.list();
@@ -1324,6 +1366,7 @@ impl ChatState {
         self.notifications_selected = false;
         self.news_selected = false;
         self.showcase_selected = false;
+        self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.discover.start_loading();
@@ -1336,10 +1379,24 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.showcase.list();
         self.showcase.mark_read();
+    }
+
+    pub fn select_work(&mut self) {
+        self.room_jump_active = false;
+        self.work_selected = true;
+        self.showcase_selected = false;
+        self.discover_selected = false;
+        self.notifications_selected = false;
+        self.news_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+        self.work.list();
+        self.work.mark_read();
     }
 
     pub fn join_selected_discover_room(&mut self) -> Option<Banner> {
@@ -1635,6 +1692,7 @@ impl ChatState {
                     self.notifications_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
+                    self.work_selected = false;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -1652,6 +1710,7 @@ impl ChatState {
                     self.notifications_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
+                    self.work_selected = false;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -1681,6 +1740,7 @@ impl ChatState {
                     self.notifications_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
+                    self.work_selected = false;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -1879,6 +1939,9 @@ impl ChatState {
 
             if let Some(message) = moderation_server_toast(&event) {
                 banner = Some(Banner::success(&message));
+            }
+            if matches!(event, ModerationEvent::RoomRenamed { .. }) {
+                self.request_list();
             }
         }
         banner
@@ -2111,6 +2174,7 @@ fn visual_order_for_rooms(
 
     order.push(RoomSlot::News);
     order.push(RoomSlot::Showcase);
+    order.push(RoomSlot::Work);
     order.push(RoomSlot::Notifications);
     order.push(RoomSlot::Discover);
 
@@ -2379,9 +2443,11 @@ fn adjacent_composer_room(
         .iter()
         .filter_map(|slot| match slot {
             RoomSlot::Room(room_id) => Some(*room_id),
-            RoomSlot::News | RoomSlot::Notifications | RoomSlot::Discover | RoomSlot::Showcase => {
-                None
-            }
+            RoomSlot::News
+            | RoomSlot::Notifications
+            | RoomSlot::Discover
+            | RoomSlot::Showcase
+            | RoomSlot::Work => None,
         })
         .collect();
     if rooms.is_empty() {
@@ -2908,7 +2974,7 @@ mod tests {
     }
 
     #[test]
-    fn visual_order_places_showcases_before_mentions_and_discover() {
+    fn visual_order_places_work_after_showcases() {
         let me = Uuid::from_u128(1);
         let alice = Uuid::from_u128(2);
         let bob = Uuid::from_u128(3);
@@ -2949,6 +3015,7 @@ mod tests {
                 RoomSlot::Room(announcements),
                 RoomSlot::News,
                 RoomSlot::Showcase,
+                RoomSlot::Work,
                 RoomSlot::Notifications,
                 RoomSlot::Discover,
                 RoomSlot::Room(public_alpha),
@@ -2969,6 +3036,7 @@ mod tests {
             RoomSlot::Room(room_a),
             RoomSlot::News,
             RoomSlot::Showcase,
+            RoomSlot::Work,
             RoomSlot::Notifications,
             RoomSlot::Discover,
             RoomSlot::Room(room_b),
@@ -2994,6 +3062,7 @@ mod tests {
         let order = vec![
             RoomSlot::News,
             RoomSlot::Showcase,
+            RoomSlot::Work,
             RoomSlot::Notifications,
             RoomSlot::Discover,
         ];
@@ -3056,6 +3125,7 @@ mod tests {
             (b'a', RoomSlot::Room(room_id)),
             (b's', RoomSlot::News),
             (b'd', RoomSlot::Showcase),
+            (b'w', RoomSlot::Work),
             (b'f', RoomSlot::Notifications),
             (b'g', RoomSlot::Discover),
         ];
@@ -3071,6 +3141,10 @@ mod tests {
         assert_eq!(
             resolve_room_jump_target(&targets, b'D'),
             Some(RoomSlot::Showcase)
+        );
+        assert_eq!(
+            resolve_room_jump_target(&targets, b'w'),
+            Some(RoomSlot::Work)
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b'f'),

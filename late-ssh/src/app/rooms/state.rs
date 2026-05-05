@@ -1,6 +1,6 @@
 use tokio::sync::broadcast;
 
-use super::svc::{RoomsEvent, game_kind_label};
+use super::svc::RoomsEvent;
 use crate::app::{common::primitives::Banner, state::App};
 
 impl App {
@@ -56,7 +56,7 @@ impl App {
                     } if user_id == self.user_id => {
                         banner = Some(Banner::success(&format!(
                             "Created {} table: {}",
-                            game_kind_label(game_kind),
+                            self.room_game_registry.label(game_kind),
                             display_name
                         )));
                     }
@@ -79,7 +79,7 @@ impl App {
                         };
                         banner = Some(Banner::error(&format!(
                             "Failed to create {} {}: {}",
-                            game_kind_label(game_kind),
+                            self.room_game_registry.label(game_kind),
                             table,
                             message
                         )));

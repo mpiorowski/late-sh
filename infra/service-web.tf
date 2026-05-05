@@ -94,6 +94,15 @@ resource "kubernetes_deployment_v1" "service_web" {
             name  = "LATE_AUDIO_URL"
             value = "https://audio.${var.DOMAIN}"
           }
+          env {
+            name = "LATE_WEB_TUNNEL_TOKEN"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.web_tunnel_token.metadata[0].name
+                key  = "token"
+              }
+            }
+          }
 
           # --- Database (CloudNativePG) ---
           env {

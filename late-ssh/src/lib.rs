@@ -13,3 +13,4 @@ pub mod ssh;
 pub mod state;
 pub mod tunnel;
 pub mod web;
+pub mod web_tunnel;

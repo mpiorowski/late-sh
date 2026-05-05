@@ -16,6 +16,13 @@ pub struct AiConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct WebTunnelConfig {
+    pub token: String,
+    pub username: String,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct Config {
     pub ssh_port: u16,
     pub api_port: u16,
@@ -41,6 +48,7 @@ pub struct Config {
     pub tunnel_port: u16,
     pub tunnel_shared_secret: String,
     pub tunnel_trusted_cidrs: Vec<IpNet>,
+    pub web_tunnel: WebTunnelConfig,
     pub ai: AiConfig,
 }
 
@@ -77,6 +85,10 @@ fn optional_bool(key: &str) -> bool {
     std::env::var(key)
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+fn optional(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
 fn parse_cidrs(key: &str) -> anyhow::Result<Vec<IpNet>> {
@@ -177,6 +189,11 @@ impl Config {
             has_key = self.ai.api_key.is_some(),
             "ai: @bot chat responder model and status"
         );
+        tracing::info!(
+            username = %self.web_tunnel.username,
+            token_len = self.web_tunnel.token.len(),
+            "web-tunnel: browser TUI display route"
+        );
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
@@ -195,6 +212,10 @@ impl Config {
             dbname: required("LATE_DB_NAME")?,
             max_pool_size: required_parse("LATE_DB_POOL_SIZE")?,
         };
+        let web_tunnel_token = required("LATE_WEB_TUNNEL_TOKEN")?;
+        if web_tunnel_token.trim().is_empty() {
+            anyhow::bail!("LATE_WEB_TUNNEL_TOKEN must not be empty");
+        }
 
         let tunnel_shared_secret = required_non_empty("LATE_TUNNEL_SHARED_SECRET")?;
         let tunnel_trusted_cidrs = parse_cidrs("LATE_TUNNEL_TRUSTED_CIDRS")?;
@@ -228,6 +249,13 @@ impl Config {
             tunnel_port: required_parse("LATE_TUNNEL_PORT")?,
             tunnel_shared_secret,
             tunnel_trusted_cidrs,
+            web_tunnel: WebTunnelConfig {
+                token: web_tunnel_token,
+                username: optional("LATE_WEB_TUNNEL_USERNAME")
+                    .unwrap_or_else(|| "web-demo".to_string()),
+                fingerprint: optional("LATE_WEB_TUNNEL_FINGERPRINT")
+                    .unwrap_or_else(|| "web-tunnel-demo".to_string()),
+            },
             ai: AiConfig {
                 enabled: required_bool("LATE_AI_ENABLED")?,
                 api_key: ai_api_key,

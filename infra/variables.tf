@@ -100,7 +100,29 @@ variable "SSH_PROXY_PROTOCOL" {
 variable "SSH_PROXY_TRUSTED_CIDRS" {
   description = "Comma-separated CIDRs trusted to send PROXY protocol headers."
   type        = string
-  default     = "10.42.0.0/16"
+  default     = "10.42.0.0/16,46.62.210.86/32"
+}
+
+# =============================================================================
+# IPv6 edge proxy
+# =============================================================================
+
+variable "IPV6_PROXY_ENABLED" {
+  description = "Deploy a host-network IPv6-only TCP proxy in front of the IPv4-only cluster ingress."
+  type        = bool
+  default     = true
+}
+
+variable "IPV6_PROXY_ADDRESS" {
+  description = "Public IPv6 address to bind for the IPv6 edge proxy."
+  type        = string
+  default     = "2a01:4f9:c013:2ae1::1"
+}
+
+variable "IPV6_PROXY_IMAGE" {
+  description = "HAProxy image used by the IPv6 edge proxy."
+  type        = string
+  default     = "haproxy:2.9-alpine"
 }
 
 variable "WS_PAIR_MAX_ATTEMPTS_PER_IP" {

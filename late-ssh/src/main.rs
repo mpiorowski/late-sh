@@ -19,6 +19,7 @@ use late_ssh::{
     app::chat::notifications::svc::NotificationService,
     app::chat::showcase::svc::ShowcaseService,
     app::chat::svc::ChatService,
+    app::chat::work::svc::WorkService,
     app::profile::svc::ProfileService,
     app::vote::svc::VoteService,
     config::Config,
@@ -139,6 +140,7 @@ async fn main() -> anyhow::Result<()> {
     let profile_service = ProfileService::new(db.clone(), active_users.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let showcase_service = ShowcaseService::new(db.clone());
+    let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
         late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
     let tetris_service = late_ssh::app::games::tetris::svc::TetrisService::new(db.clone());
@@ -151,6 +153,12 @@ async fn main() -> anyhow::Result<()> {
             chip_service.clone(),
             late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
         );
+    let tictactoe_table_manager =
+        late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new();
+    let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
+        blackjack_table_manager.clone(),
+        tictactoe_table_manager,
+    );
     let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
         db.clone(),
         activity_tx.clone(),
@@ -229,6 +237,7 @@ async fn main() -> anyhow::Result<()> {
         notification_service: notification_service.clone(),
         article_service,
         showcase_service,
+        work_service,
         profile_service,
         twenty_forty_eight_service,
         tetris_service,
@@ -241,6 +250,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service,
         rooms_service,
         blackjack_table_manager,
+        room_game_registry,
         dartboard_server,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),

@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -422,6 +423,34 @@ impl ChatRoom {
             )
             .await?;
         Ok(count)
+    }
+
+    pub async fn rename_non_dm_slug(
+        client: &impl GenericClient,
+        room_id: Uuid,
+        new_slug: &str,
+    ) -> Result<u64> {
+        let conflict = client
+            .query_opt(
+                "SELECT id FROM chat_rooms
+                 WHERE slug = $1 AND kind <> 'dm' AND id <> $2
+                 LIMIT 1",
+                &[&new_slug, &room_id],
+            )
+            .await?;
+        if conflict.is_some() {
+            bail!("room #{new_slug} already exists");
+        }
+
+        let updated = client
+            .execute(
+                "UPDATE chat_rooms
+                 SET slug = $2, updated = current_timestamp
+                 WHERE id = $1 AND kind <> 'dm'",
+                &[&room_id, &new_slug],
+            )
+            .await?;
+        Ok(updated)
     }
 }
 

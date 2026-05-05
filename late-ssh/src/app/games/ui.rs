@@ -24,7 +24,66 @@ enum GamesSidebarContent<'a> {
     Leaderboard(&'a Arc<LeaderboardData>),
 }
 
-pub fn draw_game_frame<'a>(
+pub struct GameBottomBar {
+    pub status: Line<'static>,
+    pub keys: Line<'static>,
+    pub tip: Option<Line<'static>>,
+}
+
+pub fn draw_game_frame(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    bottom: GameBottomBar,
+    show_bottom: bool,
+) -> Rect {
+    let block = Block::default()
+        .title(format!(" {title} "))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let bottom_rows: u16 = if bottom.tip.is_some() { 3 } else { 2 };
+    if !show_bottom || inner.height < bottom_rows + 3 {
+        return inner;
+    }
+
+    let mut constraints = vec![
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ];
+    if bottom.tip.is_some() {
+        constraints.push(Constraint::Length(1));
+    }
+    let rows = Layout::vertical(constraints).split(inner);
+
+    frame.render_widget(
+        Paragraph::new(bottom.status).alignment(Alignment::Center),
+        rows[1],
+    );
+    frame.render_widget(
+        Paragraph::new(bottom.keys).alignment(Alignment::Center),
+        rows[2],
+    );
+    if let Some(tip) = bottom.tip {
+        frame.render_widget(Paragraph::new(tip).alignment(Alignment::Center), rows[3]);
+    }
+
+    rows[0]
+}
+
+pub fn tip_line(text: impl Into<String>) -> Line<'static> {
+    Line::from(Span::styled(
+        text.into(),
+        Style::default()
+            .fg(theme::TEXT_MUTED())
+            .add_modifier(Modifier::ITALIC),
+    ))
+}
+
+pub fn draw_game_frame_with_info_sidebar<'a>(
     frame: &mut Frame,
     area: Rect,
     title: &str,
@@ -160,6 +219,37 @@ pub fn info_tagline(text: &str) -> Line<'static> {
             .fg(theme::TEXT_MUTED())
             .add_modifier(Modifier::ITALIC),
     ))
+}
+
+pub fn status_line(segments: Vec<(&'static str, String, Color)>) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, (label, value, color)) in segments.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(theme::AMBER_DIM())));
+        }
+        spans.push(Span::styled(
+            format!("{label} "),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::styled(
+            value,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
+    Line::from(spans)
+}
+
+pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, (key, desc)) in hints.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(theme::AMBER_DIM())));
+        }
+        spans.push(Span::styled(key, Style::default().fg(theme::AMBER())));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(desc, Style::default().fg(theme::TEXT_DIM())));
+    }
+    Line::from(spans)
 }
 
 pub struct GamesHubView<'a> {
@@ -516,27 +606,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         );
     }
 
-    push_game_section(&mut lines, "─── Multiplayer ───");
-    lines.push(Line::from(""));
-
-    for (name, desc) in [
-        (
-            "Blackjack",
-            "Live blackjack tables moved to Rooms, with chat and spectators.",
-        ),
-        ("Texas Hold'em", "The ultimate late-night poker table."),
-        (
-            "Bridge",
-            "Classic trick-taking for four. Deep strategy, cozy pace.",
-        ),
-        (
-            "Thousand",
-            "Polish card classic. Bid, meld, and outsmart your rivals.",
-        ),
-    ] {
-        draw_coming_soon_entry(&mut lines, name, desc);
-    }
-
     // Scroll so the selected game stays at the vertical center of the viewport.
     // No scrolling until the selection passes the midpoint.
     let visible = area.height as usize;
@@ -616,24 +685,6 @@ fn draw_game_entry(
             Span::styled((*description).to_string(), entry.description_style),
         ]));
     }
-    lines.push(Line::from(""));
-}
-
-fn draw_coming_soon_entry<'a>(lines: &mut Vec<Line<'a>>, name: &'a str, desc: &'a str) {
-    let padding_len = 16_usize.saturating_sub(name.len() + 4);
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            format!("[ {} ]", name),
-            Style::default().fg(theme::TEXT_MUTED()),
-        ),
-        Span::raw(" ".repeat(padding_len)),
-        Span::styled("Coming Soon", Style::default().fg(theme::TEXT_DIM())),
-    ]));
-    lines.push(Line::from(vec![
-        Span::raw("      "),
-        Span::styled(desc, Style::default().fg(theme::TEXT_MUTED())),
-    ]));
     lines.push(Line::from(""));
 }
 

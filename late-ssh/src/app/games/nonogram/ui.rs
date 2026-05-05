@@ -8,20 +8,23 @@ use ratatui::{
 
 use crate::app::common::theme;
 use crate::app::games::ui::{
-    centered_rect, draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint,
+    GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
 };
 
 use super::state::{Mode, State};
 
+fn empty_bottom_bar() -> GameBottomBar {
+    GameBottomBar {
+        status: status_line(vec![]),
+        keys: keys_line(vec![("`", "dashboard"), ("Esc", "exit")]),
+        tip: None,
+    }
+}
+
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
     if !state.has_puzzles() {
-        let board_area = draw_game_frame(
-            frame,
-            area,
-            "Nonograms",
-            vec![info_tagline("Paint by logic.")],
-            show_sidebar,
-        );
+        let board_area =
+            draw_game_frame(frame, area, "Nonograms", empty_bottom_bar(), show_sidebar);
         frame.render_widget(
             Paragraph::new("No nonogram packs loaded. Run `gen_nonograms` first.")
                 .alignment(Alignment::Center),
@@ -34,13 +37,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         return;
     };
     let Some(puzzle) = state.puzzle() else {
-        let board_area = draw_game_frame(
-            frame,
-            area,
-            "Nonograms",
-            vec![info_tagline("Paint by logic.")],
-            show_sidebar,
-        );
+        let board_area =
+            draw_game_frame(frame, area, "Nonograms", empty_bottom_bar(), show_sidebar);
         frame.render_widget(
             Paragraph::new("Selected nonogram puzzle is missing from the loaded pack.")
                 .alignment(Alignment::Center),
@@ -54,34 +52,32 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         Mode::Personal => "personal",
     };
 
-    let info_lines = vec![
-        info_tagline("Paint by logic."),
-        Line::from(""),
-        info_label_value("Mode", mode_str.to_string(), theme::AMBER_GLOW()),
-        info_label_value("Size", pack.size_key.clone(), theme::TEXT_BRIGHT()),
-        info_label_value("Difficulty", puzzle.difficulty.clone(), theme::SUCCESS()),
-        info_label_value(
-            "Progress",
-            format!("{}/{}", state.filled_count(), state.target_count()),
-            theme::TEXT_BRIGHT(),
-        ),
-        info_label_value(
-            "Puzzle",
-            state.current_puzzle_id().to_string(),
-            theme::TEXT_DIM(),
-        ),
-        Line::from(""),
-        key_hint("h/j/k/l", "move"),
-        key_hint("Space", "fill cell"),
-        key_hint("x", "mark empty"),
-        key_hint("0/Bksp", "clear"),
-        key_hint("d/p/n", "daily/pers/new"),
-        key_hint("[ ]", "size"),
-        key_hint("r", "reset"),
-        key_hint("Esc", "exit"),
-    ];
+    let bottom = GameBottomBar {
+        status: status_line(vec![
+            ("mode", mode_str.to_string(), theme::AMBER_GLOW()),
+            ("size", pack.size_key.clone(), theme::TEXT_BRIGHT()),
+            ("diff", puzzle.difficulty.clone(), theme::SUCCESS()),
+            (
+                "filled",
+                format!("{}/{}", state.filled_count(), state.target_count()),
+                theme::TEXT_BRIGHT(),
+            ),
+        ]),
+        keys: keys_line(vec![
+            ("h/j/k/l", "move"),
+            ("Space", "fill"),
+            ("x", "mark"),
+            ("0", "clear"),
+            ("d/p/n", "daily/pers/new"),
+            ("[ ]", "size"),
+            ("r", "reset"),
+            ("`", "dashboard"),
+            ("Esc", "exit"),
+        ]),
+        tip: None,
+    };
 
-    let board_area = draw_game_frame(frame, area, "Nonograms", info_lines, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "Nonograms", bottom, show_sidebar);
 
     let max_col_clues = puzzle.col_clues.iter().map(|c| c.len()).max().unwrap_or(0) as u16;
     let max_row_clues = puzzle.row_clues.iter().map(|c| c.len()).max().unwrap_or(0) as u16;
