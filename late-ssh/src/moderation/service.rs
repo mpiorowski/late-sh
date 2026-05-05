@@ -6,6 +6,7 @@ use late_core::{
         artboard_ban::{ArtboardBan, ArtboardBanListItem},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
+        game_room::GameRoom,
         moderation_audit_log::{ModerationAuditLog, ModerationAuditLogListItem},
         room_ban::{RoomBan, RoomBanListItem},
         server_ban::{ServerBan, ServerBanActivation, ServerBanListItem},
@@ -67,6 +68,10 @@ impl ModerationService {
             ModCommand::User { username } => self.user_detail(permissions, &username).await,
             ModCommand::Bans { scope, limit } => self.list_bans(permissions, scope, limit).await,
             ModCommand::Audit { limit } => self.list_audit(permissions, limit).await,
+            ModCommand::RenameRoom { slug, new_slug } => {
+                self.rename_room(actor_user_id, permissions, &slug, &new_slug)
+                    .await
+            }
             ModCommand::RoomAction {
                 action,
                 slug,
@@ -224,6 +229,58 @@ impl ModerationService {
         let mut lines = vec![format!("recent audit log entries (limit {limit})")];
         lines.extend(items.iter().map(format_audit_log_item));
         Ok(lines)
+    }
+
+    async fn rename_room(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        slug: &str,
+        new_slug: &str,
+    ) -> Result<Vec<String>> {
+        ensure_has(permissions, Caps::RENAME_ROOM)?;
+        let old_slug = normalize_mod_slug(slug)?;
+        let new_slug = normalize_mod_slug(new_slug)?;
+        if old_slug == "general" {
+            anyhow::bail!("cannot rename #general");
+        }
+        if new_slug == "general" {
+            anyhow::bail!("cannot rename room to reserved #general");
+        }
+
+        let mut client = self.db.get().await?;
+        let room = find_room_by_mod_slug(&client, &old_slug).await?;
+        let current_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        if current_slug == new_slug {
+            return Ok(vec![format!("room already named #{new_slug}")]);
+        }
+
+        let tx = client.transaction().await?;
+        let updated = ChatRoom::rename_non_dm_slug(&tx, room.id, &new_slug).await?;
+        if updated == 0 {
+            anyhow::bail!("room not found: #{old_slug}");
+        }
+        if room.kind == "game" {
+            GameRoom::rename_by_chat_room_id(&tx, room.id, &new_slug).await?;
+        }
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(false),
+            actor_user_id,
+            "rename_room",
+            "room",
+            Some(room.id),
+            json!({ "old_slug": current_slug, "new_slug": new_slug }),
+        )
+        .await?;
+        tx.commit().await?;
+        let _ = self.event_tx.send(ModerationEvent::RoomRenamed {
+            actor_user_id,
+            room_id: room.id,
+            old_slug: current_slug.clone(),
+            new_slug: new_slug.clone(),
+        });
+        Ok(vec![format!("renamed #{current_slug} to #{new_slug}")])
     }
 
     async fn room_action(

@@ -56,6 +56,10 @@ impl State {
         self.svc.room_id()
     }
 
+    pub fn is_self(&self, user_id: Uuid) -> bool {
+        self.user_id == user_id
+    }
+
     pub fn tick(&mut self) {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
@@ -91,6 +95,12 @@ impl State {
 
     pub fn leave_seat(&self) {
         self.svc.leave_seat_task(self.user_id);
+    }
+
+    pub fn touch_activity(&self) {
+        if self.seat_index().is_some() {
+            self.svc.touch_activity_task(self.user_id);
+        }
     }
 
     pub fn place_at_cursor(&self) {

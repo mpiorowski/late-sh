@@ -61,7 +61,7 @@ enum PasteTarget {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ParsedInput {
+pub enum ParsedInput {
     Char(char),
     Byte(u8),
     Arrow(u8),

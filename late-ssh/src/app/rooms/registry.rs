@@ -2,7 +2,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::{
-    backend::{ActiveRoomBackend, DirectoryHints, DirectoryMeta, RoomGameManager},
+    backend::{ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager},
     blackjack::manager::BlackjackTableManager,
     svc::{GameKind, RoomListItem},
     tictactoe::manager::TicTacToeTableManager,
@@ -47,6 +47,10 @@ impl RoomGameRegistry {
 
     pub fn default_settings(&self, kind: GameKind) -> Value {
         self.manager(kind).default_settings()
+    }
+
+    pub fn open_create_modal(&self, kind: GameKind) -> Box<dyn CreateRoomModal> {
+        self.manager(kind).open_create_modal()
     }
 
     pub fn directory_meta(&self, room: &RoomListItem) -> DirectoryMeta {

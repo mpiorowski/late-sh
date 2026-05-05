@@ -15,6 +15,12 @@ pub enum ModerationEvent {
         reason: String,
         notified_sessions: usize,
     },
+    RoomRenamed {
+        actor_user_id: Uuid,
+        room_id: Uuid,
+        old_slug: String,
+        new_slug: String,
+    },
     ServerUserAction {
         actor_user_id: Uuid,
         target_user_id: Uuid,

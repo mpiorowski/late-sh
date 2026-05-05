@@ -4,6 +4,8 @@ use ratatui::{Frame, layout::Rect};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::app::input::ParsedInput;
+
 use super::svc::{GameKind, RoomListItem};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +39,30 @@ pub struct GameDrawCtx<'a> {
     pub usernames: &'a HashMap<Uuid, String>,
 }
 
+pub enum CreateModalAction {
+    Continue,
+    Cancel,
+    Submit {
+        display_name: String,
+        settings: Value,
+    },
+}
+
+pub trait CreateRoomModal: Send {
+    fn draw(&self, frame: &mut Frame, area: Rect);
+    fn handle_event(&mut self, event: &ParsedInput) -> CreateModalAction;
+}
+
+pub enum CreateRoomFlow {
+    Picker {
+        kind_index: usize,
+    },
+    Game {
+        kind: GameKind,
+        modal: Box<dyn CreateRoomModal>,
+    },
+}
+
 pub trait ActiveRoomBackend: Send {
     fn room_id(&self) -> Uuid;
     fn tick(&mut self);
@@ -65,6 +91,7 @@ pub trait RoomGameManager: Send + Sync {
     fn slug_prefix(&self) -> &'static str;
     fn default_room_name(&self) -> &'static str;
     fn default_settings(&self) -> Value;
+    fn open_create_modal(&self) -> Box<dyn CreateRoomModal>;
     fn directory_meta(&self, room: &RoomListItem) -> DirectoryMeta;
     fn directory_hints(&self, room_id: Uuid) -> Option<DirectoryHints>;
     fn enter(

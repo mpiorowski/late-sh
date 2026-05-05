@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-01
+- Last updated: 2026-05-05
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -44,15 +44,16 @@
 - `rooms_selected_index` counts only visible real rooms.
 - `state.rs::visible_real_rooms_count` and `input.rs::visible_real_count`/`visible_real_room_at` intentionally duplicate the same filter/search predicate. Change them together.
 - Wide directory layout starts at `NARROW_WIDTH = 80` and renders a columned table. Narrow layout renders two-line cards.
-- Directory handlers support `j/k` and up/down arrows to navigate, `h/l` and left/right arrows to filter, `/` to search, `n` to create, `d` to delete, and `Enter` to enter. The rendered footer is role-aware: `n`/`d` show only for admins, and `Esc` shows only for admins/mods.
+- Directory handlers support `j/k` and up/down arrows to navigate, `h/l` and left/right arrows to filter, `/` to search, `n` to create, `d` to delete, and `Enter` to enter. The rendered footer is role-aware: `n` always shows, `d` shows only for admins, and `Esc` shows only for admins/mods.
 - In the idle directory, `Tab`, `Shift+Tab`, and number keys remain global screen navigation, not Rooms filter shortcuts. The create modal consumes `Tab`/`BackTab` for field focus, and active-room input is intercepted before global screen switching.
 - Directory `Esc` peels state in this order: create form -> active search -> search query -> non-All filter -> active room/list exit. Active rooms bypass that directory escape path: `Esc` first clears embedded chat selection when present, then routes to the game and may leave the room.
 - Create/search input limits: room name max 48 chars, search query max 32 chars, default create names come from `RoomGameRegistry`, and pasted text is passed through paste-marker sanitization.
 
 ## Access Policy
-- Room creation and deletion are admin-only in `input.rs`.
+- Room creation is open to every user. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner). There is no client-side `can_create_room` gate anymore.
+- Room deletion is admin-only in `input.rs` (`can_delete_room`).
 - Room entry is currently open to every user: `can_enter_room` returns `true` for admin, mod, and ordinary users. Older root-context notes that only admins/mods can enter are stale.
-- Create modal lets admins pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Tic-Tac-Toe uses empty JSON settings.
+- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Tic-Tac-Toe uses empty JSON settings.
 
 ## Active Room and Chat
 - Entering a room calls:
@@ -63,7 +64,8 @@
 - Game-chat joining is async. `ChatEvent::GameRoomJoined` triggers a chat `request_list()` refresh and another tail request after the membership write lands.
 - The active room area is a vertical split: preferred game height, one spacer, then an embedded chat pane.
 - The bottom pane is no longer just a placeholder; `render.rs` builds `EmbeddedRoomChatView` from the associated game chat room and `rooms/ui.rs` calls `chat::ui::draw_embedded_room_chat`.
-- Active room key routing lets embedded chat own composer/message actions first for keys like `i`, `j/k`, arrows, scroll, reactions, copy, reply/edit/delete, and selection escape.
+- Active room key routing lets embedded chat own composer/message actions first for keys like `i`, `j/k`, scroll, reactions, copy, reply/edit/delete, and selection escape.
+- Arrow keys are routed to the active game backend first; only if the backend declines (returns `false`) do they fall through to embedded chat message selection. Backends that don't override `handle_arrow` (e.g. Blackjack) keep the prior chat-first behavior.
 - The active `ActiveRoomBackend` receives remaining game keys. `q` is normalized to `Esc` inside active Blackjack rooms by its backend implementation.
 - The outer Rooms title appends active-room status from backend `title_details`: room name, seated count, role/seat label, and optional chip balance.
 - `App.active_room_game` is the single per-session active game backend. Do not add per-game `Option<State>` fields to `App`.
@@ -109,8 +111,10 @@
 - `TicTacToeTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `TicTacToeService`.
 - Restarting the SSH process drops in-memory board state. Existing open `game_rooms` survive, but re-entering creates a fresh board.
 - There are two seats: X and O. Entering starts as a viewer; `s`, `Space`, or `Enter` sits when not seated.
-- Seated players can press `1`-`9` to place directly, move a local cursor with `w/a/d/x` or left/right arrows, and press `Space` or `Enter` to place on the cursor. `j/k` and up/down remain embedded-chat navigation in active rooms.
+- Seated players can press `1`-`9` to place directly, move a local cursor with `w/a/s/d` or any of the four arrow keys, and press `Space` or `Enter` to place on the cursor. While seated, `s` is "move down" rather than "sit"; sit is reachable via `Space`/`Enter` (or `s` from a viewer state). `j/k` remain embedded-chat navigation; `tictactoe::input::handle_arrow` claims all four arrows when seated, otherwise it returns `false` and chat gets up/down for message selection.
 - `n` starts a new round for seated players. `l` leaves a seat and resets the board.
+- The board UI scales cell size to the available area (`pick_cell_dims` picks from `(11,5)`, `(9,5)`, `(7,3)` and falls back to `(5,3)`); `pick_glyph` selects a 5×5 or 3×3 block-character X/O glyph that fits inside the chosen cell. The compact path renders when `inner.height < 11` or `inner.width < 28`.
+- `preferred_game_height` returns `min(area.height * 9 / 20, 19)` — the game caps at 19 rows (enough for the 11×5 cell tier: 17 board rows + 2 border rows) so the embedded chat below it keeps the rest of the active-room area.
 - Tic-Tac-Toe has no chip-balance hook; `ActiveRoomBackend::chip_balance` returns `None`.
 
 ## Blackjack UI Invariants
@@ -128,6 +132,13 @@
 - `chat_rooms.kind = 'game'` stays in chat state so embedded room chat works.
 - Main Chat room-list rendering skips game rooms, so game-backed rooms do not appear as normal chat rooms or favorites.
 - Room entry requests a chat tail; live broadcasts then keep the embedded chat updated like other room-explicit chat flows.
+
+## Future: Asymmetric-Info Games (Poker-Shape)
+- Current games (Blackjack, TTT) publish one `watch::Sender<Snapshot>` and every session sees the same snapshot. Poker-style games where each user sees a different view (own hole cards visible, others hidden) are supported by the existing trait surface without changes.
+- Pattern: split the snapshot into a public part and a per-user private part. Service holds one `watch::Sender<PublicSnapshot>` plus a `HashMap<Uuid, watch::Sender<PrivateSnapshot>>` keyed by user_id. Per-session `State` caches both and drains both in `tick()`.
+- `RoomGameManager::enter` already receives `user_id`, so the manager can register a private channel for the entering user and bind the receiver into the returned `Box<dyn ActiveRoomBackend>`. Rooms layer never sees the split.
+- Cleanup of orphaned private channels (session disconnect drops the receiver but not the sender): prefer lazy GC inside the service's `publish` path — prune entries where `tx.receiver_count() == 0`.
+- Keep the deck/un-dealt cards inside `SharedState` only, never put them on any snapshot. Hole cards get sliced into the per-user private snapshot at publish time. Clients never receive secret state they aren't entitled to.
 
 ## Known Gaps
 - Blackjack table state is not durable across process restart.

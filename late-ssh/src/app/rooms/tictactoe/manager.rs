@@ -7,9 +7,10 @@ use late_core::MutexRecover;
 use uuid::Uuid;
 
 use crate::app::rooms::{
-    backend::{ActiveRoomBackend, DirectoryHints, DirectoryMeta, RoomGameManager},
+    backend::{ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager},
     svc::{GameKind, RoomListItem},
     tictactoe::{
+        create_modal::TicTacToeCreateModal,
         state::{State, Winner},
         svc::TicTacToeService,
     },
@@ -63,6 +64,10 @@ impl RoomGameManager for TicTacToeTableManager {
         serde_json::json!({})
     }
 
+    fn open_create_modal(&self) -> Box<dyn CreateRoomModal> {
+        Box::new(TicTacToeCreateModal::new(self.default_room_name()))
+    }
+
     fn directory_meta(&self, _room: &RoomListItem) -> DirectoryMeta {
         DirectoryMeta {
             seats: 2,
@@ -96,7 +101,9 @@ impl ActiveRoomBackend for State {
         State::tick(self);
     }
 
-    fn touch_activity(&self) {}
+    fn touch_activity(&self) {
+        State::touch_activity(self);
+    }
 
     fn handle_key(&mut self, byte: u8) -> crate::app::rooms::backend::InputAction {
         crate::app::rooms::tictactoe::input::handle_key(self, byte)
@@ -107,7 +114,8 @@ impl ActiveRoomBackend for State {
     }
 
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
-        area.height.saturating_mul(3) / 5
+        let scaled = area.height.saturating_mul(9) / 20;
+        scaled.min(19)
     }
 
     fn draw(

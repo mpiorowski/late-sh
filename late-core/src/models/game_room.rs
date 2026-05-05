@@ -1,4 +1,5 @@
 use anyhow::Result;
+use deadpool_postgres::GenericClient;
 use serde_json::Value;
 use std::time::Duration;
 use tokio_postgres::Client;
@@ -236,5 +237,21 @@ impl GameRoom {
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    pub async fn rename_by_chat_room_id(
+        client: &impl GenericClient,
+        chat_room_id: Uuid,
+        new_slug: &str,
+    ) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE game_rooms
+                 SET slug = $2, updated = current_timestamp
+                 WHERE chat_room_id = $1",
+                &[&chat_room_id, &new_slug],
+            )
+            .await?;
+        Ok(updated)
     }
 }

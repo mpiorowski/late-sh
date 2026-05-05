@@ -1,9 +1,14 @@
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use tokio::sync::{Mutex, watch};
 use uuid::Uuid;
 
 use super::state::{Mark, Winner, winning_mark};
+
+const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
 
 #[derive(Clone)]
 pub struct TicTacToeService {
@@ -51,9 +56,16 @@ impl TicTacToeService {
     pub fn sit_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let mut state = svc.state.lock().await;
-            state.sit(user_id);
-            svc.publish(&state);
+            let activity_generation = {
+                let mut state = svc.state.lock().await;
+                state.sit(user_id);
+                let activity_generation = state.record_activity(user_id);
+                svc.publish(&state);
+                activity_generation
+            };
+            if let Some(activity_generation) = activity_generation {
+                svc.schedule_inactivity_kick(user_id, activity_generation);
+            }
         });
     }
 
@@ -69,18 +81,57 @@ impl TicTacToeService {
     pub fn place_task(&self, user_id: Uuid, index: usize) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let mut state = svc.state.lock().await;
-            state.place(user_id, index);
-            svc.publish(&state);
+            let activity_generation = {
+                let mut state = svc.state.lock().await;
+                state.place(user_id, index);
+                let activity_generation = state.record_activity(user_id);
+                svc.publish(&state);
+                activity_generation
+            };
+            if let Some(activity_generation) = activity_generation {
+                svc.schedule_inactivity_kick(user_id, activity_generation);
+            }
         });
     }
 
     pub fn reset_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
+            let activity_generation = {
+                let mut state = svc.state.lock().await;
+                state.reset(user_id);
+                let activity_generation = state.record_activity(user_id);
+                svc.publish(&state);
+                activity_generation
+            };
+            if let Some(activity_generation) = activity_generation {
+                svc.schedule_inactivity_kick(user_id, activity_generation);
+            }
+        });
+    }
+
+    pub fn touch_activity_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let activity_generation = {
+                let mut state = svc.state.lock().await;
+                state.record_activity(user_id)
+            };
+            if let Some(activity_generation) = activity_generation {
+                svc.schedule_inactivity_kick(user_id, activity_generation);
+            }
+        });
+    }
+
+    fn schedule_inactivity_kick(&self, user_id: Uuid, activity_generation: u64) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS)).await;
+
             let mut state = svc.state.lock().await;
-            state.reset(user_id);
-            svc.publish(&state);
+            if state.kick_inactive_user(user_id, activity_generation) {
+                svc.publish(&state);
+            }
         });
     }
 
@@ -92,6 +143,8 @@ impl TicTacToeService {
 struct SharedState {
     room_id: Uuid,
     seats: [Option<Uuid>; 2],
+    last_activity: [Instant; 2],
+    activity_generation: [u64; 2],
     board: [Option<Mark>; 9],
     turn: Mark,
     winner: Option<Winner>,
@@ -100,9 +153,12 @@ struct SharedState {
 
 impl SharedState {
     fn new(room_id: Uuid) -> Self {
+        let now = Instant::now();
         Self {
             room_id,
             seats: [None, None],
+            last_activity: [now; 2],
+            activity_generation: [0; 2],
             board: [None; 9],
             turn: Mark::X,
             winner: None,
@@ -198,5 +254,75 @@ impl SharedState {
         self.turn = Mark::X;
         self.winner = None;
         self.status_message = "New round. X moves first.".to_string();
+    }
+
+    fn record_activity(&mut self, user_id: Uuid) -> Option<u64> {
+        let seat_index = self.seats.iter().position(|seat| *seat == Some(user_id))?;
+        self.last_activity[seat_index] = Instant::now();
+        self.activity_generation[seat_index] = self.activity_generation[seat_index].wrapping_add(1);
+        Some(self.activity_generation[seat_index])
+    }
+
+    fn kick_inactive_user(&mut self, user_id: Uuid, activity_generation: u64) -> bool {
+        let Some(seat_index) = self.seats.iter().position(|seat| *seat == Some(user_id)) else {
+            return false;
+        };
+        if self.activity_generation[seat_index] != activity_generation
+            || self.last_activity[seat_index].elapsed()
+                < Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS)
+        {
+            return false;
+        }
+
+        self.seats[seat_index] = None;
+        self.board = [None; 9];
+        self.turn = Mark::X;
+        self.winner = None;
+        self.status_message = format!("Seat {} idle for 5m and left. Board reset.", seat_index + 1);
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user_id(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn seated_player_auto_leaves_after_five_minutes_idle() {
+        let room_id = user_id(1);
+        let player = user_id(2);
+        let mut state = SharedState::new(room_id);
+        state.sit(player);
+        let activity_generation = state.record_activity(player).expect("player is seated");
+        state.last_activity[0] = Instant::now() - Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS + 1);
+
+        assert!(state.kick_inactive_user(player, activity_generation));
+
+        assert_eq!(state.seats, [None, None]);
+        assert_eq!(state.board, [None; 9]);
+        assert_eq!(state.turn, Mark::X);
+        assert_eq!(
+            state.status_message,
+            "Seat 1 idle for 5m and left. Board reset."
+        );
+    }
+
+    #[test]
+    fn stale_activity_generation_does_not_kick_player() {
+        let room_id = user_id(1);
+        let player = user_id(2);
+        let mut state = SharedState::new(room_id);
+        state.sit(player);
+        let stale_generation = state.record_activity(player).expect("player is seated");
+        let current_generation = state.record_activity(player).expect("player is seated");
+        state.last_activity[0] = Instant::now() - Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS + 1);
+
+        assert_ne!(stale_generation, current_generation);
+        assert!(!state.kick_inactive_user(player, stale_generation));
+        assert_eq!(state.seats[0], Some(player));
     }
 }
