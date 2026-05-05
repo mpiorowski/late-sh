@@ -714,6 +714,7 @@ impl App {
                     game_selection: ctx.game_selection,
                     is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
+                    show_audio_shortcuts: matches!(screen, Screen::Dashboard | Screen::Chat),
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
                     online_count: ctx.online_count,
