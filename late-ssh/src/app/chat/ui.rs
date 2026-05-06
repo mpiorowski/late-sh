@@ -908,31 +908,30 @@ fn room_jump_prefix(key: Option<u8>, active: bool, is_selected: bool) -> String 
 
 fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rect) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
-    let total_composer_lines = if view.notifications_selected || view.discover_selected {
-        1
-    } else if view.feeds_selected {
-        1
-    } else if view.news_selected {
-        chat_composer_lines_for_height(view.news_composer, composer_text_width)
-    } else if view.showcase_selected {
-        if view.showcase_composing { 8 } else { 1 }
-    } else if view.work_selected {
-        if view.work_composing { 9 } else { 1 }
-    } else {
-        chat_composer_lines_for_height(view.composer, composer_text_width).max(
-            composer_placeholder_lines(&ComposerBlockView {
-                composer: view.composer,
-                composing: view.composing,
-                selected_message: view.selected_message_id.is_some(),
-                reaction_picker_active: view.reaction_picker_active,
-                reply_author: view.reply_author,
-                is_editing: view.is_editing,
-                mention_active: view.mention_active,
-                mention_matches: view.mention_matches,
-                mention_selected: view.mention_selected,
-            }),
-        )
-    };
+    let total_composer_lines =
+        if view.notifications_selected || view.discover_selected || view.feeds_selected {
+            1
+        } else if view.news_selected {
+            chat_composer_lines_for_height(view.news_composer, composer_text_width)
+        } else if view.showcase_selected {
+            if view.showcase_composing { 8 } else { 1 }
+        } else if view.work_selected {
+            if view.work_composing { 9 } else { 1 }
+        } else {
+            chat_composer_lines_for_height(view.composer, composer_text_width).max(
+                composer_placeholder_lines(&ComposerBlockView {
+                    composer: view.composer,
+                    composing: view.composing,
+                    selected_message: view.selected_message_id.is_some(),
+                    reaction_picker_active: view.reaction_picker_active,
+                    reply_author: view.reply_author,
+                    is_editing: view.is_editing,
+                    mention_active: view.mention_active,
+                    mention_matches: view.mention_matches,
+                    mention_selected: view.mention_selected,
+                }),
+            )
+        };
     let max_composer_lines = if view.work_selected && view.work_composing {
         9
     } else {

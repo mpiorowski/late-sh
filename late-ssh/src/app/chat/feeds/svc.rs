@@ -510,10 +510,7 @@ fn split_elements<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     let mut out = Vec::new();
     let mut rest = xml;
     let close = format!("</{tag}>");
-    loop {
-        let Some(start) = find_open_tag(rest, tag) else {
-            break;
-        };
+    while let Some(start) = find_open_tag(rest, tag) {
         let after_start = &rest[start..];
         let Some(open_end) = after_start.find('>') else {
             break;
@@ -559,10 +556,10 @@ fn extract_atom_link(item: &str) -> Option<String> {
         let end = rest.find('>')?;
         let tag = &rest[..=end];
         let rel = attr_value(tag, "rel").unwrap_or_else(|| "alternate".to_string());
-        if rel == "alternate" || rel.is_empty() {
-            if let Some(href) = attr_value(tag, "href") {
-                return Some(clean_text(&href));
-            }
+        if (rel == "alternate" || rel.is_empty())
+            && let Some(href) = attr_value(tag, "href")
+        {
+            return Some(clean_text(&href));
         }
         rest = &rest[end + 1..];
     }
