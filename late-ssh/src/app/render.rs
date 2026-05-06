@@ -175,6 +175,7 @@ struct DrawContext<'a> {
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
     show_cli_install_modal: bool,
+    news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
     is_draining: bool,
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
@@ -367,6 +368,14 @@ impl App {
         };
         let work_unread_count = self.chat.work.unread_count();
         let work_composing = self.chat.work.composing();
+        let news_modal = self
+            .chat
+            .news_modal()
+            .map(|modal| chat::news::ui::ArticleModalView {
+                payload: &modal.payload,
+                author: &modal.author,
+                stamp: &modal.stamp,
+            });
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -507,6 +516,7 @@ impl App {
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         show_cli_install_modal: self.show_cli_install_modal,
+                        news_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
@@ -796,6 +806,10 @@ impl App {
 
         if ctx.show_quit_confirm {
             quit_confirm::ui::draw(frame, inner);
+        }
+
+        if let Some(news_modal) = ctx.news_modal {
+            chat::news::ui::draw_article_modal(frame, inner, news_modal);
         }
 
         if ctx.show_web_chat_qr

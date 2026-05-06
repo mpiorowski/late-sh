@@ -46,13 +46,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         b'\r' | b'\n' => {
-            if let Some(url) = app.chat.news.selected_url() {
-                let cleaned = crate::app::input::sanitize_paste_markers(url);
-                app.pending_clipboard = Some(cleaned.trim().to_owned());
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Link copied!",
-                ));
-            }
+            app.chat.open_selected_feed_news_modal();
             true
         }
         b'j' | b'J' => {

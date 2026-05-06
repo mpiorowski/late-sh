@@ -29,7 +29,7 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
-    ui_text::reaction_label,
+    ui_text::{NewsPayload, parse_news_payload, reaction_label},
     work,
 };
 
@@ -66,6 +66,13 @@ pub(crate) struct ModCommandOutput {
     pub request_id: Uuid,
     pub lines: Vec<String>,
     pub success: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NewsModalState {
+    pub payload: NewsPayload,
+    pub author: String,
+    pub stamp: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +113,7 @@ pub struct ChatState {
     pinned_rx: watch::Receiver<Vec<ChatMessage>>,
     pinned_tx: watch::Sender<Vec<ChatMessage>>,
     overlay: Option<Overlay>,
+    news_modal: Option<NewsModalState>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
@@ -220,6 +228,7 @@ impl ChatState {
             pinned_rx,
             pinned_tx,
             overlay: None,
+            news_modal: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
@@ -399,6 +408,24 @@ impl ChatState {
 
     pub(crate) fn has_overlay(&self) -> bool {
         self.overlay.is_some()
+    }
+
+    pub(crate) fn news_modal(&self) -> Option<&NewsModalState> {
+        self.news_modal.as_ref()
+    }
+
+    pub(crate) fn has_news_modal(&self) -> bool {
+        self.news_modal.is_some()
+    }
+
+    pub(crate) fn close_news_modal(&mut self) {
+        self.news_modal = None;
+    }
+
+    pub(crate) fn news_modal_url(&self) -> Option<&str> {
+        self.news_modal
+            .as_ref()
+            .map(|modal| modal.payload.url.as_str())
     }
 
     pub fn close_overlay(&mut self) {
@@ -660,6 +687,53 @@ impl ChatState {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| short_user_id(user_id));
         Some((user_id, display_name))
+    }
+
+    pub fn open_selected_news_modal_in_room(&mut self, room_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some((payload, user_id, created)) =
+            self.selected_message_in_room(room_id).and_then(|m| {
+                parse_news_payload(&m.body).map(|payload| (payload, m.user_id, m.created))
+            })
+        else {
+            return false;
+        };
+
+        let author = self
+            .usernames
+            .get(&user_id)
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .map(|name| format!("@{name}"))
+            .unwrap_or_else(|| short_user_id(user_id));
+        let stamp = format!(
+            "[{}]",
+            crate::app::common::primitives::format_relative_time(created)
+        );
+        self.news_modal = Some(NewsModalState {
+            payload,
+            author,
+            stamp,
+        });
+        true
+    }
+
+    pub fn open_selected_feed_news_modal(&mut self) -> bool {
+        let Some(item) = self.news.selected_item() else {
+            return false;
+        };
+        let payload = news::ui::payload_from_feed_item(item);
+        let author = format!("@{}", item.author_username);
+        let stamp = format!(
+            "[{}]",
+            crate::app::common::primitives::format_relative_time(item.article.created)
+        );
+        self.news_modal = Some(NewsModalState {
+            payload,
+            author,
+            stamp,
+        });
+        true
     }
 
     pub fn react_to_selected_message_in_room(

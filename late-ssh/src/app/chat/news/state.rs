@@ -88,6 +88,10 @@ impl State {
             .map(|item| item.article.url.as_str())
     }
 
+    pub fn selected_item(&self) -> Option<&ArticleFeedItem> {
+        self.articles.get(self.selected_index())
+    }
+
     pub fn unread_count(&self) -> i64 {
         self.unread_count
     }

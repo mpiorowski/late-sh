@@ -1,12 +1,13 @@
+use crate::app::chat::ui_text::{NewsPayload, wrap_news_modal_to_lines};
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Flex, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use late_core::models::article::ArticleFeedItem;
@@ -15,6 +16,12 @@ pub struct ArticleListView<'a> {
     pub articles: &'a [ArticleFeedItem],
     pub selected_index: usize,
     pub marker_read_at: Option<DateTime<Utc>>,
+}
+
+pub(crate) struct ArticleModalView<'a> {
+    pub payload: &'a NewsPayload,
+    pub author: &'a str,
+    pub stamp: &'a str,
 }
 
 const ITEM_HEIGHT: u16 = 10;
@@ -170,6 +177,60 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
     }
 }
 
+pub(crate) fn draw_article_modal(frame: &mut Frame, area: Rect, view: ArticleModalView<'_>) {
+    if area.width < 24 || area.height < 10 {
+        return;
+    }
+
+    let popup = centered_percent_rect(84, 82, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" News ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::vertical([Constraint::Min(6), Constraint::Length(1)]).split(inner);
+    let content = layout[0].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    let lines = wrap_news_modal_to_lines(
+        view.stamp,
+        view.author,
+        content.width as usize,
+        Style::default()
+            .fg(theme::CHAT_AUTHOR())
+            .add_modifier(Modifier::BOLD),
+        view.payload,
+    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), content);
+
+    let footer = Line::from(vec![
+        Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" copy link  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(footer), layout[1]);
+}
+
+pub(crate) fn payload_from_feed_item(item: &ArticleFeedItem) -> NewsPayload {
+    NewsPayload {
+        title: item.article.title.clone(),
+        summary: item.article.summary.clone(),
+        url: item.article.url.clone(),
+        ascii_art: item.article.ascii_art.replace("\\n", "\n"),
+    }
+}
+
 fn raw_ascii_preview_if_fit(ascii_art: &str, target_width: usize, max_lines: usize) -> Vec<String> {
     if target_width == 0 || max_lines == 0 {
         return Vec::new();
@@ -190,6 +251,18 @@ fn raw_ascii_preview_if_fit(ascii_art: &str, target_width: usize, max_lines: usi
     }
 
     lines.into_iter().take(max_lines).collect()
+}
+
+fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let percent_x = percent_x.min(100);
+    let percent_y = percent_y.min(100);
+    let vertical = Layout::vertical([Constraint::Percentage(percent_y)])
+        .flex(Flex::Center)
+        .split(area);
+    let horizontal = Layout::horizontal([Constraint::Percentage(percent_x)])
+        .flex(Flex::Center)
+        .split(vertical[0]);
+    horizontal[0]
 }
 
 #[cfg(test)]

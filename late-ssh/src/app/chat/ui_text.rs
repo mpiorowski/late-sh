@@ -86,15 +86,15 @@ pub(super) fn wrap_chat_entry_to_lines(
 
 // ── News formatting ─────────────────────────────────────────
 
-#[derive(Debug, Clone)]
-struct NewsPayload {
-    title: String,
-    summary: String,
-    url: String,
-    ascii_art: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NewsPayload {
+    pub title: String,
+    pub summary: String,
+    pub url: String,
+    pub ascii_art: String,
 }
 
-fn parse_news_payload(body: &str) -> Option<NewsPayload> {
+pub(crate) fn parse_news_payload(body: &str) -> Option<NewsPayload> {
     let marker_pos = body.find(NEWS_MARKER)?;
     let raw = body[marker_pos + NEWS_MARKER.len()..].trim();
     if raw.is_empty() {
@@ -131,6 +131,47 @@ fn wrap_news_to_lines(
     author_style: Style,
     payload: NewsPayload,
 ) -> Vec<Line<'static>> {
+    wrap_news_to_lines_with_mode(
+        stamp,
+        prefix,
+        width,
+        author_style,
+        payload,
+        NewsRenderMode::Preview,
+    )
+}
+
+pub(crate) fn wrap_news_modal_to_lines(
+    stamp: &str,
+    prefix: &str,
+    width: usize,
+    author_style: Style,
+    payload: &NewsPayload,
+) -> Vec<Line<'static>> {
+    wrap_news_to_lines_with_mode(
+        stamp,
+        prefix,
+        width,
+        author_style,
+        payload.clone(),
+        NewsRenderMode::Full,
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NewsRenderMode {
+    Preview,
+    Full,
+}
+
+fn wrap_news_to_lines_with_mode(
+    stamp: &str,
+    prefix: &str,
+    width: usize,
+    author_style: Style,
+    payload: NewsPayload,
+    mode: NewsRenderMode,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let border_style = Style::default().fg(theme::BORDER());
     let title_style = Style::default()
@@ -160,7 +201,13 @@ fn wrap_news_to_lines(
     }
 
     let inner_width = width.saturating_sub(2).max(1);
-    let ascii_lines = raw_ascii_preview_lines(&payload.ascii_art, 6);
+    let ascii_lines = raw_ascii_preview_lines(
+        &payload.ascii_art,
+        match mode {
+            NewsRenderMode::Preview => 6,
+            NewsRenderMode::Full => usize::MAX,
+        },
+    );
     let ascii_max_width = ascii_lines
         .iter()
         .map(|line| line.chars().count())
@@ -182,8 +229,17 @@ fn wrap_news_to_lines(
     }
     if !payload.summary.is_empty() {
         for bullet in split_summary_bullets(&payload.summary) {
-            let truncated = truncate_to_width(&bullet, right_width);
-            right_rows.push((truncated, body_style));
+            match mode {
+                NewsRenderMode::Preview => {
+                    let truncated = truncate_to_width(&bullet, right_width);
+                    right_rows.push((truncated, body_style));
+                }
+                NewsRenderMode::Full => {
+                    for row in wrap_plain_line(&bullet, right_width) {
+                        right_rows.push((row, body_style));
+                    }
+                }
+            }
         }
     }
     if !url.is_empty() {
@@ -411,6 +467,24 @@ mod tests {
         assert!(rendered.contains("Title"));
         assert!(rendered.contains("first bullet"));
         assert!(rendered.contains("https://example.com"));
+    }
+
+    #[test]
+    fn wrap_news_modal_to_lines_keeps_full_summary_rows() {
+        let lines = wrap_news_modal_to_lines(
+            "[1m]",
+            "mat: ",
+            32,
+            Style::default(),
+            &NewsPayload {
+                title: "Title".to_string(),
+                summary: "first bullet with a distinctive tailword".to_string(),
+                url: "https://example.com".to_string(),
+                ascii_art: ".:-".to_string(),
+            },
+        );
+        let rendered = lines_to_strings(&lines).join("\n");
+        assert!(rendered.contains("tailword"));
     }
 
     #[test]

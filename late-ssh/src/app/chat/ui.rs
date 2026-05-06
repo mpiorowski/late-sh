@@ -1552,7 +1552,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter copy URL · i paste URL",
+                " j/k navigate · Enter open story · i paste URL",
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);

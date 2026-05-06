@@ -441,7 +441,7 @@ Cache:
 | `Ctrl+D` / `Ctrl+U` | Approximate half-page message selection |
 | `i` | Start composing in selected room, or start News/Showcase/Work composer when selected |
 | `/` | Start command composer in selected room |
-| `Enter` | Submit composer; jump reply target; copy URL in News/Showcase; copy Work summary; join Discover; jump Mention |
+| `Enter` | Submit composer; open selected news preview; jump reply target; copy URL in Showcase; copy Work summary; join Discover; jump Mention |
 | `Alt+Enter` / `Ctrl+J` | Insert newline in main chat composer |
 | `Alt+S` | Submit main chat composer and keep it open |
 | `Esc` | Cancel compose/overlay/autocomplete/room jump |
@@ -463,7 +463,7 @@ Cache:
 | `i` | Compose in dashboard active room |
 | `j` / `k` / arrows | Move dashboard message selection |
 | `r` / `e` / `d` / `p` / `c` / `f` | Same selected-message actions as Chat |
-| `Enter` | Jump selected reply target when loaded |
+| `Enter` | Open selected news preview, or jump selected reply target when loaded |
 | `[` / `]` | Cycle dashboard favorite rooms |
 | `,` | Toggle previous dashboard favorite |
 | `g<digit>` | Jump favorite slot 1..9 |
@@ -472,7 +472,7 @@ Cache:
 
 | Entry | Keys |
 |-------|------|
-| News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `Esc` cancel |
+| News | `j/k` navigate, `i` paste URL, Enter open/submit URL, story modal Enter copy link, story modal `Esc` close, `d` delete own/admin article, `Esc` cancel |
 | Showcase | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields, `Esc` cancel |
 | Work | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy profile summary, Tab cycle fields, `Esc` cancel |
 | Mentions | `j/k` navigate, Enter jump to referenced room/message |
