@@ -1225,6 +1225,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                         entries: app.chat.feeds.all_entries(),
                         selected_index: app.chat.feeds.selected_index(),
                         has_feeds: app.chat.feeds.has_feeds(),
+                        marker_read_at: app.chat.feeds.marker_read_at(),
                     },
                     news_selected: app.chat.news_selected,
                     news_unread_count: app.chat.news.unread_count(),

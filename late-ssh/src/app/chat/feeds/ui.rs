@@ -1,5 +1,6 @@
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
+use chrono::{DateTime, Utc};
 use late_core::models::rss_entry::RssEntryView;
 use ratatui::{
     Frame,
@@ -13,6 +14,7 @@ pub struct FeedListView<'a> {
     pub entries: &'a [RssEntryView],
     pub selected_index: usize,
     pub has_feeds: bool,
+    pub marker_read_at: Option<DateTime<Utc>>,
 }
 
 const ITEM_HEIGHT: u16 = 7;
@@ -70,21 +72,36 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
             .style(Style::default().bg(bg));
         let content = item_block.inner(area);
         frame.render_widget(item_block, area);
+        let is_unread = view
+            .marker_read_at
+            .map(|last_read_at| item.entry.created > last_read_at)
+            .unwrap_or(true);
         frame.render_widget(
-            Paragraph::new(entry_lines(item)).wrap(Wrap { trim: true }),
+            Paragraph::new(entry_lines(item, is_unread)).wrap(Wrap { trim: true }),
             content,
         );
     }
 }
 
-fn entry_lines(item: &RssEntryView) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            item.entry.title.clone(),
+fn entry_lines(item: &RssEntryView, is_unread: bool) -> Vec<Line<'static>> {
+    let mut title_spans = Vec::new();
+    if is_unread {
+        title_spans.push(Span::styled(
+            "● ",
             Style::default()
-                .fg(theme::TEXT_BRIGHT())
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
-        )),
+        ));
+    }
+    title_spans.push(Span::styled(
+        item.entry.title.clone(),
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    let mut lines = vec![
+        Line::from(title_spans),
         Line::from(Span::styled(
             item.entry.url.clone(),
             Style::default()

@@ -737,7 +737,7 @@ fn draw_feeds_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         state,
     ));
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), sections[3]);
+    frame.render_widget(Paragraph::new(lines), sections[3]);
 }
 
 fn feed_display_title(feed: &late_core::models::rss_feed::RssFeed) -> String {
@@ -757,13 +757,21 @@ fn feed_row_line(
     error: Option<&str>,
 ) -> Line<'static> {
     let marker = if selected { "›" } else { " " };
-    let style = if selected {
+    let prefix_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let title_style = if selected {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
             .bg(theme::BG_SELECTION())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme::TEXT())
+        Style::default().fg(theme::TEXT_BRIGHT())
     };
     let url_style = if selected {
         Style::default()
@@ -772,22 +780,36 @@ fn feed_row_line(
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
-    let status = error
+    let error_style = if selected {
+        Style::default()
+            .fg(theme::ERROR())
+            .bg(theme::BG_SELECTION())
+    } else {
+        Style::default().fg(theme::ERROR())
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    let prefix = format!(" {marker} ");
+    let title_text = format!("{title:<28}  ");
+    let status_text = error
         .map(|err| format!("  error: {err}"))
         .unwrap_or_default();
-    let text = format!(" {marker} {title:<28} {url}{status}");
-    let padding = width.saturating_sub(text.chars().count());
+    let used = prefix.chars().count()
+        + title_text.chars().count()
+        + url.chars().count()
+        + status_text.chars().count();
+    let padding = width.saturating_sub(used.min(width));
+
     Line::from(vec![
-        Span::styled(format!(" {marker} {title:<28} "), style),
-        Span::styled(format!("{url}{status}"), url_style),
-        Span::styled(
-            " ".repeat(padding),
-            if selected {
-                Style::default().bg(theme::BG_SELECTION())
-            } else {
-                Style::default()
-            },
-        ),
+        Span::styled(prefix, prefix_style),
+        Span::styled(title_text, title_style),
+        Span::styled(url.to_string(), url_style),
+        Span::styled(status_text, error_style),
+        Span::styled(" ".repeat(padding), trailing_style),
     ])
 }
 
@@ -797,37 +819,58 @@ fn feed_add_line(
     width: usize,
     state: &SettingsModalState,
 ) -> Line<'static> {
-    let marker = if selected || editing { "›" } else { " " };
-    let style = if selected || editing {
+    let active = selected || editing;
+    let marker = if active { "›" } else { " " };
+    let prefix_style = if active {
         Style::default()
             .fg(theme::AMBER_GLOW())
             .bg(theme::BG_SELECTION())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme::TEXT_DIM())
+        Style::default().fg(theme::TEXT_FAINT())
     };
-    let value = if editing {
+    let trailing_style = if active {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    let prefix = format!(" {marker} ");
+    let (text, text_style) = if editing {
         let typed = state.feed_url_input().lines().join("");
-        if typed.is_empty() {
-            "http://...█".to_string()
+        let display = if typed.is_empty() {
+            "█".to_string()
         } else {
             text_with_caret(&typed, state.feed_url_input().cursor().1)
-        }
+        };
+        (
+            display,
+            Style::default()
+                .fg(theme::AMBER())
+                .bg(theme::BG_SELECTION()),
+        )
+    } else if active {
+        (
+            "+ Add feed…".to_string(),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD),
+        )
     } else {
-        "Add feed...".to_string()
+        (
+            "+ Add feed…".to_string(),
+            Style::default().fg(theme::AMBER_DIM()),
+        )
     };
-    let text = format!(" {marker} {value}");
-    let padding = width.saturating_sub(text.chars().count());
+
+    let used = prefix.chars().count() + text.chars().count();
+    let padding = width.saturating_sub(used.min(width));
+
     Line::from(vec![
-        Span::styled(text, style),
-        Span::styled(
-            " ".repeat(padding),
-            if selected || editing {
-                Style::default().bg(theme::BG_SELECTION())
-            } else {
-                Style::default()
-            },
-        ),
+        Span::styled(prefix, prefix_style),
+        Span::styled(text, text_style),
+        Span::styled(" ".repeat(padding), trailing_style),
     ])
 }
 

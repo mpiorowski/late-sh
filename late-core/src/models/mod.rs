@@ -20,6 +20,7 @@ pub mod profile;
 pub mod room_ban;
 pub mod rss_entry;
 pub mod rss_feed;
+pub mod rss_feed_read;
 pub mod server_ban;
 pub mod showcase;
 pub mod showcase_feed_read;

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use late_core::models::{article::ArticleEvent, rss_entry::RssEntryView, rss_feed::RssFeed};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -18,6 +19,8 @@ pub struct State {
     article_event_rx: broadcast::Receiver<ArticleEvent>,
     pending_share: Option<(Uuid, String)>,
     unread_count: i64,
+    last_read_at: Option<DateTime<Utc>>,
+    marker_read_at: Option<DateTime<Utc>>,
 }
 
 impl State {
@@ -26,6 +29,7 @@ impl State {
         let event_rx = service.subscribe_events();
         let article_event_rx = article_service.subscribe_events();
         service.list_task(user_id);
+        service.refresh_unread_count_task(user_id);
         Self {
             service,
             article_service,
@@ -38,6 +42,8 @@ impl State {
             article_event_rx,
             pending_share: None,
             unread_count: 0,
+            last_read_at: None,
+            marker_read_at: None,
         }
     }
 
@@ -57,8 +63,19 @@ impl State {
         self.unread_count
     }
 
+    pub fn marker_read_at(&self) -> Option<DateTime<Utc>> {
+        self.marker_read_at
+    }
+
     pub fn list(&self) {
         self.service.list_task(self.user_id);
+        self.service.refresh_unread_count_task(self.user_id);
+    }
+
+    pub fn mark_read(&mut self) {
+        self.marker_read_at = Some(Utc::now());
+        self.unread_count = 0;
+        self.service.mark_read_task(self.user_id);
     }
 
     pub fn poll_now(&self) {
@@ -104,7 +121,6 @@ impl State {
                 self.feeds = snapshot.feeds;
                 self.entries = snapshot.entries;
                 self.selected = clamp_index(self.selected, self.entries.len());
-                self.unread_count = self.entries.len() as i64;
             }
         }
     }
@@ -122,12 +138,24 @@ impl State {
                 Ok(FeedEvent::FeedFailed { user_id, error }) if user_id == self.user_id => {
                     banner = Some(Banner::error(&format!("Feed failed: {error}")));
                 }
-                Ok(FeedEvent::EntriesUpdated {
+                Ok(FeedEvent::UnreadCountUpdated {
+                    user_id,
+                    unread_count,
+                    last_read_at,
+                }) if user_id == self.user_id => {
+                    self.unread_count = unread_count;
+                    self.last_read_at = last_read_at;
+                    if unread_count == 0 {
+                        self.marker_read_at = last_read_at;
+                    }
+                }
+                Ok(FeedEvent::NewEntriesAvailable {
                     user_id,
                     unread_count,
                 }) if user_id == self.user_id => {
+                    let increased = unread_count > self.unread_count;
                     self.unread_count = unread_count;
-                    if unread_count > 0 {
+                    if increased {
                         banner = Some(Banner::success(&format!(
                             "{unread_count} feed entries ready"
                         )));

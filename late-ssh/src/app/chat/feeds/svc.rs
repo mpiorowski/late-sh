@@ -5,6 +5,7 @@ use late_core::{
     models::{
         rss_entry::{RssEntry, RssEntryParams, RssEntryView},
         rss_feed::RssFeed,
+        rss_feed_read::RssFeedRead,
     },
     telemetry::TracedExt,
 };
@@ -29,12 +30,31 @@ pub struct FeedSnapshot {
 
 #[derive(Clone, Debug)]
 pub enum FeedEvent {
-    FeedAdded { user_id: Uuid },
-    FeedDeleted { user_id: Uuid },
-    FeedFailed { user_id: Uuid, error: String },
-    EntriesUpdated { user_id: Uuid, unread_count: i64 },
-    EntryDismissed { user_id: Uuid },
-    EntryShared { user_id: Uuid },
+    FeedAdded {
+        user_id: Uuid,
+    },
+    FeedDeleted {
+        user_id: Uuid,
+    },
+    FeedFailed {
+        user_id: Uuid,
+        error: String,
+    },
+    UnreadCountUpdated {
+        user_id: Uuid,
+        unread_count: i64,
+        last_read_at: Option<DateTime<Utc>>,
+    },
+    NewEntriesAvailable {
+        user_id: Uuid,
+        unread_count: i64,
+    },
+    EntryDismissed {
+        user_id: Uuid,
+    },
+    EntryShared {
+        user_id: Uuid,
+    },
 }
 
 #[derive(Clone)]
@@ -102,6 +122,34 @@ impl FeedService {
         Ok(())
     }
 
+    pub fn refresh_unread_count_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service.publish_unread_count(user_id).await {
+                late_core::error_span!(
+                    "feed_unread_refresh_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    "failed to refresh feed unread count"
+                );
+            }
+        });
+    }
+
+    pub fn mark_read_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service.mark_read_and_publish(user_id).await {
+                late_core::error_span!(
+                    "feed_mark_read_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    "failed to mark feed read"
+                );
+            }
+        });
+    }
+
     pub fn add_feed_task(&self, user_id: Uuid, url: String) {
         let service = self.clone();
         tokio::spawn(
@@ -113,6 +161,7 @@ impl FeedService {
                     drop(client);
                     service.fetch_feed(feed).await?;
                     service.do_list(user_id).await?;
+                    service.publish_unread_count(user_id).await?;
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;
@@ -146,6 +195,7 @@ impl FeedService {
                     RssFeed::delete_for_user(&client, user_id, feed_id).await?;
                     drop(client);
                     service.do_list(user_id).await?;
+                    service.publish_unread_count(user_id).await?;
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;
@@ -186,6 +236,7 @@ impl FeedService {
         RssEntry::dismiss(&client, user_id, entry_id).await?;
         drop(client);
         self.do_list(user_id).await?;
+        self.publish_unread_count(user_id).await?;
         self.publish_event(FeedEvent::EntryDismissed { user_id });
         Ok(())
     }
@@ -210,6 +261,7 @@ impl FeedService {
         RssEntry::mark_shared(&client, user_id, entry_id).await?;
         drop(client);
         self.do_list(user_id).await?;
+        self.publish_unread_count(user_id).await?;
         self.publish_event(FeedEvent::EntryShared { user_id });
         Ok(())
     }
@@ -248,14 +300,7 @@ impl FeedService {
             match self.fetch_feed(feed.clone()).await {
                 Ok(new_count) if new_count > 0 => {
                     self.do_list(user_id).await?;
-                    let unread_count = {
-                        let client = self.db.get().await?;
-                        RssEntry::unread_count_for_user(&client, user_id).await?
-                    };
-                    self.publish_event(FeedEvent::EntriesUpdated {
-                        user_id,
-                        unread_count,
-                    });
+                    self.publish_new_entries_available(user_id).await?;
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -267,6 +312,48 @@ impl FeedService {
                     });
                 }
             }
+        }
+        Ok(())
+    }
+
+    async fn publish_unread_count(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let unread_count = RssFeedRead::unread_count_for_user(&client, user_id).await?;
+        let last_read_at = RssFeedRead::last_read_at(&client, user_id).await?;
+        self.publish_event(FeedEvent::UnreadCountUpdated {
+            user_id,
+            unread_count,
+            last_read_at,
+        });
+        Ok(())
+    }
+
+    async fn mark_read_and_publish(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        RssFeedRead::mark_read_now(&client, user_id).await?;
+        let last_read_at = RssFeedRead::last_read_at(&client, user_id).await?;
+        self.publish_event(FeedEvent::UnreadCountUpdated {
+            user_id,
+            unread_count: 0,
+            last_read_at,
+        });
+        Ok(())
+    }
+
+    async fn publish_new_entries_available(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let unread_count = RssFeedRead::unread_count_for_user(&client, user_id).await?;
+        let last_read_at = RssFeedRead::last_read_at(&client, user_id).await?;
+        self.publish_event(FeedEvent::UnreadCountUpdated {
+            user_id,
+            unread_count,
+            last_read_at,
+        });
+        if unread_count > 0 {
+            self.publish_event(FeedEvent::NewEntriesAvailable {
+                user_id,
+                unread_count,
+            });
         }
         Ok(())
     }

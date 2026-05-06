@@ -1678,6 +1678,7 @@ mod tests {
                 entries: &[],
                 selected_index: 0,
                 has_feeds: false,
+                marker_read_at: None,
             },
             news_selected: false,
             news_unread_count: 0,

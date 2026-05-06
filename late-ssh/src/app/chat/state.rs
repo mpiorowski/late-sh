@@ -1368,6 +1368,7 @@ impl ChatState {
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.feeds.list();
+        self.feeds.mark_read();
     }
 
     pub fn select_news(&mut self) {
