@@ -911,13 +911,20 @@ async fn handle_scripted(tcp: TcpStream, behavior: Behavior, tx: mpsc::Sender<He
             let Some(ws) = accept_capture(tcp, &tx).await else {
                 return;
             };
-            let (mut sink, _stream) = ws.split();
+            let (mut sink, mut stream) = ws.split();
             let frame = CloseFrame {
                 code: CloseCode::from(code),
                 reason: reason.into(),
             };
             let _ = sink.send(WsMessage::Close(Some(frame))).await;
-            let _ = sink.close().await;
+            let _ = timeout(Duration::from_millis(500), async {
+                while let Some(Ok(msg)) = stream.next().await {
+                    if matches!(msg, WsMessage::Close(_)) {
+                        break;
+                    }
+                }
+            })
+            .await;
         }
         Behavior::DropTransport => {
             let Some(ws) = accept_capture(tcp, &tx).await else {
