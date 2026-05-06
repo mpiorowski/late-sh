@@ -54,6 +54,7 @@ pub struct DashboardChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
+    pub selected_news_message: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
@@ -72,6 +73,7 @@ pub(super) struct ComposerBlockView<'a> {
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub selected_message: bool,
+    pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
@@ -219,6 +221,11 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static
 
     let placeholder = if view.reaction_picker_active {
         reaction_picker_placeholder_lines(dim)
+    } else if view.selected_news_message {
+        vec![Line::from(Span::styled(
+            "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link",
+            dim,
+        ))]
     } else if view.selected_message {
         vec![Line::from(Span::styled(
             "f react · r reply · e edit · d delete · p profile · c copy · Enter jump to reply",
@@ -291,6 +298,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
             composer: view.composer,
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
+            selected_news_message: view.selected_news_message,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -352,6 +360,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 composer: view.composer,
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
+                selected_news_message: view.selected_news_message,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -761,6 +770,7 @@ pub struct ChatRenderInput<'a> {
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub selected_message_id: Option<Uuid>,
+    pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub composer: &'a TextArea<'static>,
@@ -821,6 +831,7 @@ pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoom
             composer: view.composer,
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
+            selected_news_message: false,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -879,6 +890,7 @@ pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoom
             composer: view.composer,
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
+            selected_news_message: false,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -923,6 +935,7 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
                     composer: view.composer,
                     composing: view.composing,
                     selected_message: view.selected_message_id.is_some(),
+                    selected_news_message: view.selected_news_message,
                     reaction_picker_active: view.reaction_picker_active,
                     reply_author: view.reply_author,
                     is_editing: view.is_editing,
@@ -1552,7 +1565,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter open story · i paste URL",
+                " j/k navigate · Enter copy link · i paste URL",
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
@@ -1566,6 +1579,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 composer: view.composer,
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
+                selected_news_message: view.selected_news_message,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -1661,6 +1675,7 @@ mod tests {
             composer: textarea,
             composing: true,
             selected_message: false,
+            selected_news_message: false,
             reaction_picker_active: false,
             reply_author: None,
             is_editing: false,
@@ -1718,6 +1733,7 @@ mod tests {
             selected_room_id,
             room_jump_active: false,
             selected_message_id: None,
+            selected_news_message: false,
             reaction_picker_active: false,
             highlighted_message_id: None,
             composer,
@@ -1977,6 +1993,32 @@ mod tests {
         let rendered: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
         assert_eq!(rendered, expected);
         assert_eq!(buf[(0, 0)].fg, theme::TEXT_DIM());
+    }
+
+    #[test]
+    fn empty_composer_placeholder_contextualizes_selected_news_message() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let ta = TextArea::default();
+        let mut view = composer_view(&ta);
+        view.composing = false;
+        view.selected_message = true;
+        view.selected_news_message = true;
+
+        let placeholder = empty_composer_placeholder(&view);
+        let expected =
+            "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link";
+        let width = expected.chars().count() as u16;
+        let backend = TestBackend::new(width, 1);
+        let mut terminal = Terminal::new(backend).expect("term");
+
+        terminal
+            .draw(|f| f.render_widget(placeholder, Rect::new(0, 0, width, 1)))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let rendered: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+        assert_eq!(rendered, expected);
     }
 
     #[test]

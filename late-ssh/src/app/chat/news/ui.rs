@@ -220,15 +220,6 @@ pub(crate) fn draw_article_modal(frame: &mut Frame, area: Rect, view: ArticleMod
     frame.render_widget(Paragraph::new(content_lines), content);
 }
 
-pub(crate) fn payload_from_feed_item(item: &ArticleFeedItem) -> NewsPayload {
-    NewsPayload {
-        title: item.article.title.clone(),
-        summary: item.article.summary.clone(),
-        url: item.article.url.clone(),
-        ascii_art: item.article.ascii_art.replace("\\n", "\n"),
-    }
-}
-
 fn ascii_preview_if_fit(ascii_art: &str, target_width: usize, max_lines: usize) -> Vec<String> {
     if target_width == 0 || max_lines == 0 {
         return Vec::new();

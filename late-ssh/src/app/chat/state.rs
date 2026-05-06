@@ -675,6 +675,12 @@ impl ChatState {
             .map(|m| m.body.clone())
     }
 
+    pub fn selected_message_is_news_in_room(&self, room_id: Uuid) -> bool {
+        self.selected_message_in_room(room_id)
+            .and_then(|m| parse_news_payload(&m.body))
+            .is_some()
+    }
+
     pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
         let message = self.selected_message_in_room(room_id)?;
         let user_id = message.user_id;
@@ -709,21 +715,6 @@ impl ChatState {
         let meta = format!(
             "{author} - {relative} - {}",
             created.format("%a %Y-%m-%d %H:%M UTC")
-        );
-        self.news_modal = Some(NewsModalState { payload, meta });
-        true
-    }
-
-    pub fn open_selected_feed_news_modal(&mut self) -> bool {
-        let Some(item) = self.news.selected_item() else {
-            return false;
-        };
-        let payload = news::ui::payload_from_feed_item(item);
-        let author = format!("@{}", item.author_username);
-        let relative = crate::app::common::primitives::format_relative_time(item.article.created);
-        let meta = format!(
-            "{author} - {relative} - {}",
-            item.article.created.format("%a %Y-%m-%d %H:%M UTC")
         );
         self.news_modal = Some(NewsModalState { payload, meta });
         true

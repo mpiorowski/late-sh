@@ -287,6 +287,8 @@ impl App {
         let dashboard_messages = dashboard_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
+        let dashboard_selected_news_message = dashboard_active_room
+            .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             now_playing: now_playing_text.as_deref(),
             vote_counts: &vote_snapshot.counts,
@@ -312,6 +314,7 @@ impl App {
                 message_reactions,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
+                selected_news_message: dashboard_selected_news_message,
                 highlighted_message_id: self.chat.highlighted_message_id,
                 reaction_picker_active: self.chat.is_reaction_leader_active(),
                 composer: self.chat.composer(),
@@ -375,6 +378,10 @@ impl App {
                 payload: &modal.payload,
                 meta: &modal.meta,
             });
+        let selected_news_message = self
+            .chat
+            .selected_room_id
+            .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -396,6 +403,7 @@ impl App {
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
+            selected_news_message,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             highlighted_message_id: self.chat.highlighted_message_id,
             composer: self.chat.composer(),

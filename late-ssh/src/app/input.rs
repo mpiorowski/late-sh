@@ -1292,6 +1292,10 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                     selected_room_id: app.chat.selected_room_id,
                     room_jump_active: app.chat.room_jump_active,
                     selected_message_id: app.chat.selected_message_id,
+                    selected_news_message: app
+                        .chat
+                        .selected_room_id
+                        .is_some_and(|room_id| app.chat.selected_message_is_news_in_room(room_id)),
                     reaction_picker_active: app.chat.is_reaction_leader_active(),
                     highlighted_message_id: app.chat.highlighted_message_id,
                     composer: app.chat.composer(),
