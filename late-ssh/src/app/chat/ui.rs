@@ -738,6 +738,9 @@ fn draw_mention_autocomplete(
 // ── Main chat screen ────────────────────────────────────────
 
 pub struct ChatRenderInput<'a> {
+    pub feeds_selected: bool,
+    pub feeds_unread_count: i64,
+    pub feeds_view: super::feeds::ui::FeedListView<'a>,
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub news_view: super::news::ui::ArticleListView<'a>,
@@ -906,6 +909,8 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = if view.notifications_selected || view.discover_selected {
         1
+    } else if view.feeds_selected {
+        1
     } else if view.news_selected {
         chat_composer_lines_for_height(view.news_composer, composer_text_width)
     } else if view.showcase_selected {
@@ -990,7 +995,8 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
     };
 
     let room_selected = |room_id| {
-        !view.news_selected
+        !view.feeds_selected
+            && !view.news_selected
             && !view.notifications_selected
             && !view.discover_selected
             && !view.showcase_selected
@@ -1040,6 +1046,30 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
             Some(RoomSlot::Room(room.id)),
             is_selected,
         );
+    }
+
+    if view.feeds_view.has_feeds {
+        let feeds_line = {
+            let prefix = room_jump_prefix(
+                view.room_jump_active.then(|| jump_keys.next()).flatten(),
+                view.room_jump_active,
+                view.feeds_selected,
+            );
+            let style = if view.feeds_selected {
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
+            let label = if view.feeds_unread_count > 0 {
+                format!("{prefix}feeds ({})", view.feeds_unread_count)
+            } else {
+                format!("{prefix}feeds")
+            };
+            Line::from(Span::styled(label, style))
+        };
+        push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
     }
 
     let news_line = {
@@ -1303,6 +1333,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let selected_room_id = view.selected_room_id;
     let room_jump_active = view.room_jump_active;
     let current_user_id = view.current_user_id;
+    let feeds_selected = view.feeds_selected;
     let news_selected = view.news_selected;
 
     if chat_rooms.is_empty() {
@@ -1335,7 +1366,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         .scroll((rooms_scroll as u16, 0));
     frame.render_widget(rooms_paragraph, rooms_area);
 
-    if view.notifications_selected {
+    if feeds_selected {
+        super::feeds::ui::draw_feed_list(frame, messages_area, &view.feeds_view);
+    } else if view.notifications_selected {
         super::notifications::ui::draw_notification_list(
             frame,
             messages_area,
@@ -1428,7 +1461,18 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         }
     }
 
-    if view.notifications_selected {
+    if feeds_selected {
+        let hint_block = Block::default()
+            .title(" Feeds ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER()));
+        let hint_text = Paragraph::new(Line::from(Span::styled(
+            " j/k navigate · s share · Enter copy link · d dismiss · r refresh",
+            Style::default().fg(theme::TEXT_DIM()),
+        )))
+        .block(hint_block);
+        frame.render_widget(hint_text, composer_area);
+    } else if view.notifications_selected {
         let hint_block = Block::default()
             .title(" Mentions ")
             .borders(Borders::ALL)
@@ -1628,6 +1672,13 @@ mod tests {
         news_composer: &'a TextArea<'static>,
     ) -> ChatRenderInput<'a> {
         ChatRenderInput {
+            feeds_selected: false,
+            feeds_unread_count: 0,
+            feeds_view: crate::app::chat::feeds::ui::FeedListView {
+                entries: &[],
+                selected_index: 0,
+                has_feeds: false,
+            },
             news_selected: false,
             news_unread_count: 0,
             news_view: crate::app::chat::news::ui::ArticleListView {

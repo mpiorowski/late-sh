@@ -18,6 +18,8 @@ pub mod nonogram;
 pub mod notification;
 pub mod profile;
 pub mod room_ban;
+pub mod rss_entry;
+pub mod rss_feed;
 pub mod server_ban;
 pub mod showcase;
 pub mod showcase_feed_read;

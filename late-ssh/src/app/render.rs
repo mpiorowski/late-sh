@@ -328,6 +328,11 @@ impl App {
             selected_index: self.chat.news.selected_index(),
             marker_read_at: self.chat.news.marker_read_at(),
         };
+        let feeds_view = chat::feeds::ui::FeedListView {
+            entries: self.chat.feeds.all_entries(),
+            selected_index: self.chat.feeds.selected_index(),
+            has_feeds: self.chat.feeds.has_feeds(),
+        };
         let discover_view = chat::discover::ui::DiscoverListView {
             items: self.chat.discover.all_items(),
             selected_index: self.chat.discover.selected_index(),
@@ -362,6 +367,9 @@ impl App {
         let work_unread_count = self.chat.work.unread_count();
         let work_composing = self.chat.work.composing();
         let chat_view = chat::ui::ChatRenderInput {
+            feeds_selected: self.chat.feeds_selected,
+            feeds_unread_count: self.chat.feeds.unread_count(),
+            feeds_view,
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),
             news_view,

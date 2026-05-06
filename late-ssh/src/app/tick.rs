@@ -46,6 +46,9 @@ impl App {
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
         }
+        if let Some(b) = self.settings_modal_state.tick() {
+            self.banner = Some(b);
+        }
         if self.show_profile_modal {
             self.profile_modal_state.tick();
         }

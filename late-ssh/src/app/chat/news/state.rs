@@ -246,14 +246,14 @@ impl State {
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => match event {
-                    ArticleEvent::Created { user_id } if self.user_id == user_id => {
+                    ArticleEvent::Created { user_id, .. } if self.user_id == user_id => {
                         self.current_task = None;
                         self.composing = false;
                         self.processing = false;
                         self.composer = new_news_textarea();
                         banner = Some(Banner::success("Article shared!"));
                     }
-                    ArticleEvent::Failed { user_id, error } if self.user_id == user_id => {
+                    ArticleEvent::Failed { user_id, error, .. } if self.user_id == user_id => {
                         self.current_task = None;
                         self.processing = false;
                         composer::set_themed_textarea_cursor_visible(

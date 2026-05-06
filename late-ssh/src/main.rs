@@ -15,6 +15,7 @@ use late_core::{
 use late_ssh::{
     api,
     app::ai::{ghost::GhostService, svc::AiService},
+    app::chat::feeds::svc::FeedService,
     app::chat::news::svc::ArticleService,
     app::chat::notifications::svc::NotificationService,
     app::chat::showcase::svc::ShowcaseService,
@@ -132,6 +133,8 @@ async fn main() -> anyhow::Result<()> {
     );
     let profile_service = ProfileService::new(db.clone(), active_users.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let feed_service = FeedService::new(db.clone());
+    feed_service.start_poll_task();
     let showcase_service = ShowcaseService::new(db.clone());
     let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
@@ -229,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
         article_service,
+        feed_service,
         showcase_service,
         work_service,
         profile_service,
