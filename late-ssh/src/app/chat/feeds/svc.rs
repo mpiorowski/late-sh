@@ -594,10 +594,7 @@ fn clean_text(input: &str) -> String {
     // those, plus a final decode for rare double-encoded entities.
     let pass1 = decode_entities(&strip_tags(no_cdata));
     let pass2 = decode_entities(&strip_tags(&pass1));
-    pass2
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    pass2.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn strip_tags(input: &str) -> String {
