@@ -369,6 +369,7 @@ impl App {
         let work_composing = self.chat.work.composing();
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
+            feeds_processing: self.chat.feeds.processing(),
             feeds_unread_count: self.chat.feeds.unread_count(),
             feeds_view,
             news_selected: self.chat.news_selected,

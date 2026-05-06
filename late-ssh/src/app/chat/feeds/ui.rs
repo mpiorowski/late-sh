@@ -9,6 +9,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 pub struct FeedListView<'a> {
     pub entries: &'a [RssEntryView],
@@ -18,7 +19,7 @@ pub struct FeedListView<'a> {
 }
 
 const ITEM_HEIGHT: u16 = 7;
-const SUMMARY_LINES: usize = 2;
+const SUMMARY_MAX_CHARS: usize = 240;
 
 pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
     let selected = if view.entries.is_empty() {
@@ -77,14 +78,15 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
             .map(|last_read_at| item.entry.created > last_read_at)
             .unwrap_or(true);
         frame.render_widget(
-            Paragraph::new(entry_lines(item, is_unread)).wrap(Wrap { trim: true }),
+            Paragraph::new(entry_lines(item, is_unread, content.width as usize))
+                .wrap(Wrap { trim: true }),
             content,
         );
     }
 }
 
-fn entry_lines(item: &RssEntryView, is_unread: bool) -> Vec<Line<'static>> {
-    let mut title_spans = Vec::new();
+fn entry_lines(item: &RssEntryView, is_unread: bool, width: usize) -> Vec<Line<'static>> {
+    let mut title_spans = Vec::with_capacity(4);
     if is_unread {
         title_spans.push(Span::styled(
             "● ",
@@ -93,12 +95,41 @@ fn entry_lines(item: &RssEntryView, is_unread: bool) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         ));
     }
+    let unread_w = if is_unread {
+        UnicodeWidthStr::width("● ")
+    } else {
+        0
+    };
+    let shared = item.entry.shared_at.is_some();
+    let badge = if shared { "(shared)" } else { "" };
+    let badge_w = UnicodeWidthStr::width(badge);
+    let title_budget = if shared {
+        width
+            .saturating_sub(unread_w)
+            .saturating_sub(badge_w + 1)
+            .max(4)
+    } else {
+        width.saturating_sub(unread_w).max(4)
+    };
+    let title = truncate_to_width(&item.entry.title, title_budget);
+    let title_w = UnicodeWidthStr::width(title.as_str());
     title_spans.push(Span::styled(
-        item.entry.title.clone(),
+        title,
         Style::default()
             .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD),
     ));
+    if shared {
+        let used = unread_w + title_w;
+        let pad = width.saturating_sub(used + badge_w).max(1);
+        title_spans.push(Span::raw(" ".repeat(pad)));
+        title_spans.push(Span::styled(
+            badge,
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let mut lines = vec![
         Line::from(title_spans),
@@ -125,19 +156,56 @@ fn entry_lines(item: &RssEntryView, is_unread: bool) -> Vec<Line<'static>> {
         ]),
     ];
 
-    for line in item
-        .entry
-        .summary
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .take(SUMMARY_LINES)
-    {
+    let summary = item.entry.summary.trim();
+    if !summary.is_empty() {
         lines.push(Line::from(Span::styled(
-            line.trim().to_string(),
+            truncate_summary(summary, SUMMARY_MAX_CHARS),
             Style::default().fg(theme::TEXT()),
         )));
     }
     lines
+}
+
+/// Cap a summary at `max_chars`, breaking at the last whitespace within
+/// the final 30 chars of the budget so we don't slice mid-word. Strips
+/// trailing punctuation before the ellipsis so `... .` doesn't render.
+fn truncate_summary(text: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_chars {
+        return text.to_string();
+    }
+    let look_back = max_chars.saturating_sub(30);
+    let cut = (look_back..max_chars)
+        .rev()
+        .find(|i| chars[*i].is_whitespace())
+        .unwrap_or(max_chars);
+    let mut out: String = chars[..cut].iter().collect();
+    out = out
+        .trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | ';' | ':'))
+        .to_string();
+    out.push('…');
+    out
+}
+
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(s) <= max_width {
+        return s.to_string();
+    }
+
+    let ellipsis_w = 1;
+    let budget = max_width.saturating_sub(ellipsis_w);
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in s.chars() {
+        let w = UnicodeWidthStr::width(ch.to_string().as_str());
+        if used + w > budget {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    out
 }
 
 fn display_feed_title(item: &RssEntryView) -> String {

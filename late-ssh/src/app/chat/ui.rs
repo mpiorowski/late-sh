@@ -739,6 +739,7 @@ fn draw_mention_autocomplete(
 
 pub struct ChatRenderInput<'a> {
     pub feeds_selected: bool,
+    pub feeds_processing: bool,
     pub feeds_unread_count: i64,
     pub feeds_view: super::feeds::ui::FeedListView<'a>,
     pub news_selected: bool,
@@ -1462,16 +1463,29 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     }
 
     if feeds_selected {
-        let hint_block = Block::default()
-            .title(" Feeds ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER()));
-        let hint_text = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · s share · Enter copy link · d dismiss · r refresh",
-            Style::default().fg(theme::TEXT_DIM()),
-        )))
-        .block(hint_block);
-        frame.render_widget(hint_text, composer_area);
+        if view.feeds_processing {
+            let hint_block = Block::default()
+                .title(" Processing URL... ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::AMBER()));
+            let hint_text = Paragraph::new(Line::from(Span::styled(
+                " Sharing feed entry to news · Esc cancel",
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .block(hint_block);
+            frame.render_widget(hint_text, composer_area);
+        } else {
+            let hint_block = Block::default()
+                .title(" Feeds ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER()));
+            let hint_text = Paragraph::new(Line::from(Span::styled(
+                " j/k navigate · s share · Enter copy link · d dismiss · r refresh",
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .block(hint_block);
+            frame.render_widget(hint_text, composer_area);
+        }
     } else if view.notifications_selected {
         let hint_block = Block::default()
             .title(" Mentions ")
@@ -1673,6 +1687,7 @@ mod tests {
     ) -> ChatRenderInput<'a> {
         ChatRenderInput {
             feeds_selected: false,
+            feeds_processing: false,
             feeds_unread_count: 0,
             feeds_view: crate::app::chat::feeds::ui::FeedListView {
                 entries: &[],

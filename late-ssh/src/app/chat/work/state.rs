@@ -98,6 +98,7 @@ pub struct State {
     unread_count: i64,
     last_read_at: Option<DateTime<Utc>>,
     marker_read_at: Option<DateTime<Utc>>,
+    preserve_marker_read_at: bool,
 }
 
 impl State {
@@ -135,6 +136,7 @@ impl State {
             unread_count: 0,
             last_read_at: None,
             marker_read_at: None,
+            preserve_marker_read_at: false,
         }
     }
 
@@ -156,7 +158,8 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = Some(Utc::now());
+        self.marker_read_at = self.last_read_at;
+        self.preserve_marker_read_at = true;
         self.unread_count = 0;
         self.service.mark_read_task(self.user_id);
     }
@@ -452,7 +455,7 @@ impl State {
                     } if self.user_id == user_id => {
                         self.unread_count = unread_count;
                         self.last_read_at = last_read_at;
-                        if unread_count == 0 {
+                        if unread_count == 0 && !self.preserve_marker_read_at {
                             self.marker_read_at = last_read_at;
                         }
                     }

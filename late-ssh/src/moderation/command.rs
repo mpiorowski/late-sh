@@ -526,7 +526,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         "rename-room" => &[
             "rename-room #old #new",
             "Renames a non-DM room by changing its #slug.",
-            "Admin only. #general is reserved and cannot be renamed.",
+            "Moderator or admin only. #general is reserved and cannot be renamed.",
         ],
         "room" => &[
             "room <kick|ban|unban> #slug @name",

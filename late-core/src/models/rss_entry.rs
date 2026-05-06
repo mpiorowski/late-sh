@@ -28,7 +28,30 @@ pub struct RssEntryView {
 }
 
 impl RssEntry {
+    /// Returns `Some(entry)` only when a brand-new row was inserted; existing
+    /// rows are silently refreshed (title/summary/published_at) so parser
+    /// improvements heal previously-stored junk on the next poll.
     pub async fn upsert_for_feed(client: &Client, params: RssEntryParams) -> Result<Option<Self>> {
+        let updated = client
+            .execute(
+                "UPDATE rss_entries
+                 SET title = $3,
+                     summary = $4,
+                     published_at = $5,
+                     updated = current_timestamp
+                 WHERE feed_id = $1 AND guid = $2",
+                &[
+                    &params.feed_id,
+                    &params.guid,
+                    &params.title,
+                    &params.summary,
+                    &params.published_at,
+                ],
+            )
+            .await?;
+        if updated > 0 {
+            return Ok(None);
+        }
         let row = client
             .query_opt(
                 "INSERT INTO rss_entries
@@ -50,7 +73,7 @@ impl RssEntry {
         Ok(row.map(Self::from))
     }
 
-    pub async fn list_pending_for_user(
+    pub async fn list_visible_for_user(
         client: &Client,
         user_id: Uuid,
         limit: i64,
@@ -61,7 +84,6 @@ impl RssEntry {
                  FROM rss_entries e
                  JOIN rss_feeds f ON f.id = e.feed_id
                  WHERE e.user_id = $1
-                   AND e.shared_at IS NULL
                    AND e.dismissed_at IS NULL
                  ORDER BY COALESCE(e.published_at, e.created) DESC, e.created DESC
                  LIMIT $2",

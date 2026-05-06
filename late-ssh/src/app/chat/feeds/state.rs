@@ -18,9 +18,12 @@ pub struct State {
     event_rx: broadcast::Receiver<FeedEvent>,
     article_event_rx: broadcast::Receiver<ArticleEvent>,
     pending_share: Option<(Uuid, String)>,
+    processing: bool,
+    current_task: Option<tokio::task::AbortHandle>,
     unread_count: i64,
     last_read_at: Option<DateTime<Utc>>,
     marker_read_at: Option<DateTime<Utc>>,
+    preserve_marker_read_at: bool,
 }
 
 impl State {
@@ -41,9 +44,12 @@ impl State {
             event_rx,
             article_event_rx,
             pending_share: None,
+            processing: false,
+            current_task: None,
             unread_count: 0,
             last_read_at: None,
             marker_read_at: None,
+            preserve_marker_read_at: false,
         }
     }
 
@@ -63,6 +69,10 @@ impl State {
         self.unread_count
     }
 
+    pub fn processing(&self) -> bool {
+        self.processing
+    }
+
     pub fn marker_read_at(&self) -> Option<DateTime<Utc>> {
         self.marker_read_at
     }
@@ -73,7 +83,8 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = Some(Utc::now());
+        self.marker_read_at = self.last_read_at;
+        self.preserve_marker_read_at = true;
         self.unread_count = 0;
         self.service.mark_read_task(self.user_id);
     }
@@ -94,11 +105,25 @@ impl State {
     }
 
     pub fn share_selected(&mut self) -> Option<Banner> {
+        if self.processing {
+            return None;
+        }
         let item = self.entries.get(self.selected_index())?;
         self.pending_share = Some((item.entry.id, item.entry.url.clone()));
-        self.article_service
-            .process_url(self.user_id, item.entry.url.as_str());
+        self.processing = true;
+        self.current_task = Some(
+            self.article_service
+                .process_url(self.user_id, item.entry.url.as_str()),
+        );
         Some(Banner::success("Sharing feed entry..."))
+    }
+
+    pub fn stop_processing(&mut self) {
+        if let Some(task) = self.current_task.take() {
+            task.abort();
+        }
+        self.pending_share = None;
+        self.processing = false;
     }
 
     pub fn dismiss_selected(&mut self) -> Option<Banner> {
@@ -145,7 +170,7 @@ impl State {
                 }) if user_id == self.user_id => {
                     self.unread_count = unread_count;
                     self.last_read_at = last_read_at;
-                    if unread_count == 0 {
+                    if unread_count == 0 && !self.preserve_marker_read_at {
                         self.marker_read_at = last_read_at;
                     }
                 }
@@ -189,6 +214,8 @@ impl State {
                             .as_ref()
                             .is_some_and(|(_, pending_url)| pending_url == &url) =>
                 {
+                    self.current_task = None;
+                    self.processing = false;
                     if let Some((entry_id, _)) = self.pending_share.take() {
                         self.service.mark_shared_task(self.user_id, entry_id);
                     }
@@ -205,6 +232,8 @@ impl State {
                         .is_some_and(|(_, pending_url)| pending_url == &url)
                     && error.to_ascii_lowercase().contains("exists") =>
                 {
+                    self.current_task = None;
+                    self.processing = false;
                     if let Some((entry_id, _)) = self.pending_share.take() {
                         self.service.mark_shared_task(self.user_id, entry_id);
                         banner = Some(Banner::success("Already shared."));
@@ -220,6 +249,8 @@ impl State {
                         .as_ref()
                         .is_some_and(|(_, pending_url)| pending_url == &url)
                     {
+                        self.current_task = None;
+                        self.processing = false;
                         self.pending_share = None;
                         banner = Some(Banner::error(&format!("Share failed: {error}")));
                     }

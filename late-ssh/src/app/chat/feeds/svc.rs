@@ -113,7 +113,7 @@ impl FeedService {
     async fn do_list(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         let feeds = RssFeed::list_for_user(&client, user_id).await?;
-        let entries = RssEntry::list_pending_for_user(&client, user_id, ENTRY_LIMIT).await?;
+        let entries = RssEntry::list_visible_for_user(&client, user_id, ENTRY_LIMIT).await?;
         self.snapshot_tx.send(FeedSnapshot {
             user_id: Some(user_id),
             feeds,
@@ -588,7 +588,13 @@ fn clean_text(input: &str) -> String {
         .and_then(|s| s.strip_suffix("]]>"))
         .unwrap_or(input)
         .trim();
-    decode_entities(&strip_tags(no_cdata))
+    // Two passes: pass 1 strips real tags then decodes entities, which
+    // turns entity-encoded HTML (common in newsletter feeds where the
+    // description is `&lt;table&gt;...`) into real tags. Pass 2 strips
+    // those, plus a final decode for rare double-encoded entities.
+    let pass1 = decode_entities(&strip_tags(no_cdata));
+    let pass2 = decode_entities(&strip_tags(&pass1));
+    pass2
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -674,6 +680,17 @@ mod tests {
         assert_eq!(feed.title, "Blog");
         assert_eq!(feed.entries[0].url, "https://example.com/hello");
         assert_eq!(feed.entries[0].summary, "Hi");
+    }
+
+    #[test]
+    fn parse_feed_strips_entity_encoded_html() {
+        let xml = r#"
+            <rss><channel><title>Blog</title>
+            <item><title>T</title><link>/x</link><guid>1</guid><description>&lt;table border=0&gt;&lt;tr&gt;&lt;td&gt;Hello world&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</description></item>
+            </channel></rss>
+        "#;
+        let feed = parse_feed("https://example.com/feed.xml", xml).expect("feed");
+        assert_eq!(feed.entries[0].summary, "Hello world");
     }
 
     #[test]
