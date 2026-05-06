@@ -71,8 +71,7 @@ pub(crate) struct ModCommandOutput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
-    pub author: String,
-    pub stamp: String,
+    pub meta: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -706,15 +705,12 @@ impl ChatState {
             .filter(|name| !name.is_empty())
             .map(|name| format!("@{name}"))
             .unwrap_or_else(|| short_user_id(user_id));
-        let stamp = format!(
-            "[{}]",
-            crate::app::common::primitives::format_relative_time(created)
+        let relative = crate::app::common::primitives::format_relative_time(created);
+        let meta = format!(
+            "{author} - {relative} - {}",
+            created.format("%a %Y-%m-%d %H:%M UTC")
         );
-        self.news_modal = Some(NewsModalState {
-            payload,
-            author,
-            stamp,
-        });
+        self.news_modal = Some(NewsModalState { payload, meta });
         true
     }
 
@@ -724,15 +720,12 @@ impl ChatState {
         };
         let payload = news::ui::payload_from_feed_item(item);
         let author = format!("@{}", item.author_username);
-        let stamp = format!(
-            "[{}]",
-            crate::app::common::primitives::format_relative_time(item.article.created)
+        let relative = crate::app::common::primitives::format_relative_time(item.article.created);
+        let meta = format!(
+            "{author} - {relative} - {}",
+            item.article.created.format("%a %Y-%m-%d %H:%M UTC")
         );
-        self.news_modal = Some(NewsModalState {
-            payload,
-            author,
-            stamp,
-        });
+        self.news_modal = Some(NewsModalState { payload, meta });
         true
     }
 

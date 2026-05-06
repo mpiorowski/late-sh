@@ -373,8 +373,7 @@ impl App {
             .news_modal()
             .map(|modal| chat::news::ui::ArticleModalView {
                 payload: &modal.payload,
-                author: &modal.author,
-                stamp: &modal.stamp,
+                meta: &modal.meta,
             });
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,

@@ -3,11 +3,9 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::app::common::{
-    markdown::{pad_to_width, render_body_to_lines, wrap_plain_line},
-    theme,
-};
+use crate::app::common::{markdown::render_body_to_lines, theme};
 use late_core::models::{article::NEWS_MARKER, chat_message_reaction::ChatMessageReactionSummary};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const NEWS_SEPARATOR: &str = " || ";
 
@@ -124,53 +122,27 @@ pub(crate) fn parse_news_payload(body: &str) -> Option<NewsPayload> {
     })
 }
 
+pub(crate) fn format_news_ascii_art_for_display(ascii: &str, max_rows: usize) -> Vec<String> {
+    if max_rows == 0 {
+        return Vec::new();
+    }
+
+    ascii
+        .replace("\\n", "\n")
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .take(max_rows)
+        .collect()
+}
+
 fn wrap_news_to_lines(
     stamp: &str,
     prefix: &str,
     width: usize,
     author_style: Style,
     payload: NewsPayload,
-) -> Vec<Line<'static>> {
-    wrap_news_to_lines_with_mode(
-        stamp,
-        prefix,
-        width,
-        author_style,
-        payload,
-        NewsRenderMode::Preview,
-    )
-}
-
-pub(crate) fn wrap_news_modal_to_lines(
-    stamp: &str,
-    prefix: &str,
-    width: usize,
-    author_style: Style,
-    payload: &NewsPayload,
-) -> Vec<Line<'static>> {
-    wrap_news_to_lines_with_mode(
-        stamp,
-        prefix,
-        width,
-        author_style,
-        payload.clone(),
-        NewsRenderMode::Full,
-    )
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NewsRenderMode {
-    Preview,
-    Full,
-}
-
-fn wrap_news_to_lines_with_mode(
-    stamp: &str,
-    prefix: &str,
-    width: usize,
-    author_style: Style,
-    payload: NewsPayload,
-    mode: NewsRenderMode,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let border_style = Style::default().fg(theme::BORDER());
@@ -201,16 +173,13 @@ fn wrap_news_to_lines_with_mode(
     }
 
     let inner_width = width.saturating_sub(2).max(1);
-    let ascii_lines = raw_ascii_preview_lines(
-        &payload.ascii_art,
-        match mode {
-            NewsRenderMode::Preview => 6,
-            NewsRenderMode::Full => usize::MAX,
-        },
-    );
+    let mut ascii_lines = format_news_ascii_art_for_display(&payload.ascii_art, 6);
+    if ascii_lines.is_empty() {
+        ascii_lines.push("........".to_string());
+    }
     let ascii_max_width = ascii_lines
         .iter()
-        .map(|line| line.chars().count())
+        .map(|line| UnicodeWidthStr::width(line.as_str()))
         .max()
         .unwrap_or(8)
         .max(8);
@@ -223,27 +192,18 @@ fn wrap_news_to_lines_with_mode(
 
     let mut right_rows: Vec<(String, Style)> = Vec::new();
     if !title.is_empty() {
-        for row in wrap_plain_line(&format!("📰 {title}"), right_width) {
+        for row in wrap_plain_display_width(&format!("📰 {title}"), right_width) {
             right_rows.push((row, title_style));
         }
     }
     if !payload.summary.is_empty() {
         for bullet in split_summary_bullets(&payload.summary) {
-            match mode {
-                NewsRenderMode::Preview => {
-                    let truncated = truncate_to_width(&bullet, right_width);
-                    right_rows.push((truncated, body_style));
-                }
-                NewsRenderMode::Full => {
-                    for row in wrap_plain_line(&bullet, right_width) {
-                        right_rows.push((row, body_style));
-                    }
-                }
-            }
+            let truncated = truncate_to_width(&bullet, right_width);
+            right_rows.push((truncated, body_style));
         }
     }
     if !url.is_empty() {
-        for row in wrap_plain_line(&url, right_width) {
+        for row in wrap_plain_display_width(&url, right_width) {
             right_rows.push((row, meta_style));
         }
     }
@@ -266,11 +226,11 @@ fn wrap_news_to_lines_with_mode(
         lines.push(Line::from(vec![
             Span::styled("│", border_style),
             Span::styled(
-                pad_to_width(left, left_width),
+                pad_to_display_width(left, left_width),
                 Style::default().fg(theme::AMBER_DIM()),
             ),
             Span::styled(" │ ", border_style),
-            Span::styled(pad_to_width(right, right_width), right_style),
+            Span::styled(pad_to_display_width(right, right_width), right_style),
             Span::styled("│", border_style),
         ]));
     }
@@ -343,12 +303,86 @@ fn normalize_inline_text(text: &str) -> String {
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= width {
+    if UnicodeWidthStr::width(text) <= width {
         return text.to_string();
     }
-    let mut out: String = chars.iter().take(width.saturating_sub(3)).collect();
+    if width == 0 {
+        return String::new();
+    }
+    if width <= 3 {
+        return ".".repeat(width);
+    }
+
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + ch_width > width.saturating_sub(3) {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
+    }
     out.push_str("...");
+    out
+}
+
+fn pad_to_display_width(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + ch_width > width {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
+    }
+    out.push_str(&" ".repeat(width.saturating_sub(used)));
+    out
+}
+
+fn wrap_plain_display_width(text: &str, width: usize) -> Vec<String> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    if width == 0 {
+        return vec![String::new()];
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut idx = 0;
+    while idx < chars.len() {
+        let mut end = idx;
+        let mut used = 0;
+        while end < chars.len() {
+            let ch_width = UnicodeWidthChar::width(chars[end]).unwrap_or(0);
+            if used > 0 && used + ch_width > width {
+                break;
+            }
+            used += ch_width;
+            end += 1;
+            if used >= width {
+                break;
+            }
+        }
+
+        let break_at = if end < chars.len() {
+            let mut pos = end;
+            while pos > idx && chars[pos - 1] != ' ' {
+                pos -= 1;
+            }
+            if pos > idx { pos } else { end.max(idx + 1) }
+        } else {
+            end
+        };
+        out.push(chars[idx..break_at].iter().collect());
+        idx = break_at;
+        while idx < chars.len() && chars[idx] == ' ' {
+            idx += 1;
+        }
+    }
     out
 }
 
@@ -362,20 +396,6 @@ fn split_summary_bullets(text: &str) -> Vec<String> {
             format!("• {stripped}")
         })
         .collect()
-}
-
-fn raw_ascii_preview_lines(ascii: &str, max_rows: usize) -> Vec<String> {
-    let mut rows: Vec<String> = ascii
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .take(max_rows)
-        .collect();
-    if rows.is_empty() {
-        rows.push("........".to_string());
-    }
-    rows
 }
 
 fn decode_escaped_field(input: &str) -> String {
@@ -428,10 +448,27 @@ mod tests {
     }
 
     #[test]
-    fn raw_ascii_preview_lines_limits_to_requested_rows() {
+    fn format_news_ascii_art_for_display_limits_to_requested_rows() {
         let art = "abc\ndef\nghi\njkl";
-        let lines = raw_ascii_preview_lines(art, 2);
+        let lines = format_news_ascii_art_for_display(art, 2);
         assert_eq!(lines, vec!["abc".to_string(), "def".to_string()]);
+    }
+
+    #[test]
+    fn format_news_ascii_art_for_display_drops_blank_rows_and_trims_right_edge() {
+        let art = "\n   \n  abc  \n\\n def\t \n";
+        let lines = format_news_ascii_art_for_display(art, 6);
+        assert_eq!(lines, vec!["  abc".to_string(), " def".to_string()]);
+    }
+
+    #[test]
+    fn format_news_ascii_art_for_display_allows_short_or_empty_art() {
+        assert_eq!(
+            format_news_ascii_art_for_display("one\n\n", 6),
+            vec!["one".to_string()]
+        );
+        assert!(format_news_ascii_art_for_display("\n  \n", 6).is_empty());
+        assert!(format_news_ascii_art_for_display("one", 0).is_empty());
     }
 
     #[test]
@@ -470,21 +507,29 @@ mod tests {
     }
 
     #[test]
-    fn wrap_news_modal_to_lines_keeps_full_summary_rows() {
-        let lines = wrap_news_modal_to_lines(
-            "[1m]",
-            "mat: ",
-            32,
+    fn wrap_news_to_lines_respects_terminal_cell_width() {
+        let width = 58;
+        let lines = wrap_news_to_lines(
+            "[4 mins ago]",
+            "@artboard",
+            width,
             Style::default(),
-            &NewsPayload {
-                title: "Title".to_string(),
-                summary: "first bullet with a distinctive tailword".to_string(),
-                url: "https://example.com".to_string(),
-                ascii_art: ".:-".to_string(),
+            NewsPayload {
+                title: "Nobody understands the point of hybrid cars".to_string(),
+                summary:
+                    "YouTube video by Technology Connections.\nOpen the link to watch on YouTube."
+                        .to_string(),
+                url: "https://www.youtube.com/watch?v=KnUFH5GX_fI".to_string(),
+                ascii_art: ".. .-:::----\n. .:==-.....\n:-:--:     .".to_string(),
             },
         );
-        let rendered = lines_to_strings(&lines).join("\n");
-        assert!(rendered.contains("tailword"));
+
+        for rendered in lines_to_strings(&lines) {
+            assert!(
+                UnicodeWidthStr::width(rendered.as_str()) <= width,
+                "line overflowed {width} cells: {rendered:?}"
+            );
+        }
     }
 
     #[test]
