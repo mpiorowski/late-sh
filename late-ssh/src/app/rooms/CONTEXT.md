@@ -124,13 +124,15 @@
 ## Poker Runtime
 - `PokerTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `PokerService`.
 - Restarting the SSH process drops in-memory poker state. Existing open `game_rooms` survive, but re-entering creates a fresh table.
-- Poker is a no-stakes Texas Hold'em-style first pass: four seats, one 52-card deck, private two-card hole hands, shared flop/turn/river, check/fold actions, and showdown hand ranking. Chip betting is not wired yet.
-- The service uses one public `watch::Sender<PokerPublicSnapshot>` plus per-user `watch::Sender<PokerPrivateSnapshot>` channels keyed by `user_id`. Public snapshots include seat occupancy, card counts, folded/action state, dealer button, board, phase, active seat, and winners. Private snapshots include only the current user's hole cards.
+- Poker is a fixed-blind Texas Hold'em-style table: four seats, one 52-card deck, private two-card hole hands, shared flop/turn/river, 10/20 blinds, call/check, bet/raise, fold, all-in, side pots, showdown hand ranking, and chip settlement through `ChipService`.
+- The service uses one public `watch::Sender<PokerPublicSnapshot>` plus per-user `watch::Sender<PokerPrivateSnapshot>` channels keyed by `user_id`. Public snapshots include seat occupancy, visible stacks, committed chips, pot/current bet, card counts, folded/all-in/pending state, dealer button, board, phase, active seat, and winners. Private snapshots include the current user's hole cards, balance, call amount, and minimum raise.
 - The deck and all hole cards live only in `SharedState`; clients never receive other users' hole cards. `publish` lazily prunes orphaned private senders where `receiver_count() == 0`.
-- Entering starts as a viewer. `s` or `Enter` sits in the first open seat. Seated players press `n` to deal when the table is waiting or at showdown, `c`/Space/Enter to check when active, `f` to fold, and `l` to leave a seat.
-- The dealer button advances to the next occupied seat each new hand. First action on each street starts left of the button. If all remaining players check through the river, the service evaluates the best five-card hand from each player's two hole cards plus the five-card board; tied best hands share winner display.
-- A seated player who sends no active-room input for 5 minutes is removed from the table. If they were in an active hand, their seat is removed and the hand is reconciled.
-- Poker has no chip-balance hook yet; `ActiveRoomBackend::chip_balance` returns `None`.
+- Entering starts as a viewer. `s` or `Enter` sits in the first open seat. Seated players press `n` to deal when the table is waiting or at showdown, `c`/Space/Enter to check or call when active, `b`/`r` to bet or raise by the selected amount, `[`/`]` or `-`/`+` to adjust that amount, `a` to shove all-in, `f` to fold, and `l` to leave a seat.
+- The dealer button advances to the next funded occupied seat each new hand. Heads-up uses the button as the small blind; larger tables post blinds left of the button. Pre-flop action starts left of the big blind, later streets start left of the button, and when no further betting is possible because all remaining players are all-in, the service runs out the board and settles showdown.
+- Short all-ins smaller than the current call are legal. Short all-in raises update the amount to call but do not reopen raising for players whose action was already closed; those players can only call or fold unless a full raise has reopened action.
+- Side pots are built from each distinct committed-chip level. Each pot is awarded only among eligible non-folded contenders for that level; tied winners split each pot, with odd chips assigned deterministically by seat order.
+- A seated player who sends no active-room input for 5 minutes is removed from the table when idle outside an active hand. During an active hand, inactivity folds the player and reconciles the hand.
+- Poker wires `ActiveRoomBackend::chip_balance`, syncs external chip balance while safely idle, debits chips when they are committed to a pot, credits winning pot shares at settlement, and restores the chip floor for zero-credit losers.
 - `poker/ui.rs` mirrors the Blackjack table thresholds and broad layout: dealer/board block on top, felt divider, four seat panels, status line, and key bar. The current user's panel renders private hole cards face-up from the private snapshot; other players render card backs.
 
 ## Blackjack UI Invariants
@@ -159,7 +161,7 @@
 ## Known Gaps
 - Blackjack table state is not durable across process restart.
 - Poker table state is not durable across process restart.
-- Poker does not yet have chip betting, pots, blinds, all-in side pots, or chip settlement.
+- Poker blind/stake settings are fixed in code at 10/20 and are not configurable from room settings yet.
 - There is no AFK/disconnect cleanup path tied to SSH session lifecycle.
 - Dashboard showcases remain Blackjack-only.
 
