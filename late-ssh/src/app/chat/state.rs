@@ -1154,20 +1154,20 @@ impl ChatState {
         }
 
         if let Some(room) = parse_room_command(&body, "/public") {
-            self.clear_composer_after_submit();
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
             }
+            self.clear_composer_after_submit();
             self.service
                 .open_public_room_task(self.user_id, room.to_string());
             return Some(Banner::success(&format!("Opening public #{room}...")));
         }
 
         if let Some(room) = parse_room_command(&body, "/private") {
-            self.clear_composer_after_submit();
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
             }
+            self.clear_composer_after_submit();
             self.service
                 .create_private_room_task(self.user_id, room.to_string());
             return Some(Banner::success(&format!("Creating private #{room}...")));

@@ -1205,99 +1205,66 @@ fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
     app.chat.clear_message_selection();
 }
 
-fn with_chat_render_input<R>(
-    app: &App,
-    f: impl FnOnce(&crate::app::chat::ui::ChatRenderInput<'_>) -> R,
-) -> R {
-    let chat_badges = app.leaderboard.badges();
-    let discover_view = crate::app::chat::discover::ui::DiscoverListView {
-        items: app.chat.discover.all_items(),
-        selected_index: app.chat.discover.selected_index(),
-        loading: app.chat.discover.is_loading(),
-    };
-    let notifications_view = crate::app::chat::notifications::ui::NotificationListView {
-        items: app.chat.notifications.all_items(),
-        selected_index: app.chat.notifications.selected_index(),
-        marker_read_at: app.chat.notifications.marker_read_at(),
-    };
-    let mut rows_cache = crate::app::chat::ui::ChatRowsCache::default();
-    let view = crate::app::chat::ui::ChatRenderInput {
-        feeds_selected: app.chat.feeds_selected,
-        feeds_processing: app.chat.feeds.processing(),
-        feeds_unread_count: app.chat.feeds.unread_count(),
-        feeds_view: crate::app::chat::feeds::ui::FeedListView {
-            entries: app.chat.feeds.all_entries(),
-            selected_index: app.chat.feeds.selected_index(),
-            has_feeds: app.chat.feeds.has_feeds(),
-            marker_read_at: app.chat.feeds.marker_read_at(),
-        },
-        news_selected: app.chat.news_selected,
-        news_unread_count: app.chat.news.unread_count(),
-        news_view: crate::app::chat::news::ui::ArticleListView {
-            articles: app.chat.news.all_articles(),
-            selected_index: app.chat.news.selected_index(),
-            marker_read_at: app.chat.news.marker_read_at(),
-        },
-        discover_selected: app.chat.discover_selected,
-        discover_view,
-        rows_cache: &mut rows_cache,
+fn chat_selection_mode(app: &App, area: Rect) -> crate::app::chat::ui::ChatSelectionMode {
+    let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
+    if app.chat.notifications_selected || app.chat.discover_selected || app.chat.feeds_selected {
+        crate::app::chat::ui::ChatSelectionMode::Compact
+    } else if app.chat.news_selected {
+        crate::app::chat::ui::ChatSelectionMode::Composer {
+            lines: crate::app::chat::ui::chat_composer_lines_for_height(
+                app.chat.news.composer(),
+                composer_text_width,
+            ),
+            max_lines: 8,
+        }
+    } else if app.chat.showcase_selected {
+        crate::app::chat::ui::ChatSelectionMode::Composer {
+            lines: if app.chat.showcase.composing() { 8 } else { 1 },
+            max_lines: 8,
+        }
+    } else if app.chat.work_selected {
+        crate::app::chat::ui::ChatSelectionMode::Composer {
+            lines: if app.chat.work.composing() { 9 } else { 1 },
+            max_lines: 9,
+        }
+    } else {
+        crate::app::chat::ui::ChatSelectionMode::Composer {
+            lines: crate::app::chat::ui::chat_composer_lines_for_height(
+                app.chat.composer(),
+                composer_text_width,
+            )
+            .max(crate::app::chat::ui::chat_composer_placeholder_lines(
+                app.chat.composer(),
+                app.chat.mention_ac.active,
+                app.chat.is_reaction_leader_active(),
+            )),
+            max_lines: 8,
+        }
+    }
+}
+
+fn chat_room_list_view(app: &App) -> crate::app::chat::ui::ChatRoomListView<'_> {
+    crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
-        overlay: app.chat.overlay(),
         usernames: app.chat.usernames(),
         countries: app.chat.countries(),
-        badges: &chat_badges,
-        message_reactions: app.chat.message_reactions(),
         unread_counts: &app.chat.unread_counts,
         selected_room_id: app.chat.selected_room_id,
         room_jump_active: app.chat.room_jump_active,
-        selected_message_id: app.chat.selected_message_id,
-        reaction_picker_active: app.chat.is_reaction_leader_active(),
-        highlighted_message_id: app.chat.highlighted_message_id,
-        composer: app.chat.composer(),
-        composing: app.chat.composing,
         current_user_id: app.user_id,
-        cursor_visible: true,
-        mention_matches: &app.chat.mention_ac.matches,
-        mention_selected: app.chat.mention_ac.selected,
-        mention_active: app.chat.mention_ac.active,
-        reply_author: app.chat.reply_target().map(|reply| reply.author.as_str()),
-        is_editing: app.chat.edited_message_id.is_some(),
-        bonsai_glyphs: app.chat.bonsai_glyphs(),
-        news_composer: app.chat.news.composer(),
-        news_composing: app.chat.news.composing(),
-        news_processing: app.chat.news.processing(),
+        feeds_available: app.chat.feeds.has_feeds(),
+        feeds_selected: app.chat.feeds_selected,
+        feeds_unread_count: app.chat.feeds.unread_count(),
+        news_selected: app.chat.news_selected,
+        news_unread_count: app.chat.news.unread_count(),
         notifications_selected: app.chat.notifications_selected,
         notifications_unread_count: app.chat.notifications.unread_count(),
-        notifications_view,
+        discover_selected: app.chat.discover_selected,
         showcase_selected: app.chat.showcase_selected,
         showcase_unread_count: app.chat.showcase.unread_count(),
-        showcase_view: crate::app::chat::showcase::ui::ShowcaseListView {
-            items: app.chat.showcase.all_items(),
-            selected_index: app.chat.showcase.selected_index(),
-            current_user_id: app.user_id,
-            is_admin: app.chat.showcase.is_admin(),
-            marker_read_at: app.chat.showcase.marker_read_at(),
-        },
-        showcase_state: Some(&app.chat.showcase),
-        showcase_composing: app.chat.showcase.composing(),
         work_selected: app.chat.work_selected,
         work_unread_count: app.chat.work.unread_count(),
-        work_view: crate::app::chat::work::ui::WorkListView {
-            items: app.chat.work.all_items(),
-            selected_index: app.chat.work.selected_index(),
-            current_user_id: app.user_id,
-            is_admin: app.chat.work.is_admin(),
-            marker_read_at: app.chat.work.marker_read_at(),
-            profile_base_url: app
-                .connect_url
-                .rsplit_once('/')
-                .map_or(&*app.connect_url, |p| p.0),
-        },
-        work_state: Some(&app.chat.work),
-        work_composing: app.chat.work.composing(),
-    };
-
-    f(&view)
+    }
 }
 
 fn apply_chat_room_selection_delta(app: &mut App, delta: isize) {
@@ -1323,15 +1290,12 @@ fn handle_mouse_scroll_over_screen(
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
-    if let Some(target) = topbar_screen_hit_test(x, y) {
-        select_screen_from_topbar(app, screen, target);
-        return true;
-    }
-
     let content_area = app_content_area(app);
-    let over_room_list = with_chat_render_input(app, |view| {
-        crate::app::chat::ui::room_list_panel_contains(content_area, view, x, y)
-    });
+    let selection_mode = chat_selection_mode(app, content_area);
+    let rooms_area = crate::app::chat::ui::room_list_area(content_area, selection_mode);
+    let room_list_view = chat_room_list_view(app);
+    let over_room_list =
+        crate::app::chat::ui::room_list_panel_contains(rooms_area, &room_list_view, x, y);
     if !over_room_list {
         return false;
     }
@@ -1351,6 +1315,10 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
+    if let Some(target) = topbar_screen_hit_test(x, y) {
+        select_screen_from_topbar(app, screen, target);
+        return true;
+    }
     let content_area = app_content_area(app);
 
     match screen {
@@ -1392,9 +1360,10 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
             false
         }
         Screen::Chat => {
-            let slot = with_chat_render_input(app, |view| {
-                crate::app::chat::ui::room_list_hit_test(content_area, view, x, y)
-            });
+            let selection_mode = chat_selection_mode(app, content_area);
+            let rooms_area = crate::app::chat::ui::room_list_area(content_area, selection_mode);
+            let room_list_view = chat_room_list_view(app);
+            let slot = crate::app::chat::ui::room_list_hit_test(rooms_area, &room_list_view, x, y);
             if let Some(slot) = slot {
                 let changed = app.chat.select_room_slot(slot);
                 if changed {
