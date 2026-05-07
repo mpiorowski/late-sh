@@ -1671,7 +1671,7 @@ async fn mod_rename_room_command_updates_slug_and_audits() {
 }
 
 #[tokio::test]
-async fn admin_rename_user_command_updates_username_active_user_and_audits() {
+async fn mod_rename_user_command_updates_username_active_user_and_audits() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let actor = create_test_user(&test_db.db, "rename_user_actor").await;
@@ -1698,7 +1698,7 @@ async fn admin_rename_user_command_updates_username_active_user_and_audits() {
     let request_id = Uuid::now_v7();
     service.run_mod_command_task(
         actor.id,
-        Permissions::new(true, false),
+        Permissions::new(false, true),
         request_id,
         "rename-user @rename_user_old @rename_user_new".to_string(),
     );
@@ -2057,7 +2057,7 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
 }
 
 #[tokio::test]
-async fn admin_artboard_restore_command_restores_daily_snapshot_and_audits() {
+async fn mod_artboard_restore_command_restores_daily_snapshot_and_audits() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let actor = create_test_user(&test_db.db, "artboard_restore_actor").await;
@@ -2118,7 +2118,7 @@ async fn admin_artboard_restore_command_restores_daily_snapshot_and_audits() {
     let request_id = Uuid::now_v7();
     service.run_mod_command_task(
         actor.id,
-        Permissions::new(true, false),
+        Permissions::new(false, true),
         request_id,
         "artboard restore 2026-05-06 rollback vandalism".to_string(),
     );

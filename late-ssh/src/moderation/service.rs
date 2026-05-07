@@ -348,12 +348,11 @@ impl ModerationService {
         username: &str,
         new_username: &str,
     ) -> Result<Vec<String>> {
-        if !permissions.has(Caps::RENAME_USER) {
-            anyhow::bail!("admin only");
-        }
+        ensure_has(permissions, Caps::RENAME_USER)?;
 
         let mut client = self.db.get().await?;
         let target = find_user_by_mod_name(&client, username).await?;
+        ensure_can(permissions, Caps::RENAME_USER, tier_for_user(&target))?;
         let old_username = target.username.clone();
         let new_username = sanitize_username_input(new_username);
         if old_username.eq_ignore_ascii_case(&new_username) {
@@ -676,9 +675,7 @@ impl ModerationService {
         date: Option<NaiveDate>,
         reason: String,
     ) -> Result<Vec<String>> {
-        if !permissions.has(Caps::RESTORE_ARTBOARD) {
-            anyhow::bail!("admin only");
-        }
+        ensure_has(permissions, Caps::RESTORE_ARTBOARD)?;
         let (server, shared_provenance) = self
             .infra
             .artboard_handles()
