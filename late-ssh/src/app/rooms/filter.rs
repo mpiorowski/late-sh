@@ -12,6 +12,7 @@ impl RoomsFilter {
         match self {
             Self::All => "All",
             Self::Kind(GameKind::Blackjack) => "Blackjack",
+            Self::Kind(GameKind::Poker) => "Poker",
             Self::Kind(GameKind::TicTacToe) => "Tic-Tac-Toe",
         }
     }
@@ -61,12 +62,14 @@ mod tests {
     #[test]
     fn all_matches_everything() {
         assert!(RoomsFilter::All.matches_real(GameKind::Blackjack));
+        assert!(RoomsFilter::All.matches_real(GameKind::Poker));
         assert!(RoomsFilter::All.matches_real(GameKind::TicTacToe));
     }
 
     #[test]
     fn kind_filter_matches_only_that_kind() {
         assert!(RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Blackjack));
+        assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Poker));
         assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::TicTacToe));
     }
 }

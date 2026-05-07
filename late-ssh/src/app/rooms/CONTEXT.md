@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-05
+- Last updated: 2026-05-06
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
 - `mod.rs` only declares modules. Keep it declaration-only; do not add `pub use` re-exports.
 - `backend.rs` defines the room-game traits: `RoomGameManager` for static/table-manager behavior and `ActiveRoomBackend` for per-session active-room behavior.
-- `registry.rs` owns the process-local `RoomGameRegistry` and dispatches `GameKind` to Blackjack/Tic-Tac-Toe managers.
+- `registry.rs` owns the process-local `RoomGameRegistry` and dispatches `GameKind` to Blackjack/Poker/Tic-Tac-Toe managers.
 - `svc.rs` owns persistent room creation/listing/deletion over `game_rooms` plus associated `chat_rooms(kind='game')`. It stores opaque `settings: serde_json::Value`; games parse their own settings. Slug prefixes and human-readable labels are resolved from `RoomGameRegistry` at the call site and passed into room creation; `svc.rs` does not match on `GameKind` for either.
 - `state.rs` drains `RoomsService` snapshots/events into `App` fields, clamps list selection, and refreshes the active room copy.
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
@@ -20,13 +20,17 @@
 - `blackjack/ui.rs` renders the Blackjack table in fancy or compact layouts.
 - `blackjack/settings.rs` serializes table pace/stake settings into `game_rooms.settings`.
 - `blackjack/player.rs` loads username and chip balance data for seated players.
+- `poker/manager.rs` maps `GameRoom.id` to process-local `PokerService` instances.
+- `poker/svc.rs` is the authoritative in-memory Poker table runtime and owns the public/private snapshot split.
+- `poker/state.rs` is the per-session Poker client wrapper that drains both public table state and private hole-card state.
+- `poker/ui.rs` renders the Blackjack-shaped Poker table with dealer/board top and four seats below.
 - `tictactoe/manager.rs` maps `GameRoom.id` to process-local `TicTacToeService` instances.
 - `tictactoe/svc.rs` is the authoritative in-memory Tic-Tac-Toe board runtime.
 - `tictactoe/state.rs` is the per-session Tic-Tac-Toe client wrapper.
 - `tictactoe/ui.rs` renders the Tic-Tac-Toe board and seats.
 
 ## Persistence Model
-- `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Blackjack` and `TicTacToe`.
+- `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Blackjack`, `Poker`, and `TicTacToe`.
 - A game room persists in `game_rooms`; its chat pane is backed by a unique `chat_room_id` pointing at `chat_rooms(kind='game', visibility='public', auto_join=false, game_kind, slug)`.
 - `GameRoom::create_with_chat_room` creates the chat room and game room in one SQL CTE. `RoomsService::create_game_room` then joins the fixed dealer user to that game chat.
 - `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`.
@@ -53,7 +57,7 @@
 - Room creation is open to every user. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner). There is no client-side `can_create_room` gate anymore.
 - Room deletion is admin-only in `input.rs` (`can_delete_room`).
 - Room entry is currently open to every user: `can_enter_room` returns `true` for admin, mod, and ordinary users. Older root-context notes that only admins/mods can enter are stale.
-- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Tic-Tac-Toe uses empty JSON settings.
+- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Poker and Tic-Tac-Toe use empty JSON settings.
 
 ## Active Room and Chat
 - Entering a room calls:
@@ -66,7 +70,7 @@
 - The bottom pane is no longer just a placeholder; `render.rs` builds `EmbeddedRoomChatView` from the associated game chat room and `rooms/ui.rs` calls `chat::ui::draw_embedded_room_chat`.
 - Active room key routing lets embedded chat own composer/message actions first for keys like `i`, `j/k`, scroll, reactions, copy, reply/edit/delete, and selection escape.
 - Arrow keys are routed to the active game backend first; only if the backend declines (returns `false`) do they fall through to embedded chat message selection. Backends that don't override `handle_arrow` (e.g. Blackjack) keep the prior chat-first behavior.
-- The active `ActiveRoomBackend` receives remaining game keys. `q` is normalized to `Esc` inside active Blackjack rooms by its backend implementation.
+- The active `ActiveRoomBackend` receives remaining game keys. `q` leaves active Blackjack/Poker rooms by their backend/input implementations.
 - The outer Rooms title appends active-room status from backend `title_details`: room name, seated count, role/seat label, and optional chip balance.
 - `App.active_room_game` is the single per-session active game backend. Do not add per-game `Option<State>` fields to `App`.
 
@@ -117,6 +121,18 @@
 - `preferred_game_height` returns `min(area.height * 9 / 20, 19)` — the game caps at 19 rows (enough for the 11×5 cell tier: 17 board rows + 2 border rows) so the embedded chat below it keeps the rest of the active-room area.
 - Tic-Tac-Toe has no chip-balance hook; `ActiveRoomBackend::chip_balance` returns `None`.
 
+## Poker Runtime
+- `PokerTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `PokerService`.
+- Restarting the SSH process drops in-memory poker state. Existing open `game_rooms` survive, but re-entering creates a fresh table.
+- Poker is a no-stakes Texas Hold'em-style first pass: four seats, one 52-card deck, private two-card hole hands, shared flop/turn/river, check/fold actions, and showdown hand ranking. Chip betting is not wired yet.
+- The service uses one public `watch::Sender<PokerPublicSnapshot>` plus per-user `watch::Sender<PokerPrivateSnapshot>` channels keyed by `user_id`. Public snapshots include seat occupancy, card counts, folded/action state, dealer button, board, phase, active seat, and winners. Private snapshots include only the current user's hole cards.
+- The deck and all hole cards live only in `SharedState`; clients never receive other users' hole cards. `publish` lazily prunes orphaned private senders where `receiver_count() == 0`.
+- Entering starts as a viewer. `s` or `Enter` sits in the first open seat. Seated players press `n` to deal when the table is waiting or at showdown, `c`/Space/Enter to check when active, `f` to fold, and `l` to leave a seat.
+- The dealer button advances to the next occupied seat each new hand. First action on each street starts left of the button. If all remaining players check through the river, the service evaluates the best five-card hand from each player's two hole cards plus the five-card board; tied best hands share winner display.
+- A seated player who sends no active-room input for 5 minutes is removed from the table. If they were in an active hand, their seat is removed and the hand is reconciled.
+- Poker has no chip-balance hook yet; `ActiveRoomBackend::chip_balance` returns `None`.
+- `poker/ui.rs` mirrors the Blackjack table thresholds and broad layout: dealer/board block on top, felt divider, four seat panels, status line, and key bar. The current user's panel renders private hole cards face-up from the private snapshot; other players render card backs.
+
 ## Blackjack UI Invariants
 - `blackjack/ui.rs` chooses render tier from area dimensions:
   - Fancy path when `area.height >= FANCY_MIN_HEIGHT` and `area.width >= FANCY_MIN_WIDTH`.
@@ -133,8 +149,8 @@
 - Main Chat room-list rendering skips game rooms, so game-backed rooms do not appear as normal chat rooms or favorites.
 - Room entry requests a chat tail; live broadcasts then keep the embedded chat updated like other room-explicit chat flows.
 
-## Future: Asymmetric-Info Games (Poker-Shape)
-- Current games (Blackjack, TTT) publish one `watch::Sender<Snapshot>` and every session sees the same snapshot. Poker-style games where each user sees a different view (own hole cards visible, others hidden) are supported by the existing trait surface without changes.
+## Asymmetric-Info Game Pattern
+- Blackjack and TTT publish one `watch::Sender<Snapshot>` and every session sees the same snapshot. Poker proves the split-channel pattern for games where each user sees a different view.
 - Pattern: split the snapshot into a public part and a per-user private part. Service holds one `watch::Sender<PublicSnapshot>` plus a `HashMap<Uuid, watch::Sender<PrivateSnapshot>>` keyed by user_id. Per-session `State` caches both and drains both in `tick()`.
 - `RoomGameManager::enter` already receives `user_id`, so the manager can register a private channel for the entering user and bind the receiver into the returned `Box<dyn ActiveRoomBackend>`. Rooms layer never sees the split.
 - Cleanup of orphaned private channels (session disconnect drops the receiver but not the sender): prefer lazy GC inside the service's `publish` path — prune entries where `tx.receiver_count() == 0`.
@@ -142,8 +158,10 @@
 
 ## Known Gaps
 - Blackjack table state is not durable across process restart.
+- Poker table state is not durable across process restart.
+- Poker does not yet have chip betting, pots, blinds, all-in side pots, or chip settlement.
 - There is no AFK/disconnect cleanup path tied to SSH session lifecycle.
-- Blackjack and Tic-Tac-Toe are real. Dashboard showcases remain Blackjack-only.
+- Dashboard showcases remain Blackjack-only.
 
 ## Test Guidance
 - Pure rules in `filter.rs`, `settings.rs`, `blackjack/state.rs`, and key-routing helpers can use inline unit tests.
