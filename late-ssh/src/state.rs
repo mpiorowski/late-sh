@@ -26,7 +26,7 @@ use crate::session::{PairedClientRegistry, SessionRegistry};
 use crate::web::WebChatRegistry;
 use late_core::{api_types::NowPlaying, db::Db, rate_limit::IpRateLimiter};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::IpAddr,
     sync::{Arc, Mutex},
     time::Instant,
@@ -52,45 +52,6 @@ pub struct ActiveUser {
 }
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
-
-#[derive(Clone, Default)]
-pub struct AccountDeletionGate {
-    inner: Arc<Mutex<AccountDeletionState>>,
-}
-
-#[derive(Default)]
-struct AccountDeletionState {
-    user_ids: HashSet<Uuid>,
-    fingerprints: HashSet<String>,
-}
-
-impl AccountDeletionGate {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn mark(&self, user_id: Uuid, fingerprint: Option<&str>) {
-        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        state.user_ids.insert(user_id);
-        if let Some(fingerprint) = fingerprint.filter(|value| !value.is_empty()) {
-            state.fingerprints.insert(fingerprint.to_string());
-        }
-    }
-
-    pub fn clear(&self, user_id: Uuid, fingerprint: Option<&str>) {
-        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        state.user_ids.remove(&user_id);
-        if let Some(fingerprint) = fingerprint.filter(|value| !value.is_empty()) {
-            state.fingerprints.remove(fingerprint);
-        }
-    }
-
-    pub fn is_deleting(&self, user_id: Option<Uuid>, fingerprint: &str) -> bool {
-        let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        user_id.is_some_and(|id| state.user_ids.contains(&id))
-            || state.fingerprints.contains(fingerprint)
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct ActivityEvent {
@@ -130,7 +91,6 @@ pub struct State {
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
-    pub account_deletions: AccountDeletionGate,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub now_playing_rx: watch::Receiver<Option<NowPlaying>>,
     pub session_registry: SessionRegistry,

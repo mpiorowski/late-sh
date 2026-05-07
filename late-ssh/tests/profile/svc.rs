@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::helpers::new_test_db;
 use late_core::models::{
@@ -12,11 +13,27 @@ use late_core::models::{
 };
 use late_core::test_utils::create_test_user;
 use late_ssh::app::profile::svc::{ProfileEvent, ProfileService};
-use late_ssh::state::AccountDeletionGate;
-use tokio::time::{Duration, timeout};
+use late_ssh::session::{SessionMessage, SessionRegistry};
+use late_ssh::state::{ActiveSession, ActiveUser};
+use tokio::sync::mpsc;
+use tokio::time::{Duration, sleep, timeout};
 
 fn default_active_users() -> late_ssh::state::ActiveUsers {
     Arc::new(Mutex::new(HashMap::new()))
+}
+
+async fn wait_for_user_deleted(client: &tokio_postgres::Client, user_id: uuid::Uuid) {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let deleted = User::get(client, user_id).await.expect("load user");
+            if deleted.is_none() {
+                break;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("delete timeout");
 }
 
 #[tokio::test]
@@ -76,7 +93,6 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             theme_id: None,
             enable_background_color: false,
             show_dashboard_header: false,
-            show_dashboard_room_showcases: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
             show_settings_on_connect: true,
@@ -143,7 +159,6 @@ async fn edit_profile_normalizes_username_before_persisting() {
             theme_id: None,
             enable_background_color: false,
             show_dashboard_header: true,
-            show_dashboard_room_showcases: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
             show_settings_on_connect: true,
@@ -204,7 +219,6 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             theme_id: None,
             enable_background_color: false,
             show_dashboard_header: true,
-            show_dashboard_room_showcases: true,
             show_right_sidebar: true,
             show_games_sidebar: true,
             show_settings_on_connect: true,
@@ -291,26 +305,10 @@ async fn delete_account_preserves_moderation_rows_and_allows_key_reuse() {
         .await
         .expect("insert artboard ban");
 
-    let gate = AccountDeletionGate::new();
-    let service = ProfileService::new(test_db.db.clone(), default_active_users())
-        .with_account_deletion_gate(gate.clone());
-    let mut events = service.subscribe_events();
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
 
     service.delete_account(actor.id);
-
-    let event = timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("event timeout")
-        .expect("event");
-    assert!(matches!(
-        event,
-        ProfileEvent::AccountDeleted { user_id } if user_id == actor.id
-    ));
-
-    let deleted = User::get(&client, actor.id)
-        .await
-        .expect("load deleted user");
-    assert!(deleted.is_none());
+    wait_for_user_deleted(&client, actor.id).await;
     let audit_count: i64 = client
         .query_one(
             "SELECT COUNT(*) FROM moderation_audit_log WHERE actor_user_id = $1",
@@ -347,7 +345,6 @@ async fn delete_account_preserves_moderation_rows_and_allows_key_reuse() {
     assert_eq!(room_ban_count, 1);
     assert_eq!(server_ban_count, 1);
     assert_eq!(artboard_ban_count, 1);
-    assert!(!gate.is_deleting(Some(actor.id), &actor.fingerprint));
 
     let recreated = User::create(
         &client,
@@ -386,26 +383,10 @@ async fn delete_account_preserves_server_ban_against_deleted_target() {
         .await
         .expect("insert server ban");
 
-    let gate = AccountDeletionGate::new();
-    let service = ProfileService::new(test_db.db.clone(), default_active_users())
-        .with_account_deletion_gate(gate.clone());
-    let mut events = service.subscribe_events();
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
 
     service.delete_account(target.id);
-
-    let event = timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("event timeout")
-        .expect("event");
-    assert!(matches!(
-        event,
-        ProfileEvent::AccountDeleted { user_id } if user_id == target.id
-    ));
-
-    let deleted = User::get(&client, target.id)
-        .await
-        .expect("load deleted user");
-    assert!(deleted.is_none());
+    wait_for_user_deleted(&client, target.id).await;
 
     let ban_count: i64 = client
         .query_one(
@@ -428,5 +409,53 @@ async fn delete_account_preserves_server_ban_against_deleted_target() {
             .expect("lookup ip ban")
             .is_some()
     );
-    assert!(!gate.is_deleting(Some(target.id), &target.fingerprint));
+}
+
+#[tokio::test]
+async fn delete_account_terminates_active_sessions() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "delete-session-user").await;
+    let active_users = default_active_users();
+    let registry = SessionRegistry::new();
+    let token = "delete-session-token".to_string();
+    let (tx, mut rx) = mpsc::channel(1);
+
+    registry.register(token.clone(), tx).await;
+    active_users.lock().expect("active users").insert(
+        user.id,
+        ActiveUser {
+            username: user.username.clone(),
+            fingerprint: Some(user.fingerprint.clone()),
+            peer_ip: None,
+            sessions: vec![ActiveSession {
+                token,
+                fingerprint: Some(user.fingerprint.clone()),
+                peer_ip: None,
+            }],
+            connection_count: 1,
+            last_login_at: Instant::now(),
+        },
+    );
+
+    let service = ProfileService::new(test_db.db.clone(), active_users.clone())
+        .with_session_registry(registry);
+
+    service.delete_account(user.id);
+
+    let msg = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("terminate timeout")
+        .expect("terminate message");
+    assert!(matches!(
+        msg,
+        SessionMessage::Terminate { reason } if reason == "account deleted"
+    ));
+    wait_for_user_deleted(&client, user.id).await;
+    assert!(
+        !active_users
+            .lock()
+            .expect("active users")
+            .contains_key(&user.id)
+    );
 }

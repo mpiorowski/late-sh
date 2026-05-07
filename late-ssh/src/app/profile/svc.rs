@@ -13,7 +13,7 @@ use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, info_span};
 
 use crate::session::{SessionMessage, SessionRegistry};
-use crate::state::{AccountDeletionGate, ActiveUsers};
+use crate::state::ActiveUsers;
 
 #[derive(Clone)]
 pub struct ProfileService {
@@ -22,7 +22,6 @@ pub struct ProfileService {
     evt_tx: broadcast::Sender<ProfileEvent>,
     active_users: ActiveUsers,
     session_registry: Option<SessionRegistry>,
-    account_deletions: AccountDeletionGate,
 }
 
 #[derive(Clone, Default)]
@@ -36,7 +35,6 @@ pub struct ProfileSnapshot {
 pub enum ProfileEvent {
     Saved { user_id: Uuid },
     Error { user_id: Uuid, message: String },
-    AccountDeleted { user_id: Uuid },
 }
 
 impl ProfileService {
@@ -49,17 +47,11 @@ impl ProfileService {
             evt_tx,
             active_users,
             session_registry: None,
-            account_deletions: AccountDeletionGate::new(),
         }
     }
 
     pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
         self.session_registry = Some(session_registry);
-        self
-    }
-
-    pub fn with_account_deletion_gate(mut self, account_deletions: AccountDeletionGate) -> Self {
-        self.account_deletions = account_deletions;
         self
     }
 
@@ -207,80 +199,39 @@ impl ProfileService {
 
     pub fn delete_account(&self, user_id: Uuid) {
         let service = self.clone();
-        let active_fingerprint = service.active_fingerprint(user_id);
-        service
-            .account_deletions
-            .mark(user_id, active_fingerprint.as_deref());
         tokio::spawn(
             async move {
-                match service.do_delete_account(user_id, active_fingerprint).await {
-                    Ok(()) => service.publish_event(ProfileEvent::AccountDeleted { user_id }),
-                    Err(e) => {
-                        late_core::error_span!(
-                            "account_delete_failed",
-                            error = ?e,
-                            "failed to delete account"
-                        );
-                        service.publish_event(ProfileEvent::Error {
-                            user_id,
-                            message: "Could not delete account. Please try again.".to_string(),
-                        });
-                    }
+                if let Err(e) = service.do_delete_account(user_id).await {
+                    late_core::error_span!(
+                        "account_delete_failed",
+                        error = ?e,
+                        "failed to delete account"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: "Could not delete account. Please try again.".to_string(),
+                    });
                 }
             }
             .instrument(info_span!("profile.delete_account_task", user_id = %user_id)),
         );
     }
 
-    #[tracing::instrument(skip(self, active_fingerprint), fields(user_id = %user_id))]
-    async fn do_delete_account(
-        &self,
-        user_id: Uuid,
-        active_fingerprint: Option<String>,
-    ) -> Result<()> {
-        let mut fingerprint = active_fingerprint;
-        let result = async {
-            let mut client = self.db.get().await?;
-            let user = User::get(&client, user_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("user not found"))?;
-            if fingerprint.is_none() {
-                fingerprint = Some(user.fingerprint.clone());
-            }
-            self.account_deletions.mark(user_id, fingerprint.as_deref());
-            let tx = client.transaction().await?;
-            let deleted = tx
-                .execute("DELETE FROM users WHERE id = $1", &[&user_id])
-                .await?;
-            if deleted == 0 {
-                anyhow::bail!("user not found");
-            }
-            tx.commit().await?;
-            Ok::<(), anyhow::Error>(())
-        }
-        .await;
-
-        if let Err(e) = result {
-            self.account_deletions
-                .clear(user_id, fingerprint.as_deref());
-            return Err(e);
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn do_delete_account(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let deleted = client
+            .execute("DELETE FROM users WHERE id = $1", &[&user_id])
+            .await?;
+        if deleted == 0 {
+            anyhow::bail!("user not found");
         }
 
         self.terminate_active_sessions(user_id).await;
         if let Ok(mut users) = self.active_users.lock() {
             users.remove(&user_id);
         }
-        self.account_deletions
-            .clear(user_id, fingerprint.as_deref());
         Ok(())
-    }
-
-    fn active_fingerprint(&self, user_id: Uuid) -> Option<String> {
-        self.active_users.lock().ok().and_then(|users| {
-            users
-                .get(&user_id)
-                .and_then(|user| user.fingerprint.clone())
-        })
     }
 
     async fn terminate_active_sessions(&self, user_id: Uuid) {

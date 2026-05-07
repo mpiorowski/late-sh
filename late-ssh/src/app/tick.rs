@@ -46,10 +46,6 @@ impl App {
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
         }
-        if self.profile_state.take_account_deleted() {
-            tracing::info!("account deleted; ending current session");
-            self.running = false;
-        }
         if let Some(b) = self.settings_modal_state.tick() {
             self.banner = Some(b);
         }
