@@ -18,6 +18,7 @@ pub struct ShowcaseListView<'a> {
     pub current_user_id: uuid::Uuid,
     pub is_admin: bool,
     pub marker_read_at: Option<DateTime<Utc>>,
+    pub mine_only: bool,
 }
 
 const ITEM_HEIGHT: u16 = 7;
@@ -29,7 +30,11 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
     } else {
         view.selected_index.min(view.items.len() - 1) + 1
     };
-    let title = format!(" Showcases ({selected}/{}) ", view.items.len());
+    let title = if view.mine_only {
+        format!(" Showcases · mine ({selected}/{}) ", view.items.len())
+    } else {
+        format!(" Showcases ({selected}/{}) ", view.items.len())
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
@@ -245,7 +250,7 @@ pub fn draw_showcase_composer(frame: &mut Frame, area: Rect, view: &ShowcaseComp
 
     if !composing {
         let hint = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter copy URL · i compose · e edit own · d delete own",
+            " j/k navigate · Enter copy URL · i compose · e edit own · d delete own · / filter mine",
             Style::default().fg(theme::TEXT_DIM()),
         )));
         frame.render_widget(hint, inner);

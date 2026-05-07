@@ -67,6 +67,16 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             app.chat.news.delete_selected();
             true
         }
+        b'/' => {
+            app.chat.news.toggle_mine_only();
+            let banner = if app.chat.news.mine_only() {
+                crate::app::common::primitives::Banner::success("Showing only your news.")
+            } else {
+                crate::app::common::primitives::Banner::success("Showing all news.")
+            };
+            app.banner = Some(banner);
+            true
+        }
         _ => false,
     }
 }
