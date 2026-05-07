@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-06
+- Last updated: 2026-05-07
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -54,9 +54,9 @@
 - Create/search input limits: room name max 48 chars, search query max 32 chars, default create names come from `RoomGameRegistry`, and pasted text is passed through paste-marker sanitization.
 
 ## Access Policy
-- Room creation is open to every user. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner). There is no client-side `can_create_room` gate anymore.
+- Room creation is open to every user for Blackjack and Tic-Tac-Toe. Poker creation is admin/moderator-only through `input.rs::can_create_room`. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
 - Room deletion is admin-only in `input.rs` (`can_delete_room`).
-- Room entry is currently open to every user: `can_enter_room` returns `true` for admin, mod, and ordinary users. Older root-context notes that only admins/mods can enter are stale.
+- Room entry is open to every user for Blackjack and Tic-Tac-Toe. Poker entry is admin/moderator-only through `input.rs::can_enter_room`.
 - Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Poker and Tic-Tac-Toe use empty JSON settings.
 
 ## Active Room and Chat
