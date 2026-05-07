@@ -24,6 +24,7 @@ use late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
+use late_ssh::app::rooms::poker::manager::PokerTableManager;
 use late_ssh::app::rooms::registry::RoomGameRegistry;
 use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
@@ -57,7 +58,11 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let chip_service = ChipService::new(db.clone());
     let blackjack_table_manager =
         BlackjackTableManager::new(chip_service, BlackjackPlayerDirectory::new(db));
-    RoomGameRegistry::new(blackjack_table_manager, TicTacToeTableManager::new())
+    RoomGameRegistry::new(
+        blackjack_table_manager,
+        PokerTableManager::new(),
+        TicTacToeTableManager::new(),
+    )
 }
 
 pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
@@ -174,6 +179,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
             blackjack_table_manager,
+            PokerTableManager::new(),
             TicTacToeTableManager::new(),
         ),
         dartboard_server,

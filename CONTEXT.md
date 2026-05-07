@@ -1044,8 +1044,8 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
 | `b` then `1` / `2` / `3` / `4` | Dashboard | Activate a dashboard chord: Blackjack room, current daily game, current News wire article, or `#announcements` |
-| `P` | Dashboard | Show browser-pairing QR (copies pairing URL) |
-| `B` | Dashboard | Open CLI install/build-source modal |
+| `P` | Dashboard / Chat | Show browser-pairing QR (copies pairing URL) |
+| `B` | Dashboard / Chat | Open CLI install/build-source modal |
 | Dashboard chat keys | Dashboard | See `late-ssh/src/app/chat/CONTEXT.md`. |
 | `Enter` | Games lobby | Launch selected game |
 | `Esc` | Active game | Exit back to Arcade lobby |

@@ -4,6 +4,7 @@ use uuid::Uuid;
 use super::{
     backend::{ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager},
     blackjack::manager::BlackjackTableManager,
+    poker::manager::PokerTableManager,
     svc::{GameKind, RoomListItem},
     tictactoe::manager::TicTacToeTableManager,
 };
@@ -11,13 +12,19 @@ use super::{
 #[derive(Clone)]
 pub struct RoomGameRegistry {
     blackjack: BlackjackTableManager,
+    poker: PokerTableManager,
     tictactoe: TicTacToeTableManager,
 }
 
 impl RoomGameRegistry {
-    pub fn new(blackjack: BlackjackTableManager, tictactoe: TicTacToeTableManager) -> Self {
+    pub fn new(
+        blackjack: BlackjackTableManager,
+        poker: PokerTableManager,
+        tictactoe: TicTacToeTableManager,
+    ) -> Self {
         Self {
             blackjack,
+            poker,
             tictactoe,
         }
     }
@@ -25,6 +32,7 @@ impl RoomGameRegistry {
     pub fn manager(&self, kind: GameKind) -> &dyn RoomGameManager {
         match kind {
             GameKind::Blackjack => &self.blackjack,
+            GameKind::Poker => &self.poker,
             GameKind::TicTacToe => &self.tictactoe,
         }
     }

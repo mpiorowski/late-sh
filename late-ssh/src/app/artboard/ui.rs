@@ -34,7 +34,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool
     let info = artboard_info_lines(state, interacting);
     let layout = artboard_layout(area);
     let info_area = info_block_area(layout.info_anchor, info.len());
-    draw_canvas(frame, area, layout.canvas, info_area, state);
+    draw_canvas(frame, area, layout.canvas, info_area, state, interacting);
     draw_artboard_sidebar(frame, info_area, &info);
     if state.is_help_open() {
         draw_help(frame, area, state);
@@ -268,6 +268,7 @@ fn draw_canvas(
     canvas_area: Rect,
     info_area: Option<Rect>,
     state: &State,
+    interacting: bool,
 ) {
     if canvas_area.width == 0 || canvas_area.height == 0 {
         return;
@@ -314,7 +315,7 @@ fn draw_canvas(
     // needing to repaint a highlight.
     let cursor = canvas_cursor_render_pos(state);
     let viewport_origin = state.viewport_origin();
-    if state.should_show_canvas_cursor()
+    if should_show_native_canvas_cursor(state, interacting)
         && cursor.x >= viewport_origin.x
         && cursor.y >= viewport_origin.y
         && cursor.x < viewport_origin.x + canvas_area.width as usize
@@ -331,6 +332,10 @@ fn draw_canvas(
             frame.set_cursor_position((cx, cy));
         }
     }
+}
+
+fn should_show_native_canvas_cursor(state: &State, interacting: bool) -> bool {
+    interacting && state.should_show_canvas_cursor()
 }
 
 fn render_canvas_widget(
@@ -1306,6 +1311,14 @@ mod tests {
             dartboard_core::Pos { x: 0, y: 0 }
         );
         assert_eq!(state.cursor(), dartboard_core::Pos { x: 1, y: 0 });
+    }
+
+    #[test]
+    fn native_canvas_cursor_is_hidden_in_view_mode() {
+        let state = test_state();
+
+        assert!(!should_show_native_canvas_cursor(&state, false));
+        assert!(should_show_native_canvas_cursor(&state, true));
     }
 
     #[test]

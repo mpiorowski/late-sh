@@ -278,17 +278,29 @@ fn horizontal_inset(rect: Rect, pad: u16) -> Rect {
     }
 }
 
-fn chat_composer_lines_for_height(textarea: &TextArea<'static>, width: usize) -> usize {
+pub(crate) fn chat_composer_lines_for_height(textarea: &TextArea<'static>, width: usize) -> usize {
     let text = textarea.lines().join("\n");
     composer_line_count(&text, width)
 }
 
-fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
-    if view.composer.is_empty() && !view.mention_active && view.reaction_picker_active {
+pub(crate) fn chat_composer_placeholder_lines(
+    composer: &TextArea<'static>,
+    mention_active: bool,
+    reaction_picker_active: bool,
+) -> usize {
+    if composer.is_empty() && !mention_active && reaction_picker_active {
         reaction_picker_placeholder_lines(Style::default()).len()
     } else {
         0
     }
+}
+
+fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
+    chat_composer_placeholder_lines(
+        view.composer,
+        view.mention_active,
+        view.reaction_picker_active,
+    )
 }
 
 pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
@@ -801,6 +813,44 @@ pub struct ChatRenderInput<'a> {
     pub work_composing: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChatSelectionMode {
+    Compact,
+    Composer { lines: usize, max_lines: usize },
+}
+
+impl ChatSelectionMode {
+    fn composer_height(self) -> u16 {
+        let lines = match self {
+            Self::Compact => 1,
+            Self::Composer { lines, max_lines } => lines.min(max_lines),
+        };
+        lines as u16 + 2
+    }
+}
+
+pub(crate) struct ChatRoomListView<'a> {
+    pub chat_rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
+    pub usernames: &'a HashMap<Uuid, String>,
+    pub countries: &'a HashMap<Uuid, String>,
+    pub unread_counts: &'a HashMap<Uuid, i64>,
+    pub selected_room_id: Option<Uuid>,
+    pub room_jump_active: bool,
+    pub current_user_id: Uuid,
+    pub feeds_available: bool,
+    pub feeds_selected: bool,
+    pub feeds_unread_count: i64,
+    pub news_selected: bool,
+    pub news_unread_count: i64,
+    pub notifications_selected: bool,
+    pub notifications_unread_count: i64,
+    pub discover_selected: bool,
+    pub showcase_selected: bool,
+    pub showcase_unread_count: i64,
+    pub work_selected: bool,
+    pub work_unread_count: i64,
+}
+
 pub struct EmbeddedRoomChatView<'a> {
     pub title: &'a str,
     pub messages: &'a [ChatMessage],
@@ -918,19 +968,28 @@ fn room_jump_prefix(key: Option<u8>, active: bool, is_selected: bool) -> String 
     }
 }
 
-fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rect) {
+fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionMode {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
-    let total_composer_lines =
-        if view.notifications_selected || view.discover_selected || view.feeds_selected {
-            1
-        } else if view.news_selected {
-            chat_composer_lines_for_height(view.news_composer, composer_text_width)
-        } else if view.showcase_selected {
-            if view.showcase_composing { 8 } else { 1 }
-        } else if view.work_selected {
-            if view.work_composing { 9 } else { 1 }
-        } else {
-            chat_composer_lines_for_height(view.composer, composer_text_width).max(
+    if view.notifications_selected || view.discover_selected || view.feeds_selected {
+        ChatSelectionMode::Compact
+    } else if view.news_selected {
+        ChatSelectionMode::Composer {
+            lines: chat_composer_lines_for_height(view.news_composer, composer_text_width),
+            max_lines: 8,
+        }
+    } else if view.showcase_selected {
+        ChatSelectionMode::Composer {
+            lines: if view.showcase_composing { 8 } else { 1 },
+            max_lines: 8,
+        }
+    } else if view.work_selected {
+        ChatSelectionMode::Composer {
+            lines: if view.work_composing { 9 } else { 1 },
+            max_lines: 9,
+        }
+    } else {
+        ChatSelectionMode::Composer {
+            lines: chat_composer_lines_for_height(view.composer, composer_text_width).max(
                 composer_placeholder_lines(&ComposerBlockView {
                     composer: view.composer,
                     composing: view.composing,
@@ -943,15 +1002,17 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
                     mention_matches: view.mention_matches,
                     mention_selected: view.mention_selected,
                 }),
-            )
-        };
-    let max_composer_lines = if view.work_selected && view.work_composing {
-        9
-    } else {
-        8
-    };
-    let visible_composer_lines = total_composer_lines.min(max_composer_lines);
-    let composer_height = visible_composer_lines as u16 + 2;
+            ),
+            max_lines: 8,
+        }
+    }
+}
+
+fn chat_layout_for_selection(
+    area: Rect,
+    selection_mode: ChatSelectionMode,
+) -> (Rect, Rect, Rect, Rect) {
+    let composer_height = selection_mode.composer_height();
     let layout =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
     let body = layout[0];
@@ -960,7 +1021,40 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
     (body, body_layout[0], body_layout[1], composer_area)
 }
 
-fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomListRows {
+fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rect) {
+    chat_layout_for_selection(area, chat_selection_mode(view, area))
+}
+
+pub(crate) fn room_list_area(area: Rect, selection_mode: ChatSelectionMode) -> Rect {
+    let (_, rooms_area, _, _) = chat_layout_for_selection(area, selection_mode);
+    rooms_area
+}
+
+fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRoomListView<'a> {
+    ChatRoomListView {
+        chat_rooms: view.chat_rooms,
+        usernames: view.usernames,
+        countries: view.countries,
+        unread_counts: view.unread_counts,
+        selected_room_id: view.selected_room_id,
+        room_jump_active: view.room_jump_active,
+        current_user_id: view.current_user_id,
+        feeds_available: view.feeds_view.has_feeds,
+        feeds_selected: view.feeds_selected,
+        feeds_unread_count: view.feeds_unread_count,
+        news_selected: view.news_selected,
+        news_unread_count: view.news_unread_count,
+        notifications_selected: view.notifications_selected,
+        notifications_unread_count: view.notifications_unread_count,
+        discover_selected: view.discover_selected,
+        showcase_selected: view.showcase_selected,
+        showcase_unread_count: view.showcase_unread_count,
+        work_selected: view.work_selected,
+        work_unread_count: view.work_unread_count,
+    }
+}
+
+fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomListRows {
     let chat_rooms = view.chat_rooms;
     let rooms_width = rooms_area.width.saturating_sub(2);
     let mut jump_keys = ROOM_JUMP_KEYS.iter().copied();
@@ -1061,7 +1155,7 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         );
     }
 
-    if view.feeds_view.has_feeds {
+    if view.feeds_available {
         let feeds_line = {
             let prefix = room_jump_prefix(
                 view.room_jump_active.then(|| jump_keys.next()).flatten(),
@@ -1314,8 +1408,8 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
 }
 
 pub(crate) fn room_list_hit_test(
-    area: Rect,
-    view: &ChatRenderInput<'_>,
+    rooms_area: Rect,
+    view: &ChatRoomListView<'_>,
     x: u16,
     y: u16,
 ) -> Option<RoomSlot> {
@@ -1323,7 +1417,6 @@ pub(crate) fn room_list_hit_test(
         return None;
     }
 
-    let (_, rooms_area, _, _) = chat_layout(area, view);
     let inner = Block::default().borders(Borders::ALL).inner(rooms_area);
     if x < inner.x || x >= inner.right() || y < inner.y || y >= inner.bottom() {
         return None;
@@ -1337,6 +1430,19 @@ pub(crate) fn room_list_hit_test(
     );
     let row_index = (y - inner.y) as usize + scroll;
     room_rows.hit_slots.get(row_index).copied().flatten()
+}
+
+pub(crate) fn room_list_panel_contains(
+    rooms_area: Rect,
+    view: &ChatRoomListView<'_>,
+    x: u16,
+    y: u16,
+) -> bool {
+    if view.chat_rooms.is_empty() {
+        return false;
+    }
+
+    x >= rooms_area.x && x < rooms_area.right() && y >= rooms_area.y && y < rooms_area.bottom()
 }
 
 pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
@@ -1359,7 +1465,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
 
     let (_, rooms_area, messages_area, composer_area) = chat_layout(area, &view);
 
-    let room_rows = build_room_list_rows(&view, rooms_area);
+    let room_list_view = room_list_view_from_render_input(&view);
+    let room_rows = build_room_list_rows(&room_list_view, rooms_area);
 
     let rooms_block = Block::default()
         .title(if room_jump_active {
@@ -2078,7 +2185,8 @@ mod tests {
             &news_composer,
         );
 
-        let room_rows = build_room_list_rows(&view, Rect::new(0, 0, 40, 20));
+        let room_list_view = room_list_view_from_render_input(&view);
+        let room_rows = build_room_list_rows(&room_list_view, Rect::new(0, 0, 40, 20));
         let hit_slots: Vec<_> = room_rows.hit_slots.into_iter().flatten().collect();
 
         assert_eq!(
@@ -2145,7 +2253,8 @@ mod tests {
             &news_composer,
         );
 
-        let room_rows = build_room_list_rows(&view, Rect::new(0, 0, 40, 20));
+        let room_list_view = room_list_view_from_render_input(&view);
+        let room_rows = build_room_list_rows(&room_list_view, Rect::new(0, 0, 40, 20));
 
         assert!(!room_rows.hit_slots.contains(&Some(RoomSlot::Room(game.id))));
     }
@@ -2205,7 +2314,8 @@ mod tests {
         let area = Rect::new(1, 1, 74, 30);
         let (_, rooms_area, _, _) = chat_layout(area, &view);
         let inner = Block::default().borders(Borders::ALL).inner(rooms_area);
-        let room_rows = build_room_list_rows(&view, rooms_area);
+        let room_list_view = room_list_view_from_render_input(&view);
+        let room_rows = build_room_list_rows(&room_list_view, rooms_area);
         let rust_row = room_rows
             .hit_slots
             .iter()
@@ -2213,9 +2323,29 @@ mod tests {
             .expect("rust room row");
 
         assert_eq!(
-            room_list_hit_test(area, &view, inner.x, inner.y + rust_row as u16),
+            room_list_hit_test(
+                rooms_area,
+                &room_list_view,
+                inner.x,
+                inner.y + rust_row as u16
+            ),
             Some(RoomSlot::Room(rust.id))
         );
-        assert_eq!(room_list_hit_test(area, &view, inner.x, inner.y), None);
+        assert_eq!(
+            room_list_hit_test(rooms_area, &room_list_view, inner.x, inner.y),
+            None
+        );
+        assert!(room_list_panel_contains(
+            rooms_area,
+            &room_list_view,
+            rooms_area.x,
+            rooms_area.y
+        ));
+        assert!(!room_list_panel_contains(
+            rooms_area,
+            &room_list_view,
+            rooms_area.right(),
+            rooms_area.y
+        ));
     }
 }

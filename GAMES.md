@@ -2,7 +2,7 @@
 
 This guide is for contributors who want to add a new multiplayer game room to
 late.sh. By the end you should know what to write, where it lives, and which
-patterns the existing games (Blackjack, Tic-Tac-Toe) already prove out.
+patterns the existing games (Blackjack, Poker, Tic-Tac-Toe) already prove out.
 
 If anything here disagrees with the code, trust the code and please open a PR
 to fix this file.
@@ -26,6 +26,8 @@ game's own runtime. You will not touch the rooms layer.
 Live reference implementations:
 
 - `late-ssh/src/app/rooms/tictactoe/` — minimal example, ~6 small files
+- `late-ssh/src/app/rooms/poker/` — asymmetric-info example with public table
+  state plus per-user private hole-card state
 - `late-ssh/src/app/rooms/blackjack/` — complex example with chips, settlements,
   AFK timer
 - `late-ssh/src/app/rooms/CONTEXT.md` — internal architecture notes
@@ -302,12 +304,12 @@ re-validates against the truth under the lock. Be defensive in `SharedState`
 methods: turn checks, occupancy checks, "are you actually seated" checks.
 Stale-cache races are normal and harmless if you validate.
 
-### Asymmetric-info games (poker-style)
+### Asymmetric-info games
 
-The current pattern publishes the same snapshot to all sessions. Games like
-poker, where each player sees a different view (own hole cards visible,
-others' hidden), are supported by the existing trait surface without changes.
-See the "Future: Asymmetric-Info Games" section in
+Most simple games publish the same snapshot to all sessions. Poker now proves
+the pattern for games where each player sees a different view (own hole cards
+visible, others' hidden), without changing the room trait surface. See the
+"Asymmetric-Info Game Pattern" section in
 `late-ssh/src/app/rooms/CONTEXT.md` for the recommended split-channel pattern.
 
 Short version: one `watch::Sender<PublicSnapshot>` plus a
