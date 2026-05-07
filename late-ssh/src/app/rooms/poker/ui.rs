@@ -374,9 +374,7 @@ fn seat_border_color(
     is_active: bool,
     is_winner: bool,
 ) -> ratatui::style::Color {
-    if is_winner {
-        theme::SUCCESS()
-    } else if is_you {
+    if is_winner || is_you {
         theme::SUCCESS()
     } else if is_active {
         theme::AMBER()
@@ -420,7 +418,7 @@ fn draw_seat_cards(
     let card_w = card_width(theme_card) as u16;
     let card_h = theme_card.card_height() as u16;
     let gap: u16 = 1;
-    let visible_count = seat.card_count.max(2).min(2);
+    let visible_count = 2;
     let total_w = card_w * visible_count as u16 + gap * (visible_count as u16).saturating_sub(1);
     let start_x = area.x + area.width.saturating_sub(total_w) / 2;
     let card_y = area.y + area.height.saturating_sub(card_h) / 2;
