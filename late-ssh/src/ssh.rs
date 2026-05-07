@@ -1046,11 +1046,15 @@ impl russh::server::Handler for ClientHandler {
     #[tracing::instrument(skip(self, data, _session), fields(peer = ?self.peer_addr, len = data.len()))]
     async fn data(
         &mut self,
-        _channel: ChannelId,
+        channel: ChannelId,
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(len = data.len(), "received input data");
+        if self.app_channel_id != Some(channel) {
+            tracing::debug!(?channel, "ignoring input from non-app channel");
+            return Ok(());
+        }
         if self.app.is_none() {
             return Ok(());
         }

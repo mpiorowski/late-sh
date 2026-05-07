@@ -206,8 +206,13 @@ async fn closing_token_exec_channel_does_not_close_interactive_shell() {
         .await
         .expect("request shell");
     expect_shell_data(&mut shell_channel).await;
+    drain_shell_data(&mut shell_channel).await;
 
     token_channel.close().await.expect("close token channel");
+    shell_channel
+        .data(&b" "[..])
+        .await
+        .expect("send shell input after token close");
     expect_shell_data(&mut shell_channel).await;
 
     client
@@ -225,6 +230,18 @@ async fn expect_shell_data(channel: &mut russh::Channel<client::Msg>) {
             Ok(Some(_)) => {}
             Ok(None) => panic!("interactive shell channel ended unexpectedly"),
             Err(_) => panic!("timed out waiting for interactive shell data"),
+        }
+    }
+}
+
+async fn drain_shell_data(channel: &mut russh::Channel<client::Msg>) {
+    loop {
+        match timeout(Duration::from_millis(100), channel.wait()).await {
+            Ok(Some(ChannelMsg::Data { .. })) => {}
+            Ok(Some(ChannelMsg::Close)) => panic!("interactive shell closed unexpectedly"),
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("interactive shell channel ended unexpectedly"),
+            Err(_) => return,
         }
     }
 }
