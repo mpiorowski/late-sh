@@ -1542,6 +1542,24 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 
     match byte {
+        b'B' if matches!(ctx.screen, Screen::Dashboard | Screen::Chat)
+            && !ctx.chat_composing
+            && !ctx.news_composing
+            && !ctx.showcase_composing
+            && !ctx.work_composing =>
+        {
+            dashboard::input::open_cli_install_modal(app);
+            true
+        }
+        b'P' if matches!(ctx.screen, Screen::Dashboard | Screen::Chat)
+            && !ctx.chat_composing
+            && !ctx.news_composing
+            && !ctx.showcase_composing
+            && !ctx.work_composing =>
+        {
+            dashboard::input::open_browser_pairing_qr(app);
+            true
+        }
         b'q' | b'Q' => {
             if ctx.screen == Screen::Artboard
                 && app
