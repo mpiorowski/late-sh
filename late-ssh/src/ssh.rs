@@ -94,6 +94,7 @@ struct ClientHandler {
 
     /// Session bindings
     channel: Option<Channel<Msg>>,
+    app_channel_id: Option<ChannelId>,
     app: Option<Arc<TokioMutex<crate::app::state::App>>>,
     /// Signaled by input/resize paths to request an immediate (world-stateless)
     /// render, so typed characters echo without waiting for the next world tick.
@@ -299,6 +300,7 @@ impl Server {
             active_user_incremented: false,
             over_limit,
             channel: None,
+            app_channel_id: None,
             app: None,
             render_signal: None,
             input_tx: None,
@@ -967,6 +969,7 @@ impl russh::server::Handler for ClientHandler {
                 anyhow::anyhow!("session input receiver missing during shell request")
             })?;
             let channel_id = chan.id();
+            self.app_channel_id = Some(channel_id);
             let handle = session.handle();
 
             if self.cli_mode
@@ -1044,11 +1047,15 @@ impl russh::server::Handler for ClientHandler {
     #[tracing::instrument(skip(self, data, _session), fields(peer = ?self.peer_addr, len = data.len()))]
     async fn data(
         &mut self,
-        _channel: ChannelId,
+        channel: ChannelId,
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(len = data.len(), "received input data");
+        if self.app_channel_id != Some(channel) {
+            tracing::debug!(?channel, "ignoring input from non-app channel");
+            return Ok(());
+        }
         if self.app.is_none() {
             return Ok(());
         }
@@ -1085,7 +1092,9 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(?channel, "client sent channel EOF");
-        if let Some(app) = self.app.as_ref() {
+        if self.app_channel_id == Some(channel)
+            && let Some(app) = self.app.as_ref()
+        {
             let mut app = app.lock().await;
             app.running = false;
         }
@@ -1099,9 +1108,12 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(?channel, "client closed channel");
-        if let Some(app) = self.app.as_ref() {
+        if self.app_channel_id == Some(channel)
+            && let Some(app) = self.app.as_ref()
+        {
             let mut app = app.lock().await;
             app.running = false;
+            self.app_channel_id = None;
         }
         Ok(())
     }
