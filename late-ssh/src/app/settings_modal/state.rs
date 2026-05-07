@@ -150,8 +150,8 @@ impl Tab {
         Tab::Bio,
         Tab::Themes,
         Tab::Favorites,
-        Tab::Account,
         Tab::Feeds,
+        Tab::Account,
         Tab::Special,
     ];
 
