@@ -1,4 +1,5 @@
 pub mod discover;
+pub mod feeds;
 pub mod input;
 pub mod news;
 pub mod notifications;
@@ -7,3 +8,4 @@ pub mod state;
 pub mod svc;
 pub mod ui;
 pub(crate) mod ui_text;
+pub mod work;

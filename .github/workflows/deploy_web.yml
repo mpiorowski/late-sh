@@ -5,8 +5,8 @@ on:
     types: [published]
 
 concurrency:
-  group: ${{ endsWith(github.ref, '-web') && format('terraform-deploy-{0}', github.event.release.prerelease && 'staging' || 'production') || format('{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: false
+  group: ${{ endsWith(github.ref, '-web') && format('deploy-web-{0}', github.event.release.prerelease && 'staging' || 'production') || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

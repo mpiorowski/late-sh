@@ -56,6 +56,10 @@ late.sh      → <server-ip>
 *.late.sh    → <server-ip>
 ```
 
+For IPv6, configure matching AAAA records to the node IPv6 address. The
+Terraform-managed `ipv6-proxy` DaemonSet binds only that IPv6 address and
+forwards traffic into the existing IPv4 ingress path.
+
 This enables:
 - `ssh late.sh` — SSH TUI
 - `https://late.sh` — Web landing + audio pairing
@@ -143,6 +147,14 @@ All parameters are set as Terraform variables (via GitHub secrets/variables for 
 | `WS_PAIR_MAX_ATTEMPTS_PER_IP` | Max WebSocket pair attempts per IP in window |
 | `WS_PAIR_RATE_LIMIT_WINDOW_SECS` | WebSocket pair rate limit window in seconds |
 | `DB_POOL_SIZE` | Database connection pool size |
+
+### IPv6 edge proxy
+
+| Variable | Description |
+|----------|-------------|
+| `IPV6_PROXY_ENABLED` | Deploy the host-network IPv6-only HAProxy edge proxy |
+| `IPV6_PROXY_ADDRESS` | Public IPv6 address for the proxy to bind |
+| `IPV6_PROXY_IMAGE` | HAProxy image used by the proxy |
 
 ### AI (Gemini)
 

@@ -50,6 +50,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
         Tab::Favorites => draw_favorites_tab(frame, layout[3], state),
         Tab::Account => draw_account_tab(frame, layout[3], state),
+        Tab::Feeds => draw_feeds_tab(frame, layout[3], state),
         Tab::Special => draw_special_tab(frame, layout[3], state),
     }
 
@@ -89,7 +90,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
             spans.extend([
                 Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" save & preview  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Alt+Enter", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled("Alt+Enter/Ctrl+J", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" newline  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(
@@ -166,6 +167,20 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" open confirm  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+            ]);
+        }
+        (Tab::Feeds, _) => {
+            spans.extend([
+                Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("↵/a", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" add  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("d", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" remove  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("r", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" refresh  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);
@@ -401,9 +416,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             if state.editing_username() {
                 let typed = state.username_input().lines().join("");
                 if typed.is_empty() {
-                    value_span("typing…", theme::AMBER())
+                    value_span("█", theme::AMBER())
                 } else {
-                    value_span(format!("{}█", typed), theme::AMBER())
+                    value_span(
+                        text_with_caret(&typed, state.username_input().cursor().1),
+                        theme::AMBER(),
+                    )
                 }
             } else if state.draft().username.is_empty() {
                 value_span("not set", theme::TEXT_FAINT())
@@ -529,7 +547,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         )),
         sections[13],
     );
-
     frame.render_widget(Paragraph::new(section_heading("Location")), sections[15]);
     frame.render_widget(
         Paragraph::new(row_line(
@@ -764,6 +781,182 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, _state: &SettingsModalState) 
         ])),
         sections[3],
     );
+}
+
+fn draw_feeds_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let sections = Layout::vertical([
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // hint
+        Constraint::Length(1), // breathing
+        Constraint::Min(4),    // list
+    ])
+    .split(area);
+
+    frame.render_widget(Paragraph::new(section_heading("Feeds")), sections[0]);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "RSS/Atom entries stay private until you share them from Chat > feeds.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        sections[1],
+    );
+
+    let width = sections[3].width as usize;
+    let mut lines = Vec::new();
+    for (idx, feed) in state.feeds().iter().enumerate() {
+        lines.push(feed_row_line(
+            idx == state.feed_index() && !state.editing_feed_url(),
+            width,
+            feed_display_title(feed),
+            feed.url.as_str(),
+            feed.last_error.as_deref(),
+        ));
+    }
+    lines.push(feed_add_line(
+        state.feed_index_is_add_row() && !state.editing_feed_url(),
+        state.editing_feed_url(),
+        width,
+        state,
+    ));
+
+    frame.render_widget(Paragraph::new(lines), sections[3]);
+}
+
+fn feed_display_title(feed: &late_core::models::rss_feed::RssFeed) -> String {
+    let title = feed.title.trim();
+    if title.is_empty() {
+        "untitled feed".to_string()
+    } else {
+        title.to_string()
+    }
+}
+
+fn feed_row_line(
+    selected: bool,
+    width: usize,
+    title: String,
+    url: &str,
+    error: Option<&str>,
+) -> Line<'static> {
+    let marker = if selected { "›" } else { " " };
+    let prefix_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let title_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_BRIGHT())
+    };
+    let url_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_DIM())
+            .bg(theme::BG_SELECTION())
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let error_style = if selected {
+        Style::default()
+            .fg(theme::ERROR())
+            .bg(theme::BG_SELECTION())
+    } else {
+        Style::default().fg(theme::ERROR())
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    let prefix = format!(" {marker} ");
+    let title_text = format!("{title:<28}  ");
+    let status_text = error
+        .map(|err| format!("  error: {err}"))
+        .unwrap_or_default();
+    let used = prefix.chars().count()
+        + title_text.chars().count()
+        + url.chars().count()
+        + status_text.chars().count();
+    let padding = width.saturating_sub(used.min(width));
+
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(title_text, title_style),
+        Span::styled(url.to_string(), url_style),
+        Span::styled(status_text, error_style),
+        Span::styled(" ".repeat(padding), trailing_style),
+    ])
+}
+
+fn feed_add_line(
+    selected: bool,
+    editing: bool,
+    width: usize,
+    state: &SettingsModalState,
+) -> Line<'static> {
+    let active = selected || editing;
+    let marker = if active { "›" } else { " " };
+    let prefix_style = if active {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let trailing_style = if active {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    let prefix = format!(" {marker} ");
+    let (text, text_style) = if editing {
+        let typed = state.feed_url_input().lines().join("");
+        let display = if typed.is_empty() {
+            "█".to_string()
+        } else {
+            text_with_caret(&typed, state.feed_url_input().cursor().1)
+        };
+        (
+            display,
+            Style::default()
+                .fg(theme::AMBER())
+                .bg(theme::BG_SELECTION()),
+        )
+    } else if active {
+        (
+            "+ Add feed…".to_string(),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            "+ Add feed…".to_string(),
+            Style::default().fg(theme::AMBER_DIM()),
+        )
+    };
+
+    let used = prefix.chars().count() + text.chars().count();
+    let padding = width.saturating_sub(used.min(width));
+
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(text, text_style),
+        Span::styled(" ".repeat(padding), trailing_style),
+    ])
 }
 
 /// Layout note: `area` is the 6-line strip reserved at the bottom of the
@@ -1400,17 +1593,22 @@ fn value_span(text: impl Into<String>, color: ratatui::style::Color) -> ValueSpa
     }
 }
 
+fn text_with_caret(text: &str, cursor_col: usize) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    chars.insert(cursor_col.min(chars.len()), '█');
+    chars.into_iter().collect()
+}
+
 fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String>) -> ValueSpan {
     if state.editing_system_row(row) {
         let typed = state.system_input().lines().join("");
         if typed.is_empty() {
-            if row == Row::Langs {
-                value_span("rust, go, typescript…", theme::AMBER())
-            } else {
-                value_span("typing…", theme::AMBER())
-            }
+            value_span("█", theme::AMBER())
         } else {
-            value_span(format!("{}█", typed), theme::AMBER())
+            value_span(
+                text_with_caret(&typed, state.system_input().cursor().1),
+                theme::AMBER(),
+            )
         }
     } else {
         match value
@@ -1535,4 +1733,17 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .split(vertical[0]);
     horizontal[0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_with_caret_uses_cursor_column() {
+        assert_eq!(text_with_caret("abcd", 0), "█abcd");
+        assert_eq!(text_with_caret("abcd", 2), "ab█cd");
+        assert_eq!(text_with_caret("abcd", 4), "abcd█");
+        assert_eq!(text_with_caret("abcd", 99), "abcd█");
+    }
 }

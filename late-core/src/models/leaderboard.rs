@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use tokio_postgres::Client;
@@ -58,11 +58,35 @@ pub struct HighScoreEntry {
     pub score: i32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DailyGame {
+    Sudoku,
+    Nonogram,
+    Solitaire,
+    Minesweeper,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DailyCompletionStatus {
+    pub completed_games: HashSet<DailyGame>,
+}
+
+impl DailyCompletionStatus {
+    pub fn completed(&self, game: DailyGame) -> bool {
+        self.completed_games.contains(&game)
+    }
+
+    fn mark_completed(&mut self, game: DailyGame) {
+        self.completed_games.insert(game);
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct LeaderboardData {
     pub today_champions: Vec<LeaderboardEntry>,
     pub streak_leaders: Vec<LeaderboardEntry>,
     pub user_streaks: HashMap<Uuid, u32>,
+    pub user_daily_statuses: HashMap<Uuid, DailyCompletionStatus>,
     pub high_scores: Vec<HighScoreEntry>,
     pub chip_leaders: Vec<ChipLeader>,
     pub user_chips: HashMap<Uuid, i64>,
@@ -84,9 +108,10 @@ impl LeaderboardData {
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {
-    let (champions, streaks, high_scores, chip_leaders, all_chips) = tokio::try_join!(
+    let (champions, streaks, daily_statuses, high_scores, chip_leaders, all_chips) = tokio::try_join!(
         fetch_today_champions(client, 10),
         fetch_all_streaks(client),
+        fetch_today_daily_statuses(client),
         fetch_high_scores(client, 3),
         UserChips::top_balances(client, 10),
         UserChips::all_balances(client),
@@ -100,6 +125,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         today_champions: champions,
         streak_leaders,
         user_streaks,
+        user_daily_statuses: daily_statuses,
         high_scores,
         chip_leaders,
         user_chips: all_chips,
@@ -182,6 +208,49 @@ async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<Leader
             count: row.get::<_, i32>("wins") as u32,
         })
         .collect())
+}
+
+async fn fetch_today_daily_statuses(
+    client: &Client,
+) -> Result<HashMap<Uuid, DailyCompletionStatus>> {
+    let rows = client
+        .query(
+            "WITH all_today AS (
+                SELECT DISTINCT user_id, 'sudoku' AS game
+                FROM sudoku_daily_wins
+                WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT DISTINCT user_id, 'nonogram' AS game
+                FROM nonogram_daily_wins
+                WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT DISTINCT user_id, 'solitaire' AS game
+                FROM solitaire_daily_wins
+                WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT DISTINCT user_id, 'minesweeper' AS game
+                FROM minesweeper_daily_wins
+                WHERE puzzle_date = CURRENT_DATE
+            )
+            SELECT user_id, game FROM all_today",
+            &[],
+        )
+        .await?;
+
+    let mut statuses: HashMap<Uuid, DailyCompletionStatus> = HashMap::new();
+    for row in rows {
+        let user_id: Uuid = row.get("user_id");
+        let game = match row.get::<_, &str>("game") {
+            "sudoku" => DailyGame::Sudoku,
+            "nonogram" => DailyGame::Nonogram,
+            "solitaire" => DailyGame::Solitaire,
+            "minesweeper" => DailyGame::Minesweeper,
+            _ => continue,
+        };
+        statuses.entry(user_id).or_default().mark_completed(game);
+    }
+
+    Ok(statuses)
 }
 
 async fn fetch_all_streaks(client: &Client) -> Result<Vec<LeaderboardEntry>> {

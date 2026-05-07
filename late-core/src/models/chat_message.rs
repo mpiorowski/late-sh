@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use std::collections::HashMap;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -152,7 +153,7 @@ impl ChatMessage {
     }
 
     pub async fn edit_by_author(
-        client: &Client,
+        client: &impl GenericClient,
         message_id: Uuid,
         user_id: Uuid,
         body: &str,
@@ -175,7 +176,34 @@ impl ChatMessage {
         Ok(row.map(Self::from))
     }
 
-    pub async fn delete_by_author(client: &Client, message_id: Uuid, user_id: Uuid) -> Result<u64> {
+    pub async fn edit_after_authorization(
+        client: &impl GenericClient,
+        message_id: Uuid,
+        body: &str,
+    ) -> Result<Self> {
+        let body = body.trim();
+        if body.is_empty() {
+            bail!("message body cannot be empty");
+        }
+
+        let row = client
+            .query_one(
+                "UPDATE chat_messages
+                 SET body = $1, updated = current_timestamp
+                 WHERE id = $2
+                 RETURNING *",
+                &[&body, &message_id],
+            )
+            .await?;
+
+        Ok(Self::from(row))
+    }
+
+    pub async fn delete_by_author(
+        client: &impl GenericClient,
+        message_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<u64> {
         let count = client
             .execute(
                 "DELETE FROM chat_messages WHERE id = $1 AND user_id = $2",
@@ -185,7 +213,7 @@ impl ChatMessage {
         Ok(count)
     }
 
-    pub async fn delete_by_admin(client: &Client, message_id: Uuid) -> Result<u64> {
+    pub async fn delete_by_admin(client: &impl GenericClient, message_id: Uuid) -> Result<u64> {
         let count = client
             .execute("DELETE FROM chat_messages WHERE id = $1", &[&message_id])
             .await?;

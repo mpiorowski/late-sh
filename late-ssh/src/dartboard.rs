@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex, OnceLock, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -40,6 +40,7 @@ impl CanvasStore for LateShCanvasStore {
 struct PersistState {
     latest_canvas: Option<Canvas>,
     dirty: bool,
+    version: u64,
 }
 
 struct PostgresCanvasStore {
@@ -101,6 +102,7 @@ impl CanvasStore for PostgresCanvasStore {
     fn save(&mut self, canvas: &Canvas) {
         let mut state = self.persist_state.lock_recover();
         state.latest_canvas = Some(canvas.clone());
+        state.version = state.version.wrapping_add(1);
         if state.dirty {
             return;
         }
@@ -142,8 +144,36 @@ pub async fn flush_server_snapshot(
     server: &ServerHandle,
     shared_provenance: &SharedArtboardProvenance,
 ) -> anyhow::Result<()> {
-    let canvas = server.canvas_snapshot();
-    let provenance = clone_shared_provenance(shared_provenance);
+    let (canvas, provenance) = {
+        let _guard = persistence_lock().lock_recover();
+        (
+            server.canvas_snapshot(),
+            clone_shared_provenance(shared_provenance),
+        )
+    };
+    save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &canvas, &provenance).await
+}
+
+pub async fn restore_live_artboard(
+    db: &Db,
+    server: &ServerHandle,
+    shared_provenance: &SharedArtboardProvenance,
+    canvas: Canvas,
+    provenance: ArtboardProvenance,
+) -> anyhow::Result<()> {
+    {
+        let _guard = persistence_lock().lock_recover();
+        let mut shared = shared_provenance.lock_recover();
+        *shared = provenance.clone();
+        drop(shared);
+        server.submit_op_for(
+            SYSTEM_ROLLOVER_USER_ID,
+            SYSTEM_ROLLOVER_CLIENT_OP_ID,
+            CanvasOp::Replace {
+                canvas: canvas.clone(),
+            },
+        );
+    }
     save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &canvas, &provenance).await
 }
 
@@ -313,19 +343,7 @@ pub async fn rollover_daily_snapshot_for_day(
 
         let blank = blank_canvas();
         let blank_provenance = ArtboardProvenance::default();
-        {
-            let mut shared = shared_provenance.lock_recover();
-            *shared = blank_provenance.clone();
-        }
-        server.submit_op_for(
-            SYSTEM_ROLLOVER_USER_ID,
-            SYSTEM_ROLLOVER_CLIENT_OP_ID,
-            CanvasOp::Replace {
-                canvas: blank.clone(),
-            },
-        );
-        save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &blank, &blank_provenance)
-            .await?;
+        restore_live_artboard(db, server, shared_provenance, blank, blank_provenance).await?;
         save_canvas_snapshot_for_key(db, &monthly_key, &archived.canvas, &archived.provenance)
             .await?;
         tracing::info!(board_key = %monthly_key, "saved monthly artboard snapshot");
@@ -383,50 +401,73 @@ fn flush_dirty_canvas(
     shared_provenance: &SharedArtboardProvenance,
     runtime: &tokio::runtime::Handle,
 ) -> bool {
-    let canvas = {
+    let (canvas, provenance, version) = {
+        let _guard = persistence_lock().lock_recover();
         let mut state = persist_state.lock_recover();
         if !state.dirty {
             return false;
         }
         state.dirty = false;
-        state.latest_canvas.clone()
+        let Some(canvas) = state.latest_canvas.clone() else {
+            return false;
+        };
+        (
+            canvas,
+            clone_shared_provenance(shared_provenance),
+            state.version,
+        )
     };
 
-    let Some(canvas) = canvas else {
-        return false;
-    };
-
-    let provenance = clone_shared_provenance(shared_provenance);
-    if let Err(error) = persist_canvas(runtime, db, &canvas, &provenance) {
-        tracing::error!(error = ?error, "failed to persist artboard snapshot");
-        let mut state = persist_state.lock_recover();
-        state.latest_canvas = Some(canvas);
-        state.dirty = true;
-        return true;
+    match persist_canvas(runtime, db, persist_state, version, &canvas, &provenance) {
+        Ok(true) => {}
+        Ok(false) => return true,
+        Err(error) => {
+            tracing::error!(error = ?error, "failed to persist artboard snapshot");
+            let mut state = persist_state.lock_recover();
+            if state.version == version {
+                state.latest_canvas = Some(canvas);
+            }
+            state.dirty = true;
+            return true;
+        }
     }
 
     tracing::debug!("persisted artboard snapshot");
     persist_state.lock_recover().dirty
 }
 
+fn persistence_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn persist_canvas(
     runtime: &tokio::runtime::Handle,
     db: &Db,
+    persist_state: &Arc<Mutex<PersistState>>,
+    version: u64,
     canvas: &Canvas,
     provenance: &ArtboardProvenance,
-) -> anyhow::Result<()> {
-    runtime.block_on(save_canvas_snapshot(db, canvas, provenance))
-}
-
-async fn save_canvas_snapshot(
-    db: &Db,
-    canvas: &Canvas,
-    provenance: &ArtboardProvenance,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let canvas = serde_json::to_value(canvas).context("failed to serialize artboard canvas")?;
     let provenance =
         serde_json::to_value(provenance).context("failed to serialize artboard provenance")?;
-    save_canvas_snapshot_value(db, Snapshot::MAIN_BOARD_KEY, canvas, provenance).await
+    let client = runtime.block_on(async {
+        db.get()
+            .await
+            .context("failed to get db client for artboard save")
+    })?;
+
+    let _guard = persistence_lock().lock_recover();
+    if persist_state.lock_recover().version != version {
+        return Ok(false);
+    }
+    runtime.block_on(async {
+        Snapshot::upsert(&client, Snapshot::MAIN_BOARD_KEY, canvas, provenance)
+            .await
+            .context("failed to upsert artboard snapshot")
+    })?;
+    Ok(true)
 }
 
 async fn save_canvas_snapshot_for_key(

@@ -1,65 +1,41 @@
-use super::mock::PlaceholderKind;
 use super::svc::GameKind;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum RoomsFilter {
     #[default]
     All,
-    Blackjack,
-    Poker,
-    Chess,
-    Battleship,
-    Tron,
+    Kind(GameKind),
 }
 
 impl RoomsFilter {
-    pub const ALL: [Self; 6] = [
-        Self::All,
-        Self::Blackjack,
-        Self::Poker,
-        Self::Chess,
-        Self::Battleship,
-        Self::Tron,
-    ];
-
     pub fn label(self) -> &'static str {
         match self {
             Self::All => "All",
-            Self::Blackjack => "Blackjack",
-            Self::Poker => "Poker",
-            Self::Chess => "Chess",
-            Self::Battleship => "Battleship",
-            Self::Tron => "Tron",
+            Self::Kind(GameKind::Blackjack) => "Blackjack",
+            Self::Kind(GameKind::Poker) => "Poker",
+            Self::Kind(GameKind::TicTacToe) => "Tic-Tac-Toe",
         }
     }
 
     pub fn matches_real(self, kind: GameKind) -> bool {
-        matches!(
-            (self, kind),
-            (Self::All, _) | (Self::Blackjack, GameKind::Blackjack)
-        )
-    }
-
-    pub fn matches_placeholder(self, kind: PlaceholderKind) -> bool {
-        matches!(
-            (self, kind),
-            (Self::All, _)
-                | (Self::Poker, PlaceholderKind::Poker)
-                | (Self::Chess, PlaceholderKind::Chess)
-                | (Self::Battleship, PlaceholderKind::Battleship)
-                | (Self::Tron, PlaceholderKind::Tron)
-        )
+        match self {
+            Self::All => true,
+            Self::Kind(filter_kind) => filter_kind == kind,
+        }
     }
 
     pub fn cycle(self, forward: bool) -> Self {
-        let idx = Self::ALL.iter().position(|f| *f == self).unwrap_or(0);
-        let len = Self::ALL.len();
+        let mut filters = Vec::with_capacity(GameKind::ALL.len() + 1);
+        filters.push(Self::All);
+        filters.extend(GameKind::ALL.iter().copied().map(Self::Kind));
+        let idx = filters.iter().position(|f| *f == self).unwrap_or(0);
+        let len = filters.len();
         let next = if forward {
             (idx + 1) % len
         } else {
             (idx + len - 1) % len
         };
-        Self::ALL[next]
+        filters[next]
     }
 }
 
@@ -69,21 +45,31 @@ mod tests {
 
     #[test]
     fn cycle_wraps_in_both_directions() {
-        assert_eq!(RoomsFilter::All.cycle(true), RoomsFilter::Blackjack);
-        assert_eq!(RoomsFilter::Tron.cycle(true), RoomsFilter::All);
-        assert_eq!(RoomsFilter::All.cycle(false), RoomsFilter::Tron);
+        assert_eq!(
+            RoomsFilter::All.cycle(true),
+            RoomsFilter::Kind(GameKind::Blackjack)
+        );
+        assert_eq!(
+            RoomsFilter::Kind(GameKind::TicTacToe).cycle(true),
+            RoomsFilter::All
+        );
+        assert_eq!(
+            RoomsFilter::All.cycle(false),
+            RoomsFilter::Kind(GameKind::TicTacToe)
+        );
     }
 
     #[test]
     fn all_matches_everything() {
         assert!(RoomsFilter::All.matches_real(GameKind::Blackjack));
-        assert!(RoomsFilter::All.matches_placeholder(PlaceholderKind::Poker));
-        assert!(RoomsFilter::All.matches_placeholder(PlaceholderKind::Chess));
+        assert!(RoomsFilter::All.matches_real(GameKind::Poker));
+        assert!(RoomsFilter::All.matches_real(GameKind::TicTacToe));
     }
 
     #[test]
-    fn blackjack_only_matches_blackjack() {
-        assert!(RoomsFilter::Blackjack.matches_real(GameKind::Blackjack));
-        assert!(!RoomsFilter::Blackjack.matches_placeholder(PlaceholderKind::Poker));
+    fn kind_filter_matches_only_that_kind() {
+        assert!(RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Blackjack));
+        assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Poker));
+        assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::TicTacToe));
     }
 }

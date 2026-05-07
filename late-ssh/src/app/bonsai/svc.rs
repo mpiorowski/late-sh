@@ -96,27 +96,10 @@ impl BonsaiService {
         let client = self.db.get().await?;
         let today = chrono::Utc::now().date_naive();
 
-        let tree = Tree::find_by_user_id(&client, user_id).await?;
-        let Some(tree) = tree else {
-            return Ok(false);
-        };
-        if !tree.is_alive {
+        if !Tree::water_and_add_growth_if_available(&client, user_id, today, unlimited).await? {
             return Ok(false);
         }
-        if !unlimited && tree.last_watered == Some(today) {
-            return Ok(false); // Already watered today
-        }
-
-        Tree::water(&client, user_id, today).await?;
         DailyCare::mark_watered(&client, user_id, today).await?;
-
-        // Grant growth points: base 10, bonus if consecutive day
-        let bonus = if let Some(last) = tree.last_watered {
-            if (today - last).num_days() == 1 { 5 } else { 0 }
-        } else {
-            0
-        };
-        Tree::add_growth(&client, user_id, 10 + bonus).await?;
 
         // Grant chips for watering
         late_core::models::chips::UserChips::add_bonus(

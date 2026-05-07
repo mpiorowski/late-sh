@@ -342,11 +342,17 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     if app.chat.discover_selected {
         return super::discover::input::handle_arrow(app, key);
     }
+    if app.chat.feeds_selected {
+        return super::feeds::input::handle_arrow(app, key);
+    }
     if app.chat.news_selected {
         return super::news::input::handle_arrow(app, key);
     }
     if app.chat.showcase_selected {
         return super::showcase::input::handle_arrow(app, key);
+    }
+    if app.chat.work_selected {
+        return super::work::input::handle_arrow(app, key);
     }
     handle_message_arrow(app, key)
 }
@@ -399,6 +405,18 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         return super::discover::input::handle_byte(app, byte);
     }
 
+    if app.chat.feeds_selected {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        return super::feeds::input::handle_byte(app, byte);
+    }
+
     if app.chat.news_selected {
         // Room-switch keys still work when a virtual room is selected.
         if is_next_room_key(byte) {
@@ -422,6 +440,18 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::showcase::input::handle_byte(app, byte);
+    }
+
+    if app.chat.work_selected {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        return super::work::input::handle_byte(app, byte);
     }
 
     if handle_message_action(app, byte) {

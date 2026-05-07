@@ -20,6 +20,7 @@ pub struct SidebarProps<'a> {
     pub game_selection: usize,
     pub is_playing_game: bool,
     pub visualizer: &'a Visualizer,
+    pub show_audio_shortcuts: bool,
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
     pub online_count: usize,
@@ -45,7 +46,7 @@ pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     .split(area);
 
     draw_clock_card(frame, layout[0], props.clock_text);
-    visualizer.render(frame, layout[1]);
+    visualizer.render(frame, layout[1], props.show_audio_shortcuts);
     draw_now_playing(frame, layout[2], now_playing, paired_client);
     draw_status(frame, layout[3], online_count, props.activity);
     crate::app::bonsai::ui::draw_bonsai(frame, layout[4], props.bonsai, props.audio_beat);

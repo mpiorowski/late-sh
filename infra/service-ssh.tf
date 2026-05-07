@@ -33,7 +33,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
       }
 
       spec {
-        termination_grace_period_seconds = 7200
+        termination_grace_period_seconds = 21600
 
         container {
           image = var.SSH_IMAGE_TAG
@@ -161,6 +161,15 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           env {
             name  = "LATE_ALLOWED_ORIGINS"
             value = "https://${var.DOMAIN}"
+          }
+          env {
+            name = "LATE_WEB_TUNNEL_TOKEN"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.web_tunnel_token.metadata[0].name
+                key  = "token"
+              }
+            }
           }
 
           # --- SSH ---

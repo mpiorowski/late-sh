@@ -3,22 +3,17 @@ use crate::app::{
     common::primitives::{Banner, Screen},
     input::{MouseEventKind, ParsedInput, sanitize_paste_markers},
     rooms::{
-        blackjack::settings::{BlackjackTableSettings, PACE_OPTIONS, STAKE_OPTIONS},
+        backend::{CreateModalAction, CreateRoomFlow, InputAction},
         filter::RoomsFilter,
+        svc::GameKind,
     },
     state::App,
 };
 
-const DISPLAY_NAME_MAX_LEN: usize = 48;
-const DEFAULT_BLACKJACK_TABLE_NAME: &str = "Blackjack Table";
 const SEARCH_QUERY_MAX_LEN: usize = 32;
-const CREATE_FIELD_COUNT: usize = 3;
-const CREATE_FIELD_NAME: usize = 0;
-const CREATE_FIELD_PACE: usize = 1;
-const CREATE_FIELD_STAKE: usize = 2;
 
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
-    if app.rooms_active_room.is_some() && !app.rooms_add_form_open {
+    if app.rooms_active_room.is_some() && app.rooms_create_flow.is_none() {
         match event {
             ParsedInput::Byte(byte) => return handle_active_room_key(app, *byte),
             ParsedInput::Char(ch) if ch.is_ascii() => {
@@ -41,8 +36,8 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         }
     }
 
-    if app.rooms_add_form_open {
-        return handle_create_form_event(app, event);
+    if app.rooms_create_flow.is_some() {
+        return handle_create_flow_event(app, event);
     }
 
     if app.rooms_search_active {
@@ -63,7 +58,7 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Char('n') | ParsedInput::Char('N') => {
-            open_create_form(app);
+            open_create_picker(app);
             true
         }
         ParsedInput::Char('d') | ParsedInput::Char('D') => {
@@ -90,79 +85,8 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     }
 }
 
-fn handle_create_form_event(app: &mut App, event: &ParsedInput) -> bool {
-    match event {
-        ParsedInput::Byte(b'\r' | b'\n') => {
-            submit_create_form(app);
-            true
-        }
-        ParsedInput::Byte(0x1B) => {
-            app.rooms_add_form_open = false;
-            true
-        }
-        ParsedInput::Byte(b'\t') => {
-            move_create_focus(app, 1);
-            true
-        }
-        ParsedInput::BackTab => {
-            move_create_focus(app, -1);
-            true
-        }
-        ParsedInput::Arrow(b'A') => {
-            move_create_focus(app, -1);
-            true
-        }
-        ParsedInput::Arrow(b'B') => {
-            move_create_focus(app, 1);
-            true
-        }
-        ParsedInput::Arrow(b'D') => {
-            adjust_create_selection(app, -1);
-            true
-        }
-        ParsedInput::Arrow(b'C') => {
-            adjust_create_selection(app, 1);
-            true
-        }
-        ParsedInput::Char('a' | 'A') if app.rooms_create_focus_index != CREATE_FIELD_NAME => {
-            adjust_create_selection(app, -1);
-            true
-        }
-        ParsedInput::Char('d' | 'D') if app.rooms_create_focus_index != CREATE_FIELD_NAME => {
-            adjust_create_selection(app, 1);
-            true
-        }
-        ParsedInput::Byte(0x08 | 0x7F) if app.rooms_create_focus_index == CREATE_FIELD_NAME => {
-            app.rooms_display_name_input.pop();
-            true
-        }
-        ParsedInput::Byte(0x17) if app.rooms_create_focus_index == CREATE_FIELD_NAME => {
-            app.rooms_display_name_input.clear();
-            true
-        }
-        ParsedInput::Char(ch) if app.rooms_create_focus_index == CREATE_FIELD_NAME => {
-            push_display_name_char(app, *ch);
-            true
-        }
-        ParsedInput::Byte(byte) if app.rooms_create_focus_index == CREATE_FIELD_NAME => {
-            if byte.is_ascii_graphic() || *byte == b' ' {
-                push_display_name_char(app, *byte as char);
-            }
-            true
-        }
-        ParsedInput::Paste(bytes) if app.rooms_create_focus_index == CREATE_FIELD_NAME => {
-            let pasted = String::from_utf8_lossy(bytes);
-            for ch in sanitize_paste_markers(&pasted).chars() {
-                push_display_name_char(app, ch);
-            }
-            true
-        }
-        _ => true,
-    }
-}
-
 pub fn handle_key(app: &mut App, byte: u8) {
-    if app.rooms_active_room.is_some() && !app.rooms_add_form_open {
+    if app.rooms_active_room.is_some() && app.rooms_create_flow.is_none() {
         handle_active_room_key(app, byte);
         return;
     }
@@ -175,7 +99,8 @@ pub fn handle_key(app: &mut App, byte: u8) {
 }
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
-    if app.rooms_add_form_open || app.rooms_active_room.is_some() || app.rooms_search_active {
+    if app.rooms_create_flow.is_some() || app.rooms_active_room.is_some() || app.rooms_search_active
+    {
         return false;
     }
 
@@ -248,8 +173,7 @@ fn handle_search_event(app: &mut App, event: &ParsedInput) -> bool {
 }
 
 fn handle_enter(app: &mut App) {
-    if app.rooms_add_form_open {
-        submit_create_form(app);
+    if app.rooms_create_flow.is_some() {
         return;
     }
 
@@ -259,44 +183,140 @@ fn handle_enter(app: &mut App) {
     enter_selected_room(app);
 }
 
-fn submit_create_form(app: &mut App) {
-    if !can_create_room(app.is_admin) {
-        app.banner = Some(Banner::error(
-            "Admin only: creating rooms is locked for now.",
-        ));
-        app.rooms_add_form_open = false;
+fn handle_create_flow_event(app: &mut App, event: &ParsedInput) -> bool {
+    if let Some(CreateRoomFlow::Picker { kind_index }) = app.rooms_create_flow.as_ref() {
+        return handle_create_picker_event(app, *kind_index, event);
+    }
+
+    let Some(CreateRoomFlow::Game { kind, modal }) = app.rooms_create_flow.as_mut() else {
+        return false;
+    };
+    let kind = *kind;
+    let action = modal.handle_event(event);
+
+    match action {
+        CreateModalAction::Continue => true,
+        CreateModalAction::Cancel => {
+            app.rooms_create_flow = None;
+            true
+        }
+        CreateModalAction::Submit {
+            display_name,
+            settings,
+        } => {
+            submit_create_modal(app, kind, display_name, settings);
+            true
+        }
+    }
+}
+
+fn handle_create_picker_event(app: &mut App, kind_index: usize, event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::Byte(0x1B) => {
+            app.rooms_create_flow = None;
+            true
+        }
+        ParsedInput::Byte(b'\r' | b'\n') => {
+            open_selected_create_modal(app, kind_index);
+            true
+        }
+        ParsedInput::Arrow(b'A') | ParsedInput::Char('k' | 'K') => {
+            move_create_picker(app, -1);
+            true
+        }
+        ParsedInput::Arrow(b'B') | ParsedInput::Char('j' | 'J') => {
+            move_create_picker(app, 1);
+            true
+        }
+        ParsedInput::Char(ch) if ch.is_ascii_alphabetic() => {
+            let _ = open_create_modal_by_shortcut(app, *ch);
+            true
+        }
+        _ => true,
+    }
+}
+
+fn submit_create_modal(
+    app: &mut App,
+    game_kind: GameKind,
+    display_name: String,
+    settings: serde_json::Value,
+) {
+    if !can_create_room(app.is_admin, app.is_moderator, game_kind) {
+        app.banner = Some(Banner::error(&role_gate_message("create", game_kind)));
         return;
     }
 
-    let display_name = app.rooms_display_name_input.trim().to_string();
+    let display_name = display_name.trim().to_string();
     if display_name.is_empty() {
         app.banner = Some(Banner::error("Table name is required."));
         return;
     }
+    let slug_prefix = app.room_game_registry.slug_prefix(game_kind);
+    let label = app.room_game_registry.label(game_kind);
 
     app.rooms_service.create_game_room_task(
         app.user_id,
-        crate::app::rooms::svc::GameKind::Blackjack,
+        game_kind,
+        slug_prefix,
+        label,
         display_name,
-        selected_blackjack_settings(app),
+        settings,
     );
-    app.rooms_display_name_input.clear();
-    app.rooms_add_form_open = false;
+    app.rooms_create_flow = None;
 
-    app.banner = Some(Banner::success("Creating Blackjack table."));
+    app.banner = Some(Banner::success(&format!(
+        "Creating {} room.",
+        app.room_game_registry.label(game_kind)
+    )));
 }
 
-fn open_create_form(app: &mut App) {
-    if !can_create_room(app.is_admin) {
-        app.banner = Some(Banner::error(
-            "Admin only: creating rooms is locked for now.",
-        ));
+fn open_create_picker(app: &mut App) {
+    app.rooms_create_flow = Some(CreateRoomFlow::Picker { kind_index: 0 });
+}
+
+fn open_selected_create_modal(app: &mut App, kind_index: usize) {
+    let Some(kind) = app
+        .room_game_registry
+        .ordered_kinds()
+        .get(kind_index)
+        .copied()
+    else {
+        return;
+    };
+    if !can_create_room(app.is_admin, app.is_moderator, kind) {
+        app.banner = Some(Banner::error(&role_gate_message("create", kind)));
         return;
     }
-    app.rooms_add_form_open = true;
-    app.rooms_create_focus_index = CREATE_FIELD_NAME;
-    if app.rooms_display_name_input.trim().is_empty() {
-        app.rooms_display_name_input = DEFAULT_BLACKJACK_TABLE_NAME.to_string();
+    let modal = app.room_game_registry.open_create_modal(kind);
+    app.rooms_create_flow = Some(CreateRoomFlow::Game { kind, modal });
+}
+
+fn open_create_modal_by_shortcut(app: &mut App, ch: char) -> bool {
+    let target = ch.to_ascii_lowercase();
+    let Some((index, _)) = app
+        .room_game_registry
+        .ordered_kinds()
+        .iter()
+        .enumerate()
+        .find(|(_, kind)| {
+            app.room_game_registry
+                .label(**kind)
+                .chars()
+                .next()
+                .is_some_and(|label_ch| label_ch.to_ascii_lowercase() == target)
+        })
+    else {
+        return false;
+    };
+    open_selected_create_modal(app, index);
+    true
+}
+
+fn move_create_picker(app: &mut App, delta: isize) {
+    let len = app.room_game_registry.ordered_kinds().len();
+    if let Some(CreateRoomFlow::Picker { kind_index }) = app.rooms_create_flow.as_mut() {
+        *kind_index = cycle_index(*kind_index, len, delta);
     }
 }
 
@@ -321,8 +341,8 @@ fn delete_selected_room(app: &mut App) {
 }
 
 fn handle_escape(app: &mut App) {
-    if app.rooms_add_form_open {
-        app.rooms_add_form_open = false;
+    if app.rooms_create_flow.is_some() {
+        app.rooms_create_flow = None;
         return;
     }
     if app.rooms_search_active {
@@ -353,54 +373,11 @@ fn enter_search(app: &mut App) {
     app.rooms_search_active = true;
 }
 
-fn move_create_focus(app: &mut App, delta: isize) {
-    app.rooms_create_focus_index =
-        cycle_index(app.rooms_create_focus_index, CREATE_FIELD_COUNT, delta);
-}
-
-fn adjust_create_selection(app: &mut App, delta: isize) {
-    match app.rooms_create_focus_index {
-        CREATE_FIELD_PACE => {
-            app.rooms_create_pace_index =
-                cycle_index(app.rooms_create_pace_index, PACE_OPTIONS.len(), delta);
-        }
-        CREATE_FIELD_STAKE => {
-            app.rooms_create_stake_index =
-                cycle_index(app.rooms_create_stake_index, STAKE_OPTIONS.len(), delta);
-        }
-        _ => {}
-    }
-}
-
 fn cycle_index(index: usize, len: usize, delta: isize) -> usize {
     if len == 0 {
         return 0;
     }
     (index as isize + delta).rem_euclid(len as isize) as usize
-}
-
-fn selected_blackjack_settings(app: &App) -> BlackjackTableSettings {
-    BlackjackTableSettings {
-        pace: PACE_OPTIONS
-            .get(app.rooms_create_pace_index)
-            .copied()
-            .unwrap_or_default(),
-        stake: STAKE_OPTIONS
-            .get(app.rooms_create_stake_index)
-            .copied()
-            .unwrap_or(STAKE_OPTIONS[0]),
-    }
-    .normalized()
-}
-
-fn push_display_name_char(app: &mut App, ch: char) {
-    if !is_input_char(ch) {
-        return;
-    }
-    if app.rooms_display_name_input.chars().count() >= DISPLAY_NAME_MAX_LEN {
-        return;
-    }
-    app.rooms_display_name_input.push(ch);
 }
 
 fn push_search_char(app: &mut App, ch: char) {
@@ -469,48 +446,38 @@ fn enter_selected_room(app: &mut App) {
 }
 
 pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListItem) -> bool {
-    if !can_enter_room(app.is_admin, app.is_moderator) {
-        app.banner = Some(Banner::error("Rooms are locked for now."));
+    if !can_enter_room(app.is_admin, app.is_moderator, room.game_kind) {
+        app.banner = Some(Banner::error(&role_gate_message("enter", room.game_kind)));
         return false;
     }
 
     app.chat.join_game_room_chat(room.chat_room_id);
     app.chat.request_room_tail(room.chat_room_id);
-    if matches!(room.game_kind, crate::app::rooms::svc::GameKind::Blackjack) {
-        app.rooms_service.touch_room_task(room.id);
-        if !can_reuse_blackjack_state(app, room.id) {
-            let svc = app
-                .blackjack_table_manager
-                .get_or_create(room.id, room.blackjack_settings.clone());
-            app.blackjack_state = Some(crate::app::rooms::blackjack::state::State::new(
-                svc,
-                app.user_id,
-                app.chip_balance,
-            ));
-        }
+    app.rooms_service.touch_room_task(room.id);
+    let same_room = app
+        .active_room_game
+        .as_ref()
+        .is_some_and(|game| game.room_id() == room.id);
+    if !same_room {
+        app.active_room_game = Some(app.room_game_registry.enter(
+            &room,
+            app.user_id,
+            app.chip_balance,
+        ));
     }
     app.rooms_last_active_room_id = Some(room.id);
     app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
     app.rooms_active_room = Some(room);
-    app.rooms_add_form_open = false;
+    app.rooms_create_flow = None;
     true
-}
-
-fn can_reuse_blackjack_state(app: &App, room_id: uuid::Uuid) -> bool {
-    app.blackjack_state.is_some()
-        && app
-            .rooms_active_room
-            .as_ref()
-            .is_some_and(|active_room| active_room.id == room_id)
 }
 
 fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
     };
-    let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
-    touch_active_room_activity(app, game_kind);
+    touch_active_room_activity(app);
 
     if byte == b'`' {
         app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
@@ -534,24 +501,15 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    match game_kind {
-        crate::app::rooms::svc::GameKind::Blackjack => {
-            let Some(blackjack_state) = &mut app.blackjack_state else {
-                return false;
-            };
-            let byte = if matches!(byte, b'q' | b'Q') {
-                0x1B
-            } else {
-                byte
-            };
-            match crate::app::rooms::blackjack::input::handle_key(blackjack_state, byte) {
-                crate::app::rooms::blackjack::input::InputAction::Ignored => false,
-                crate::app::rooms::blackjack::input::InputAction::Handled => true,
-                crate::app::rooms::blackjack::input::InputAction::Leave => {
-                    app.rooms_active_room = None;
-                    true
-                }
-            }
+    let Some(active_room_game) = &mut app.active_room_game else {
+        return false;
+    };
+    match active_room_game.handle_key(byte) {
+        InputAction::Ignored => false,
+        InputAction::Handled => true,
+        InputAction::Leave => {
+            app.rooms_active_room = None;
+            true
         }
     }
 }
@@ -560,9 +518,13 @@ fn handle_active_room_arrow(app: &mut App, key: u8) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
     };
-    let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
-    touch_active_room_activity(app, game_kind);
+    touch_active_room_activity(app);
+    if let Some(game) = app.active_room_game.as_mut()
+        && game.handle_arrow(key)
+    {
+        return true;
+    }
     crate::app::chat::input::handle_message_arrow_in_room(app, chat_room_id, key)
 }
 
@@ -570,20 +532,15 @@ fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
     };
-    let game_kind = room.game_kind;
     let chat_room_id = room.chat_room_id;
-    touch_active_room_activity(app, game_kind);
+    touch_active_room_activity(app);
     crate::app::chat::input::handle_scroll_in_room(app, chat_room_id, delta);
     true
 }
 
-fn touch_active_room_activity(app: &mut App, game_kind: crate::app::rooms::svc::GameKind) {
-    match game_kind {
-        crate::app::rooms::svc::GameKind::Blackjack => {
-            if let Some(blackjack_state) = &app.blackjack_state {
-                blackjack_state.touch_activity();
-            }
-        }
+fn touch_active_room_activity(app: &mut App) {
+    if let Some(active_room_game) = &app.active_room_game {
+        active_room_game.touch_activity();
     }
 }
 
@@ -622,28 +579,29 @@ fn should_route_active_room_chat_key(app: &App, chat_room_id: uuid::Uuid, byte: 
         )
 }
 
-fn can_create_room(is_admin: bool) -> bool {
-    is_admin
-}
-
 fn can_delete_room(is_admin: bool) -> bool {
     is_admin
 }
 
-fn can_enter_room(is_admin: bool, is_moderator: bool) -> bool {
-    let _ = (is_admin, is_moderator);
-    true
+fn can_create_room(is_admin: bool, is_moderator: bool, game_kind: GameKind) -> bool {
+    !matches!(game_kind, GameKind::Poker) || is_admin || is_moderator
+}
+
+fn can_enter_room(is_admin: bool, is_moderator: bool, game_kind: GameKind) -> bool {
+    !matches!(game_kind, GameKind::Poker) || is_admin || is_moderator
+}
+
+fn role_gate_message(action: &'static str, game_kind: GameKind) -> String {
+    match game_kind {
+        GameKind::Poker => format!("Only admins and moderators can {action} Poker rooms."),
+        _ => format!("You cannot {action} this room."),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{can_create_room, can_delete_room, can_enter_room};
-
-    #[test]
-    fn room_creation_stays_admin_only() {
-        assert!(can_create_room(true));
-        assert!(!can_create_room(false));
-    }
+    use crate::app::rooms::svc::GameKind;
 
     #[test]
     fn room_deletion_stays_admin_only() {
@@ -652,10 +610,27 @@ mod tests {
     }
 
     #[test]
-    fn room_entry_allows_all_users() {
-        assert!(can_enter_room(true, false));
-        assert!(can_enter_room(false, true));
-        assert!(can_enter_room(true, true));
-        assert!(can_enter_room(false, false));
+    fn blackjack_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(false, false, GameKind::Blackjack));
+        assert!(can_enter_room(false, false, GameKind::Blackjack));
+    }
+
+    #[test]
+    fn tictactoe_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(false, false, GameKind::TicTacToe));
+        assert!(can_enter_room(false, false, GameKind::TicTacToe));
+    }
+
+    #[test]
+    fn poker_creation_and_entry_require_admin_or_moderator() {
+        assert!(can_create_room(true, false, GameKind::Poker));
+        assert!(can_create_room(false, true, GameKind::Poker));
+        assert!(can_create_room(true, true, GameKind::Poker));
+        assert!(!can_create_room(false, false, GameKind::Poker));
+
+        assert!(can_enter_room(true, false, GameKind::Poker));
+        assert!(can_enter_room(false, true, GameKind::Poker));
+        assert!(can_enter_room(true, true, GameKind::Poker));
+        assert!(!can_enter_room(false, false, GameKind::Poker));
     }
 }

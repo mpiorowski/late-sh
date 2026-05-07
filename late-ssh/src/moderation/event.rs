@@ -15,6 +15,19 @@ pub enum ModerationEvent {
         reason: String,
         notified_sessions: usize,
     },
+    RoomRenamed {
+        actor_user_id: Uuid,
+        room_id: Uuid,
+        old_slug: String,
+        new_slug: String,
+    },
+    UserRenamed {
+        actor_user_id: Uuid,
+        target_user_id: Uuid,
+        old_username: String,
+        new_username: String,
+        active_user_updated: bool,
+    },
     ServerUserAction {
         actor_user_id: Uuid,
         target_user_id: Uuid,
@@ -31,6 +44,12 @@ pub enum ModerationEvent {
         expires_at: Option<DateTime<Utc>>,
         reason: String,
         notified_sessions: usize,
+    },
+    ArtboardRestored {
+        actor_user_id: Uuid,
+        source_key: String,
+        backup_key: Option<String>,
+        reason: String,
     },
     RoleAction {
         actor_user_id: Uuid,

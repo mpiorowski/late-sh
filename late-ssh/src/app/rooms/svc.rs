@@ -4,12 +4,11 @@ use late_core::{
     db::Db,
     models::{chat_room_member::ChatRoomMember, game_room::GameRoom},
 };
+use serde_json::Value;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::ai::ghost::DEALER_FINGERPRINT;
-
-use super::blackjack::settings::BlackjackTableSettings;
 
 pub use late_core::models::game_room::GameKind;
 
@@ -38,7 +37,7 @@ pub struct RoomListItem {
     pub slug: String,
     pub display_name: String,
     pub status: String,
-    pub blackjack_settings: BlackjackTableSettings,
+    pub settings: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -65,18 +64,6 @@ pub enum RoomsEvent {
     },
 }
 
-pub(crate) fn game_kind_label(game_kind: GameKind) -> &'static str {
-    match game_kind {
-        GameKind::Blackjack => "Blackjack",
-    }
-}
-
-fn game_kind_slug_prefix(game_kind: GameKind) -> &'static str {
-    match game_kind {
-        GameKind::Blackjack => "bj",
-    }
-}
-
 impl TryFrom<GameRoom> for RoomListItem {
     type Error = anyhow::Error;
 
@@ -88,7 +75,7 @@ impl TryFrom<GameRoom> for RoomListItem {
             slug: room.slug,
             display_name: room.display_name,
             status: room.status,
-            blackjack_settings: BlackjackTableSettings::from_json(&room.settings),
+            settings: room.settings,
         })
     }
 }
@@ -177,13 +164,22 @@ impl RoomsService {
         &self,
         user_id: Uuid,
         game_kind: GameKind,
+        slug_prefix: &'static str,
+        label: &'static str,
         display_name: String,
-        settings: BlackjackTableSettings,
+        settings: Value,
     ) {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc
-                .create_game_room(user_id, game_kind, &display_name, settings)
+                .create_game_room(
+                    user_id,
+                    game_kind,
+                    slug_prefix,
+                    label,
+                    &display_name,
+                    settings,
+                )
                 .await
             {
                 Ok(room) => {
@@ -216,8 +212,10 @@ impl RoomsService {
         &self,
         user_id: Uuid,
         game_kind: GameKind,
+        slug_prefix: &str,
+        label: &str,
         display_name: &str,
-        settings: BlackjackTableSettings,
+        settings: Value,
     ) -> anyhow::Result<GameRoom> {
         let client = self.db.get().await?;
         let existing_count = count_open_rooms_created_by(&client, user_id, game_kind).await?;
@@ -225,17 +223,17 @@ impl RoomsService {
             anyhow::bail!(
                 "table limit reached: max {} open {} tables per user",
                 MAX_TABLES_PER_USER,
-                game_kind_label(game_kind)
+                label
             );
         }
 
-        let slug = generate_room_slug(game_kind);
+        let slug = generate_room_slug(slug_prefix);
         let room = GameRoom::create_with_chat_room(
             &client,
             game_kind,
             &slug,
             display_name,
-            settings.to_json(),
+            settings,
             Some(user_id),
         )
         .await?;
@@ -311,9 +309,9 @@ async fn touch_room_activity(client: &tokio_postgres::Client, room_id: Uuid) -> 
     Ok(())
 }
 
-fn generate_room_slug(game_kind: GameKind) -> String {
+fn generate_room_slug(slug_prefix: &str) -> String {
     let id = Uuid::now_v7().simple().to_string();
-    format!("{}-{}", game_kind_slug_prefix(game_kind), &id[..12])
+    format!("{}-{}", slug_prefix, &id[..12])
 }
 
 fn room_create_error_message(error: &anyhow::Error) -> String {

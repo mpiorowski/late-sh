@@ -9,29 +9,32 @@ use ratatui::{
 use super::state::{BOARD_HEIGHT, BOARD_WIDTH, PieceKind, State};
 use crate::app::common::theme;
 use crate::app::games::ui::{
-    centered_rect, draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint,
+    GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
 };
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
-    let info_lines = vec![
-        info_tagline("Endless falling blocks. Speed rises as you survive."),
-        Line::from(""),
-        info_label_value("Score", state.score.to_string(), theme::AMBER_GLOW()),
-        info_label_value("Best", state.best_score.to_string(), theme::SUCCESS()),
-        info_label_value("Lines", state.lines.to_string(), theme::TEXT_BRIGHT()),
-        info_label_value("Level", state.level.to_string(), theme::TEXT_BRIGHT()),
-        info_label_value("Next", state.next.name().to_string(), theme::AMBER_DIM()),
-        Line::from(""),
-        key_hint("h/l or ←/→", "move"),
-        key_hint("j or ↓", "soft drop"),
-        key_hint("k or ↑", "rotate"),
-        key_hint("Space", "hard drop"),
-        key_hint("p", "pause"),
-        key_hint("r", "restart"),
-        key_hint("Esc", "exit"),
-    ];
+    let bottom = GameBottomBar {
+        status: status_line(vec![
+            ("score", state.score.to_string(), theme::AMBER_GLOW()),
+            ("best", state.best_score.to_string(), theme::SUCCESS()),
+            ("lines", state.lines.to_string(), theme::TEXT_BRIGHT()),
+            ("level", state.level.to_string(), theme::TEXT_BRIGHT()),
+            ("next", state.next.name().to_string(), theme::AMBER_DIM()),
+        ]),
+        keys: keys_line(vec![
+            ("h/l", "move"),
+            ("k", "rotate"),
+            ("j", "soft"),
+            ("Space", "hard drop"),
+            ("p", "pause"),
+            ("r", "restart"),
+            ("`", "dashboard"),
+            ("Esc", "exit"),
+        ]),
+        tip: None,
+    };
 
-    let board_area = draw_game_frame(frame, area, "Tetris", info_lines, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "Tetris", bottom, show_sidebar);
     let board_rect = centered_rect(
         board_area,
         24.min(board_area.width),

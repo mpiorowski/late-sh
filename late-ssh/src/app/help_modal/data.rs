@@ -195,7 +195,21 @@ pub fn chat_help_lines() -> Vec<String> {
         "  Composer fields    title (≤120) · url · tags (comma-sep, ≤8) · description (≤800)",
         "  Tab / Shift+Tab    cycle composer fields",
         "  Enter              submit",
-        "  Alt+Enter          newline (description only)",
+        "  Alt+Enter / Ctrl+J newline (description only)",
+        "  Esc                cancel compose",
+        "",
+        "Work room",
+        "  A synthetic room where users post one work profile.",
+        "  j / k              navigate work profiles",
+        "  Enter / c          copy selected profile summary",
+        "  i                  create/edit your own profile",
+        "  e                  edit your own profile (admin: any)",
+        "  d                  delete your own profile (admin: any)",
+        "  Fields             headline, status, type, location, contact, links, skills, summary",
+        "  Status             open, casual, or not-looking",
+        "  Tab / Shift+Tab    cycle composer fields",
+        "  Enter              submit",
+        "  Alt+Enter          newline (summary only)",
         "  Esc                cancel compose",
     ]
     .into_iter()
@@ -230,7 +244,7 @@ fn overview_lines() -> Vec<String> {
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "",
-        "Dashboard",
+        "Dashboard / Chat",
         "  P                 show browser pairing QR",
         "  B                 open CLI install / BUILD SOURCE modal",
         "",
@@ -334,7 +348,6 @@ fn arcade_help_lines() -> Vec<String> {
         "Games in rotation",
         "  High score: 2048, Tetris",
         "  Daily: Sudoku, Nonograms, Minesweeper, Solitaire",
-        "  Multiplayer: Blackjack (admin-gated)",
         "",
         "Hub controls",
         "  j / k             browse games",
@@ -531,7 +544,7 @@ Don't trust the install script? Build from source:
 
 Option 2: Browser pairing
 
-On the Dashboard, press `P` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
+On the Dashboard or Chat screen, press `P` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
 
 Both options give you:
   m = mute | +/- = volume | visualizer in the sidebar

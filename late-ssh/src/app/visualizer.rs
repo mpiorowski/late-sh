@@ -67,7 +67,7 @@ impl Visualizer {
         self.beat = (self.beat * 0.9).max(0.0);
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, show_audio_shortcuts: bool) {
         let border = if self.has_viz {
             theme::BORDER_ACTIVE()
         } else {
@@ -88,7 +88,7 @@ impl Visualizer {
         if !self.has_viz {
             let dim = Style::default().fg(theme::TEXT_DIM());
             let key = Style::default().fg(theme::AMBER());
-            let lines = vec![
+            let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled("No audio paired", dim)),
                 Line::from(""),
@@ -97,15 +97,19 @@ impl Visualizer {
                     Span::styled("/music", key),
                     Span::styled(" in chat", dim),
                 ]),
-                Line::from(""),
-                Line::from(Span::styled("On dashboard:", dim)),
-                Line::from(vec![
-                    Span::styled("B", key),
-                    Span::styled(" cli  ", dim),
-                    Span::styled("P", key),
-                    Span::styled(" web", dim),
-                ]),
             ];
+            if show_audio_shortcuts {
+                lines.extend([
+                    Line::from(""),
+                    Line::from(Span::styled("Dashboard/chat:", dim)),
+                    Line::from(vec![
+                        Span::styled("B", key),
+                        Span::styled(" cli  ", dim),
+                        Span::styled("P", key),
+                        Span::styled(" web", dim),
+                    ]),
+                ]);
+            }
             frame.render_widget(Paragraph::new(lines), inner);
             return;
         }
@@ -203,6 +207,48 @@ impl Visualizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn render_disconnected(show_audio_shortcuts: bool) -> String {
+        let width = 24;
+        let height = 10;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let viz = Visualizer::new();
+
+        terminal
+            .draw(|frame| viz.render(frame, Rect::new(0, 0, width, height), show_audio_shortcuts))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let mut rendered = String::new();
+        for y in 0..height {
+            for x in 0..width {
+                rendered.push_str(buffer[(x, y)].symbol());
+            }
+            rendered.push('\n');
+        }
+        rendered
+    }
+
+    #[test]
+    fn disconnected_visualizer_can_show_audio_shortcuts() {
+        let rendered = render_disconnected(true);
+
+        assert!(rendered.contains("Dashboard/chat:"));
+        assert!(rendered.contains("B cli"));
+        assert!(rendered.contains("P web"));
+    }
+
+    #[test]
+    fn disconnected_visualizer_can_hide_audio_shortcuts() {
+        let rendered = render_disconnected(false);
+
+        assert!(rendered.contains("No audio paired"));
+        assert!(!rendered.contains("Dashboard/chat:"));
+        assert!(!rendered.contains("B cli"));
+        assert!(!rendered.contains("P web"));
+    }
 
     #[test]
     fn resample_same_size() {

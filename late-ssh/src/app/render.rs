@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear},
 };
 
-use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::leaderboard::{DailyCompletionStatus, DailyGame, LeaderboardData};
 
 use super::{
     artboard, bonsai, chat,
@@ -88,17 +88,45 @@ fn dashboard_header_enabled(
     }
 }
 
+fn dashboard_daily_statuses(
+    completion: &DailyCompletionStatus,
+    streak: u32,
+) -> [dashboard::ui::DashboardDailyStatus; 4] {
+    [
+        dashboard::ui::DashboardDailyStatus {
+            game: DailyGame::Sudoku,
+            completed_today: completion.completed(DailyGame::Sudoku),
+            launch_key: 's',
+            streak,
+        },
+        dashboard::ui::DashboardDailyStatus {
+            game: DailyGame::Nonogram,
+            completed_today: completion.completed(DailyGame::Nonogram),
+            launch_key: 'n',
+            streak,
+        },
+        dashboard::ui::DashboardDailyStatus {
+            game: DailyGame::Solitaire,
+            completed_today: completion.completed(DailyGame::Solitaire),
+            launch_key: 'o',
+            streak,
+        },
+        dashboard::ui::DashboardDailyStatus {
+            game: DailyGame::Minesweeper,
+            completed_today: completion.completed(DailyGame::Minesweeper),
+            launch_key: 'm',
+            streak,
+        },
+    ]
+}
+
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
-    rooms_add_form_open: bool,
-    rooms_display_name_input: &'a str,
-    rooms_create_focus_index: usize,
-    rooms_create_pace_index: usize,
-    rooms_create_stake_index: usize,
+    rooms_create_flow: Option<&'a crate::app::rooms::backend::CreateRoomFlow>,
     rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
     rooms_selected_index: usize,
     rooms_active_room: Option<&'a crate::app::rooms::svc::RoomListItem>,
@@ -106,10 +134,8 @@ struct DrawContext<'a> {
     rooms_search_active: bool,
     rooms_search_query: &'a str,
     rooms_usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
-    rooms_blackjack_snapshots: &'a std::collections::HashMap<
-        uuid::Uuid,
-        crate::app::rooms::blackjack::state::BlackjackSnapshot,
-    >,
+    room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
+    active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::games::tetris::state::State,
@@ -117,7 +143,6 @@ struct DrawContext<'a> {
     nonogram_state: &'a crate::app::games::nonogram::state::State,
     solitaire_state: &'a crate::app::games::solitaire::state::State,
     minesweeper_state: &'a crate::app::games::minesweeper::state::State,
-    blackjack_state: Option<&'a crate::app::rooms::blackjack::state::State>,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
@@ -206,13 +231,6 @@ impl App {
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
         );
-        let show_dashboard_room_showcases = if self.show_settings {
-            self.settings_modal_state
-                .draft()
-                .show_dashboard_room_showcases
-        } else {
-            self.profile_state.profile().show_dashboard_room_showcases
-        };
         let show_games_sidebar = games_sidebar_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_games_sidebar,
@@ -240,7 +258,31 @@ impl App {
         let message_reactions = self.chat.message_reactions();
         let dashboard_active_room = self.dashboard_active_room_id();
         let dashboard_strip_pins = self.dashboard_strip_pins();
-        let rooms_blackjack_snapshots = self.blackjack_table_manager.table_snapshots();
+        let rooms_blackjack_snapshots = self.room_game_registry.blackjack().table_snapshots();
+        let online_count = self
+            .active_users
+            .as_ref()
+            .map(|active_users| active_users.lock_recover().len())
+            .unwrap_or(0);
+        let dashboard_daily_completion = self
+            .leaderboard
+            .user_daily_statuses
+            .get(&self.user_id)
+            .cloned()
+            .unwrap_or_default();
+        let dashboard_daily_streak = self
+            .leaderboard
+            .user_streaks
+            .get(&self.user_id)
+            .copied()
+            .unwrap_or(0);
+        let dashboard_daily_statuses =
+            dashboard_daily_statuses(&dashboard_daily_completion, dashboard_daily_streak);
+        let dashboard_cycle_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let dashboard_wire_articles = self.chat.news.all_articles();
         let dashboard_messages = dashboard_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -253,10 +295,12 @@ impl App {
             show_header: show_dashboard_header,
             favorites_strip: dashboard_strip_pins.as_deref(),
             pinned_messages: self.chat.pinned_messages(),
-            show_room_showcases: show_dashboard_room_showcases,
             rooms_snapshot: &self.rooms_snapshot,
             blackjack_snapshots: &rooms_blackjack_snapshots,
             blackjack_prefix_armed: self.dashboard_blackjack_prefix_armed,
+            daily_statuses: &dashboard_daily_statuses,
+            wire_news_articles: dashboard_wire_articles,
+            dashboard_cycle_secs,
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
@@ -284,6 +328,12 @@ impl App {
             selected_index: self.chat.news.selected_index(),
             marker_read_at: self.chat.news.marker_read_at(),
         };
+        let feeds_view = chat::feeds::ui::FeedListView {
+            entries: self.chat.feeds.all_entries(),
+            selected_index: self.chat.feeds.selected_index(),
+            has_feeds: self.chat.feeds.has_feeds(),
+            marker_read_at: self.chat.feeds.marker_read_at(),
+        };
         let discover_view = chat::discover::ui::DiscoverListView {
             items: self.chat.discover.all_items(),
             selected_index: self.chat.discover.selected_index(),
@@ -303,7 +353,25 @@ impl App {
         };
         let showcase_unread_count = self.chat.showcase.unread_count();
         let showcase_composing = self.chat.showcase.composing();
+        let web_base_url = self
+            .connect_url
+            .rsplit_once('/')
+            .map_or(&*self.connect_url, |p| p.0);
+        let work_view = chat::work::ui::WorkListView {
+            items: self.chat.work.all_items(),
+            selected_index: self.chat.work.selected_index(),
+            current_user_id: self.user_id,
+            is_admin: self.chat.work.is_admin(),
+            marker_read_at: self.chat.work.marker_read_at(),
+            profile_base_url: web_base_url,
+        };
+        let work_unread_count = self.chat.work.unread_count();
+        let work_composing = self.chat.work.composing();
         let chat_view = chat::ui::ChatRenderInput {
+            feeds_selected: self.chat.feeds_selected,
+            feeds_processing: self.chat.feeds.processing(),
+            feeds_unread_count: self.chat.feeds.unread_count(),
+            feeds_view,
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),
             news_view,
@@ -343,6 +411,11 @@ impl App {
             showcase_view,
             showcase_state: Some(&self.chat.showcase),
             showcase_composing,
+            work_selected: self.chat.work_selected,
+            work_unread_count,
+            work_view,
+            work_state: Some(&self.chat.work),
+            work_composing,
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
@@ -371,11 +444,6 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                 });
-        let online_count = self
-            .active_users
-            .as_ref()
-            .map(|active_users| active_users.lock_recover().len())
-            .unwrap_or(0);
         let terminal = &mut self.terminal;
 
         terminal
@@ -390,11 +458,7 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
-                        rooms_add_form_open: self.rooms_add_form_open,
-                        rooms_display_name_input: self.rooms_display_name_input.as_str(),
-                        rooms_create_focus_index: self.rooms_create_focus_index,
-                        rooms_create_pace_index: self.rooms_create_pace_index,
-                        rooms_create_stake_index: self.rooms_create_stake_index,
+                        rooms_create_flow: self.rooms_create_flow.as_ref(),
                         rooms_snapshot: &self.rooms_snapshot,
                         rooms_selected_index: self.rooms_selected_index,
                         rooms_active_room: self.rooms_active_room.as_ref(),
@@ -402,7 +466,8 @@ impl App {
                         rooms_search_active: self.rooms_search_active,
                         rooms_search_query: self.rooms_search_query.as_str(),
                         rooms_usernames: chat_usernames,
-                        rooms_blackjack_snapshots: &rooms_blackjack_snapshots,
+                        room_game_registry: &self.room_game_registry,
+                        active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -410,7 +475,6 @@ impl App {
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
-                        blackjack_state: self.blackjack_state.as_ref(),
                         dartboard_state: self.dartboard_state.as_ref(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
@@ -635,22 +699,18 @@ impl App {
                 frame,
                 content_area,
                 crate::app::rooms::ui::RoomsPageView {
-                    add_form_open: ctx.rooms_add_form_open,
-                    display_name: ctx.rooms_display_name_input,
-                    create_focus_index: ctx.rooms_create_focus_index,
-                    create_pace_index: ctx.rooms_create_pace_index,
-                    create_stake_index: ctx.rooms_create_stake_index,
+                    create_flow: ctx.rooms_create_flow,
                     snapshot: ctx.rooms_snapshot,
                     selected_index: ctx.rooms_selected_index,
                     active_room: ctx.rooms_active_room,
-                    blackjack_state: ctx.blackjack_state,
+                    active_room_game: ctx.active_room_game,
+                    room_game_registry: ctx.room_game_registry,
                     is_admin: ctx.is_admin,
                     is_moderator: ctx.is_moderator,
                     filter: ctx.rooms_filter,
                     search_active: ctx.rooms_search_active,
                     search_query: ctx.rooms_search_query,
                     usernames: ctx.rooms_usernames,
-                    blackjack_snapshots: ctx.rooms_blackjack_snapshots,
                     active_room_chat: ctx.rooms_chat_view,
                 },
             ),
@@ -664,6 +724,7 @@ impl App {
                     game_selection: ctx.game_selection,
                     is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
+                    show_audio_shortcuts: matches!(screen, Screen::Dashboard | Screen::Chat),
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
                     online_count: ctx.online_count,
@@ -857,30 +918,23 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
     let bright = Style::default().fg(theme::TEXT_BRIGHT());
 
     if let Some(room) = ctx.rooms_active_room {
-        let Some(blackjack_state) = ctx.blackjack_state else {
-            return;
-        };
-        let snapshot = blackjack_state.snapshot();
-        let seated = snapshot
-            .seats
-            .iter()
-            .filter(|s| s.user_id.is_some())
-            .count();
-        let max = snapshot.seats.len();
-        let seat_label = match blackjack_state.seat_index() {
-            Some(i) => format!("seat {}", i + 1),
-            None => "viewer".to_string(),
-        };
-
         spans.push(Span::styled("· ", dim));
         spans.push(Span::styled(room.display_name.clone(), bright));
-        spans.push(Span::styled(" · ", dim));
-        spans.push(Span::styled(format!("{seated}/{max} seated"), dim));
-        spans.push(Span::styled(" · ", dim));
-        spans.push(Span::styled(seat_label, dim));
-        spans.push(Span::styled(" · ", dim));
-        spans.push(Span::styled("Bal ", dim));
-        spans.push(Span::styled(format!("{} ", snapshot.balance), amber));
+        if let Some(details) = ctx.active_room_game.and_then(|game| game.title_details()) {
+            if let Some(seated) = details.seated {
+                spans.push(Span::styled(" · ", dim));
+                spans.push(Span::styled(seated, dim));
+            }
+            if let Some(role) = details.role {
+                spans.push(Span::styled(" · ", dim));
+                spans.push(Span::styled(role, dim));
+            }
+            if let Some(balance) = details.balance {
+                spans.push(Span::styled(" · ", dim));
+                spans.push(Span::styled("Bal ", dim));
+                spans.push(Span::styled(format!("{} ", balance), amber));
+            }
+        }
     } else {
         let real_count = ctx.rooms_snapshot.rooms.len();
         let open = ctx

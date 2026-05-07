@@ -8,7 +8,8 @@ use ratatui::{
 
 use crate::app::common::theme;
 use crate::app::games::ui::{
-    centered_rect, draw_game_frame, draw_game_overlay, info_label_value, info_tagline, key_hint,
+    GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
+    tip_line,
 };
 
 use super::state::{self, Mode, State, adjacent_mine_count};
@@ -29,46 +30,38 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         .map(|i| if i < state.lives { '#' } else { '.' })
         .collect::<String>();
 
-    let info_lines = vec![
-        info_tagline("Clear the field. Three strikes and you're out."),
-        Line::from(""),
-        info_label_value("Mode", mode_str.to_string(), theme::AMBER_GLOW()),
-        info_label_value(
-            "Difficulty",
-            state.difficulty_key().to_string(),
-            theme::SUCCESS(),
-        ),
-        info_label_value("Lives", lives_str, lives_color(state.lives)),
-        info_label_value(
-            "Revealed",
-            format!("{}/{}", state.revealed_count(), state.safe_cell_count()),
-            theme::TEXT_BRIGHT(),
-        ),
-        info_label_value(
-            "Flags",
-            format!("{}/{}", state.accounted_mine_count(), state.mine_count()),
-            theme::AMBER(),
-        ),
-        Line::from(""),
-        key_hint("h/j/k/l", "move"),
-        key_hint("Space", "reveal"),
-        key_hint("f", "flag mine"),
-        key_hint("d/p/n", "daily/pers/new"),
-        key_hint("[ ]", "difficulty"),
-        key_hint("Esc", "exit"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Reveal tips",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
+    let bottom = GameBottomBar {
+        status: status_line(vec![
+            ("mode", mode_str.to_string(), theme::AMBER_GLOW()),
+            ("diff", state.difficulty_key().to_string(), theme::SUCCESS()),
+            ("lives", lives_str, lives_color(state.lives)),
+            (
+                "revealed",
+                format!("{}/{}", state.revealed_count(), state.safe_cell_count()),
+                theme::TEXT_BRIGHT(),
+            ),
+            (
+                "flags",
+                format!("{}/{}", state.accounted_mine_count(), state.mine_count()),
+                theme::AMBER(),
+            ),
+        ]),
+        keys: keys_line(vec![
+            ("h/j/k/l", "move"),
+            ("Space", "reveal"),
+            ("f", "flag"),
+            ("1-8", "chord"),
+            ("d/p/n", "daily/pers/new"),
+            ("[ ]", "diff"),
+            ("`", "dashboard"),
+            ("Esc", "exit"),
+        ]),
+        tip: Some(tip_line(
+            "On a revealed cell, press its number to open all adjacent unflagged cells.",
         )),
-        info_tagline("Press a matching number on"),
-        info_tagline("a revealed cell to open"),
-        info_tagline("all adjacent unflagged cells."),
-    ];
+    };
 
-    let board_area = draw_game_frame(frame, area, "Minesweeper", info_lines, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "Minesweeper", bottom, show_sidebar);
 
     let board_w = (diff.cols as u16) * 4 + 4; // row labels + borders
     let board_h = diff.rows as u16 + 3; // col headers + top/bottom borders

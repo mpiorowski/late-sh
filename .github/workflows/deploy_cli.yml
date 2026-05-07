@@ -5,7 +5,7 @@ on:
     types: [published]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ endsWith(github.ref, '-cli') }}
+  group: ${{ endsWith(github.ref, '-cli') && format('deploy-cli-{0}', github.event.release.prerelease && 'staging' || 'production') || format('{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: true
 
 permissions:

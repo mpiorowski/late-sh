@@ -15,13 +15,16 @@ use late_core::{
 use late_ssh::{
     api,
     app::ai::{ghost::GhostService, svc::AiService},
+    app::chat::feeds::svc::FeedService,
     app::chat::news::svc::ArticleService,
     app::chat::notifications::svc::NotificationService,
     app::chat::showcase::svc::ShowcaseService,
     app::chat::svc::ChatService,
+    app::chat::work::svc::WorkService,
     app::profile::svc::ProfileService,
     app::vote::svc::VoteService,
     config::Config,
+    moderation::service::ModerationInfra,
     session::SessionRegistry,
     ssh,
     state::{ActivityEvent, State},
@@ -134,7 +137,10 @@ async fn main() -> anyhow::Result<()> {
         .with_session_registry(session_registry.clone())
         .with_account_deletion_gate(account_deletions.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let feed_service = FeedService::new(db.clone());
+    feed_service.start_poll_task();
     let showcase_service = ShowcaseService::new(db.clone());
+    let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
         late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
     let tetris_service = late_ssh::app::games::tetris::svc::TetrisService::new(db.clone());
@@ -147,6 +153,15 @@ async fn main() -> anyhow::Result<()> {
             chip_service.clone(),
             late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
         );
+    let tictactoe_table_manager =
+        late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new();
+    let poker_table_manager =
+        late_ssh::app::rooms::poker::manager::PokerTableManager::new(chip_service.clone());
+    let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
+        blackjack_table_manager.clone(),
+        poker_table_manager,
+        tictactoe_table_manager,
+    );
     let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
         db.clone(),
         activity_tx.clone(),
@@ -186,6 +201,11 @@ async fn main() -> anyhow::Result<()> {
         initial_dartboard.map(|snapshot| snapshot.canvas),
         dartboard_provenance.clone(),
     );
+    let chat_service = chat_service.with_moderation_infra(
+        ModerationInfra::default()
+            .with_force_admin(config.force_admin)
+            .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone()),
+    );
     let leaderboard_service =
         late_ssh::app::games::leaderboard::svc::LeaderboardService::new(db.clone());
     let nonogram_library = match late_ssh::app::games::nonogram::state::load_default_library() {
@@ -224,7 +244,9 @@ async fn main() -> anyhow::Result<()> {
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
         article_service,
+        feed_service,
         showcase_service,
+        work_service,
         profile_service,
         twenty_forty_eight_service,
         tetris_service,
@@ -237,6 +259,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service,
         rooms_service,
         blackjack_table_manager,
+        room_game_registry,
         dartboard_server,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),

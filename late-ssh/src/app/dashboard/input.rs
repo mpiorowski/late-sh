@@ -1,13 +1,20 @@
+use std::cmp::Reverse;
+
 use crate::app::{
-    chat,
+    chat::{self, state::RoomSlot},
     common::{
         cli_install,
         primitives::{Banner, Screen},
     },
+    dashboard::ui::{DASHBOARD_DAILY_CYCLE_SECONDS, wire_current_article},
     rooms::svc::GameKind,
-    state::{App, DashboardGameToggleTarget},
+    state::{
+        App, DashboardGameToggleTarget, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
+        GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
+    },
     vote,
 };
+use late_core::models::leaderboard::DailyGame;
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     let Some(room_id) = app.dashboard_active_room_id() else {
@@ -19,7 +26,16 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.dashboard_blackjack_prefix_armed {
         app.dashboard_blackjack_prefix_armed = false;
-        if let Some(slot) = blackjack_slot_for_key(byte) {
+        if let Some(slot) = dashboard_box_slot_for_key(byte) {
+            if slot == 1 {
+                return launch_current_dashboard_daily(app);
+            }
+            if slot == 2 {
+                return open_current_dashboard_wire_article(app);
+            }
+            if slot == 3 {
+                return open_announcements_room(app);
+            }
             return enter_blackjack_room_slot(app, slot);
         }
         // Any non-slot key disarms and continues through normal handling so
@@ -53,10 +69,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return enter_last_game_room(app);
     }
 
-    if byte == b'b'
-        && app.profile_state.profile().show_dashboard_room_showcases
-        && dashboard_blackjack_room_count(app) > 0
-    {
+    if byte == b'b' {
         app.dashboard_blackjack_prefix_armed = true;
         return true;
     }
@@ -132,23 +145,8 @@ pub(crate) fn open_browser_pairing_qr(app: &mut App) {
     app.show_web_chat_qr = true;
 }
 
-fn dashboard_blackjack_room_count(app: &App) -> usize {
-    app.rooms_snapshot
-        .rooms
-        .iter()
-        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
-        .count()
-}
-
 fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
-    let Some(room) = app
-        .rooms_snapshot
-        .rooms
-        .iter()
-        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
-        .nth(slot)
-        .cloned()
-    else {
+    let Some(room) = sorted_dashboard_blackjack_rooms(app).into_iter().nth(slot) else {
         return false;
     };
 
@@ -157,6 +155,44 @@ fn enter_blackjack_room_slot(app: &mut App, slot: usize) -> bool {
         true
     } else {
         false
+    }
+}
+
+fn sorted_dashboard_blackjack_rooms(app: &App) -> Vec<crate::app::rooms::svc::RoomListItem> {
+    let snapshots = app.room_game_registry.blackjack().table_snapshots();
+    let mut rooms: Vec<crate::app::rooms::svc::RoomListItem> = app
+        .rooms_snapshot
+        .rooms
+        .iter()
+        .filter(|room| matches!(room.game_kind, GameKind::Blackjack))
+        .cloned()
+        .collect();
+    rooms.sort_by_key(|room| {
+        let snapshot = snapshots.get(&room.id);
+        let occupied = snapshot
+            .map(|snap| {
+                snap.seats
+                    .iter()
+                    .filter(|seat| seat.user_id.is_some())
+                    .count()
+            })
+            .unwrap_or(0);
+        (
+            Reverse(occupied),
+            Reverse(blackjack_phase_priority(snapshot)),
+        )
+    });
+    rooms
+}
+
+fn blackjack_phase_priority(
+    snapshot: Option<&crate::app::rooms::blackjack::state::BlackjackSnapshot>,
+) -> u8 {
+    use crate::app::rooms::blackjack::state::Phase;
+    match snapshot.map(|snap| snap.phase) {
+        Some(Phase::PlayerTurn | Phase::DealerTurn) => 2,
+        Some(Phase::Betting) => 1,
+        _ => 0,
     }
 }
 
@@ -193,9 +229,125 @@ fn enter_last_game_room(app: &mut App) -> bool {
     true
 }
 
-pub(crate) fn blackjack_slot_for_key(byte: u8) -> Option<usize> {
+pub(crate) fn dashboard_box_slot_for_key(byte: u8) -> Option<usize> {
     match byte {
-        b'1'..=b'3' => Some((byte - b'1') as usize),
+        b'1'..=b'4' => Some((byte - b'1') as usize),
         _ => None,
+    }
+}
+
+fn launch_current_dashboard_daily(app: &mut App) -> bool {
+    let Some(game) = current_dashboard_daily_game(app) else {
+        app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
+        app.is_playing_game = false;
+        app.set_screen(Screen::Games);
+        app.banner = Some(Banner::success("All dailies complete."));
+        return true;
+    };
+
+    match game {
+        DailyGame::Sudoku => {
+            app.sudoku_state.show_daily();
+            app.game_selection = GAME_SELECTION_SUDOKU;
+        }
+        DailyGame::Nonogram => {
+            if !app.nonogram_state.has_puzzles() {
+                app.banner = Some(Banner::error("No nonogram packs loaded."));
+                return true;
+            }
+            app.nonogram_state.show_daily();
+            app.game_selection = GAME_SELECTION_NONOGRAMS;
+        }
+        DailyGame::Solitaire => {
+            app.solitaire_state.show_daily();
+            app.game_selection = GAME_SELECTION_SOLITAIRE;
+        }
+        DailyGame::Minesweeper => {
+            app.minesweeper_state.show_daily();
+            app.game_selection = GAME_SELECTION_MINESWEEPER;
+        }
+    }
+
+    app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
+    app.is_playing_game = true;
+    app.set_screen(Screen::Games);
+    true
+}
+
+fn current_dashboard_daily_game(app: &App) -> Option<DailyGame> {
+    let completion = app.leaderboard.user_daily_statuses.get(&app.user_id);
+    let unfinished: Vec<DailyGame> = [
+        DailyGame::Sudoku,
+        DailyGame::Nonogram,
+        DailyGame::Solitaire,
+        DailyGame::Minesweeper,
+    ]
+    .into_iter()
+    .filter(|game| !completion.is_some_and(|status| status.completed(*game)))
+    .collect();
+
+    if unfinished.is_empty() {
+        return None;
+    }
+
+    let idx = (dashboard_cycle_secs() / DASHBOARD_DAILY_CYCLE_SECONDS) as usize % unfinished.len();
+    unfinished.get(idx).copied()
+}
+
+fn open_current_dashboard_wire_article(app: &mut App) -> bool {
+    let articles = app.chat.news.all_articles();
+    let Some(item) = wire_current_article(articles, dashboard_cycle_secs()) else {
+        app.banner = Some(Banner::error("no headline to open"));
+        return true;
+    };
+    let article_id = item.article.id;
+
+    app.chat.close_overlay();
+    app.set_screen(Screen::Chat);
+    app.chat.select_news();
+    app.chat.news.select_article_by_id(article_id);
+    true
+}
+
+fn open_announcements_room(app: &mut App) -> bool {
+    let Some(room_id) = app
+        .chat
+        .rooms
+        .iter()
+        .find(|(room, _)| room.slug.as_deref() == Some("announcements"))
+        .map(|(room, _)| room.id)
+    else {
+        app.chat.request_list();
+        app.banner = Some(Banner::error("#announcements not loaded yet."));
+        return true;
+    };
+
+    app.chat.close_overlay();
+    app.chat.reset_composer();
+    app.chat.select_room_slot(RoomSlot::Room(room_id));
+    app.set_screen(Screen::Chat);
+    app.sync_visible_chat_room();
+    app.chat.request_list();
+    true
+}
+
+fn dashboard_cycle_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dashboard_box_slot_for_key;
+
+    #[test]
+    fn dashboard_box_slot_accepts_announcements_chord() {
+        assert_eq!(dashboard_box_slot_for_key(b'1'), Some(0));
+        assert_eq!(dashboard_box_slot_for_key(b'2'), Some(1));
+        assert_eq!(dashboard_box_slot_for_key(b'3'), Some(2));
+        assert_eq!(dashboard_box_slot_for_key(b'4'), Some(3));
+        assert_eq!(dashboard_box_slot_for_key(b'5'), None);
     }
 }

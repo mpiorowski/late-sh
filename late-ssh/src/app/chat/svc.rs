@@ -34,7 +34,7 @@ use crate::authz::{Caps, Permissions, Tier};
 use crate::metrics;
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::service::{
-    ModerationService, ensure_message_permission, target_tier_for_user_id,
+    ModerationInfra, ModerationService, ensure_message_permission, target_tier_for_user_id,
 };
 use crate::moderation::session_effects::ModerationSessionEffects;
 use crate::session::SessionRegistry;
@@ -56,7 +56,7 @@ pub struct ChatService {
     notification_svc: super::notifications::svc::NotificationService,
     active_users: Option<ActiveUsers>,
     session_registry: Option<SessionRegistry>,
-    force_admin: bool,
+    moderation_infra: ModerationInfra,
     username_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
     refresh_scheduler_started: Arc<AtomicBool>,
@@ -312,7 +312,7 @@ impl ChatService {
             notification_svc,
             active_users: None,
             session_registry: None,
-            force_admin: false,
+            moderation_infra: ModerationInfra::default(),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
             refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
@@ -338,7 +338,12 @@ impl ChatService {
     }
 
     pub fn with_force_admin(mut self, force_admin: bool) -> Self {
-        self.force_admin = force_admin;
+        self.moderation_infra = self.moderation_infra.with_force_admin(force_admin);
+        self
+    }
+
+    pub fn with_moderation_infra(mut self, moderation_infra: ModerationInfra) -> Self {
+        self.moderation_infra = moderation_infra;
         self
     }
 
@@ -396,7 +401,7 @@ impl ChatService {
             self.db.clone(),
             self.moderation_session_effects(),
             self.moderation_event_tx.clone(),
-            self.force_admin,
+            self.moderation_infra.clone(),
         )
     }
 
@@ -1113,16 +1118,7 @@ impl ChatService {
         ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
 
         let tx = client.transaction().await?;
-        let row = tx
-            .query_one(
-                "UPDATE chat_messages
-                 SET body = $1, updated = current_timestamp
-                 WHERE id = $2
-                 RETURNING *",
-                &[&new_body, &message_id],
-            )
-            .await?;
-        let updated = ChatMessage::from(row);
+        let updated = ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?;
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(is_owner),
@@ -1948,14 +1944,9 @@ impl ChatService {
         )?;
         let tx = client.transaction().await?;
         let count = if is_owner {
-            tx.execute(
-                "DELETE FROM chat_messages WHERE id = $1 AND user_id = $2",
-                &[&message_id, &user_id],
-            )
-            .await?
+            ChatMessage::delete_by_author(&tx, message_id, user_id).await?
         } else {
-            tx.execute("DELETE FROM chat_messages WHERE id = $1", &[&message_id])
-                .await?
+            ChatMessage::delete_by_admin(&tx, message_id).await?
         };
         if count == 0 {
             anyhow::bail!("Cannot delete this message");

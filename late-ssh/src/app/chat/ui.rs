@@ -17,7 +17,6 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
-    markdown::wrap_plain_line,
     overlay::{Overlay, draw_overlay},
     theme,
 };
@@ -31,7 +30,7 @@ const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 fn custom_badge_for_username(username: &str) -> Option<&'static str> {
     match username.trim().to_ascii_lowercase().as_str() {
         "mevanlc" | "yawner" => Some(" 🔧"),
-        "kirii.md" => Some(" 🎨"),
+        "kirii.md" | "kirii.exe" | "kirii.tar" => Some(" 🎨"),
         _ => None,
     }
 }
@@ -120,9 +119,11 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     }
 
     if let Some(author) = view.reply_author {
-        let long =
-            format!(" Reply to @{author} (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ");
-        let mid = format!(" Reply to @{author} (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ");
+        let long = format!(
+            " Reply to @{author} (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
+        );
+        let mid =
+            format!(" Reply to @{author} (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ");
         let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
         let minimal = format!(" Reply to @{author} (Esc) ");
         let name_only = format!(" Reply to @{author} ");
@@ -146,8 +147,8 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
         return pick_title_that_fits(
             block_width,
             &[
-                " Edit message (Enter save, Alt+S stay, Alt+Enter newline, Esc cancel) ",
-                " Edit message (⏎ save, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
+                " Edit message (Enter save, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+                " Edit message (⏎ save, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
                 " Edit message (⏎ save, Esc cancel) ",
                 " Edit message (Esc) ",
                 " Edit message ",
@@ -162,9 +163,9 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     pick_title_that_fits(
         block_width,
         &[
-            " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
-            " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ",
-            " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ",
+            " Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+            " (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+            " (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
             " (⏎ send, Esc cancel) ",
             " (Esc cancel) ",
             " Esc ",
@@ -270,17 +271,29 @@ fn horizontal_inset(rect: Rect, pad: u16) -> Rect {
     }
 }
 
-fn chat_composer_lines_for_height(textarea: &TextArea<'static>, width: usize) -> usize {
+pub(crate) fn chat_composer_lines_for_height(textarea: &TextArea<'static>, width: usize) -> usize {
     let text = textarea.lines().join("\n");
     composer_line_count(&text, width)
 }
 
-fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
-    if view.composer.is_empty() && !view.mention_active && view.reaction_picker_active {
+pub(crate) fn chat_composer_placeholder_lines(
+    composer: &TextArea<'static>,
+    mention_active: bool,
+    reaction_picker_active: bool,
+) -> usize {
+    if composer.is_empty() && !mention_active && reaction_picker_active {
         reaction_picker_placeholder_lines(Style::default()).len()
     } else {
         0
     }
+}
+
+fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
+    chat_composer_placeholder_lines(
+        view.composer,
+        view.mention_active,
+        view.reaction_picker_active,
+    )
 }
 
 pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
@@ -362,54 +375,6 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     }
 }
 
-pub(crate) fn dashboard_pinned_height(message_count: usize, available_height: u16) -> u16 {
-    if message_count == 0 {
-        return 0;
-    }
-    // +1 for the bottom border. Always leave 4 rows for chat below.
-    let desired = message_count.saturating_add(1) as u16;
-    desired.min(available_height.saturating_sub(4))
-}
-
-pub(crate) fn draw_dashboard_pinned_messages(
-    frame: &mut Frame,
-    area: Rect,
-    messages: &[ChatMessage],
-) {
-    if area.height == 0 || messages.is_empty() {
-        return;
-    }
-
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(theme::AMBER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 || inner.width == 0 {
-        return;
-    }
-
-    let amber = Style::default().fg(theme::AMBER());
-    let body_style = Style::default().fg(theme::CHAT_BODY());
-    let body_width = inner.width.saturating_sub(2).max(1) as usize;
-    let lines: Vec<Line<'static>> = messages
-        .iter()
-        .map(|msg| {
-            let first_line = msg.body.split('\n').next().unwrap_or("");
-            let body_text = wrap_plain_line(first_line, body_width)
-                .into_iter()
-                .next()
-                .unwrap_or_default();
-            Line::from(vec![
-                Span::styled("▌ ", amber),
-                Span::styled(body_text, body_style),
-            ])
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
 // ── Chat rows cache & scroll ────────────────────────────────
 
 struct ChatRowsContext<'a> {
@@ -438,6 +403,7 @@ fn chat_rows_fingerprint(
     let mut hasher = DefaultHasher::new();
     width.hash(&mut hasher);
     ctx.current_user_id.hash(&mut hasher);
+    theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
     (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
 
@@ -784,6 +750,10 @@ fn draw_mention_autocomplete(
 // ── Main chat screen ────────────────────────────────────────
 
 pub struct ChatRenderInput<'a> {
+    pub feeds_selected: bool,
+    pub feeds_processing: bool,
+    pub feeds_unread_count: i64,
+    pub feeds_view: super::feeds::ui::FeedListView<'a>,
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub news_view: super::news::ui::ArticleListView<'a>,
@@ -826,6 +796,49 @@ pub struct ChatRenderInput<'a> {
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
     pub showcase_state: Option<&'a super::showcase::state::State>,
     pub showcase_composing: bool,
+    pub work_selected: bool,
+    pub work_unread_count: i64,
+    pub work_view: super::work::ui::WorkListView<'a>,
+    pub work_state: Option<&'a super::work::state::State>,
+    pub work_composing: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChatSelectionMode {
+    Compact,
+    Composer { lines: usize, max_lines: usize },
+}
+
+impl ChatSelectionMode {
+    fn composer_height(self) -> u16 {
+        let lines = match self {
+            Self::Compact => 1,
+            Self::Composer { lines, max_lines } => lines.min(max_lines),
+        };
+        lines as u16 + 2
+    }
+}
+
+pub(crate) struct ChatRoomListView<'a> {
+    pub chat_rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
+    pub usernames: &'a HashMap<Uuid, String>,
+    pub countries: &'a HashMap<Uuid, String>,
+    pub unread_counts: &'a HashMap<Uuid, i64>,
+    pub selected_room_id: Option<Uuid>,
+    pub room_jump_active: bool,
+    pub current_user_id: Uuid,
+    pub feeds_available: bool,
+    pub feeds_selected: bool,
+    pub feeds_unread_count: i64,
+    pub news_selected: bool,
+    pub news_unread_count: i64,
+    pub notifications_selected: bool,
+    pub notifications_unread_count: i64,
+    pub discover_selected: bool,
+    pub showcase_selected: bool,
+    pub showcase_unread_count: i64,
+    pub work_selected: bool,
+    pub work_unread_count: i64,
 }
 
 pub struct EmbeddedRoomChatView<'a> {
@@ -943,31 +956,50 @@ fn room_jump_prefix(key: Option<u8>, active: bool, is_selected: bool) -> String 
     }
 }
 
-fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rect) {
+fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionMode {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
-    let total_composer_lines = if view.notifications_selected || view.discover_selected {
-        1
+    if view.notifications_selected || view.discover_selected || view.feeds_selected {
+        ChatSelectionMode::Compact
     } else if view.news_selected {
-        chat_composer_lines_for_height(view.news_composer, composer_text_width)
+        ChatSelectionMode::Composer {
+            lines: chat_composer_lines_for_height(view.news_composer, composer_text_width),
+            max_lines: 8,
+        }
     } else if view.showcase_selected {
-        if view.showcase_composing { 8 } else { 1 }
+        ChatSelectionMode::Composer {
+            lines: if view.showcase_composing { 8 } else { 1 },
+            max_lines: 8,
+        }
+    } else if view.work_selected {
+        ChatSelectionMode::Composer {
+            lines: if view.work_composing { 9 } else { 1 },
+            max_lines: 9,
+        }
     } else {
-        chat_composer_lines_for_height(view.composer, composer_text_width).max(
-            composer_placeholder_lines(&ComposerBlockView {
-                composer: view.composer,
-                composing: view.composing,
-                selected_message: view.selected_message_id.is_some(),
-                reaction_picker_active: view.reaction_picker_active,
-                reply_author: view.reply_author,
-                is_editing: view.is_editing,
-                mention_active: view.mention_active,
-                mention_matches: view.mention_matches,
-                mention_selected: view.mention_selected,
-            }),
-        )
-    };
-    let visible_composer_lines = total_composer_lines.min(8);
-    let composer_height = visible_composer_lines as u16 + 2;
+        ChatSelectionMode::Composer {
+            lines: chat_composer_lines_for_height(view.composer, composer_text_width).max(
+                composer_placeholder_lines(&ComposerBlockView {
+                    composer: view.composer,
+                    composing: view.composing,
+                    selected_message: view.selected_message_id.is_some(),
+                    reaction_picker_active: view.reaction_picker_active,
+                    reply_author: view.reply_author,
+                    is_editing: view.is_editing,
+                    mention_active: view.mention_active,
+                    mention_matches: view.mention_matches,
+                    mention_selected: view.mention_selected,
+                }),
+            ),
+            max_lines: 8,
+        }
+    }
+}
+
+fn chat_layout_for_selection(
+    area: Rect,
+    selection_mode: ChatSelectionMode,
+) -> (Rect, Rect, Rect, Rect) {
+    let composer_height = selection_mode.composer_height();
     let layout =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
     let body = layout[0];
@@ -976,7 +1008,40 @@ fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rec
     (body, body_layout[0], body_layout[1], composer_area)
 }
 
-fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomListRows {
+fn chat_layout(area: Rect, view: &ChatRenderInput<'_>) -> (Rect, Rect, Rect, Rect) {
+    chat_layout_for_selection(area, chat_selection_mode(view, area))
+}
+
+pub(crate) fn room_list_area(area: Rect, selection_mode: ChatSelectionMode) -> Rect {
+    let (_, rooms_area, _, _) = chat_layout_for_selection(area, selection_mode);
+    rooms_area
+}
+
+fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRoomListView<'a> {
+    ChatRoomListView {
+        chat_rooms: view.chat_rooms,
+        usernames: view.usernames,
+        countries: view.countries,
+        unread_counts: view.unread_counts,
+        selected_room_id: view.selected_room_id,
+        room_jump_active: view.room_jump_active,
+        current_user_id: view.current_user_id,
+        feeds_available: view.feeds_view.has_feeds,
+        feeds_selected: view.feeds_selected,
+        feeds_unread_count: view.feeds_unread_count,
+        news_selected: view.news_selected,
+        news_unread_count: view.news_unread_count,
+        notifications_selected: view.notifications_selected,
+        notifications_unread_count: view.notifications_unread_count,
+        discover_selected: view.discover_selected,
+        showcase_selected: view.showcase_selected,
+        showcase_unread_count: view.showcase_unread_count,
+        work_selected: view.work_selected,
+        work_unread_count: view.work_unread_count,
+    }
+}
+
+fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomListRows {
     let chat_rooms = view.chat_rooms;
     let rooms_width = rooms_area.width.saturating_sub(2);
     let mut jump_keys = ROOM_JUMP_KEYS.iter().copied();
@@ -1024,10 +1089,12 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
     };
 
     let room_selected = |room_id| {
-        !view.news_selected
+        !view.feeds_selected
+            && !view.news_selected
             && !view.notifications_selected
             && !view.discover_selected
             && !view.showcase_selected
+            && !view.work_selected
             && view.selected_room_id == Some(room_id)
     };
 
@@ -1073,6 +1140,30 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
             Some(RoomSlot::Room(room.id)),
             is_selected,
         );
+    }
+
+    if view.feeds_available {
+        let feeds_line = {
+            let prefix = room_jump_prefix(
+                view.room_jump_active.then(|| jump_keys.next()).flatten(),
+                view.room_jump_active,
+                view.feeds_selected,
+            );
+            let style = if view.feeds_selected {
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
+            let label = if view.feeds_unread_count > 0 {
+                format!("{prefix}feeds ({})", view.feeds_unread_count)
+            } else {
+                format!("{prefix}feeds")
+            };
+            Line::from(Span::styled(label, style))
+        };
+        push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
     }
 
     let news_line = {
@@ -1122,6 +1213,28 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
         Some(RoomSlot::Showcase),
         view.showcase_selected,
     );
+
+    let work_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.work_selected,
+        );
+        let style = if view.work_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.work_unread_count > 0 {
+            format!("{prefix}work ({})", view.work_unread_count)
+        } else {
+            format!("{prefix}work")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(work_line, Some(RoomSlot::Work), view.work_selected);
 
     let notifications_line = {
         let prefix = room_jump_prefix(
@@ -1282,8 +1395,8 @@ fn build_room_list_rows(view: &ChatRenderInput<'_>, rooms_area: Rect) -> RoomLis
 }
 
 pub(crate) fn room_list_hit_test(
-    area: Rect,
-    view: &ChatRenderInput<'_>,
+    rooms_area: Rect,
+    view: &ChatRoomListView<'_>,
     x: u16,
     y: u16,
 ) -> Option<RoomSlot> {
@@ -1291,7 +1404,6 @@ pub(crate) fn room_list_hit_test(
         return None;
     }
 
-    let (_, rooms_area, _, _) = chat_layout(area, view);
     let inner = Block::default().borders(Borders::ALL).inner(rooms_area);
     if x < inner.x || x >= inner.right() || y < inner.y || y >= inner.bottom() {
         return None;
@@ -1307,6 +1419,19 @@ pub(crate) fn room_list_hit_test(
     room_rows.hit_slots.get(row_index).copied().flatten()
 }
 
+pub(crate) fn room_list_panel_contains(
+    rooms_area: Rect,
+    view: &ChatRoomListView<'_>,
+    x: u16,
+    y: u16,
+) -> bool {
+    if view.chat_rooms.is_empty() {
+        return false;
+    }
+
+    x >= rooms_area.x && x < rooms_area.right() && y >= rooms_area.y && y < rooms_area.bottom()
+}
+
 pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let chat_rooms = view.chat_rooms;
     let usernames = view.usernames;
@@ -1314,6 +1439,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let selected_room_id = view.selected_room_id;
     let room_jump_active = view.room_jump_active;
     let current_user_id = view.current_user_id;
+    let feeds_selected = view.feeds_selected;
     let news_selected = view.news_selected;
 
     if chat_rooms.is_empty() {
@@ -1326,7 +1452,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
 
     let (_, rooms_area, messages_area, composer_area) = chat_layout(area, &view);
 
-    let room_rows = build_room_list_rows(&view, rooms_area);
+    let room_list_view = room_list_view_from_render_input(&view);
+    let room_rows = build_room_list_rows(&room_list_view, rooms_area);
 
     let rooms_block = Block::default()
         .title(if room_jump_active {
@@ -1346,7 +1473,9 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         .scroll((rooms_scroll as u16, 0));
     frame.render_widget(rooms_paragraph, rooms_area);
 
-    if view.notifications_selected {
+    if feeds_selected {
+        super::feeds::ui::draw_feed_list(frame, messages_area, &view.feeds_view);
+    } else if view.notifications_selected {
         super::notifications::ui::draw_notification_list(
             frame,
             messages_area,
@@ -1356,6 +1485,8 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         super::discover::ui::draw_discover_list(frame, messages_area, &view.discover_view);
     } else if view.showcase_selected {
         super::showcase::ui::draw_showcase_list(frame, messages_area, &view.showcase_view);
+    } else if view.work_selected {
+        super::work::ui::draw_work_list(frame, messages_area, &view.work_view);
     } else if news_selected {
         super::news::ui::draw_article_list(frame, messages_area, &view.news_view);
     } else {
@@ -1437,7 +1568,31 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
         }
     }
 
-    if view.notifications_selected {
+    if feeds_selected {
+        if view.feeds_processing {
+            let hint_block = Block::default()
+                .title(" Processing URL... ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::AMBER()));
+            let hint_text = Paragraph::new(Line::from(Span::styled(
+                " Sharing feed entry to news · Esc cancel",
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .block(hint_block);
+            frame.render_widget(hint_text, composer_area);
+        } else {
+            let hint_block = Block::default()
+                .title(" Feeds ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER()));
+            let hint_text = Paragraph::new(Line::from(Span::styled(
+                " j/k navigate · s share · Enter copy link · d dismiss · r refresh",
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .block(hint_block);
+            frame.render_widget(hint_text, composer_area);
+        }
+    } else if view.notifications_selected {
         let hint_block = Block::default()
             .title(" Mentions ")
             .borders(Borders::ALL)
@@ -1456,6 +1611,14 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 &super::showcase::ui::ShowcaseComposerView {
                     state: showcase_state,
                 },
+            );
+        }
+    } else if view.work_selected {
+        if let Some(work_state) = view.work_state {
+            super::work::ui::draw_work_composer(
+                frame,
+                composer_area,
+                &super::work::ui::WorkComposerView { state: work_state },
             );
         }
     } else if view.discover_selected {
@@ -1562,6 +1725,44 @@ mod tests {
         assert_eq!(scroll, 3);
     }
 
+    #[test]
+    fn chat_rows_fingerprint_changes_when_theme_changes() {
+        let room_id = Uuid::from_u128(1);
+        let user_id = Uuid::from_u128(2);
+        let message = ChatMessage {
+            id: Uuid::from_u128(3),
+            created: Utc::now(),
+            updated: Utc::now(),
+            pinned: false,
+            reply_to_message_id: None,
+            room_id,
+            user_id,
+            body: "hello".to_string(),
+        };
+        let usernames = HashMap::from([(user_id, "alice".to_string())]);
+        let countries = HashMap::new();
+        let badges = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let message_reactions = HashMap::new();
+
+        let messages = vec![&message];
+        let ctx = ChatRowsContext {
+            current_user_id: user_id,
+            usernames: &usernames,
+            countries: &countries,
+            badges: &badges,
+            bonsai_glyphs: &bonsai_glyphs,
+            message_reactions: &message_reactions,
+        };
+
+        theme::set_current_by_id("late");
+        let late_fingerprint = chat_rows_fingerprint(&messages, &ctx, 80);
+        theme::set_current_by_id("contrast");
+        let contrast_fingerprint = chat_rows_fingerprint(&messages, &ctx, 80);
+
+        assert_ne!(late_fingerprint, contrast_fingerprint);
+    }
+
     fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         ComposerBlockView {
             composer: textarea,
@@ -1591,6 +1792,15 @@ mod tests {
         news_composer: &'a TextArea<'static>,
     ) -> ChatRenderInput<'a> {
         ChatRenderInput {
+            feeds_selected: false,
+            feeds_processing: false,
+            feeds_unread_count: 0,
+            feeds_view: crate::app::chat::feeds::ui::FeedListView {
+                entries: &[],
+                selected_index: 0,
+                has_feeds: false,
+                marker_read_at: None,
+            },
             news_selected: false,
             news_unread_count: 0,
             news_view: crate::app::chat::news::ui::ArticleListView {
@@ -1648,6 +1858,18 @@ mod tests {
             },
             showcase_state: None,
             showcase_composing: false,
+            work_selected: false,
+            work_unread_count: 0,
+            work_view: crate::app::chat::work::ui::WorkListView {
+                items: &[],
+                selected_index: 0,
+                current_user_id: Uuid::nil(),
+                is_admin: false,
+                marker_read_at: None,
+                profile_base_url: "http://localhost:3000",
+            },
+            work_state: None,
+            work_composing: false,
         }
     }
 
@@ -1672,9 +1894,9 @@ mod tests {
     fn composer_title_collapses_across_block_widths() {
         let ta = TextArea::default();
         let view = composer_view(&ta);
-        let full = " Compose (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
-        let long = " (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) ";
-        let short = " (⏎ send, Alt+S stay, Alt+⏎ newline, Esc cancel) ";
+        let full = " Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ";
+        let long = " (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ";
+        let short = " (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ";
         let minimal = " (⏎ send, Esc cancel) ";
         let cancel = " (Esc cancel) ";
         let esc = " Esc ";
@@ -1728,7 +1950,7 @@ mod tests {
         view.reply_author = Some("alice");
         assert_eq!(
             composer_title(&view, 100),
-            " Reply to @alice (Enter send, Alt+S stay, Alt+Enter newline, Esc cancel) "
+            " Reply to @alice (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
         );
         // Far too narrow for even the shortest reply form → drops to " Reply ".
         // " Reply " = 7 cols → needs block_w ≥ 9.
@@ -1896,7 +2118,7 @@ mod tests {
     }
 
     #[test]
-    fn room_list_rows_place_showcases_before_mentions_and_discover() {
+    fn room_list_rows_place_work_after_showcases() {
         let rooms = Vec::new();
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
@@ -1921,7 +2143,8 @@ mod tests {
             &news_composer,
         );
 
-        let room_rows = build_room_list_rows(&view, Rect::new(0, 0, 40, 20));
+        let room_list_view = room_list_view_from_render_input(&view);
+        let room_rows = build_room_list_rows(&room_list_view, Rect::new(0, 0, 40, 20));
         let hit_slots: Vec<_> = room_rows.hit_slots.into_iter().flatten().collect();
 
         assert_eq!(
@@ -1929,6 +2152,7 @@ mod tests {
             vec![
                 RoomSlot::News,
                 RoomSlot::Showcase,
+                RoomSlot::Work,
                 RoomSlot::Notifications,
                 RoomSlot::Discover,
             ]
@@ -1987,7 +2211,8 @@ mod tests {
             &news_composer,
         );
 
-        let room_rows = build_room_list_rows(&view, Rect::new(0, 0, 40, 20));
+        let room_list_view = room_list_view_from_render_input(&view);
+        let room_rows = build_room_list_rows(&room_list_view, Rect::new(0, 0, 40, 20));
 
         assert!(!room_rows.hit_slots.contains(&Some(RoomSlot::Room(game.id))));
     }
@@ -2047,7 +2272,8 @@ mod tests {
         let area = Rect::new(1, 1, 74, 30);
         let (_, rooms_area, _, _) = chat_layout(area, &view);
         let inner = Block::default().borders(Borders::ALL).inner(rooms_area);
-        let room_rows = build_room_list_rows(&view, rooms_area);
+        let room_list_view = room_list_view_from_render_input(&view);
+        let room_rows = build_room_list_rows(&room_list_view, rooms_area);
         let rust_row = room_rows
             .hit_slots
             .iter()
@@ -2055,9 +2281,29 @@ mod tests {
             .expect("rust room row");
 
         assert_eq!(
-            room_list_hit_test(area, &view, inner.x, inner.y + rust_row as u16),
+            room_list_hit_test(
+                rooms_area,
+                &room_list_view,
+                inner.x,
+                inner.y + rust_row as u16
+            ),
             Some(RoomSlot::Room(rust.id))
         );
-        assert_eq!(room_list_hit_test(area, &view, inner.x, inner.y), None);
+        assert_eq!(
+            room_list_hit_test(rooms_area, &room_list_view, inner.x, inner.y),
+            None
+        );
+        assert!(room_list_panel_contains(
+            rooms_area,
+            &room_list_view,
+            rooms_area.x,
+            rooms_area.y
+        ));
+        assert!(!room_list_panel_contains(
+            rooms_area,
+            &room_list_view,
+            rooms_area.right(),
+            rooms_area.y
+        ));
     }
 }

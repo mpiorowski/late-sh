@@ -19,6 +19,7 @@ pub struct State {
     unread_count: i64,
     last_read_at: Option<DateTime<Utc>>,
     marker_read_at: Option<DateTime<Utc>>,
+    preserve_marker_read_at: bool,
     composing: bool,
     composer: TextArea<'static>,
     processing: bool,
@@ -29,6 +30,7 @@ impl State {
     pub fn new(article_service: ArticleService, user_id: Uuid, is_admin: bool) -> Self {
         let snapshot_rx = article_service.subscribe_snapshot();
         let event_rx = article_service.subscribe_events();
+        article_service.list_articles_task();
         article_service.refresh_unread_count_task(user_id);
         Self {
             article_service,
@@ -41,6 +43,7 @@ impl State {
             unread_count: 0,
             last_read_at: None,
             marker_read_at: None,
+            preserve_marker_read_at: false,
             composing: false,
             composer: new_news_textarea(),
             processing: false,
@@ -58,11 +61,20 @@ impl State {
 
     pub fn list_articles(&self) {
         self.article_service.list_articles_task();
-        self.article_service.refresh_unread_count_task(self.user_id);
     }
 
     pub fn selected_index(&self) -> usize {
         clamp_index(self.selected, self.articles.len())
+    }
+
+    pub fn select_article_by_id(&mut self, article_id: Uuid) {
+        if let Some(index) = self
+            .articles
+            .iter()
+            .position(|item| item.article.id == article_id)
+        {
+            self.selected = index;
+        }
     }
 
     pub fn move_selection(&mut self, delta: isize) {
@@ -115,7 +127,8 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = Some(Utc::now());
+        self.marker_read_at = self.last_read_at;
+        self.preserve_marker_read_at = true;
         self.unread_count = 0;
         self.article_service.mark_read_task(self.user_id);
     }
@@ -235,14 +248,14 @@ impl State {
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => match event {
-                    ArticleEvent::Created { user_id } if self.user_id == user_id => {
+                    ArticleEvent::Created { user_id, .. } if self.user_id == user_id => {
                         self.current_task = None;
                         self.composing = false;
                         self.processing = false;
                         self.composer = new_news_textarea();
                         banner = Some(Banner::success("Article shared!"));
                     }
-                    ArticleEvent::Failed { user_id, error } if self.user_id == user_id => {
+                    ArticleEvent::Failed { user_id, error, .. } if self.user_id == user_id => {
                         self.current_task = None;
                         self.processing = false;
                         composer::set_themed_textarea_cursor_visible(
@@ -261,7 +274,7 @@ impl State {
                     } if self.user_id == user_id => {
                         self.unread_count = unread_count;
                         self.last_read_at = last_read_at;
-                        if unread_count == 0 {
+                        if unread_count == 0 && !self.preserve_marker_read_at {
                             self.marker_read_at = last_read_at;
                         }
                     }

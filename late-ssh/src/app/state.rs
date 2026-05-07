@@ -113,7 +113,9 @@ pub struct SessionConfig {
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
+    pub feed_service: crate::app::chat::feeds::svc::FeedService,
     pub showcase_service: crate::app::chat::showcase::svc::ShowcaseService,
+    pub work_service: crate::app::chat::work::svc::WorkService,
     pub profile_service: ProfileService,
     pub twenty_forty_eight_service:
         crate::app::games::twenty_forty_eight::svc::TwentyFortyEightService,
@@ -131,7 +133,7 @@ pub struct SessionConfig {
     pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
-    pub blackjack_table_manager: crate::app::rooms::blackjack::manager::BlackjackTableManager,
+    pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
     /// color slot and showing up in `peer_count` — when the user actually
     /// enters the dartboard game from the arcade.
@@ -272,16 +274,11 @@ pub struct App {
     pub(crate) is_playing_game: bool,
     pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
-    pub(crate) blackjack_table_manager:
-        crate::app::rooms::blackjack::manager::BlackjackTableManager,
+    pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     pub(crate) rooms_selected_index: usize,
     pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
     pub(crate) rooms_last_active_room_id: Option<Uuid>,
-    pub(crate) rooms_add_form_open: bool,
-    pub(crate) rooms_display_name_input: String,
-    pub(crate) rooms_create_focus_index: usize,
-    pub(crate) rooms_create_pace_index: usize,
-    pub(crate) rooms_create_stake_index: usize,
+    pub(crate) rooms_create_flow: Option<crate::app::rooms::backend::CreateRoomFlow>,
     pub(crate) rooms_filter: crate::app::rooms::filter::RoomsFilter,
     pub(crate) rooms_search_active: bool,
     pub(crate) rooms_search_query: String,
@@ -295,7 +292,7 @@ pub struct App {
     pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
-    pub(crate) blackjack_state: Option<crate::app::rooms::blackjack::state::State>,
+    pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -657,6 +654,7 @@ impl App {
         };
         let mut settings_modal_state = settings_modal::state::SettingsModalState::new(
             config.profile_service.clone(),
+            config.feed_service.clone(),
             config.user_id,
         );
         settings_modal_state.open_from_profile(
@@ -709,13 +707,17 @@ impl App {
             artboard_ban_expires_at: config.artboard_ban_expires_at,
             vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
-                config.chat_service,
-                config.notification_service,
+                chat::state::ChatServices {
+                    chat: config.chat_service,
+                    notifications: config.notification_service,
+                    articles: config.article_service.clone(),
+                    feeds: config.feed_service.clone(),
+                    showcases: config.showcase_service.clone(),
+                    work: config.work_service.clone(),
+                },
                 config.user_id,
                 config.permissions,
                 active_users.clone(),
-                config.article_service.clone(),
-                config.showcase_service.clone(),
             ),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
@@ -742,15 +744,11 @@ impl App {
             is_playing_game: false,
             dashboard_game_toggle_target: None,
             rooms_service: config.rooms_service,
-            blackjack_table_manager: config.blackjack_table_manager,
+            room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,
             rooms_active_room: None,
             rooms_last_active_room_id: None,
-            rooms_add_form_open: false,
-            rooms_display_name_input: String::new(),
-            rooms_create_focus_index: 0,
-            rooms_create_pace_index: 1,
-            rooms_create_stake_index: 0,
+            rooms_create_flow: None,
             rooms_filter: crate::app::rooms::filter::RoomsFilter::default(),
             rooms_search_active: false,
             rooms_search_query: String::new(),
@@ -763,7 +761,7 @@ impl App {
             nonogram_state,
             solitaire_state,
             minesweeper_state,
-            blackjack_state: None,
+            active_room_game: None,
             dartboard_state: None,
             artboard_interacting: false,
             dartboard_server,

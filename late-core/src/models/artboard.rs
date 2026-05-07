@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use serde_json::Value;
 use tokio_postgres::Client;
 
@@ -89,6 +90,27 @@ impl Snapshot {
             .execute(
                 "DELETE FROM artboard_snapshots WHERE board_key = $1",
                 &[&board_key],
+            )
+            .await?;
+        Ok(count)
+    }
+
+    pub async fn copy_board_key(
+        client: &impl GenericClient,
+        source_key: &str,
+        target_key: &str,
+    ) -> Result<u64> {
+        let count = client
+            .execute(
+                "INSERT INTO artboard_snapshots (board_key, canvas, provenance)
+                 SELECT $1, canvas, provenance
+                 FROM artboard_snapshots
+                 WHERE board_key = $2
+                 ON CONFLICT (board_key) DO UPDATE
+                 SET canvas = EXCLUDED.canvas,
+                     provenance = EXCLUDED.provenance,
+                     updated = current_timestamp",
+                &[&target_key, &source_key],
             )
             .await?;
         Ok(count)

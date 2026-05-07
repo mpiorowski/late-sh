@@ -8,7 +8,7 @@ CARGO_TARGET_DIR ?= /app/target
 INSTANCE ?= late                                            # Prefix for container names; bump (e.g. late2) for a parallel clone
 
 # --- SSH ---
-LATE_FORCE_ADMIN ?= 0
+LATE_FORCE_ADMIN ?= 1
 LATE_SSH_PORT ?= 2222                                       # SSH server listen port
 LATE_API_PORT ?= 4000                                       # HTTP API listen port
 LATE_SSH_OPEN ?= 1                                          # Allow connections without auth (1=open, 0=require key)
@@ -46,6 +46,7 @@ LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (us
 LATE_SSH_INTERNAL_URL ?= http://service-ssh:$(LATE_API_PORT) # Internal SSH API URL (used by web server)
 LATE_SSH_PUBLIC_URL ?= localhost:$(LATE_API_PORT)           # Public SSH API URL (used by browser for WS)
 LATE_AUDIO_URL ?= http://icecast:8000                       # Upstream audio URL used by late-web /stream proxy
+LATE_WEB_TUNNEL_TOKEN ?= dev-web-tunnel                     # Local-only shared token for /play web terminal
 
 # --- Vote ---
 LATE_VOTE_SWITCH_INTERVAL_SECS ?= 3600                      # Duration of each vote round (60 min)
@@ -59,7 +60,6 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 # Targets
 ####################################################
 
-# All vars above are written to .env, docker-compose reads it via env_file
 .PHONY: .env
 .env:
 	@echo "RUST_LOG=$(RUST_LOG)" > .env
@@ -97,6 +97,7 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
 	@echo "LATE_SSH_PUBLIC_URL=$(LATE_SSH_PUBLIC_URL)" >> .env
 	@echo "LATE_AUDIO_URL=$(LATE_AUDIO_URL)" >> .env
+	@echo "LATE_WEB_TUNNEL_TOKEN=$(LATE_WEB_TUNNEL_TOKEN)" >> .env
 	@echo "LATE_VOTE_SWITCH_INTERVAL_SECS=$(LATE_VOTE_SWITCH_INTERVAL_SECS)" >> .env
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env

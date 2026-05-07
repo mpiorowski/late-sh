@@ -25,14 +25,16 @@ use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
 use crate::state::{ActiveUser, ActiveUsers};
 
 use super::{
-    discover, news, notifications,
+    discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
     ui_text::reaction_label,
+    work,
 };
 
 pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
+const USER_CREATED_CHANNEL_NAME_MAX_CHARS: usize = 16;
 const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
 const REACTION_OWNER_COLUMNS: usize = 3;
 
@@ -70,14 +72,20 @@ pub(crate) struct ModCommandOutput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
+    Feeds,
     News,
     Notifications,
     Discover,
     Showcase,
+    Work,
 }
 
 pub(super) fn is_chat_list_room(room: &ChatRoom) -> bool {
-    room.kind != "game"
+    if room.kind == "game" {
+        return false;
+    }
+
+    room.kind == "dm" || room.permanent || matches!(room.visibility.as_str(), "public" | "private")
 }
 
 pub struct ChatState {
@@ -127,6 +135,8 @@ pub struct ChatState {
 
     /// News (shown as a virtual room in the room list)
     pub(crate) news_selected: bool,
+    pub(crate) feeds_selected: bool,
+    pub feeds: feeds::state::State,
     pub(crate) news: news::state::State,
 
     /// Notifications / mentions (shown as a virtual room in the room list)
@@ -136,6 +146,8 @@ pub struct ChatState {
     pub(crate) discover: discover::state::State,
     pub(crate) showcase_selected: bool,
     pub(crate) showcase: showcase::state::State,
+    pub(crate) work_selected: bool,
+    pub(crate) work: work::state::State,
 
     /// Pending desktop notifications drained on render. `kind` matches the
     /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
@@ -153,6 +165,15 @@ pub(crate) struct PendingNotification {
     pub body: String,
 }
 
+pub(crate) struct ChatServices {
+    pub chat: ChatService,
+    pub notifications: NotificationService,
+    pub articles: news::svc::ArticleService,
+    pub feeds: feeds::svc::FeedService,
+    pub showcases: showcase::svc::ShowcaseService,
+    pub work: work::svc::WorkService,
+}
+
 impl Drop for ChatState {
     fn drop(&mut self) {
         self.bg_task.abort();
@@ -160,15 +181,20 @@ impl Drop for ChatState {
 }
 
 impl ChatState {
-    pub fn new(
-        service: ChatService,
-        notification_service: NotificationService,
+    pub(crate) fn new(
+        services: ChatServices,
         user_id: Uuid,
         permissions: Permissions,
         active_users: Option<ActiveUsers>,
-        article_service: news::svc::ArticleService,
-        showcase_service: showcase::svc::ShowcaseService,
     ) -> Self {
+        let ChatServices {
+            chat: service,
+            notifications: notification_service,
+            articles: article_service,
+            feeds: feed_service,
+            showcases: showcase_service,
+            work: work_service,
+        } = services;
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
@@ -221,6 +247,8 @@ impl ChatState {
             reply_target: None,
             bg_task,
             news_selected: false,
+            feeds_selected: false,
+            feeds: feeds::state::State::new(feed_service, article_service.clone(), user_id),
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
@@ -232,6 +260,8 @@ impl ChatState {
                 user_id,
                 permissions.is_admin(),
             ),
+            work_selected: false,
+            work: work::state::State::new(work_service, user_id, permissions.is_admin()),
             pending_notifications: Vec::new(),
             requested_help_topic: None,
             requested_settings_modal: false,
@@ -249,6 +279,7 @@ impl ChatState {
         composer::apply_themed_textarea_style(&mut self.composer, self.composing);
         self.news.refresh_composer_theme();
         self.showcase.refresh_composer_theme();
+        self.work.refresh_composer_theme();
     }
 
     pub fn is_composing(&self) -> bool {
@@ -403,6 +434,7 @@ impl ChatState {
         self.is_admin = permissions.is_admin();
         self.news.set_is_admin(self.is_admin);
         self.showcase.set_is_admin(self.is_admin);
+        self.work.set_is_admin(self.is_admin);
     }
 
     pub(crate) fn submit_mod_command(&mut self, command: String) -> Uuid {
@@ -457,10 +489,12 @@ impl ChatState {
     pub fn focus_message_in_room(&mut self, room_id: Uuid, message_id: Uuid) {
         self.reaction_leader_active = false;
         self.room_jump_active = false;
+        self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
+        self.work_selected = false;
         self.selected_room_id = Some(room_id);
         self.selected_message_id = Some(message_id);
         self.highlighted_message_id = Some(message_id);
@@ -717,10 +751,18 @@ impl ChatState {
     }
 
     /// Build the flat visual navigation order.
-    /// Order: core (general, announcements) → news → showcases → mentions
-    /// → discover → public rooms (alpha) → private rooms (alpha) → DMs
+    /// Order: core (general, announcements) → news → showcases → work
+    /// → mentions → discover → public rooms (alpha) → private rooms (alpha) → DMs
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames)
+        let mut order = visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames);
+        if self.feeds.has_feeds() {
+            let insert_at = order
+                .iter()
+                .position(|slot| *slot == RoomSlot::News)
+                .unwrap_or(order.len());
+            order.insert(insert_at, RoomSlot::Feeds);
+        }
+        order
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -745,6 +787,11 @@ impl ChatState {
         self.highlighted_message_id = None;
 
         match slot {
+            RoomSlot::Feeds => {
+                let changed = !self.feeds_selected;
+                self.select_feeds();
+                changed
+            }
             RoomSlot::News => {
                 let changed = !self.news_selected;
                 self.select_news();
@@ -765,6 +812,11 @@ impl ChatState {
                 self.select_showcase();
                 changed
             }
+            RoomSlot::Work => {
+                let changed = !self.work_selected;
+                self.select_work();
+                changed
+            }
             RoomSlot::Room(next_id) => {
                 if !self
                     .rooms
@@ -773,15 +825,19 @@ impl ChatState {
                 {
                     return false;
                 }
-                let changed = self.news_selected
+                let changed = self.feeds_selected
+                    || self.news_selected
                     || self.notifications_selected
                     || self.discover_selected
                     || self.showcase_selected
+                    || self.work_selected
                     || self.selected_room_id != Some(next_id);
+                self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
+                self.work_selected = false;
                 self.selected_room_id = Some(next_id);
                 if !changed {
                     self.mark_room_read(next_id);
@@ -820,12 +876,16 @@ impl ChatState {
             return false;
         }
 
-        let current_item = if self.notifications_selected {
+        let current_item = if self.feeds_selected {
+            RoomSlot::Feeds
+        } else if self.notifications_selected {
             RoomSlot::Notifications
         } else if self.discover_selected {
             RoomSlot::Discover
         } else if self.showcase_selected {
             RoomSlot::Showcase
+        } else if self.work_selected {
+            RoomSlot::Work
         } else if self.news_selected {
             RoomSlot::News
         } else {
@@ -979,6 +1039,10 @@ impl ChatState {
         format_active_user_lines(self.active_users.as_ref())
     }
 
+    pub(crate) fn open_active_users_overlay(&mut self) {
+        self.open_overlay("Active Users", self.active_user_lines());
+    }
+
     pub fn submit_composer(&mut self, keep_open: bool, from_dashboard: bool) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
 
@@ -1038,7 +1102,7 @@ impl ChatState {
 
         if body.trim() == "/active" {
             self.clear_composer_after_submit();
-            self.open_overlay("Active Users", self.active_user_lines());
+            self.open_active_users_overlay();
             return None;
         }
 
@@ -1090,13 +1154,19 @@ impl ChatState {
         }
 
         if let Some(room) = parse_room_command(&body, "/public") {
+            if user_created_channel_name_too_long(room) {
+                return Some(user_created_channel_name_length_error());
+            }
+            self.clear_composer_after_submit();
             self.service
                 .open_public_room_task(self.user_id, room.to_string());
-            self.clear_composer_after_submit();
             return Some(Banner::success(&format!("Opening public #{room}...")));
         }
 
         if let Some(room) = parse_room_command(&body, "/private") {
+            if user_created_channel_name_too_long(room) {
+                return Some(user_created_channel_name_length_error());
+            }
             self.clear_composer_after_submit();
             self.service
                 .create_private_room_task(self.user_id, room.to_string());
@@ -1280,22 +1350,42 @@ impl ChatState {
         self.drain_pinned_messages();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
+        let feeds_banner = self.feeds.tick();
         let news_banner = self.news.tick();
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
+        let work_banner = self.work.tick();
         moderation_banner
             .or(banner)
+            .or(feeds_banner)
             .or(news_banner)
             .or(notif_banner)
             .or(showcase_banner)
+            .or(work_banner)
+    }
+
+    pub fn select_feeds(&mut self) {
+        self.room_jump_active = false;
+        self.feeds_selected = true;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+        self.feeds.list();
+        self.feeds.mark_read();
     }
 
     pub fn select_news(&mut self) {
         self.room_jump_active = false;
+        self.feeds_selected = false;
         self.news_selected = true;
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
+        self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.news.list_articles();
@@ -1309,9 +1399,11 @@ impl ChatState {
     pub fn select_notifications(&mut self) {
         self.room_jump_active = false;
         self.notifications_selected = true;
+        self.feeds_selected = false;
         self.news_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
+        self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.notifications.list();
@@ -1321,9 +1413,11 @@ impl ChatState {
     pub fn select_discover(&mut self) {
         self.room_jump_active = false;
         self.discover_selected = true;
+        self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
         self.showcase_selected = false;
+        self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.discover.start_loading();
@@ -1333,13 +1427,29 @@ impl ChatState {
     pub fn select_showcase(&mut self) {
         self.room_jump_active = false;
         self.showcase_selected = true;
+        self.feeds_selected = false;
+        self.discover_selected = false;
+        self.notifications_selected = false;
+        self.news_selected = false;
+        self.work_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+        self.showcase.list();
+        self.showcase.mark_read();
+    }
+
+    pub fn select_work(&mut self) {
+        self.room_jump_active = false;
+        self.work_selected = true;
+        self.feeds_selected = false;
+        self.showcase_selected = false;
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
-        self.showcase.list();
-        self.showcase.mark_read();
+        self.work.list();
+        self.work.mark_read();
     }
 
     pub fn join_selected_discover_room(&mut self) -> Option<Banner> {
@@ -1631,10 +1741,12 @@ impl ChatState {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::DmOpened { user_id, room_id } if self.user_id == user_id => {
+                    self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
+                    self.work_selected = false;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -1648,10 +1760,12 @@ impl ChatState {
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
+                    self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
+                    self.work_selected = false;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -1677,10 +1791,12 @@ impl ChatState {
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
+                    self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
+                    self.work_selected = false;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -1879,6 +1995,9 @@ impl ChatState {
 
             if let Some(message) = moderation_server_toast(&event) {
                 banner = Some(Banner::success(&message));
+            }
+            if matches!(event, ModerationEvent::RoomRenamed { .. }) {
+                self.request_list();
             }
         }
         banner
@@ -2111,6 +2230,7 @@ fn visual_order_for_rooms(
 
     order.push(RoomSlot::News);
     order.push(RoomSlot::Showcase);
+    order.push(RoomSlot::Work);
     order.push(RoomSlot::Notifications);
     order.push(RoomSlot::Discover);
 
@@ -2201,6 +2321,16 @@ fn parse_room_command<'a>(input: &'a str, command: &str) -> Option<&'a str> {
         return None;
     }
     Some(slug)
+}
+
+fn user_created_channel_name_too_long(slug: &str) -> bool {
+    slug.chars().count() > USER_CREATED_CHANNEL_NAME_MAX_CHARS
+}
+
+fn user_created_channel_name_length_error() -> Banner {
+    Banner::error(&format!(
+        "Channel names must be {USER_CREATED_CHANNEL_NAME_MAX_CHARS} characters or fewer"
+    ))
 }
 
 /// Parse `/create-room <slug>` from the composer text (admin only).
@@ -2379,9 +2509,12 @@ fn adjacent_composer_room(
         .iter()
         .filter_map(|slot| match slot {
             RoomSlot::Room(room_id) => Some(*room_id),
-            RoomSlot::News | RoomSlot::Notifications | RoomSlot::Discover | RoomSlot::Showcase => {
-                None
-            }
+            RoomSlot::Feeds
+            | RoomSlot::News
+            | RoomSlot::Notifications
+            | RoomSlot::Discover
+            | RoomSlot::Showcase
+            | RoomSlot::Work => None,
         })
         .collect();
     if rooms.is_empty() {
@@ -2908,7 +3041,7 @@ mod tests {
     }
 
     #[test]
-    fn visual_order_places_showcases_before_mentions_and_discover() {
+    fn visual_order_places_work_after_showcases() {
         let me = Uuid::from_u128(1);
         let alice = Uuid::from_u128(2);
         let bob = Uuid::from_u128(3);
@@ -2949,6 +3082,7 @@ mod tests {
                 RoomSlot::Room(announcements),
                 RoomSlot::News,
                 RoomSlot::Showcase,
+                RoomSlot::Work,
                 RoomSlot::Notifications,
                 RoomSlot::Discover,
                 RoomSlot::Room(public_alpha),
@@ -2969,6 +3103,7 @@ mod tests {
             RoomSlot::Room(room_a),
             RoomSlot::News,
             RoomSlot::Showcase,
+            RoomSlot::Work,
             RoomSlot::Notifications,
             RoomSlot::Discover,
             RoomSlot::Room(room_b),
@@ -2994,6 +3129,7 @@ mod tests {
         let order = vec![
             RoomSlot::News,
             RoomSlot::Showcase,
+            RoomSlot::Work,
             RoomSlot::Notifications,
             RoomSlot::Discover,
         ];
@@ -3056,6 +3192,7 @@ mod tests {
             (b'a', RoomSlot::Room(room_id)),
             (b's', RoomSlot::News),
             (b'd', RoomSlot::Showcase),
+            (b'w', RoomSlot::Work),
             (b'f', RoomSlot::Notifications),
             (b'g', RoomSlot::Discover),
         ];
@@ -3071,6 +3208,10 @@ mod tests {
         assert_eq!(
             resolve_room_jump_target(&targets, b'D'),
             Some(RoomSlot::Showcase)
+        );
+        assert_eq!(
+            resolve_room_jump_target(&targets, b'w'),
+            Some(RoomSlot::Work)
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b'f'),
@@ -3144,6 +3285,33 @@ mod tests {
     fn parse_private_room_not_command() {
         assert_eq!(parse_room_command("hello", "/private"), None);
         assert_eq!(parse_room_command("/privates foo", "/private"), None);
+    }
+
+    #[test]
+    fn user_created_channel_name_length_allows_16_chars() {
+        assert!(!user_created_channel_name_too_long("1234567890123456"));
+    }
+
+    #[test]
+    fn user_created_channel_name_length_rejects_more_than_16_chars() {
+        assert!(user_created_channel_name_too_long("12345678901234567"));
+    }
+
+    #[test]
+    fn user_created_channel_name_length_counts_chars_not_bytes() {
+        let sixteen = "界".repeat(16);
+        let seventeen = "界".repeat(17);
+
+        assert!(!user_created_channel_name_too_long(&sixteen));
+        assert!(user_created_channel_name_too_long(&seventeen));
+    }
+
+    #[test]
+    fn parse_room_command_keeps_legacy_long_slugs_parseable() {
+        assert_eq!(
+            parse_room_command("/public #very-long-legacy-channel", "/public"),
+            Some("very-long-legacy-channel")
+        );
     }
 
     #[test]

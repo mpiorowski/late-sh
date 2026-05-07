@@ -15,6 +15,14 @@ pub(crate) enum ModCommand {
     Audit {
         limit: i64,
     },
+    RenameRoom {
+        slug: String,
+        new_slug: String,
+    },
+    RenameUser {
+        username: String,
+        new_username: String,
+    },
     RoomAction {
         action: RoomModAction,
         slug: String,
@@ -32,6 +40,10 @@ pub(crate) enum ModCommand {
         action: ArtboardAction,
         username: String,
         duration: Option<chrono::Duration>,
+        reason: String,
+    },
+    ArtboardRestore {
+        date: Option<chrono::NaiveDate>,
         reason: String,
     },
     Role {
@@ -161,6 +173,8 @@ pub(crate) fn parse_mod_command(input: &str) -> Result<ModCommand> {
         }),
         "bans" => parse_bans_mod_command(&rest),
         "audit" => parse_audit_mod_command(&rest),
+        "rename-room" => parse_rename_room_mod_command(&rest),
+        "rename-user" => parse_rename_user_mod_command(&rest),
         "room" => parse_room_mod_command(&rest),
         "server" => parse_server_mod_command(&rest),
         "artboard" => parse_artboard_mod_command(&rest),
@@ -231,6 +245,26 @@ fn parse_audit_mod_command(parts: &[&str]) -> Result<ModCommand> {
     })
 }
 
+fn parse_rename_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    if parts.len() != 2 {
+        anyhow::bail!("usage: rename-room #old #new");
+    }
+    Ok(ModCommand::RenameRoom {
+        slug: required_slug(parts.first().copied(), "usage: rename-room #old #new")?,
+        new_slug: required_slug(parts.get(1).copied(), "usage: rename-room #old #new")?,
+    })
+}
+
+fn parse_rename_user_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    if parts.len() != 2 {
+        anyhow::bail!("usage: rename-user @old @new");
+    }
+    Ok(ModCommand::RenameUser {
+        username: required_username(parts.first().copied(), "usage: rename-user @old @new")?,
+        new_username: required_username(parts.get(1).copied(), "usage: rename-user @old @new")?,
+    })
+}
+
 fn parse_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
         anyhow::bail!("usage: room #slug | room <action> ...");
@@ -289,8 +323,11 @@ fn parse_server_mod_command(parts: &[&str]) -> Result<ModCommand> {
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: artboard <ban|unban> @name");
+        anyhow::bail!("usage: artboard <ban|unban|restore> ...");
     };
+    if first == "restore" {
+        return parse_artboard_restore_mod_command(&parts[1..]);
+    }
     let action = match first {
         "ban" => ArtboardAction::Ban,
         "unban" => ArtboardAction::Unban,
@@ -308,6 +345,21 @@ fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
         duration,
         reason: parts.get(reason_start..).unwrap_or_default().join(" "),
     })
+}
+
+fn parse_artboard_restore_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    let (date, reason_start) = match parts.first().copied() {
+        Some(value) => match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+            Ok(date) => (Some(date), 1),
+            Err(_) => (None, 0),
+        },
+        None => (None, 0),
+    };
+    let reason = parts.get(reason_start..).unwrap_or_default().join(" ");
+    if reason.trim().is_empty() {
+        anyhow::bail!("usage: artboard restore [YYYY-MM-DD] <reason...>");
+    }
+    Ok(ModCommand::ArtboardRestore { date, reason })
 }
 
 fn parse_role_mod_command(mod_action: RoleAction, parts: &[&str]) -> Result<ModCommand> {
@@ -462,6 +514,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "user @name",
             "bans [server|artboard|room #slug] [limit]",
             "audit [limit]",
+            "rename-room #old #new",
+            "rename-user @old @new",
             "room kick #slug @name [reason...]",
             "room ban #slug @name [duration] [reason...]",
             "room unban #slug @name",
@@ -470,6 +524,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "server unban @name",
             "artboard ban @name [duration] [reason...]",
             "artboard unban @name",
+            "artboard restore [YYYY-MM-DD] [reason...]",
             "grant mod @name",
             "revoke mod @name",
             "",
@@ -506,6 +561,17 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "audit [limit]",
             "Lists recent moderation audit log entries.",
             "limit: optional positive number; capped at 100; default 25.",
+        ],
+        "rename-room" => &[
+            "rename-room #old #new",
+            "Renames a non-DM room by changing its #slug.",
+            "Moderator or admin only. #general is reserved and cannot be renamed.",
+        ],
+        "rename-user" => &[
+            "rename-user @old @new",
+            "Renames a user account.",
+            "@old: existing username. @new: desired username; sanitized with normal username rules.",
+            "Moderator or admin only. Writes a moderation audit entry.",
         ],
         "room" => &[
             "room <kick|ban|unban> #slug @name",
@@ -551,9 +617,9 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "@name: username.",
         ],
         "artboard" => &[
-            "artboard <ban|unban> @name",
-            "Controls whether a user may use the artboard.",
-            "Subcommands: artboard ban, artboard unban.",
+            "artboard <ban|unban|restore> ...",
+            "Controls artboard access and snapshots.",
+            "Subcommands: artboard ban, artboard unban, artboard restore.",
         ],
         "artboard ban" => &[
             "artboard ban @name [duration] [reason...]",
@@ -566,6 +632,13 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard unban @name",
             "Removes an artboard ban for a user.",
             "@name: username.",
+        ],
+        "artboard restore" => &[
+            "artboard restore [YYYY-MM-DD] <reason...>",
+            "Restores live Artboard from a daily UTC snapshot.",
+            "date: optional daily snapshot date; defaults to previous UTC day.",
+            "reason: required audit text.",
+            "Moderator or admin only. Writes a moderation audit entry and backs up the previous main row.",
         ],
         "grant" => &[
             "grant mod @name",
@@ -689,6 +762,39 @@ mod tests {
     }
 
     #[test]
+    fn parses_rename_room_command() {
+        assert_eq!(
+            parse_mod_command("rename-room #Old_Room #New.Room").unwrap(),
+            ModCommand::RenameRoom {
+                slug: "Old_Room".to_string(),
+                new_slug: "New.Room".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("rename-room #old #new").unwrap(),
+            ModCommand::RenameRoom {
+                slug: "old".to_string(),
+                new_slug: "new".to_string(),
+            }
+        );
+        assert!(parse_mod_command("rename-room #old").is_err());
+        assert!(parse_mod_command("rename-room #old #new extra").is_err());
+    }
+
+    #[test]
+    fn parses_rename_user_command() {
+        assert_eq!(
+            parse_mod_command("rename-user @Old @New.Name").unwrap(),
+            ModCommand::RenameUser {
+                username: "Old".to_string(),
+                new_username: "New.Name".to_string(),
+            }
+        );
+        assert!(parse_mod_command("rename-user @old").is_err());
+        assert!(parse_mod_command("rename-user @old @new extra").is_err());
+    }
+
+    #[test]
     fn parses_server_permanent_ban_without_duration() {
         assert_eq!(
             parse_mod_command("server ban @alice policy").unwrap(),
@@ -769,6 +875,26 @@ mod tests {
             ModCommand::Audit { limit: 5 }
         );
         assert!(parse_mod_command("audit nope").is_err());
+    }
+
+    #[test]
+    fn parses_artboard_restore_command() {
+        assert_eq!(
+            parse_mod_command("artboard restore 2026-05-06 rollback vandalism").unwrap(),
+            ModCommand::ArtboardRestore {
+                date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 6).unwrap()),
+                reason: "rollback vandalism".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("artboard restore rollback latest").unwrap(),
+            ModCommand::ArtboardRestore {
+                date: None,
+                reason: "rollback latest".to_string(),
+            }
+        );
+        assert!(parse_mod_command("artboard restore").is_err());
+        assert!(parse_mod_command("artboard restore 2026-05-06").is_err());
     }
 
     #[test]
