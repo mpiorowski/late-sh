@@ -132,7 +132,8 @@ async fn main() -> anyhow::Result<()> {
         config.ai.api_key.clone(),
         config.ai.model.clone(),
     );
-    let profile_service = ProfileService::new(db.clone(), active_users.clone());
+    let profile_service = ProfileService::new(db.clone(), active_users.clone())
+        .with_session_registry(session_registry.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = FeedService::new(db.clone());
     feed_service.start_poll_task();

@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, info_span};
 
+use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::ActiveUsers;
 
 #[derive(Clone)]
@@ -20,6 +21,7 @@ pub struct ProfileService {
     snapshot_txs: Arc<Mutex<HashMap<Uuid, watch::Sender<ProfileSnapshot>>>>,
     evt_tx: broadcast::Sender<ProfileEvent>,
     active_users: ActiveUsers,
+    session_registry: Option<SessionRegistry>,
 }
 
 #[derive(Clone, Default)]
@@ -44,7 +46,13 @@ impl ProfileService {
             snapshot_txs: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
             active_users,
+            session_registry: None,
         }
+    }
+
+    pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
+        self.session_registry = Some(session_registry);
+        self
     }
 
     // Snapshot
@@ -187,6 +195,71 @@ impl ProfileService {
         self.find_profile(user_id);
         self.publish_event(ProfileEvent::Saved { user_id });
         Ok(())
+    }
+
+    pub fn delete_account(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_delete_account(user_id).await {
+                    late_core::error_span!(
+                        "account_delete_failed",
+                        error = ?e,
+                        "failed to delete account"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: "Could not delete account. Please try again.".to_string(),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.delete_account_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn do_delete_account(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let deleted = client
+            .execute("DELETE FROM users WHERE id = $1", &[&user_id])
+            .await?;
+        if deleted == 0 {
+            anyhow::bail!("user not found");
+        }
+
+        self.terminate_active_sessions(user_id).await;
+        if let Ok(mut users) = self.active_users.lock() {
+            users.remove(&user_id);
+        }
+        Ok(())
+    }
+
+    async fn terminate_active_sessions(&self, user_id: Uuid) {
+        let Some(registry) = self.session_registry.clone() else {
+            return;
+        };
+        let tokens = self
+            .active_users
+            .lock()
+            .ok()
+            .and_then(|users| users.get(&user_id).cloned())
+            .map(|user| {
+                user.sessions
+                    .into_iter()
+                    .map(|session| session.token)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for token in tokens {
+            let _ = registry
+                .send_message(
+                    &token,
+                    SessionMessage::Terminate {
+                        reason: "account deleted".to_string(),
+                    },
+                )
+                .await;
+        }
     }
 }
 
