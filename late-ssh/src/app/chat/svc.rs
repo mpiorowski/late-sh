@@ -29,6 +29,7 @@ use serde_json::json;
 use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
+use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::bonsai::state::stage_for;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::metrics;
@@ -57,6 +58,8 @@ pub struct ChatService {
     active_users: Option<ActiveUsers>,
     session_registry: Option<SessionRegistry>,
     force_admin: bool,
+    dartboard_server: Option<dartboard_local::ServerHandle>,
+    dartboard_provenance: Option<SharedArtboardProvenance>,
     username_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
     refresh_scheduler_started: Arc<AtomicBool>,
@@ -313,6 +316,8 @@ impl ChatService {
             active_users: None,
             session_registry: None,
             force_admin: false,
+            dartboard_server: None,
+            dartboard_provenance: None,
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
             refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
@@ -339,6 +344,16 @@ impl ChatService {
 
     pub fn with_force_admin(mut self, force_admin: bool) -> Self {
         self.force_admin = force_admin;
+        self
+    }
+
+    pub fn with_artboard_handles(
+        mut self,
+        server: dartboard_local::ServerHandle,
+        provenance: SharedArtboardProvenance,
+    ) -> Self {
+        self.dartboard_server = Some(server);
+        self.dartboard_provenance = Some(provenance);
         self
     }
 
@@ -392,12 +407,18 @@ impl ChatService {
     }
 
     fn moderation_service(&self) -> ModerationService {
-        ModerationService::new(
+        let service = ModerationService::new(
             self.db.clone(),
             self.moderation_session_effects(),
             self.moderation_event_tx.clone(),
             self.force_admin,
-        )
+        );
+        match (&self.dartboard_server, &self.dartboard_provenance) {
+            (Some(server), Some(provenance)) => {
+                service.with_artboard_handles(server.clone(), provenance.clone())
+            }
+            _ => service,
+        }
     }
 
     async fn refresh_username_directory(&self) -> Result<()> {
@@ -1113,16 +1134,7 @@ impl ChatService {
         ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
 
         let tx = client.transaction().await?;
-        let row = tx
-            .query_one(
-                "UPDATE chat_messages
-                 SET body = $1, updated = current_timestamp
-                 WHERE id = $2
-                 RETURNING *",
-                &[&new_body, &message_id],
-            )
-            .await?;
-        let updated = ChatMessage::from(row);
+        let updated = ChatMessage::edit(&tx, message_id, &new_body).await?;
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(is_owner),
@@ -1948,14 +1960,9 @@ impl ChatService {
         )?;
         let tx = client.transaction().await?;
         let count = if is_owner {
-            tx.execute(
-                "DELETE FROM chat_messages WHERE id = $1 AND user_id = $2",
-                &[&message_id, &user_id],
-            )
-            .await?
+            ChatMessage::delete_by_author(&tx, message_id, user_id).await?
         } else {
-            tx.execute("DELETE FROM chat_messages WHERE id = $1", &[&message_id])
-                .await?
+            ChatMessage::delete_by_admin(&tx, message_id).await?
         };
         if count == 0 {
             anyhow::bail!("Cannot delete this message");

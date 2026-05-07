@@ -38,6 +38,10 @@ pub(crate) enum ModCommand {
         duration: Option<chrono::Duration>,
         reason: String,
     },
+    ArtboardRestore {
+        date: Option<chrono::NaiveDate>,
+        reason: String,
+    },
     Role {
         action: RoleAction,
         username: String,
@@ -304,8 +308,11 @@ fn parse_server_mod_command(parts: &[&str]) -> Result<ModCommand> {
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: artboard <ban|unban> @name");
+        anyhow::bail!("usage: artboard <ban|unban|restore> ...");
     };
+    if first == "restore" {
+        return parse_artboard_restore_mod_command(&parts[1..]);
+    }
     let action = match first {
         "ban" => ArtboardAction::Ban,
         "unban" => ArtboardAction::Unban,
@@ -321,6 +328,20 @@ fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
         action,
         username,
         duration,
+        reason: parts.get(reason_start..).unwrap_or_default().join(" "),
+    })
+}
+
+fn parse_artboard_restore_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    let (date, reason_start) = match parts.first().copied() {
+        Some(value) => match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+            Ok(date) => (Some(date), 1),
+            Err(_) => (None, 0),
+        },
+        None => (None, 0),
+    };
+    Ok(ModCommand::ArtboardRestore {
+        date,
         reason: parts.get(reason_start..).unwrap_or_default().join(" "),
     })
 }
@@ -486,6 +507,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "server unban @name",
             "artboard ban @name [duration] [reason...]",
             "artboard unban @name",
+            "artboard restore [YYYY-MM-DD] [reason...]",
             "grant mod @name",
             "revoke mod @name",
             "",
@@ -572,9 +594,9 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "@name: username.",
         ],
         "artboard" => &[
-            "artboard <ban|unban> @name",
-            "Controls whether a user may use the artboard.",
-            "Subcommands: artboard ban, artboard unban.",
+            "artboard <ban|unban|restore> ...",
+            "Controls artboard access and snapshots.",
+            "Subcommands: artboard ban, artboard unban, artboard restore.",
         ],
         "artboard ban" => &[
             "artboard ban @name [duration] [reason...]",
@@ -587,6 +609,12 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard unban @name",
             "Removes an artboard ban for a user.",
             "@name: username.",
+        ],
+        "artboard restore" => &[
+            "artboard restore [YYYY-MM-DD] [reason...]",
+            "Restores live Artboard from a daily UTC snapshot.",
+            "date: optional daily snapshot date; defaults to previous UTC day.",
+            "Admin only. Writes a moderation audit entry and backs up the previous main row.",
         ],
         "grant" => &[
             "grant mod @name",
@@ -810,6 +838,24 @@ mod tests {
             ModCommand::Audit { limit: 5 }
         );
         assert!(parse_mod_command("audit nope").is_err());
+    }
+
+    #[test]
+    fn parses_artboard_restore_command() {
+        assert_eq!(
+            parse_mod_command("artboard restore 2026-05-06 rollback vandalism").unwrap(),
+            ModCommand::ArtboardRestore {
+                date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 6).unwrap()),
+                reason: "rollback vandalism".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("artboard restore rollback latest").unwrap(),
+            ModCommand::ArtboardRestore {
+                date: None,
+                reason: "rollback latest".to_string(),
+            }
+        );
     }
 
     #[test]

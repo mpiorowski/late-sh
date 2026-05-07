@@ -70,6 +70,25 @@ impl Tree {
         Ok(())
     }
 
+    pub async fn set_recorded_dates(
+        client: &Client,
+        user_id: Uuid,
+        timestamp: DateTime<Utc>,
+        last_watered: Option<NaiveDate>,
+    ) -> Result<()> {
+        client
+            .execute(
+                "UPDATE bonsai_trees
+                 SET created = $2,
+                     updated = $2,
+                     last_watered = $3
+                 WHERE user_id = $1",
+                &[&user_id, &timestamp, &last_watered],
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn water_and_add_growth_if_available(
         client: &Client,
         user_id: Uuid,

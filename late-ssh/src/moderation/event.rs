@@ -38,6 +38,12 @@ pub enum ModerationEvent {
         reason: String,
         notified_sessions: usize,
     },
+    ArtboardRestored {
+        actor_user_id: Uuid,
+        source_key: String,
+        backup_key: Option<String>,
+        reason: String,
+    },
     RoleAction {
         actor_user_id: Uuid,
         target_user_id: Uuid,

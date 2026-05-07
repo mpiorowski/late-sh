@@ -1,8 +1,11 @@
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
+use dartboard_core::{Canvas, CanvasOp};
 use late_core::{
+    MutexRecover,
     db::Db,
     models::{
+        artboard::Snapshot as ArtboardSnapshot,
         artboard_ban::{ArtboardBan, ArtboardBanListItem},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
@@ -17,6 +20,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
 use crate::authz::{Caps, Permissions, Tier};
 use crate::moderation::command::{
     ArtboardAction, BanListScope, ModCommand, RoleAction, RoomModAction, ServerUserAction,
@@ -31,6 +35,8 @@ pub(crate) struct ModerationService {
     effects: ModerationSessionEffects,
     event_tx: broadcast::Sender<ModerationEvent>,
     force_admin: bool,
+    dartboard_server: Option<dartboard_local::ServerHandle>,
+    dartboard_provenance: Option<SharedArtboardProvenance>,
 }
 
 struct RoomModRequest {
@@ -53,7 +59,19 @@ impl ModerationService {
             effects,
             event_tx,
             force_admin,
+            dartboard_server: None,
+            dartboard_provenance: None,
         }
+    }
+
+    pub(crate) fn with_artboard_handles(
+        mut self,
+        server: dartboard_local::ServerHandle,
+        provenance: SharedArtboardProvenance,
+    ) -> Self {
+        self.dartboard_server = Some(server);
+        self.dartboard_provenance = Some(provenance);
+        self
     }
 
     pub(crate) async fn run_command(
@@ -123,6 +141,10 @@ impl ModerationService {
                     reason,
                 )
                 .await
+            }
+            ModCommand::ArtboardRestore { date, reason } => {
+                self.artboard_restore(actor_user_id, permissions, date, reason)
+                    .await
             }
             ModCommand::Role { action, username } => {
                 self.role(actor_user_id, permissions, action, &username)
@@ -547,6 +569,90 @@ impl ModerationService {
         )])
     }
 
+    async fn artboard_restore(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        date: Option<NaiveDate>,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        if !permissions.has(Caps::RESTORE_ARTBOARD) {
+            anyhow::bail!("admin only");
+        }
+        let server = self
+            .dartboard_server
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("artboard restore is unavailable"))?;
+        let shared_provenance = self
+            .dartboard_provenance
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("artboard restore is unavailable"))?;
+        let date = date.unwrap_or_else(previous_utc_day);
+        let source_key = daily_artboard_key(date);
+        let backup_key = format!(
+            "restore-backup:main:{}",
+            Utc::now().format("%Y%m%dT%H%M%SZ")
+        );
+
+        let mut client = self.db.get().await?;
+        let source = ArtboardSnapshot::find_by_board_key(&client, &source_key)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("artboard snapshot not found: {source_key}"))?;
+        let canvas: Canvas = serde_json::from_value(source.canvas.clone())?;
+        let provenance: ArtboardProvenance = serde_json::from_value(source.provenance.clone())?;
+
+        let tx = client.transaction().await?;
+        let backed_up =
+            ArtboardSnapshot::copy_board_key(&tx, ArtboardSnapshot::MAIN_BOARD_KEY, &backup_key)
+                .await?
+                > 0;
+        let restored =
+            ArtboardSnapshot::copy_board_key(&tx, &source_key, ArtboardSnapshot::MAIN_BOARD_KEY)
+                .await?;
+        if restored == 0 {
+            anyhow::bail!("artboard snapshot not found: {source_key}");
+        }
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "artboard_restore",
+            "artboard",
+            None,
+            json!({
+                "source_key": source_key.clone(),
+                "backup_key": backed_up.then_some(backup_key.clone()),
+                "reason": reason.clone(),
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        {
+            let mut shared = shared_provenance.lock_recover();
+            *shared = provenance;
+        }
+        server.submit_op_for(
+            0,
+            0,
+            CanvasOp::Replace {
+                canvas: canvas.clone(),
+            },
+        );
+
+        let _ = self.event_tx.send(ModerationEvent::ArtboardRestored {
+            actor_user_id,
+            source_key: source_key.clone(),
+            backup_key: backed_up.then_some(backup_key.clone()),
+            reason,
+        });
+
+        let mut lines = vec![format!("restored artboard from {source_key}")];
+        if backed_up {
+            lines.push(format!("backup: {backup_key}"));
+        }
+        Ok(lines)
+    }
+
     async fn role(
         &self,
         actor_user_id: Uuid,
@@ -802,6 +908,17 @@ fn format_reason(reason: &str) -> &str {
 
 fn user_label(username: &str) -> String {
     format!("@{username}")
+}
+
+fn previous_utc_day() -> NaiveDate {
+    Utc::now()
+        .date_naive()
+        .pred_opt()
+        .expect("UTC date overflow")
+}
+
+fn daily_artboard_key(date: NaiveDate) -> String {
+    format!("daily:{date}")
 }
 
 async fn find_user_by_mod_name(client: &tokio_postgres::Client, username: &str) -> Result<User> {

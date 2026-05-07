@@ -1,16 +1,21 @@
+use dartboard_core::{Canvas, Pos};
 use late_core::models::{
+    artboard::Snapshot as ArtboardSnapshot,
     artboard_ban::ArtboardBan,
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::{ChatRoom, ChatRoomParams},
     chat_room_member::ChatRoomMember,
+    moderation_audit_log::ModerationAuditLog,
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::ServerBan,
     user::User,
 };
+use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::{ChatEvent, ChatService};
 use late_ssh::authz::Permissions;
+use late_ssh::dartboard;
 use late_ssh::moderation::command::ServerUserAction;
 use late_ssh::moderation::event::ModerationEvent;
 use late_ssh::session::{SessionMessage, SessionRegistry};
@@ -1291,18 +1296,15 @@ async fn admin_delete_event_carries_admin_user_id_not_author() {
         other => panic!("expected MessageDeleted, got {other:?}"),
     }
 
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*)
-             FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'message_delete'
-               AND target_id = $2",
-            &[&admin.id, &msg.id],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == admin.id
+                && entry.action == "message_delete"
+                && entry.target_id == Some(msg.id)
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1566,17 +1568,15 @@ async fn mod_room_ban_command_bans_kicks_and_audits() {
             .await
             .expect("membership lookup")
     );
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'room_ban'
-               AND target_id = $2",
-            &[&actor.id, &target.id],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "room_ban"
+                && entry.target_id == Some(target.id)
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1654,20 +1654,18 @@ async fn mod_rename_room_command_updates_slug_and_audits() {
         other => panic!("expected room renamed moderation event, got {other:?}"),
     }
 
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'rename_room'
-               AND target_kind = 'room'
-               AND target_id = $2
-               AND metadata->>'old_slug' = 'rename-room-old'
-               AND metadata->>'new_slug' = 'rename-room-new'",
-            &[&actor.id, &room.id],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "rename_room"
+                && entry.target_kind == "room"
+                && entry.target_id == Some(room.id)
+                && entry.metadata["old_slug"] == "rename-room-old"
+                && entry.metadata["new_slug"] == "rename-room-new"
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1740,17 +1738,15 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
         other => panic!("expected terminate message, got {other:?}"),
     }
 
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'server_kick'
-               AND target_id = $2",
-            &[&actor.id, &target.id],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "server_kick"
+                && entry.target_id == Some(target.id)
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1861,17 +1857,15 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
         Some(target.fingerprint.as_str())
     );
 
-    let audit_count: i64 = client
-        .query_one(
-            "SELECT COUNT(*) FROM moderation_audit_log
-             WHERE actor_user_id = $1
-               AND action = 'server_ban'
-               AND target_id = $2",
-            &[&actor.id, &target.id],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "server_ban"
+                && entry.target_id == Some(target.id)
+        })
+        .count();
     assert_eq!(audit_count, 1);
 }
 
@@ -1951,6 +1945,143 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
             .await
             .expect("artboard ban lookup")
     );
+}
+
+#[tokio::test]
+async fn admin_artboard_restore_command_restores_daily_snapshot_and_audits() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "artboard_restore_actor").await;
+
+    let mut main_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = main_canvas.put_glyph(Pos { x: 0, y: 0 }, 'M');
+    let mut main_provenance = ArtboardProvenance::default();
+    main_provenance.set_username(Pos { x: 0, y: 0 }, "main_owner");
+
+    let mut daily_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = daily_canvas.put_glyph(Pos { x: 0, y: 0 }, 'D');
+    let mut daily_provenance = ArtboardProvenance::default();
+    daily_provenance.set_username(Pos { x: 0, y: 0 }, "daily_owner");
+
+    ArtboardSnapshot::upsert(
+        &client,
+        ArtboardSnapshot::MAIN_BOARD_KEY,
+        serde_json::to_value(&main_canvas).expect("serialize main canvas"),
+        serde_json::to_value(&main_provenance).expect("serialize main provenance"),
+    )
+    .await
+    .expect("insert main snapshot");
+    ArtboardSnapshot::upsert(
+        &client,
+        "daily:2026-05-06",
+        serde_json::to_value(&daily_canvas).expect("serialize daily canvas"),
+        serde_json::to_value(&daily_provenance).expect("serialize daily provenance"),
+    )
+    .await
+    .expect("insert daily snapshot");
+
+    let shared_provenance = main_provenance.shared();
+    let server = dartboard::spawn_persistent_server_with_interval(
+        test_db.db.clone(),
+        Some(main_canvas),
+        shared_provenance.clone(),
+        Duration::from_secs(3600),
+    );
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    )
+    .with_artboard_handles(server.clone(), shared_provenance.clone());
+    let mut events = service.subscribe_events();
+    let mut moderation_events = service.subscribe_moderation_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(true, false),
+        request_id,
+        "artboard restore 2026-05-06 rollback vandalism".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines[0], "restored artboard from daily:2026-05-06");
+            assert!(
+                lines
+                    .get(1)
+                    .is_some_and(|line| line.starts_with("backup: restore-backup:main:")),
+                "missing backup line: {lines:?}"
+            );
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let moderation_event = timeout(Duration::from_secs(2), moderation_events.recv())
+        .await
+        .expect("moderation event timeout")
+        .expect("moderation event");
+    match moderation_event {
+        ModerationEvent::ArtboardRestored {
+            actor_user_id,
+            source_key,
+            backup_key,
+            reason,
+        } => {
+            assert_eq!(actor_user_id, actor.id);
+            assert_eq!(source_key, "daily:2026-05-06");
+            assert!(backup_key.is_some());
+            assert_eq!(reason, "rollback vandalism");
+        }
+        other => panic!("expected artboard restored moderation event, got {other:?}"),
+    }
+
+    let live_canvas = server.canvas_snapshot();
+    assert_eq!(live_canvas.get(Pos { x: 0, y: 0 }), 'D');
+    assert_eq!(
+        shared_provenance
+            .lock()
+            .expect("shared provenance lock")
+            .username_at(&live_canvas, Pos { x: 0, y: 0 }),
+        Some("daily_owner")
+    );
+
+    let main_snapshot =
+        ArtboardSnapshot::find_by_board_key(&client, ArtboardSnapshot::MAIN_BOARD_KEY)
+            .await
+            .expect("load restored main")
+            .expect("restored main exists");
+    let persisted_canvas: Canvas =
+        serde_json::from_value(main_snapshot.canvas).expect("decode persisted canvas");
+    assert_eq!(persisted_canvas.get(Pos { x: 0, y: 0 }), 'D');
+
+    let backups = ArtboardSnapshot::list_by_board_key_prefix(&client, "restore-backup:main:")
+        .await
+        .expect("backup snapshots");
+    assert_eq!(backups.len(), 1);
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "artboard_restore"
+                && entry.target_kind == "artboard"
+                && entry.metadata["source_key"] == "daily:2026-05-06"
+                && entry.metadata["reason"] == "rollback vandalism"
+        })
+        .count();
+    assert_eq!(audit_count, 1);
 }
 
 #[tokio::test]
