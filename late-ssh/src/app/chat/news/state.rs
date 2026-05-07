@@ -61,7 +61,6 @@ impl State {
 
     pub fn list_articles(&self) {
         self.article_service.list_articles_task();
-        self.article_service.refresh_unread_count_task(self.user_id);
     }
 
     pub fn selected_index(&self) -> usize {

@@ -150,7 +150,6 @@ impl State {
 
     pub fn list(&self) {
         self.service.list_task();
-        self.refresh_unread_count();
     }
 
     pub fn refresh_unread_count(&self) {
