@@ -8,6 +8,8 @@ use testcontainers::{
 use tokio::time::{Duration, sleep};
 use tokio_postgres::NoTls;
 
+const TEST_DB_POOL_SIZE: usize = 8;
+
 pub struct TestDb {
     /// Holds the testcontainers container alive (local dev).
     /// `None` when using an external postgres (CI).
@@ -63,7 +65,7 @@ async fn test_db_external(url: &str) -> TestDb {
         user,
         password,
         dbname: db_name,
-        max_pool_size: 16,
+        max_pool_size: TEST_DB_POOL_SIZE,
     };
 
     let db = Db::new(&config).expect("create db");
@@ -99,7 +101,7 @@ async fn test_db_container() -> TestDb {
         user: "postgres".to_string(),
         password: "postgres".to_string(),
         dbname: "postgres".to_string(),
-        max_pool_size: 16,
+        max_pool_size: TEST_DB_POOL_SIZE,
     };
 
     wait_for_db(&config).await;

@@ -39,6 +39,8 @@ bitflags! {
         const OPEN_MOD_SURFACE = 1 << 13;
         const VIEW_STAFF_INFO = 1 << 14;
         const RENAME_ROOM = 1 << 15;
+        const RESTORE_ARTBOARD = 1 << 16;
+        const RENAME_USER = 1 << 17;
     }
 }
 
@@ -56,7 +58,9 @@ const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::UNBAN_FROM_ARTBOARD)
     .union(Caps::OPEN_MOD_SURFACE)
     .union(Caps::VIEW_STAFF_INFO)
-    .union(Caps::RENAME_ROOM);
+    .union(Caps::RENAME_ROOM)
+    .union(Caps::RESTORE_ARTBOARD)
+    .union(Caps::RENAME_USER);
 
 const ADMIN: Caps = Caps::all();
 
@@ -155,6 +159,8 @@ mod tests {
         assert!(permissions.has(Caps::OPEN_MOD_SURFACE));
         assert!(permissions.has(Caps::TEMP_BAN_USER));
         assert!(permissions.has(Caps::RENAME_ROOM));
+        assert!(permissions.has(Caps::RENAME_USER));
+        assert!(permissions.has(Caps::RESTORE_ARTBOARD));
         assert!(!permissions.has(Caps::PERMA_BAN_USER));
         assert!(!permissions.has(Caps::GRANT_MOD));
     }

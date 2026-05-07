@@ -5,6 +5,7 @@ use crate::app::{
     rooms::{
         backend::{CreateModalAction, CreateRoomFlow, InputAction},
         filter::RoomsFilter,
+        svc::GameKind,
     },
     state::App,
 };
@@ -237,10 +238,15 @@ fn handle_create_picker_event(app: &mut App, kind_index: usize, event: &ParsedIn
 
 fn submit_create_modal(
     app: &mut App,
-    game_kind: crate::app::rooms::svc::GameKind,
+    game_kind: GameKind,
     display_name: String,
     settings: serde_json::Value,
 ) {
+    if !can_create_room(app.is_admin, app.is_moderator, game_kind) {
+        app.banner = Some(Banner::error(&role_gate_message("create", game_kind)));
+        return;
+    }
+
     let display_name = display_name.trim().to_string();
     if display_name.is_empty() {
         app.banner = Some(Banner::error("Table name is required."));
@@ -278,6 +284,10 @@ fn open_selected_create_modal(app: &mut App, kind_index: usize) {
     else {
         return;
     };
+    if !can_create_room(app.is_admin, app.is_moderator, kind) {
+        app.banner = Some(Banner::error(&role_gate_message("create", kind)));
+        return;
+    }
     let modal = app.room_game_registry.open_create_modal(kind);
     app.rooms_create_flow = Some(CreateRoomFlow::Game { kind, modal });
 }
@@ -436,8 +446,8 @@ fn enter_selected_room(app: &mut App) {
 }
 
 pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListItem) -> bool {
-    if !can_enter_room(app.is_admin, app.is_moderator) {
-        app.banner = Some(Banner::error("Rooms are locked for now."));
+    if !can_enter_room(app.is_admin, app.is_moderator, room.game_kind) {
+        app.banner = Some(Banner::error(&role_gate_message("enter", room.game_kind)));
         return false;
     }
 
@@ -573,14 +583,25 @@ fn can_delete_room(is_admin: bool) -> bool {
     is_admin
 }
 
-fn can_enter_room(is_admin: bool, is_moderator: bool) -> bool {
-    let _ = (is_admin, is_moderator);
-    true
+fn can_create_room(is_admin: bool, is_moderator: bool, game_kind: GameKind) -> bool {
+    !matches!(game_kind, GameKind::Poker) || is_admin || is_moderator
+}
+
+fn can_enter_room(is_admin: bool, is_moderator: bool, game_kind: GameKind) -> bool {
+    !matches!(game_kind, GameKind::Poker) || is_admin || is_moderator
+}
+
+fn role_gate_message(action: &'static str, game_kind: GameKind) -> String {
+    match game_kind {
+        GameKind::Poker => format!("Only admins and moderators can {action} Poker rooms."),
+        _ => format!("You cannot {action} this room."),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{can_delete_room, can_enter_room};
+    use super::{can_create_room, can_delete_room, can_enter_room};
+    use crate::app::rooms::svc::GameKind;
 
     #[test]
     fn room_deletion_stays_admin_only() {
@@ -589,10 +610,27 @@ mod tests {
     }
 
     #[test]
-    fn room_entry_allows_all_users() {
-        assert!(can_enter_room(true, false));
-        assert!(can_enter_room(false, true));
-        assert!(can_enter_room(true, true));
-        assert!(can_enter_room(false, false));
+    fn blackjack_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(false, false, GameKind::Blackjack));
+        assert!(can_enter_room(false, false, GameKind::Blackjack));
+    }
+
+    #[test]
+    fn tictactoe_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(false, false, GameKind::TicTacToe));
+        assert!(can_enter_room(false, false, GameKind::TicTacToe));
+    }
+
+    #[test]
+    fn poker_creation_and_entry_require_admin_or_moderator() {
+        assert!(can_create_room(true, false, GameKind::Poker));
+        assert!(can_create_room(false, true, GameKind::Poker));
+        assert!(can_create_room(true, true, GameKind::Poker));
+        assert!(!can_create_room(false, false, GameKind::Poker));
+
+        assert!(can_enter_room(true, false, GameKind::Poker));
+        assert!(can_enter_room(false, true, GameKind::Poker));
+        assert!(can_enter_room(true, true, GameKind::Poker));
+        assert!(!can_enter_room(false, false, GameKind::Poker));
     }
 }

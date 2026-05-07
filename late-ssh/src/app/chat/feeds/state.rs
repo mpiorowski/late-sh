@@ -79,7 +79,6 @@ impl State {
 
     pub fn list(&self) {
         self.service.list_task(self.user_id);
-        self.service.refresh_unread_count_task(self.user_id);
     }
 
     pub fn mark_read(&mut self) {
