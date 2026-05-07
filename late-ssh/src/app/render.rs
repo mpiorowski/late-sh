@@ -953,7 +953,10 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
 
 fn app_frame_sponsor_title() -> Line<'static> {
     Line::from(vec![
-        Span::styled(" thanks for hanging out ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            " thanks for hanging out ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
         Span::styled("☕ ", Style::default().fg(theme::AMBER())),
         Span::styled(
             "ko-fi.com/mateuszpiorowski ",
