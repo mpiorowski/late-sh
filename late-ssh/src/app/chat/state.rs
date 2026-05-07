@@ -25,7 +25,7 @@ use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
 use crate::state::{ActiveUser, ActiveUsers};
 
 use super::{
-    discover, news, notifications,
+    discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
@@ -72,6 +72,7 @@ pub(crate) struct ModCommandOutput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
+    Feeds,
     News,
     Notifications,
     Discover,
@@ -134,6 +135,8 @@ pub struct ChatState {
 
     /// News (shown as a virtual room in the room list)
     pub(crate) news_selected: bool,
+    pub(crate) feeds_selected: bool,
+    pub feeds: feeds::state::State,
     pub(crate) news: news::state::State,
 
     /// Notifications / mentions (shown as a virtual room in the room list)
@@ -166,6 +169,7 @@ pub(crate) struct ChatServices {
     pub chat: ChatService,
     pub notifications: NotificationService,
     pub articles: news::svc::ArticleService,
+    pub feeds: feeds::svc::FeedService,
     pub showcases: showcase::svc::ShowcaseService,
     pub work: work::svc::WorkService,
 }
@@ -187,6 +191,7 @@ impl ChatState {
             chat: service,
             notifications: notification_service,
             articles: article_service,
+            feeds: feed_service,
             showcases: showcase_service,
             work: work_service,
         } = services;
@@ -242,6 +247,8 @@ impl ChatState {
             reply_target: None,
             bg_task,
             news_selected: false,
+            feeds_selected: false,
+            feeds: feeds::state::State::new(feed_service, article_service.clone(), user_id),
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
@@ -482,6 +489,7 @@ impl ChatState {
     pub fn focus_message_in_room(&mut self, room_id: Uuid, message_id: Uuid) {
         self.reaction_leader_active = false;
         self.room_jump_active = false;
+        self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
         self.discover_selected = false;
@@ -746,7 +754,15 @@ impl ChatState {
     /// Order: core (general, announcements) → news → showcases → work
     /// → mentions → discover → public rooms (alpha) → private rooms (alpha) → DMs
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames)
+        let mut order = visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames);
+        if self.feeds.has_feeds() {
+            let insert_at = order
+                .iter()
+                .position(|slot| *slot == RoomSlot::News)
+                .unwrap_or(order.len());
+            order.insert(insert_at, RoomSlot::Feeds);
+        }
+        order
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -771,6 +787,11 @@ impl ChatState {
         self.highlighted_message_id = None;
 
         match slot {
+            RoomSlot::Feeds => {
+                let changed = !self.feeds_selected;
+                self.select_feeds();
+                changed
+            }
             RoomSlot::News => {
                 let changed = !self.news_selected;
                 self.select_news();
@@ -804,12 +825,14 @@ impl ChatState {
                 {
                     return false;
                 }
-                let changed = self.news_selected
+                let changed = self.feeds_selected
+                    || self.news_selected
                     || self.notifications_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
                     || self.selected_room_id != Some(next_id);
+                self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
                 self.discover_selected = false;
@@ -853,7 +876,9 @@ impl ChatState {
             return false;
         }
 
-        let current_item = if self.notifications_selected {
+        let current_item = if self.feeds_selected {
+            RoomSlot::Feeds
+        } else if self.notifications_selected {
             RoomSlot::Notifications
         } else if self.discover_selected {
             RoomSlot::Discover
@@ -1325,20 +1350,37 @@ impl ChatState {
         self.drain_pinned_messages();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
+        let feeds_banner = self.feeds.tick();
         let news_banner = self.news.tick();
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
         let work_banner = self.work.tick();
         moderation_banner
             .or(banner)
+            .or(feeds_banner)
             .or(news_banner)
             .or(notif_banner)
             .or(showcase_banner)
             .or(work_banner)
     }
 
+    pub fn select_feeds(&mut self) {
+        self.room_jump_active = false;
+        self.feeds_selected = true;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+        self.feeds.list();
+        self.feeds.mark_read();
+    }
+
     pub fn select_news(&mut self) {
         self.room_jump_active = false;
+        self.feeds_selected = false;
         self.news_selected = true;
         self.notifications_selected = false;
         self.discover_selected = false;
@@ -1357,6 +1399,7 @@ impl ChatState {
     pub fn select_notifications(&mut self) {
         self.room_jump_active = false;
         self.notifications_selected = true;
+        self.feeds_selected = false;
         self.news_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
@@ -1370,6 +1413,7 @@ impl ChatState {
     pub fn select_discover(&mut self) {
         self.room_jump_active = false;
         self.discover_selected = true;
+        self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
         self.showcase_selected = false;
@@ -1383,6 +1427,7 @@ impl ChatState {
     pub fn select_showcase(&mut self) {
         self.room_jump_active = false;
         self.showcase_selected = true;
+        self.feeds_selected = false;
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
@@ -1396,6 +1441,7 @@ impl ChatState {
     pub fn select_work(&mut self) {
         self.room_jump_active = false;
         self.work_selected = true;
+        self.feeds_selected = false;
         self.showcase_selected = false;
         self.discover_selected = false;
         self.notifications_selected = false;
@@ -1695,6 +1741,7 @@ impl ChatState {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::DmOpened { user_id, room_id } if self.user_id == user_id => {
+                    self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
@@ -1713,6 +1760,7 @@ impl ChatState {
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
+                    self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
@@ -1743,6 +1791,7 @@ impl ChatState {
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
+                    self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
@@ -2460,7 +2509,8 @@ fn adjacent_composer_room(
         .iter()
         .filter_map(|slot| match slot {
             RoomSlot::Room(room_id) => Some(*room_id),
-            RoomSlot::News
+            RoomSlot::Feeds
+            | RoomSlot::News
             | RoomSlot::Notifications
             | RoomSlot::Discover
             | RoomSlot::Showcase

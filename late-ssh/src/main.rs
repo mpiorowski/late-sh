@@ -15,6 +15,7 @@ use late_core::{
 use late_ssh::{
     api,
     app::ai::{ghost::GhostService, svc::AiService},
+    app::chat::feeds::svc::FeedService,
     app::chat::news::svc::ArticleService,
     app::chat::notifications::svc::NotificationService,
     app::chat::showcase::svc::ShowcaseService,
@@ -23,6 +24,7 @@ use late_ssh::{
     app::profile::svc::ProfileService,
     app::vote::svc::VoteService,
     config::Config,
+    moderation::service::ModerationInfra,
     session::SessionRegistry,
     ssh,
     state::{ActivityEvent, State},
@@ -132,6 +134,8 @@ async fn main() -> anyhow::Result<()> {
     );
     let profile_service = ProfileService::new(db.clone(), active_users.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let feed_service = FeedService::new(db.clone());
+    feed_service.start_poll_task();
     let showcase_service = ShowcaseService::new(db.clone());
     let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
@@ -148,8 +152,10 @@ async fn main() -> anyhow::Result<()> {
         );
     let tictactoe_table_manager =
         late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new();
+    let poker_table_manager = late_ssh::app::rooms::poker::manager::PokerTableManager::new();
     let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
         blackjack_table_manager.clone(),
+        poker_table_manager,
         tictactoe_table_manager,
     );
     let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
@@ -191,6 +197,11 @@ async fn main() -> anyhow::Result<()> {
         initial_dartboard.map(|snapshot| snapshot.canvas),
         dartboard_provenance.clone(),
     );
+    let chat_service = chat_service.with_moderation_infra(
+        ModerationInfra::default()
+            .with_force_admin(config.force_admin)
+            .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone()),
+    );
     let leaderboard_service =
         late_ssh::app::games::leaderboard::svc::LeaderboardService::new(db.clone());
     let nonogram_library = match late_ssh::app::games::nonogram::state::load_default_library() {
@@ -229,6 +240,7 @@ async fn main() -> anyhow::Result<()> {
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
         article_service,
+        feed_service,
         showcase_service,
         work_service,
         profile_service,

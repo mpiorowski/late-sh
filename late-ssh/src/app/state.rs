@@ -113,6 +113,7 @@ pub struct SessionConfig {
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
+    pub feed_service: crate::app::chat::feeds::svc::FeedService,
     pub showcase_service: crate::app::chat::showcase::svc::ShowcaseService,
     pub work_service: crate::app::chat::work::svc::WorkService,
     pub profile_service: ProfileService,
@@ -653,6 +654,7 @@ impl App {
         };
         let mut settings_modal_state = settings_modal::state::SettingsModalState::new(
             config.profile_service.clone(),
+            config.feed_service.clone(),
             config.user_id,
         );
         settings_modal_state.open_from_profile(
@@ -709,6 +711,7 @@ impl App {
                     chat: config.chat_service,
                     notifications: config.notification_service,
                     articles: config.article_service.clone(),
+                    feeds: config.feed_service.clone(),
                     showcases: config.showcase_service.clone(),
                     work: config.work_service.clone(),
                 },

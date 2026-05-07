@@ -18,6 +18,7 @@ struct InputContext {
     screen: Screen,
     chat_composing: bool,
     chat_ac_active: bool,
+    feeds_processing: bool,
     news_composing: bool,
     showcase_composing: bool,
     work_composing: bool,
@@ -29,6 +30,7 @@ impl InputContext {
             screen: app.screen,
             chat_composing: app.chat.is_composing(),
             chat_ac_active: app.chat.is_autocomplete_active(),
+            feeds_processing: app.chat.feeds.processing(),
             news_composing: app.chat.news.composing(),
             showcase_composing: app.chat.showcase.composing(),
             work_composing: app.chat.work.composing(),
@@ -43,7 +45,10 @@ impl InputContext {
         }
         chat_screen
             || (self.screen == Screen::Chat
-                && (self.news_composing || self.showcase_composing || self.work_composing))
+                && (self.feeds_processing
+                    || self.news_composing
+                    || self.showcase_composing
+                    || self.work_composing))
     }
 }
 
@@ -637,6 +642,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if ctx.screen == Screen::Chat && ctx.feeds_processing {
+        return;
+    }
+
     // Screen-specific rich event handlers get first crack at
     // Mouse/Home/modified-arrow events before the generic dispatch below.
     if ctx.screen == Screen::Games
@@ -710,7 +719,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 return;
             }
             if ctx.screen == Screen::Chat
-                && (ctx.news_composing || ctx.showcase_composing || ctx.work_composing)
+                && (ctx.feeds_processing
+                    || ctx.news_composing
+                    || ctx.showcase_composing
+                    || ctx.work_composing)
             {
                 return;
             }
@@ -929,6 +941,9 @@ fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
         chat::input::handle_compose_char(app, ch);
         return true;
     }
+    if ctx.screen == Screen::Chat && ctx.feeds_processing {
+        return true;
+    }
     if ctx.screen == Screen::Chat && ctx.showcase_composing {
         app.chat.showcase.field_insert_char(ch);
         return true;
@@ -1050,6 +1065,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::Games && app.is_playing_game {
         dispatch_screen_key(app, ctx.screen, 0x1B);
+        return;
+    }
+    if ctx.screen == Screen::Chat && ctx.feeds_processing {
+        app.chat.feeds.stop_processing();
         return;
     }
     if ctx.screen == Screen::Rooms {
@@ -1203,6 +1222,15 @@ fn with_chat_render_input<R>(
     };
     let mut rows_cache = crate::app::chat::ui::ChatRowsCache::default();
     let view = crate::app::chat::ui::ChatRenderInput {
+        feeds_selected: app.chat.feeds_selected,
+        feeds_processing: app.chat.feeds.processing(),
+        feeds_unread_count: app.chat.feeds.unread_count(),
+        feeds_view: crate::app::chat::feeds::ui::FeedListView {
+            entries: app.chat.feeds.all_entries(),
+            selected_index: app.chat.feeds.selected_index(),
+            has_feeds: app.chat.feeds.has_feeds(),
+            marker_read_at: app.chat.feeds.marker_read_at(),
+        },
         news_selected: app.chat.news_selected,
         news_unread_count: app.chat.news.unread_count(),
         news_view: crate::app::chat::news::ui::ArticleListView {
@@ -1508,6 +1536,7 @@ fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
 
 fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
+    app.chat.feeds.stop_processing();
     app.chat.news.stop_composing();
     app.chat.showcase.stop_composing();
     app.chat.work.stop_composing();
@@ -1549,6 +1578,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     // ? opens the global guide unless the current screen owns it.
     if byte == b'?'
         && !ctx.chat_composing
+        && !ctx.feeds_processing
         && !ctx.news_composing
         && !ctx.showcase_composing
         && !ctx.work_composing
@@ -1593,6 +1623,24 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 
     match byte {
+        b'B' if matches!(ctx.screen, Screen::Dashboard | Screen::Chat)
+            && !ctx.chat_composing
+            && !ctx.news_composing
+            && !ctx.showcase_composing
+            && !ctx.work_composing =>
+        {
+            dashboard::input::open_cli_install_modal(app);
+            true
+        }
+        b'P' if matches!(ctx.screen, Screen::Dashboard | Screen::Chat)
+            && !ctx.chat_composing
+            && !ctx.news_composing
+            && !ctx.showcase_composing
+            && !ctx.work_composing =>
+        {
+            dashboard::input::open_browser_pairing_qr(app);
+            true
+        }
         b'q' | b'Q' => {
             if ctx.screen == Screen::Artboard
                 && app
@@ -1664,6 +1712,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'w' | b'W'
             if !ctx.chat_composing
+                && !ctx.feeds_processing
                 && !ctx.news_composing
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
@@ -1915,6 +1964,7 @@ mod tests {
             screen: Screen::Dashboard,
             chat_composing: true,
             chat_ac_active: false,
+            feeds_processing: false,
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
@@ -1928,6 +1978,7 @@ mod tests {
             screen: Screen::Chat,
             chat_composing: true,
             chat_ac_active: false,
+            feeds_processing: false,
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
@@ -1941,6 +1992,7 @@ mod tests {
             screen: Screen::Dashboard,
             chat_composing: false,
             chat_ac_active: false,
+            feeds_processing: false,
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
@@ -2101,6 +2153,7 @@ mod tests {
             screen: Screen::Chat,
             chat_composing: true,
             chat_ac_active: false,
+            feeds_processing: false,
             news_composing: true,
             showcase_composing: false,
             work_composing: false,
@@ -2114,6 +2167,7 @@ mod tests {
             screen: Screen::Chat,
             chat_composing: false,
             chat_ac_active: false,
+            feeds_processing: false,
             news_composing: true,
             showcase_composing: false,
             work_composing: false,
@@ -2127,6 +2181,7 @@ mod tests {
             screen: Screen::Chat,
             chat_composing: false,
             chat_ac_active: false,
+            feeds_processing: false,
             news_composing: false,
             showcase_composing: true,
             work_composing: false,
@@ -2448,6 +2503,7 @@ mod tests {
             screen: Screen::Chat,
             chat_composing: true,
             chat_ac_active: true,
+            feeds_processing: false,
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
@@ -2461,6 +2517,7 @@ mod tests {
             screen: Screen::Chat,
             chat_composing: true,
             chat_ac_active: false,
+            feeds_processing: false,
             news_composing: false,
             showcase_composing: false,
             work_composing: false,

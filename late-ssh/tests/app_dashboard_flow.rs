@@ -40,6 +40,16 @@ async fn uppercase_b_on_dashboard_opens_cli_install_modal() {
 }
 
 #[tokio::test]
+async fn uppercase_b_opens_cli_install_modal_on_chat() {
+    let (_test_db, mut app) = make_app_harness().await;
+
+    app.handle_input(b"2");
+    wait_for_render_contains(&mut app, " Chat ").await;
+    app.handle_input(b"B");
+    wait_for_render_contains(&mut app, "build from source").await;
+}
+
+#[tokio::test]
 async fn mouse_move_does_not_close_cli_install_modal() {
     let (_test_db, mut app) = make_app_harness().await;
 
@@ -54,16 +64,14 @@ async fn mouse_move_does_not_close_cli_install_modal() {
 }
 
 #[tokio::test]
-async fn uppercase_p_only_opens_pairing_qr_on_dashboard() {
+async fn uppercase_p_opens_pairing_qr_on_dashboard_and_chat() {
     let (_test_db, mut app) = make_app_harness().await;
 
     app.handle_input(b"2");
     wait_for_render_contains(&mut app, " Chat ").await;
     app.handle_input(b"P");
-    assert!(
-        !render_plain(&mut app).contains("Scan to pair audio"),
-        "uppercase P should not open the pairing QR outside Dashboard"
-    );
+    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+    app.handle_input(b"x");
 
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Dashboard ").await;

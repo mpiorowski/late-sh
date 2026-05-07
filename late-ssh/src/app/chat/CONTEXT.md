@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat feeds, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-02
+- Last updated: 2026-05-05
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -17,7 +17,7 @@ Included here:
 - Main chat rooms, DMs, public/private topic rooms, and game-backed room chat.
 - Dashboard chat and embedded Rooms chat surfaces.
 - Message composer, replies, edits, deletes, reactions, pinned messages, ignores, overlays, and autocomplete.
-- Synthetic chat entries: News, Mentions/Notifications, Showcase, Work, and Discover.
+- Synthetic chat entries: Feeds, News, Mentions/Notifications, Showcase, Work, and Discover.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
 
 Global SSH, audio, games, profile, rooms/blackjack, observability, and repo-wide test policy stay in the root context.
@@ -35,6 +35,7 @@ late-ssh/src/app/chat/
 |-- ui.rs                        # Full chat, dashboard chat, embedded room chat, room list, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
+|-- feeds/                       # Synthetic Feeds entry: private per-user RSS/Atom inbox
 |-- news/                        # Synthetic News entry: articles + #general announcement
 |-- notifications/               # Synthetic Mentions entry: mention notifications
 |-- showcase/                    # Synthetic Showcase entry: user project links
@@ -55,7 +56,7 @@ late-ssh/tests/chat/
 
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
-`notification.rs`, `article.rs`, `article_feed_read.rs`, `showcase.rs`,
+`notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_feed_read.rs`, `showcase.rs`,
 `showcase_feed_read.rs`, `work_profile.rs`, and `work_feed_read.rs`.
 Chat-owned moderation commands also use `room_ban.rs`,
 `server_ban.rs`, `artboard_ban.rs`, and `moderation_audit_log.rs`.
@@ -147,14 +148,22 @@ Notifications:
 Visual order is defined in `state.rs` and mirrored by room-list rendering in `ui.rs`:
 1. Core permanent rooms: `general`, `announcements`, `suggestions`, `bugs`.
 2. Other permanent rooms.
-3. News.
-4. Showcase.
-5. Work.
-6. Notifications/Mentions.
-7. Discover.
-8. Public topic rooms, sorted by slug.
-9. Private topic rooms, sorted by slug.
-10. DMs, sorted by peer display name.
+3. Feeds, when the current user has at least one RSS/Atom subscription.
+4. News.
+5. Showcase.
+6. Work.
+7. Notifications/Mentions.
+8. Discover.
+9. Public topic rooms, sorted by slug.
+10. Private topic rooms, sorted by slug.
+11. DMs, sorted by peer display name.
+
+Feeds:
+- Feed subscriptions are per-user and managed in `Settings -> Feeds`.
+- `rss_feeds` stores connected RSS/Atom URLs; `rss_entries` stores private pending entries.
+- The background `FeedService` polls active feeds, parses a conservative RSS/Atom subset, stores unseen entries, and publishes per-user events.
+- The `feeds` synthetic room is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#general` announcement.
+- Enter copies the selected feed entry URL, `d` dismisses it, and `r` asks the feed poller to refresh.
 
 Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_room` hides them from the main Chat room list/navigation and favorite-room picker.
 

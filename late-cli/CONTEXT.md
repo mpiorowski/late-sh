@@ -385,8 +385,8 @@ Relevant TUI controls:
 - `m`: toggle mute on paired client
 - `+` / `=`: volume up on paired client
 - `-` / `_`: volume down on paired client
-- `P`: dashboard browser-pairing QR
-- `B`: dashboard CLI install/build-source modal
+- `P`: dashboard/chat browser-pairing QR
+- `B`: dashboard/chat CLI install/build-source modal
 
 ---
 

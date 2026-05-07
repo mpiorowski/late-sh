@@ -1,6 +1,7 @@
 use crate::app::ai::svc::AiService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::bonsai::svc::BonsaiService;
+use crate::app::chat::feeds::svc::FeedService;
 use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
@@ -68,6 +69,7 @@ pub struct State {
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
+    pub feed_service: FeedService,
     pub showcase_service: ShowcaseService,
     pub work_service: WorkService,
     pub profile_service: ProfileService,

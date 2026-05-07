@@ -252,6 +252,7 @@ impl ArticleService {
                         service.publish_event(ArticleEvent::Failed {
                             user_id,
                             error: e.to_string(),
+                            url: None,
                         });
                     }
                 }
@@ -294,6 +295,7 @@ impl ArticleService {
                     service.publish_event(ArticleEvent::Failed {
                         user_id,
                         error: e.to_string(),
+                        url: Some(target_url.clone()),
                     });
                 }
             }
@@ -393,7 +395,10 @@ impl ArticleService {
 
         // 5. Publish Event
         tracing::info!(%url, "publishing ArticleEvent::Created");
-        self.publish_event(ArticleEvent::Created { user_id });
+        self.publish_event(ArticleEvent::Created {
+            user_id,
+            url: url.to_string(),
+        });
 
         Ok(())
     }

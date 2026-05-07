@@ -26,6 +26,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.settings_modal_state.editing_feed_url() {
+        handle_feed_url_input(app, event);
+        return;
+    }
+
     // Tab / Shift+Tab switch top-level tabs. Do this before close-event
     // routing so Tab doesn't get eaten as "close".
     match event {
@@ -57,6 +62,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
 
     if app.settings_modal_state.selected_tab() == Tab::Favorites {
         handle_favorites_tab_input(app, event);
+        return;
+    }
+
+    if app.settings_modal_state.selected_tab() == Tab::Feeds {
+        handle_feeds_tab_input(app, event);
         return;
     }
 
@@ -127,6 +137,32 @@ fn handle_favorites_tab_input(app: &mut App, event: ParsedInput) {
             if state.favorites_index_is_add_row() && !state.filtered_rooms().is_empty() =>
         {
             state.open_picker(PickerKind::Room);
+        }
+        _ => {}
+    }
+}
+
+fn handle_feeds_tab_input(app: &mut App, event: ParsedInput) {
+    let state: &mut SettingsModalState = &mut app.settings_modal_state;
+    match event {
+        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
+        ParsedInput::Byte(b'j') | ParsedInput::Char('j') | ParsedInput::Arrow(b'B') => {
+            state.move_feed_cursor(1)
+        }
+        ParsedInput::Byte(b'k') | ParsedInput::Char('k') | ParsedInput::Arrow(b'A') => {
+            state.move_feed_cursor(-1)
+        }
+        ParsedInput::Byte(b'd')
+        | ParsedInput::Char('d')
+        | ParsedInput::Byte(0x7F)
+        | ParsedInput::Delete => state.remove_selected_feed(),
+        ParsedInput::Byte(b'r') | ParsedInput::Char('r') | ParsedInput::Char('R') => {
+            state.refresh_feeds();
+        }
+        ParsedInput::Byte(b'\r') | ParsedInput::Char('a') | ParsedInput::Char('A')
+            if state.feed_index_is_add_row() =>
+        {
+            state.start_feed_url_edit();
         }
         _ => {}
     }
@@ -317,6 +353,40 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Char(ch) if !ch.is_control() => state.username_push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             state.username_push(byte as char)
+        }
+        _ => {}
+    }
+}
+
+fn handle_feed_url_input(app: &mut App, event: ParsedInput) {
+    let state = &mut app.settings_modal_state;
+    match event {
+        ParsedInput::Byte(0x1B) => state.cancel_feed_url_edit(),
+        ParsedInput::Byte(b'\r') => state.submit_feed_url(),
+        ParsedInput::Byte(0x15) => state.feed_clear(),
+        ParsedInput::Byte(0x01) => state.feed_cursor_home(),
+        ParsedInput::Byte(0x05) => state.feed_cursor_end(),
+        ParsedInput::Byte(0x19) => state.feed_paste(),
+        ParsedInput::Byte(0x1F) => state.feed_undo(),
+        ParsedInput::Byte(0x7F) => state.feed_backspace(),
+        ParsedInput::Delete => state.feed_delete_right(),
+        ParsedInput::Arrow(b'C') => state.feed_cursor_right(),
+        ParsedInput::Arrow(b'D') => state.feed_cursor_left(),
+        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
+            state.feed_cursor_word_right()
+        }
+        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => state.feed_cursor_word_left(),
+        ParsedInput::Paste(pasted) => {
+            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
+            for ch in cleaned.chars() {
+                if !ch.is_control() && ch != '\n' && ch != '\r' {
+                    state.feed_push(ch);
+                }
+            }
+        }
+        ParsedInput::Char(ch) if !ch.is_control() => state.feed_push(ch),
+        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
+            state.feed_push(byte as char)
         }
         _ => {}
     }

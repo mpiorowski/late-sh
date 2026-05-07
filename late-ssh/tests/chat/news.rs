@@ -186,7 +186,7 @@ async fn process_url_emits_failed_event_for_duplicate_url() {
         .expect("event timeout")
         .expect("event");
     match event {
-        ArticleEvent::Failed { user_id, error } => {
+        ArticleEvent::Failed { user_id, error, .. } => {
             assert_eq!(user_id, user.id);
             assert!(
                 error.contains("exists"),

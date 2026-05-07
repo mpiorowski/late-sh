@@ -1,8 +1,10 @@
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
+use dartboard_core::Canvas;
 use late_core::{
     db::Db,
     models::{
+        artboard::Snapshot as ArtboardSnapshot,
         artboard_ban::{ArtboardBan, ArtboardBanListItem},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
@@ -10,14 +12,17 @@ use late_core::{
         moderation_audit_log::{ModerationAuditLog, ModerationAuditLogListItem},
         room_ban::{RoomBan, RoomBanListItem},
         server_ban::{ServerBan, ServerBanActivation, ServerBanListItem},
-        user::User,
+        user::{User, sanitize_username_input},
     },
 };
 use serde_json::json;
 use tokio::sync::broadcast;
+use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
+use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
 use crate::authz::{Caps, Permissions, Tier};
+use crate::dartboard;
 use crate::moderation::command::{
     ArtboardAction, BanListScope, ModCommand, RoleAction, RoomModAction, ServerUserAction,
     mod_help_lines, normalize_mod_slug, parse_mod_command, strip_user_prefix,
@@ -30,7 +35,19 @@ pub(crate) struct ModerationService {
     db: Db,
     effects: ModerationSessionEffects,
     event_tx: broadcast::Sender<ModerationEvent>,
+    infra: ModerationInfra,
+}
+
+#[derive(Clone, Default)]
+pub struct ModerationInfra {
     force_admin: bool,
+    artboard: Option<ArtboardRestoreHandles>,
+}
+
+#[derive(Clone)]
+struct ArtboardRestoreHandles {
+    server: dartboard_local::ServerHandle,
+    provenance: SharedArtboardProvenance,
 }
 
 struct RoomModRequest {
@@ -46,16 +63,46 @@ impl ModerationService {
         db: Db,
         effects: ModerationSessionEffects,
         event_tx: broadcast::Sender<ModerationEvent>,
-        force_admin: bool,
+        infra: ModerationInfra,
     ) -> Self {
         Self {
             db,
             effects,
             event_tx,
-            force_admin,
+            infra,
         }
     }
+}
 
+impl ModerationInfra {
+    pub fn with_force_admin(mut self, force_admin: bool) -> Self {
+        self.force_admin = force_admin;
+        self
+    }
+
+    pub fn with_artboard_handles(
+        mut self,
+        server: dartboard_local::ServerHandle,
+        provenance: SharedArtboardProvenance,
+    ) -> Self {
+        self.artboard = Some(ArtboardRestoreHandles { server, provenance });
+        self
+    }
+
+    fn force_admin(&self) -> bool {
+        self.force_admin
+    }
+
+    fn artboard_handles(
+        &self,
+    ) -> Option<(&dartboard_local::ServerHandle, &SharedArtboardProvenance)> {
+        self.artboard
+            .as_ref()
+            .map(|handles| (&handles.server, &handles.provenance))
+    }
+}
+
+impl ModerationService {
     pub(crate) async fn run_command(
         &self,
         actor_user_id: Uuid,
@@ -70,6 +117,13 @@ impl ModerationService {
             ModCommand::Audit { limit } => self.list_audit(permissions, limit).await,
             ModCommand::RenameRoom { slug, new_slug } => {
                 self.rename_room(actor_user_id, permissions, &slug, &new_slug)
+                    .await
+            }
+            ModCommand::RenameUser {
+                username,
+                new_username,
+            } => {
+                self.rename_user(actor_user_id, permissions, &username, &new_username)
                     .await
             }
             ModCommand::RoomAction {
@@ -123,6 +177,10 @@ impl ModerationService {
                     reason,
                 )
                 .await
+            }
+            ModCommand::ArtboardRestore { date, reason } => {
+                self.artboard_restore(actor_user_id, permissions, date, reason)
+                    .await
             }
             ModCommand::Role { action, username } => {
                 self.role(actor_user_id, permissions, action, &username)
@@ -281,6 +339,70 @@ impl ModerationService {
             new_slug: new_slug.clone(),
         });
         Ok(vec![format!("renamed #{current_slug} to #{new_slug}")])
+    }
+
+    async fn rename_user(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        username: &str,
+        new_username: &str,
+    ) -> Result<Vec<String>> {
+        if !permissions.has(Caps::RENAME_USER) {
+            anyhow::bail!("admin only");
+        }
+
+        let mut client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        let old_username = target.username.clone();
+        let new_username = sanitize_username_input(new_username);
+        if old_username.eq_ignore_ascii_case(&new_username) {
+            return Ok(vec![format!("@{old_username} already has that username")]);
+        }
+        if User::find_by_username(&client, &new_username)
+            .await?
+            .is_some()
+        {
+            anyhow::bail!("username already taken: @{new_username}");
+        }
+
+        let tx = client.transaction().await?;
+        let updated = match User::rename(&tx, target.id, &new_username).await {
+            Ok(updated) => updated,
+            Err(error) if is_unique_violation(&error) => {
+                anyhow::bail!("username already taken: @{new_username}");
+            }
+            Err(error) => return Err(error),
+        };
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "rename_user",
+            "user",
+            Some(target.id),
+            json!({
+                "old_username": old_username,
+                "new_username": updated.username,
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        let active_user_updated = self
+            .effects
+            .update_active_username(target.id, &updated.username);
+        let _ = self.event_tx.send(ModerationEvent::UserRenamed {
+            actor_user_id,
+            target_user_id: target.id,
+            old_username: old_username.clone(),
+            new_username: updated.username.clone(),
+            active_user_updated,
+        });
+
+        Ok(vec![format!(
+            "renamed @{old_username} to @{}",
+            updated.username
+        )])
     }
 
     async fn room_action(
@@ -547,6 +669,72 @@ impl ModerationService {
         )])
     }
 
+    async fn artboard_restore(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        date: Option<NaiveDate>,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        if !permissions.has(Caps::RESTORE_ARTBOARD) {
+            anyhow::bail!("admin only");
+        }
+        let (server, shared_provenance) = self
+            .infra
+            .artboard_handles()
+            .ok_or_else(|| anyhow::anyhow!("artboard restore is unavailable"))?;
+        let date = date.unwrap_or_else(previous_utc_day);
+        let source_key = daily_artboard_key(date);
+        let backup_key = format!(
+            "restore-backup:main:{}:{}",
+            Utc::now().format("%Y%m%dT%H%M%S%.fZ"),
+            Uuid::now_v7()
+        );
+
+        let mut client = self.db.get().await?;
+        let source = ArtboardSnapshot::find_by_board_key(&client, &source_key)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("artboard snapshot not found: {source_key}"))?;
+        let canvas: Canvas = serde_json::from_value(source.canvas.clone())?;
+        let provenance: ArtboardProvenance = serde_json::from_value(source.provenance.clone())?;
+
+        let tx = client.transaction().await?;
+        let backed_up =
+            ArtboardSnapshot::copy_board_key(&tx, ArtboardSnapshot::MAIN_BOARD_KEY, &backup_key)
+                .await?
+                > 0;
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "artboard_restore",
+            "artboard",
+            None,
+            json!({
+                "source_key": source_key.clone(),
+                "backup_key": backed_up.then_some(backup_key.clone()),
+                "reason": reason.clone(),
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        dartboard::restore_live_artboard(&self.db, server, shared_provenance, canvas, provenance)
+            .await?;
+
+        let _ = self.event_tx.send(ModerationEvent::ArtboardRestored {
+            actor_user_id,
+            source_key: source_key.clone(),
+            backup_key: backed_up.then_some(backup_key.clone()),
+            reason,
+        });
+
+        let mut lines = vec![format!("restored artboard from {source_key}")];
+        if backed_up {
+            lines.push(format!("backup: {backup_key}"));
+        }
+        Ok(lines)
+    }
+
     async fn role(
         &self,
         actor_user_id: Uuid,
@@ -580,7 +768,10 @@ impl ModerationService {
         )
         .await?;
         tx.commit().await?;
-        let permissions = Permissions::new(target.is_admin || self.force_admin, new_is_moderator);
+        let permissions = Permissions::new(
+            target.is_admin || self.infra.force_admin(),
+            new_is_moderator,
+        );
         let notified_sessions = self
             .effects
             .notify_permissions_changed(target.id, permissions)
@@ -802,6 +993,24 @@ fn format_reason(reason: &str) -> &str {
 
 fn user_label(username: &str) -> String {
     format!("@{username}")
+}
+
+fn previous_utc_day() -> NaiveDate {
+    Utc::now()
+        .date_naive()
+        .pred_opt()
+        .expect("UTC date overflow")
+}
+
+fn daily_artboard_key(date: NaiveDate) -> String {
+    format!("daily:{date}")
+}
+
+fn is_unique_violation(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<tokio_postgres::Error>())
+        .any(|error| error.code() == Some(&SqlState::UNIQUE_VIOLATION))
 }
 
 async fn find_user_by_mod_name(client: &tokio_postgres::Client, username: &str) -> Result<User> {
