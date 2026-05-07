@@ -436,12 +436,12 @@ fn draw_seat_cards(
             width: card_w,
             height: card_h,
         };
-        if is_you && let Some(card) = private_cards.get(index) {
+        if let Some(card) = revealed_or_private_card(seat, private_cards, is_you, index) {
             render_card_lines(
                 frame,
                 card_area,
-                &theme_card.render_face_lines(*card),
-                card_color(*card),
+                &theme_card.render_face_lines(card),
+                card_color(card),
             );
         } else if seat.card_count > index {
             render_card_lines(
@@ -487,10 +487,12 @@ fn compact_seat_cards_line(state: &State, seat: &PokerSeat) -> Line<'static> {
         if index > 0 {
             spans.push(Span::raw(" "));
         }
-        if is_you && let Some(card) = state.private_snapshot().hole_cards.get(index) {
+        if let Some(card) =
+            revealed_or_private_card(seat, &state.private_snapshot().hole_cards, is_you, index)
+        {
             spans.push(Span::styled(
-                format!("[{}]", card_theme.render_face_compact(*card).trim()),
-                Style::default().fg(card_color(*card)),
+                format!("[{}]", card_theme.render_face_compact(card).trim()),
+                Style::default().fg(card_color(card)),
             ));
         } else {
             spans.push(Span::styled(
@@ -703,14 +705,29 @@ fn compact_seat_cards_text(state: &State, seat: &PokerSeat) -> String {
     let theme_card = AsciiCardTheme::Minimal;
     (0..seat.card_count.min(2))
         .map(|index| {
-            if is_you && let Some(card) = state.private_snapshot().hole_cards.get(index) {
-                format!("[{}]", theme_card.render_face_compact(*card).trim())
+            if let Some(card) =
+                revealed_or_private_card(seat, &state.private_snapshot().hole_cards, is_you, index)
+            {
+                format!("[{}]", theme_card.render_face_compact(card).trim())
             } else {
                 format!("[{}]", theme_card.render_back_compact().trim())
             }
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn revealed_or_private_card(
+    seat: &PokerSeat,
+    private_cards: &[PlayingCard],
+    is_you: bool,
+    index: usize,
+) -> Option<PlayingCard> {
+    seat.revealed_cards
+        .as_ref()
+        .and_then(|cards| cards.get(index))
+        .copied()
+        .or_else(|| is_you.then(|| private_cards.get(index).copied()).flatten())
 }
 
 fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {

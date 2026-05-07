@@ -43,6 +43,7 @@ pub struct PokerSeat {
     pub index: usize,
     pub user_id: Option<Uuid>,
     pub card_count: usize,
+    pub revealed_cards: Option<Vec<PlayingCard>>,
     pub folded: bool,
     pub in_hand: bool,
     pub last_action: Option<PokerAction>,
@@ -335,14 +336,27 @@ impl SharedState {
 
     fn seat_snapshot(&self, index: usize) -> PokerSeat {
         let card_count = self.hole_cards[index].len();
+        let revealed_cards = self.revealed_cards_for(index);
         PokerSeat {
             index,
             user_id: self.seats[index],
             card_count,
+            revealed_cards,
             folded: card_count > 0 && self.folded[index],
             in_hand: card_count > 0 && self.seats[index].is_some(),
             last_action: self.last_action[index],
         }
+    }
+
+    fn revealed_cards_for(&self, index: usize) -> Option<Vec<PlayingCard>> {
+        if self.phase != PokerPhase::Showdown
+            || self.seats[index].is_none()
+            || self.folded[index]
+            || self.hole_cards[index].len() != 2
+        {
+            return None;
+        }
+        Some(self.hole_cards[index].clone())
     }
 
     fn sit(&mut self, user_id: Uuid) {
