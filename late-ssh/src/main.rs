@@ -269,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
         web_chat_registry,
         ssh_attempt_limiter,
         ws_pair_limiter,
+        native_challenges: late_ssh::state::NativeChallengeStore::new(),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 

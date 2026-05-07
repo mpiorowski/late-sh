@@ -29,7 +29,7 @@ use std::{
     collections::HashMap,
     net::IpAddr,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{Semaphore, broadcast, watch};
 use uuid::Uuid;
@@ -52,6 +52,38 @@ pub struct ActiveUser {
 }
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
+
+const CHALLENGE_TTL: Duration = Duration::from_secs(60);
+
+/// In-memory store for short-lived auth nonces issued by `GET /api/native/challenge`.
+#[derive(Clone, Default)]
+pub struct NativeChallengeStore {
+    inner: Arc<Mutex<HashMap<String, Instant>>>,
+}
+
+impl NativeChallengeStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Mint a new nonce, storing it with a 60-second TTL. Returns the nonce.
+    pub fn issue(&self, nonce: String) -> String {
+        let expiry = Instant::now() + CHALLENGE_TTL;
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, exp| *exp > Instant::now());
+        map.insert(nonce.clone(), expiry);
+        nonce
+    }
+
+    /// Remove and return whether the nonce was valid (present and not expired).
+    pub fn consume(&self, nonce: &str) -> bool {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match map.remove(nonce) {
+            Some(exp) => exp > Instant::now(),
+            None => false,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ActivityEvent {
@@ -98,5 +130,6 @@ pub struct State {
     pub web_chat_registry: WebChatRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
+    pub native_challenges: NativeChallengeStore,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
 }
