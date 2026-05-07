@@ -152,7 +152,8 @@ async fn main() -> anyhow::Result<()> {
         );
     let tictactoe_table_manager =
         late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new();
-    let poker_table_manager = late_ssh::app::rooms::poker::manager::PokerTableManager::new();
+    let poker_table_manager =
+        late_ssh::app::rooms::poker::manager::PokerTableManager::new(chip_service.clone());
     let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
         blackjack_table_manager.clone(),
         poker_table_manager,

@@ -571,7 +571,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "rename-user @old @new",
             "Renames a user account.",
             "@old: existing username. @new: desired username; sanitized with normal username rules.",
-            "Admin only. Writes a moderation audit entry.",
+            "Moderator or admin only. Writes a moderation audit entry.",
         ],
         "room" => &[
             "room <kick|ban|unban> #slug @name",
@@ -638,7 +638,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Restores live Artboard from a daily UTC snapshot.",
             "date: optional daily snapshot date; defaults to previous UTC day.",
             "reason: required audit text.",
-            "Admin only. Writes a moderation audit entry and backs up the previous main row.",
+            "Moderator or admin only. Writes a moderation audit entry and backs up the previous main row.",
         ],
         "grant" => &[
             "grant mod @name",

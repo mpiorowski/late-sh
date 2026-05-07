@@ -202,6 +202,14 @@ fn draw_felt_divider(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsh
         Some(index) => format!("button seat {}", index + 1),
         None => "waiting for dealer button".to_string(),
     };
+    let label = if snapshot.current_bet > 0 {
+        format!(
+            "{label} · pot {} · bet {}",
+            snapshot.pot, snapshot.current_bet
+        )
+    } else {
+        format!("{label} · pot {}", snapshot.pot)
+    };
     let chip_w = label.chars().count() + 6;
     let side_each = (area.width as usize).saturating_sub(chip_w) / 2;
     let half_pattern = "- ".repeat(side_each / 2);
@@ -284,7 +292,7 @@ fn draw_seat_panel_outline(
         Constraint::Length(5),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Min(1),
+        Constraint::Length(1),
     ])
     .split(inner);
 
@@ -299,21 +307,13 @@ fn draw_seat_panel_outline(
         rows[2],
     );
     frame.render_widget(
-        Paragraph::new(seat_badge_line(snapshot, seat)).alignment(Alignment::Center),
+        Paragraph::new(seat_bet_balance_line(seat)).alignment(Alignment::Center),
         rows[3],
     );
-    if is_winner {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "WINNER",
-                Style::default()
-                    .fg(theme::SUCCESS())
-                    .add_modifier(Modifier::BOLD),
-            )))
-            .alignment(Alignment::Center),
-            rows[4],
-        );
-    }
+    frame.render_widget(
+        Paragraph::new(seat_badge_line(snapshot, seat, is_winner)).alignment(Alignment::Center),
+        rows[4],
+    );
 }
 
 fn draw_seat_panel(
@@ -348,23 +348,14 @@ fn draw_seat_panel_inner(
         return;
     }
     let is_you = state.seat_index() == Some(seat.index);
-    let mut lines = vec![
+    let lines = vec![
         Line::from(identity_span(seat, is_you, usernames)).alignment(Alignment::Center),
         compact_seat_cards_line(state, seat).alignment(Alignment::Center),
         seat_status_line(state, snapshot, seat).alignment(Alignment::Center),
-        seat_badge_line(snapshot, seat).alignment(Alignment::Center),
-    ];
-    if snapshot.winners.contains(&seat.index) {
-        lines.push(
-            Line::from(Span::styled(
-                "WINNER",
-                Style::default()
-                    .fg(theme::SUCCESS())
-                    .add_modifier(Modifier::BOLD),
-            ))
+        seat_bet_balance_line(seat).alignment(Alignment::Center),
+        seat_badge_line(snapshot, seat, snapshot.winners.contains(&seat.index))
             .alignment(Alignment::Center),
-        );
-    }
+    ];
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -519,6 +510,14 @@ fn seat_status_line(
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
+    if seat.pending {
+        return Line::from(Span::styled(
+            "pending",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if snapshot.winners.contains(&seat.index) {
         return Line::from(Span::styled(
             "showdown",
@@ -531,6 +530,14 @@ fn seat_status_line(
         return Line::from(Span::styled(
             "folded",
             Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    if seat.all_in {
+        return Line::from(Span::styled(
+            "all-in",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
         ));
     }
     if snapshot.active_seat == Some(seat.index) {
@@ -562,9 +569,36 @@ fn seat_status_line(
     }
 }
 
-fn seat_badge_line(snapshot: &PokerPublicSnapshot, seat: &PokerSeat) -> Line<'static> {
+fn seat_bet_balance_line(seat: &PokerSeat) -> Line<'static> {
+    if seat.user_id.is_none() {
+        return Line::from(Span::raw(""));
+    }
+    let text = if seat.committed > 0 {
+        format!("bal {} · pot {}", seat.balance, seat.committed)
+    } else {
+        format!("bal {}", seat.balance)
+    };
+    Line::from(Span::styled(text, Style::default().fg(theme::SUCCESS())))
+}
+
+fn seat_badge_line(
+    snapshot: &PokerPublicSnapshot,
+    seat: &PokerSeat,
+    is_winner: bool,
+) -> Line<'static> {
     let mut spans = Vec::new();
+    if is_winner {
+        spans.push(Span::styled(
+            "WINNER",
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if snapshot.dealer_button == Some(seat.index) {
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
         spans.push(Span::styled(
             "button",
             Style::default()
@@ -572,7 +606,7 @@ fn seat_badge_line(snapshot: &PokerPublicSnapshot, seat: &PokerSeat) -> Line<'st
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    if seat.in_hand && !seat.folded && !snapshot.winners.contains(&seat.index) {
+    if seat.in_hand && !seat.folded && !snapshot.winners.contains(&seat.index) && !seat.all_in {
         if !spans.is_empty() {
             spans.push(Span::raw("  "));
         }
@@ -643,6 +677,16 @@ fn draw_table_compact(
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled("  Pot: ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                snapshot.pot.to_string(),
+                Style::default().fg(theme::AMBER()),
+            ),
+            Span::styled("  Bet: ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                snapshot.current_bet.to_string(),
+                Style::default().fg(theme::AMBER()),
+            ),
         ]),
         Line::raw(""),
     ];
@@ -688,11 +732,17 @@ fn compact_seat_line(
         .last_action
         .map(action_label)
         .unwrap_or(if seat.folded { "folded" } else { "" });
+    let stack = if seat.user_id.is_some() {
+        format!(" bal {:<5}", seat.balance)
+    } else {
+        String::new()
+    };
     Line::from(vec![
         Span::styled(format!("{label:<11}"), label_style),
         Span::styled(format!("{name:<12}"), Style::default().fg(theme::TEXT())),
         Span::styled(cards, Style::default().fg(theme::TEXT_BRIGHT())),
         Span::raw(" "),
+        Span::styled(stack, Style::default().fg(theme::SUCCESS())),
         Span::styled(action.to_string(), Style::default().fg(theme::TEXT_DIM())),
     ])
 }
@@ -735,13 +785,44 @@ fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {
         return key_hint("s/Enter sit - Esc back", "");
     }
     match snapshot.phase {
+        PokerPhase::PostingBlinds => key_hint("posting blinds - L leave - Esc back", ""),
         PokerPhase::Waiting | PokerPhase::Showdown => {
             key_hint("N deal next - L leave - Esc back", "")
         }
         PokerPhase::PreFlop | PokerPhase::Flop | PokerPhase::Turn | PokerPhase::River
             if state.can_act() =>
         {
-            key_hint("C/Space check - F fold - L leave - Esc back", "")
+            if state.to_call() > 0 {
+                if state.can_raise() {
+                    key_hint(
+                        &format!(
+                            "C call {} - R raise +{} - A all-in - F fold - [/] raise",
+                            state.to_call(),
+                            state.selected_raise().max(state.min_raise())
+                        ),
+                        "",
+                    )
+                } else if state.can_all_in() {
+                    key_hint(
+                        &format!("C call {} - A all-in - F fold", state.to_call()),
+                        "",
+                    )
+                } else {
+                    key_hint(&format!("C call {} - F fold", state.to_call()), "")
+                }
+            } else {
+                if state.can_raise() {
+                    key_hint(
+                        &format!(
+                            "C check - B bet {} - A all-in - F fold - [/] bet",
+                            state.selected_raise().max(state.min_raise())
+                        ),
+                        "",
+                    )
+                } else {
+                    key_hint("C check - F fold", "")
+                }
+            }
         }
         PokerPhase::PreFlop | PokerPhase::Flop | PokerPhase::Turn | PokerPhase::River => {
             key_hint("waiting action - L leave - Esc back", "")
@@ -751,8 +832,14 @@ fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {
 
 fn action_label(action: PokerAction) -> &'static str {
     match action {
+        PokerAction::SmallBlind => "small blind",
+        PokerAction::BigBlind => "big blind",
         PokerAction::Check => "check",
+        PokerAction::Call => "call",
+        PokerAction::Bet => "bet",
+        PokerAction::Raise => "raise",
         PokerAction::Fold => "fold",
+        PokerAction::AllIn => "all-in",
     }
 }
 

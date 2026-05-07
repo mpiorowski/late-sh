@@ -110,8 +110,9 @@ async fn concurrent_water_attempts_only_grant_growth_once() {
     let today = Utc::now().date_naive();
 
     Tree::ensure(&client, user.id, 22).await.expect("ensure");
+    drop(client);
 
-    let task_count = 12;
+    let task_count = 8;
     let barrier = Arc::new(Barrier::new(task_count));
     let mut handles = Vec::new();
     for _ in 0..task_count {
@@ -134,6 +135,7 @@ async fn concurrent_water_attempts_only_grant_growth_once() {
         }
     }
 
+    let client = test_db.db.get().await.expect("db client");
     let tree = Tree::find_by_user_id(&client, user.id)
         .await
         .expect("find tree")

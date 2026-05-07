@@ -57,10 +57,10 @@ fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArt
 fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let chip_service = ChipService::new(db.clone());
     let blackjack_table_manager =
-        BlackjackTableManager::new(chip_service, BlackjackPlayerDirectory::new(db));
+        BlackjackTableManager::new(chip_service.clone(), BlackjackPlayerDirectory::new(db));
     RoomGameRegistry::new(
         blackjack_table_manager,
-        PokerTableManager::new(),
+        PokerTableManager::new(chip_service),
         TicTacToeTableManager::new(),
     )
 }
@@ -174,12 +174,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         minesweeper_service,
         bonsai_service,
         nonogram_library: NonogramLibrary::default(),
-        chip_service,
+        chip_service: chip_service.clone(),
         rooms_service,
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
             blackjack_table_manager,
-            PokerTableManager::new(),
+            PokerTableManager::new(chip_service.clone()),
             TicTacToeTableManager::new(),
         ),
         dartboard_server,
