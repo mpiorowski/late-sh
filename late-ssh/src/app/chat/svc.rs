@@ -29,13 +29,12 @@ use serde_json::json;
 use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
-use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::bonsai::state::stage_for;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::metrics;
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::service::{
-    ModerationService, ensure_message_permission, target_tier_for_user_id,
+    ModerationInfra, ModerationService, ensure_message_permission, target_tier_for_user_id,
 };
 use crate::moderation::session_effects::ModerationSessionEffects;
 use crate::session::SessionRegistry;
@@ -57,9 +56,7 @@ pub struct ChatService {
     notification_svc: super::notifications::svc::NotificationService,
     active_users: Option<ActiveUsers>,
     session_registry: Option<SessionRegistry>,
-    force_admin: bool,
-    dartboard_server: Option<dartboard_local::ServerHandle>,
-    dartboard_provenance: Option<SharedArtboardProvenance>,
+    moderation_infra: ModerationInfra,
     username_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
     refresh_scheduler_started: Arc<AtomicBool>,
@@ -315,9 +312,7 @@ impl ChatService {
             notification_svc,
             active_users: None,
             session_registry: None,
-            force_admin: false,
-            dartboard_server: None,
-            dartboard_provenance: None,
+            moderation_infra: ModerationInfra::default(),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
             refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
@@ -343,17 +338,12 @@ impl ChatService {
     }
 
     pub fn with_force_admin(mut self, force_admin: bool) -> Self {
-        self.force_admin = force_admin;
+        self.moderation_infra = self.moderation_infra.with_force_admin(force_admin);
         self
     }
 
-    pub fn with_artboard_handles(
-        mut self,
-        server: dartboard_local::ServerHandle,
-        provenance: SharedArtboardProvenance,
-    ) -> Self {
-        self.dartboard_server = Some(server);
-        self.dartboard_provenance = Some(provenance);
+    pub fn with_moderation_infra(mut self, moderation_infra: ModerationInfra) -> Self {
+        self.moderation_infra = moderation_infra;
         self
     }
 
@@ -407,18 +397,12 @@ impl ChatService {
     }
 
     fn moderation_service(&self) -> ModerationService {
-        let service = ModerationService::new(
+        ModerationService::new(
             self.db.clone(),
             self.moderation_session_effects(),
             self.moderation_event_tx.clone(),
-            self.force_admin,
-        );
-        match (&self.dartboard_server, &self.dartboard_provenance) {
-            (Some(server), Some(provenance)) => {
-                service.with_artboard_handles(server.clone(), provenance.clone())
-            }
-            _ => service,
-        }
+            self.moderation_infra.clone(),
+        )
     }
 
     async fn refresh_username_directory(&self) -> Result<()> {
@@ -1134,7 +1118,7 @@ impl ChatService {
         ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
 
         let tx = client.transaction().await?;
-        let updated = ChatMessage::edit(&tx, message_id, &new_body).await?;
+        let updated = ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?;
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(is_owner),

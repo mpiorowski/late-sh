@@ -24,6 +24,7 @@ use late_ssh::{
     app::profile::svc::ProfileService,
     app::vote::svc::VoteService,
     config::Config,
+    moderation::service::ModerationInfra,
     session::SessionRegistry,
     ssh,
     state::{ActivityEvent, State},
@@ -194,8 +195,11 @@ async fn main() -> anyhow::Result<()> {
         initial_dartboard.map(|snapshot| snapshot.canvas),
         dartboard_provenance.clone(),
     );
-    let chat_service =
-        chat_service.with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone());
+    let chat_service = chat_service.with_moderation_infra(
+        ModerationInfra::default()
+            .with_force_admin(config.force_admin)
+            .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone()),
+    );
     let leaderboard_service =
         late_ssh::app::games::leaderboard::svc::LeaderboardService::new(db.clone());
     let nonogram_library = match late_ssh::app::games::nonogram::state::load_default_library() {

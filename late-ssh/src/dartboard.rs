@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex, OnceLock, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -142,8 +142,36 @@ pub async fn flush_server_snapshot(
     server: &ServerHandle,
     shared_provenance: &SharedArtboardProvenance,
 ) -> anyhow::Result<()> {
-    let canvas = server.canvas_snapshot();
-    let provenance = clone_shared_provenance(shared_provenance);
+    let (canvas, provenance) = {
+        let _guard = persistence_lock().lock_recover();
+        (
+            server.canvas_snapshot(),
+            clone_shared_provenance(shared_provenance),
+        )
+    };
+    save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &canvas, &provenance).await
+}
+
+pub async fn restore_live_artboard(
+    db: &Db,
+    server: &ServerHandle,
+    shared_provenance: &SharedArtboardProvenance,
+    canvas: Canvas,
+    provenance: ArtboardProvenance,
+) -> anyhow::Result<()> {
+    {
+        let _guard = persistence_lock().lock_recover();
+        let mut shared = shared_provenance.lock_recover();
+        *shared = provenance.clone();
+        drop(shared);
+        server.submit_op_for(
+            SYSTEM_ROLLOVER_USER_ID,
+            SYSTEM_ROLLOVER_CLIENT_OP_ID,
+            CanvasOp::Replace {
+                canvas: canvas.clone(),
+            },
+        );
+    }
     save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &canvas, &provenance).await
 }
 
@@ -313,19 +341,7 @@ pub async fn rollover_daily_snapshot_for_day(
 
         let blank = blank_canvas();
         let blank_provenance = ArtboardProvenance::default();
-        {
-            let mut shared = shared_provenance.lock_recover();
-            *shared = blank_provenance.clone();
-        }
-        server.submit_op_for(
-            SYSTEM_ROLLOVER_USER_ID,
-            SYSTEM_ROLLOVER_CLIENT_OP_ID,
-            CanvasOp::Replace {
-                canvas: blank.clone(),
-            },
-        );
-        save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &blank, &blank_provenance)
-            .await?;
+        restore_live_artboard(db, server, shared_provenance, blank, blank_provenance).await?;
         save_canvas_snapshot_for_key(db, &monthly_key, &archived.canvas, &archived.provenance)
             .await?;
         tracing::info!(board_key = %monthly_key, "saved monthly artboard snapshot");
@@ -383,6 +399,7 @@ fn flush_dirty_canvas(
     shared_provenance: &SharedArtboardProvenance,
     runtime: &tokio::runtime::Handle,
 ) -> bool {
+    let _guard = persistence_lock().lock_recover();
     let canvas = {
         let mut state = persist_state.lock_recover();
         if !state.dirty {
@@ -407,6 +424,11 @@ fn flush_dirty_canvas(
 
     tracing::debug!("persisted artboard snapshot");
     persist_state.lock_recover().dirty
+}
+
+fn persistence_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn persist_canvas(

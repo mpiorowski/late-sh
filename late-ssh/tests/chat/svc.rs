@@ -1,4 +1,4 @@
-use dartboard_core::{Canvas, Pos};
+use dartboard_core::{Canvas, CanvasOp, Pos, RgbColor};
 use late_core::models::{
     artboard::Snapshot as ArtboardSnapshot,
     artboard_ban::ArtboardBan,
@@ -18,12 +18,13 @@ use late_ssh::authz::Permissions;
 use late_ssh::dartboard;
 use late_ssh::moderation::command::ServerUserAction;
 use late_ssh::moderation::event::ModerationEvent;
+use late_ssh::moderation::service::ModerationInfra;
 use late_ssh::session::{SessionMessage, SessionRegistry};
 use late_ssh::state::{ActiveSession, ActiveUser};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
-use tokio::time::{Duration, timeout};
+use tokio::time::{Duration, sleep, timeout};
 use uuid::Uuid;
 
 use super::helpers::new_test_db;
@@ -2093,13 +2094,24 @@ async fn admin_artboard_restore_command_restores_daily_snapshot_and_audits() {
         test_db.db.clone(),
         Some(main_canvas),
         shared_provenance.clone(),
-        Duration::from_secs(3600),
+        Duration::from_millis(10),
+    );
+    server.submit_op_for(
+        0,
+        1,
+        CanvasOp::PaintCell {
+            pos: Pos { x: 0, y: 0 },
+            ch: 'O',
+            fg: RgbColor::new(1, 2, 3),
+        },
     );
     let service = ChatService::new(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     )
-    .with_artboard_handles(server.clone(), shared_provenance.clone());
+    .with_moderation_infra(
+        ModerationInfra::default().with_artboard_handles(server.clone(), shared_provenance.clone()),
+    );
     let mut events = service.subscribe_events();
     let mut moderation_events = service.subscribe_moderation_events();
 
@@ -2169,6 +2181,15 @@ async fn admin_artboard_restore_command_restores_daily_snapshot_and_audits() {
             .await
             .expect("load restored main")
             .expect("restored main exists");
+    let persisted_canvas: Canvas =
+        serde_json::from_value(main_snapshot.canvas).expect("decode persisted canvas");
+    assert_eq!(persisted_canvas.get(Pos { x: 0, y: 0 }), 'D');
+    sleep(Duration::from_millis(50)).await;
+    let main_snapshot =
+        ArtboardSnapshot::find_by_board_key(&client, ArtboardSnapshot::MAIN_BOARD_KEY)
+            .await
+            .expect("reload restored main")
+            .expect("restored main still exists");
     let persisted_canvas: Canvas =
         serde_json::from_value(main_snapshot.canvas).expect("decode persisted canvas");
     assert_eq!(persisted_canvas.get(Pos { x: 0, y: 0 }), 'D');

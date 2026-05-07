@@ -1,8 +1,7 @@
 use anyhow::Result;
 use chrono::{NaiveDate, Utc};
-use dartboard_core::{Canvas, CanvasOp};
+use dartboard_core::Canvas;
 use late_core::{
-    MutexRecover,
     db::Db,
     models::{
         artboard::Snapshot as ArtboardSnapshot,
@@ -18,10 +17,12 @@ use late_core::{
 };
 use serde_json::json;
 use tokio::sync::broadcast;
+use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
 use crate::authz::{Caps, Permissions, Tier};
+use crate::dartboard;
 use crate::moderation::command::{
     ArtboardAction, BanListScope, ModCommand, RoleAction, RoomModAction, ServerUserAction,
     mod_help_lines, normalize_mod_slug, parse_mod_command, strip_user_prefix,
@@ -34,9 +35,19 @@ pub(crate) struct ModerationService {
     db: Db,
     effects: ModerationSessionEffects,
     event_tx: broadcast::Sender<ModerationEvent>,
+    infra: ModerationInfra,
+}
+
+#[derive(Clone, Default)]
+pub struct ModerationInfra {
     force_admin: bool,
-    dartboard_server: Option<dartboard_local::ServerHandle>,
-    dartboard_provenance: Option<SharedArtboardProvenance>,
+    artboard: Option<ArtboardRestoreHandles>,
+}
+
+#[derive(Clone)]
+struct ArtboardRestoreHandles {
+    server: dartboard_local::ServerHandle,
+    provenance: SharedArtboardProvenance,
 }
 
 struct RoomModRequest {
@@ -52,28 +63,46 @@ impl ModerationService {
         db: Db,
         effects: ModerationSessionEffects,
         event_tx: broadcast::Sender<ModerationEvent>,
-        force_admin: bool,
+        infra: ModerationInfra,
     ) -> Self {
         Self {
             db,
             effects,
             event_tx,
-            force_admin,
-            dartboard_server: None,
-            dartboard_provenance: None,
+            infra,
         }
     }
+}
 
-    pub(crate) fn with_artboard_handles(
+impl ModerationInfra {
+    pub fn with_force_admin(mut self, force_admin: bool) -> Self {
+        self.force_admin = force_admin;
+        self
+    }
+
+    pub fn with_artboard_handles(
         mut self,
         server: dartboard_local::ServerHandle,
         provenance: SharedArtboardProvenance,
     ) -> Self {
-        self.dartboard_server = Some(server);
-        self.dartboard_provenance = Some(provenance);
+        self.artboard = Some(ArtboardRestoreHandles { server, provenance });
         self
     }
 
+    fn force_admin(&self) -> bool {
+        self.force_admin
+    }
+
+    fn artboard_handles(
+        &self,
+    ) -> Option<(&dartboard_local::ServerHandle, &SharedArtboardProvenance)> {
+        self.artboard
+            .as_ref()
+            .map(|handles| (&handles.server, &handles.provenance))
+    }
+}
+
+impl ModerationService {
     pub(crate) async fn run_command(
         &self,
         actor_user_id: Uuid,
@@ -338,7 +367,13 @@ impl ModerationService {
         }
 
         let tx = client.transaction().await?;
-        let updated = User::rename(&tx, target.id, &new_username).await?;
+        let updated = match User::rename(&tx, target.id, &new_username).await {
+            Ok(updated) => updated,
+            Err(error) if is_unique_violation(&error) => {
+                anyhow::bail!("username already taken: @{new_username}");
+            }
+            Err(error) => return Err(error),
+        };
         ModerationAuditLog::record(
             &tx,
             actor_user_id,
@@ -644,19 +679,16 @@ impl ModerationService {
         if !permissions.has(Caps::RESTORE_ARTBOARD) {
             anyhow::bail!("admin only");
         }
-        let server = self
-            .dartboard_server
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("artboard restore is unavailable"))?;
-        let shared_provenance = self
-            .dartboard_provenance
-            .as_ref()
+        let (server, shared_provenance) = self
+            .infra
+            .artboard_handles()
             .ok_or_else(|| anyhow::anyhow!("artboard restore is unavailable"))?;
         let date = date.unwrap_or_else(previous_utc_day);
         let source_key = daily_artboard_key(date);
         let backup_key = format!(
-            "restore-backup:main:{}",
-            Utc::now().format("%Y%m%dT%H%M%SZ")
+            "restore-backup:main:{}:{}",
+            Utc::now().format("%Y%m%dT%H%M%S%.fZ"),
+            Uuid::now_v7()
         );
 
         let mut client = self.db.get().await?;
@@ -671,12 +703,6 @@ impl ModerationService {
             ArtboardSnapshot::copy_board_key(&tx, ArtboardSnapshot::MAIN_BOARD_KEY, &backup_key)
                 .await?
                 > 0;
-        let restored =
-            ArtboardSnapshot::copy_board_key(&tx, &source_key, ArtboardSnapshot::MAIN_BOARD_KEY)
-                .await?;
-        if restored == 0 {
-            anyhow::bail!("artboard snapshot not found: {source_key}");
-        }
         ModerationAuditLog::record(
             &tx,
             actor_user_id,
@@ -692,17 +718,8 @@ impl ModerationService {
         .await?;
         tx.commit().await?;
 
-        {
-            let mut shared = shared_provenance.lock_recover();
-            *shared = provenance;
-        }
-        server.submit_op_for(
-            0,
-            0,
-            CanvasOp::Replace {
-                canvas: canvas.clone(),
-            },
-        );
+        dartboard::restore_live_artboard(&self.db, server, shared_provenance, canvas, provenance)
+            .await?;
 
         let _ = self.event_tx.send(ModerationEvent::ArtboardRestored {
             actor_user_id,
@@ -751,7 +768,10 @@ impl ModerationService {
         )
         .await?;
         tx.commit().await?;
-        let permissions = Permissions::new(target.is_admin || self.force_admin, new_is_moderator);
+        let permissions = Permissions::new(
+            target.is_admin || self.infra.force_admin(),
+            new_is_moderator,
+        );
         let notified_sessions = self
             .effects
             .notify_permissions_changed(target.id, permissions)
@@ -984,6 +1004,13 @@ fn previous_utc_day() -> NaiveDate {
 
 fn daily_artboard_key(date: NaiveDate) -> String {
     format!("daily:{date}")
+}
+
+fn is_unique_violation(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<tokio_postgres::Error>())
+        .any(|error| error.code() == Some(&SqlState::UNIQUE_VIOLATION))
 }
 
 async fn find_user_by_mod_name(client: &tokio_postgres::Client, username: &str) -> Result<User> {

@@ -176,7 +176,11 @@ impl ChatMessage {
         Ok(row.map(Self::from))
     }
 
-    pub async fn edit(client: &impl GenericClient, message_id: Uuid, body: &str) -> Result<Self> {
+    pub async fn edit_after_authorization(
+        client: &impl GenericClient,
+        message_id: Uuid,
+        body: &str,
+    ) -> Result<Self> {
         let body = body.trim();
         if body.is_empty() {
             bail!("message body cannot be empty");

@@ -355,10 +355,11 @@ fn parse_artboard_restore_mod_command(parts: &[&str]) -> Result<ModCommand> {
         },
         None => (None, 0),
     };
-    Ok(ModCommand::ArtboardRestore {
-        date,
-        reason: parts.get(reason_start..).unwrap_or_default().join(" "),
-    })
+    let reason = parts.get(reason_start..).unwrap_or_default().join(" ");
+    if reason.trim().is_empty() {
+        anyhow::bail!("usage: artboard restore [YYYY-MM-DD] <reason...>");
+    }
+    Ok(ModCommand::ArtboardRestore { date, reason })
 }
 
 fn parse_role_mod_command(mod_action: RoleAction, parts: &[&str]) -> Result<ModCommand> {
@@ -633,9 +634,10 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "@name: username.",
         ],
         "artboard restore" => &[
-            "artboard restore [YYYY-MM-DD] [reason...]",
+            "artboard restore [YYYY-MM-DD] <reason...>",
             "Restores live Artboard from a daily UTC snapshot.",
             "date: optional daily snapshot date; defaults to previous UTC day.",
+            "reason: required audit text.",
             "Admin only. Writes a moderation audit entry and backs up the previous main row.",
         ],
         "grant" => &[
@@ -891,6 +893,8 @@ mod tests {
                 reason: "rollback latest".to_string(),
             }
         );
+        assert!(parse_mod_command("artboard restore").is_err());
+        assert!(parse_mod_command("artboard restore 2026-05-06").is_err());
     }
 
     #[test]
