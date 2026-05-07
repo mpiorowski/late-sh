@@ -131,6 +131,7 @@
 - The dealer button advances to the next funded occupied seat each new hand. Heads-up uses the button as the small blind; larger tables post blinds left of the button. Pre-flop action starts left of the big blind, later streets start left of the button, and when no further betting is possible because all remaining players are all-in, the service runs out the board and settles showdown.
 - Short all-ins smaller than the current call are legal. Short all-in raises update the amount to call but do not reopen raising for players whose action was already closed; those players can only call or fold unless a full raise has reopened action.
 - Side pots are built from each distinct committed-chip level. Each pot is awarded only among eligible non-folded contenders for that level; tied winners split each pot, with odd chips assigned deterministically by seat order.
+- Showdown currently auto-reveals every non-folded contender's hole cards. Real poker can allow players to muck at showdown instead of showing if they do not want to contest the pot; this app does not model a `show`/`muck` reveal phase yet.
 - A seated player who sends no active-room input for 5 minutes is removed from the table when idle outside an active hand. During an active hand, inactivity folds the player and reconciles the hand.
 - Poker wires `ActiveRoomBackend::chip_balance`, syncs external chip balance while safely idle, debits chips when they are committed to a pot, credits winning pot shares at settlement, and restores the chip floor for zero-credit losers.
 - `poker/ui.rs` mirrors the Blackjack table thresholds and broad layout: dealer/board block on top, felt divider, four seat panels, status line, and key bar. The current user's panel renders private hole cards face-up from the private snapshot; other players render card backs.
@@ -162,6 +163,7 @@
 - Blackjack table state is not durable across process restart.
 - Poker table state is not durable across process restart.
 - Poker blind/stake settings are fixed in code at 10/20 and are not configurable from room settings yet.
+- Poker showdown reveal is simplified: all non-folded contenders auto-show, with no optional muck flow.
 - There is no AFK/disconnect cleanup path tied to SSH session lifecycle.
 - Dashboard showcases remain Blackjack-only.
 
