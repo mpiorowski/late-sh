@@ -40,6 +40,7 @@ bitflags! {
         const VIEW_STAFF_INFO = 1 << 14;
         const RENAME_ROOM = 1 << 15;
         const RESTORE_ARTBOARD = 1 << 16;
+        const RENAME_USER = 1 << 17;
     }
 }
 

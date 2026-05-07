@@ -19,6 +19,10 @@ pub(crate) enum ModCommand {
         slug: String,
         new_slug: String,
     },
+    RenameUser {
+        username: String,
+        new_username: String,
+    },
     RoomAction {
         action: RoomModAction,
         slug: String,
@@ -170,6 +174,7 @@ pub(crate) fn parse_mod_command(input: &str) -> Result<ModCommand> {
         "bans" => parse_bans_mod_command(&rest),
         "audit" => parse_audit_mod_command(&rest),
         "rename-room" => parse_rename_room_mod_command(&rest),
+        "rename-user" => parse_rename_user_mod_command(&rest),
         "room" => parse_room_mod_command(&rest),
         "server" => parse_server_mod_command(&rest),
         "artboard" => parse_artboard_mod_command(&rest),
@@ -247,6 +252,16 @@ fn parse_rename_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
     Ok(ModCommand::RenameRoom {
         slug: required_slug(parts.first().copied(), "usage: rename-room #old #new")?,
         new_slug: required_slug(parts.get(1).copied(), "usage: rename-room #old #new")?,
+    })
+}
+
+fn parse_rename_user_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    if parts.len() != 2 {
+        anyhow::bail!("usage: rename-user @old @new");
+    }
+    Ok(ModCommand::RenameUser {
+        username: required_username(parts.first().copied(), "usage: rename-user @old @new")?,
+        new_username: required_username(parts.get(1).copied(), "usage: rename-user @old @new")?,
     })
 }
 
@@ -499,6 +514,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "bans [server|artboard|room #slug] [limit]",
             "audit [limit]",
             "rename-room #old #new",
+            "rename-user @old @new",
             "room kick #slug @name [reason...]",
             "room ban #slug @name [duration] [reason...]",
             "room unban #slug @name",
@@ -549,6 +565,12 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "rename-room #old #new",
             "Renames a non-DM room by changing its #slug.",
             "Moderator or admin only. #general is reserved and cannot be renamed.",
+        ],
+        "rename-user" => &[
+            "rename-user @old @new",
+            "Renames a user account.",
+            "@old: existing username. @new: desired username; sanitized with normal username rules.",
+            "Admin only. Writes a moderation audit entry.",
         ],
         "room" => &[
             "room <kick|ban|unban> #slug @name",
@@ -755,6 +777,19 @@ mod tests {
         );
         assert!(parse_mod_command("rename-room #old").is_err());
         assert!(parse_mod_command("rename-room #old #new extra").is_err());
+    }
+
+    #[test]
+    fn parses_rename_user_command() {
+        assert_eq!(
+            parse_mod_command("rename-user @Old @New.Name").unwrap(),
+            ModCommand::RenameUser {
+                username: "Old".to_string(),
+                new_username: "New.Name".to_string(),
+            }
+        );
+        assert!(parse_mod_command("rename-user @old").is_err());
+        assert!(parse_mod_command("rename-user @old @new extra").is_err());
     }
 
     #[test]

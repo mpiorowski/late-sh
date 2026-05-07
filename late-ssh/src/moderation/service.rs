@@ -13,7 +13,7 @@ use late_core::{
         moderation_audit_log::{ModerationAuditLog, ModerationAuditLogListItem},
         room_ban::{RoomBan, RoomBanListItem},
         server_ban::{ServerBan, ServerBanActivation, ServerBanListItem},
-        user::User,
+        user::{User, sanitize_username_input},
     },
 };
 use serde_json::json;
@@ -88,6 +88,13 @@ impl ModerationService {
             ModCommand::Audit { limit } => self.list_audit(permissions, limit).await,
             ModCommand::RenameRoom { slug, new_slug } => {
                 self.rename_room(actor_user_id, permissions, &slug, &new_slug)
+                    .await
+            }
+            ModCommand::RenameUser {
+                username,
+                new_username,
+            } => {
+                self.rename_user(actor_user_id, permissions, &username, &new_username)
                     .await
             }
             ModCommand::RoomAction {
@@ -303,6 +310,64 @@ impl ModerationService {
             new_slug: new_slug.clone(),
         });
         Ok(vec![format!("renamed #{current_slug} to #{new_slug}")])
+    }
+
+    async fn rename_user(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        username: &str,
+        new_username: &str,
+    ) -> Result<Vec<String>> {
+        if !permissions.has(Caps::RENAME_USER) {
+            anyhow::bail!("admin only");
+        }
+
+        let mut client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        let old_username = target.username.clone();
+        let new_username = sanitize_username_input(new_username);
+        if old_username.eq_ignore_ascii_case(&new_username) {
+            return Ok(vec![format!("@{old_username} already has that username")]);
+        }
+        if User::find_by_username(&client, &new_username)
+            .await?
+            .is_some()
+        {
+            anyhow::bail!("username already taken: @{new_username}");
+        }
+
+        let tx = client.transaction().await?;
+        let updated = User::rename(&tx, target.id, &new_username).await?;
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "rename_user",
+            "user",
+            Some(target.id),
+            json!({
+                "old_username": old_username,
+                "new_username": updated.username,
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        let active_user_updated = self
+            .effects
+            .update_active_username(target.id, &updated.username);
+        let _ = self.event_tx.send(ModerationEvent::UserRenamed {
+            actor_user_id,
+            target_user_id: target.id,
+            old_username: old_username.clone(),
+            new_username: updated.username.clone(),
+            active_user_updated,
+        });
+
+        Ok(vec![format!(
+            "renamed @{old_username} to @{}",
+            updated.username
+        )])
     }
 
     async fn room_action(

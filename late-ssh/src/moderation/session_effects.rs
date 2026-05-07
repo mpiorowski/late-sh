@@ -131,6 +131,18 @@ impl ModerationSessionEffects {
         notified
     }
 
+    pub(crate) fn update_active_username(&self, user_id: Uuid, username: &str) -> bool {
+        let Some(active_users) = self.active_users.as_ref() else {
+            return false;
+        };
+        let mut guard = active_users.lock_recover();
+        let Some(user) = guard.get_mut(&user_id) else {
+            return false;
+        };
+        user.username = username.to_string();
+        true
+    }
+
     async fn send(&self, token: &str, msg: SessionMessage) -> bool {
         let Some(registry) = self.session_registry.as_ref() else {
             return false;

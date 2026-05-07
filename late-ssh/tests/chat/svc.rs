@@ -1670,6 +1670,114 @@ async fn mod_rename_room_command_updates_slug_and_audits() {
 }
 
 #[tokio::test]
+async fn admin_rename_user_command_updates_username_active_user_and_audits() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "rename_user_actor").await;
+    let target = create_test_user(&test_db.db, "rename_user_old").await;
+    let active_users = Arc::new(Mutex::new(HashMap::from([(
+        target.id,
+        ActiveUser {
+            username: target.username.clone(),
+            fingerprint: Some(target.fingerprint.clone()),
+            peer_ip: None,
+            sessions: Vec::new(),
+            connection_count: 1,
+            last_login_at: std::time::Instant::now(),
+        },
+    )])));
+    let service = ChatService::new_with_active_users(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+        active_users.clone(),
+    );
+    let mut events = service.subscribe_events();
+    let mut moderation_events = service.subscribe_moderation_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(true, false),
+        request_id,
+        "rename-user @rename_user_old @rename_user_new".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines, vec!["renamed @rename_user_old to @rename_user_new"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let moderation_event = timeout(Duration::from_secs(2), moderation_events.recv())
+        .await
+        .expect("moderation event timeout")
+        .expect("moderation event");
+    match moderation_event {
+        ModerationEvent::UserRenamed {
+            actor_user_id,
+            target_user_id,
+            old_username,
+            new_username,
+            active_user_updated,
+        } => {
+            assert_eq!(actor_user_id, actor.id);
+            assert_eq!(target_user_id, target.id);
+            assert_eq!(old_username, "rename_user_old");
+            assert_eq!(new_username, "rename_user_new");
+            assert!(active_user_updated);
+        }
+        other => panic!("expected user renamed moderation event, got {other:?}"),
+    }
+
+    assert!(
+        User::find_by_username(&client, "rename_user_old")
+            .await
+            .expect("old username lookup")
+            .is_none()
+    );
+    let renamed = User::find_by_username(&client, "rename_user_new")
+        .await
+        .expect("new username lookup")
+        .expect("renamed user exists");
+    assert_eq!(renamed.id, target.id);
+    assert_eq!(
+        active_users
+            .lock()
+            .expect("active users lock")
+            .get(&target.id)
+            .expect("active target")
+            .username,
+        "rename_user_new"
+    );
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "rename_user"
+                && entry.target_kind == "user"
+                && entry.target_id == Some(target.id)
+                && entry.metadata["old_username"] == "rename_user_old"
+                && entry.metadata["new_username"] == "rename_user_new"
+        })
+        .count();
+    assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
 async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");

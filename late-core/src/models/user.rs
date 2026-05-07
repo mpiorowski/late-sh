@@ -302,6 +302,24 @@ impl User {
         Ok(())
     }
 
+    pub async fn rename(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        username: &str,
+    ) -> Result<Self> {
+        let username = sanitize_username_input(username);
+        let row = client
+            .query_one(
+                "UPDATE users
+                 SET username = $1, updated = current_timestamp
+                 WHERE id = $2
+                 RETURNING *",
+                &[&username, &user_id],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     async fn settings_for_user(client: &Client, user_id: Uuid) -> Result<Value> {
         let row = client
             .query_opt("SELECT settings FROM users WHERE id = $1", &[&user_id])

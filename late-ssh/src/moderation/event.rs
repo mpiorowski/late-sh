@@ -21,6 +21,13 @@ pub enum ModerationEvent {
         old_slug: String,
         new_slug: String,
     },
+    UserRenamed {
+        actor_user_id: Uuid,
+        target_user_id: Uuid,
+        old_username: String,
+        new_username: String,
+        active_user_updated: bool,
+    },
     ServerUserAction {
         actor_user_id: Uuid,
         target_user_id: Uuid,
