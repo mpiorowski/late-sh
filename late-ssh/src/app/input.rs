@@ -546,6 +546,27 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
     }
 }
 
+fn handle_news_modal_input(app: &mut App, event: &ParsedInput) {
+    match event {
+        ParsedInput::Byte(b'\r' | b'\n') => {
+            if let Some(url) = app.chat.news_modal_url() {
+                let cleaned = sanitize_paste_markers(url);
+                app.pending_clipboard = Some(cleaned.trim().to_owned());
+                app.banner = Some(crate::app::common::primitives::Banner::success(
+                    "Link copied!",
+                ));
+            }
+            app.chat.close_news_modal();
+        }
+        ParsedInput::Byte(b'n' | b'N') | ParsedInput::Char('n' | 'N') => {
+            app.chat.jump_to_news_modal_article();
+            app.set_screen(Screen::Chat);
+        }
+        ParsedInput::Byte(0x1B) => app.chat.close_news_modal(),
+        _ => {}
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OverlayInputAction {
     Close,
@@ -587,6 +608,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.show_web_chat_qr = false;
             app.web_chat_qr_url = None;
         }
+        return;
+    }
+
+    if app.chat.has_news_modal() {
+        handle_news_modal_input(app, &event);
         return;
     }
 
@@ -1020,6 +1046,10 @@ fn dispatch_escape(app: &mut App) {
     if app.show_web_chat_qr {
         app.show_web_chat_qr = false;
         app.web_chat_qr_url = None;
+        return;
+    }
+    if app.chat.has_news_modal() {
+        app.chat.close_news_modal();
         return;
     }
     let ctx = InputContext::from_app(app);
@@ -1517,6 +1547,7 @@ fn reset_composers_for_page_change(app: &mut App) {
     app.chat.news.stop_composing();
     app.chat.showcase.stop_composing();
     app.chat.work.stop_composing();
+    app.chat.close_news_modal();
 }
 
 fn open_settings_modal_globally(app: &mut App) {
@@ -1529,6 +1560,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
+    app.chat.close_news_modal();
     app.chat.cancel_room_jump();
     app.settings_modal_state.open_from_profile(
         app.profile_state.profile(),

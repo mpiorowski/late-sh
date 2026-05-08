@@ -152,6 +152,21 @@ impl State {
             .map(|item| item.article.url.as_str())
     }
 
+    pub fn selected_item(&self) -> Option<&ArticleFeedItem> {
+        self.articles.get(self.selected_index())
+    }
+
+    pub fn article_id_by_url(&self, url: &str) -> Option<Uuid> {
+        let url = url.trim();
+        if url.is_empty() {
+            return None;
+        }
+        self.source_articles
+            .iter()
+            .find(|item| item.article.url.trim() == url)
+            .map(|item| item.article.id)
+    }
+
     pub fn unread_count(&self) -> i64 {
         self.unread_count
     }
