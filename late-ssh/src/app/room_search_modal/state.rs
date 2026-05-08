@@ -206,8 +206,10 @@ mod tests {
 
     #[test]
     fn delete_word_left_stops_at_room_prefix() {
-        let mut state = RoomSearchModalState::default();
-        state.query = "#general chat".to_string();
+        let mut state = RoomSearchModalState {
+            query: "#general chat".to_string(),
+            ..RoomSearchModalState::default()
+        };
         state.delete_word_left();
         assert_eq!(state.query, "#general ");
         state.delete_word_left();
