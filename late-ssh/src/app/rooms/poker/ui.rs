@@ -276,7 +276,7 @@ fn draw_seat_panel_outline(
     let border_color = seat_border_color(seat, is_you, is_active, is_winner);
 
     let block = Block::default()
-        .title(format!(" Seat {} ", seat.index + 1))
+        .title_top(seat_title_left(seat, is_you, usernames))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
     let inner = block.inner(area);
@@ -287,27 +287,27 @@ fn draw_seat_panel_outline(
         return;
     }
 
+    // Layout: cards (5) + status (1) + committed (1) + balance (1) + badge (1)
     let rows = Layout::vertical([
-        Constraint::Length(1),
         Constraint::Length(5),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
     .split(inner);
 
-    frame.render_widget(
-        Paragraph::new(Line::from(identity_span(seat, is_you, usernames)))
-            .alignment(Alignment::Center),
-        rows[0],
-    );
-    draw_seat_cards(frame, rows[1], state, seat, AsciiCardTheme::Outline);
+    draw_seat_cards(frame, rows[0], state, seat, AsciiCardTheme::Outline);
     frame.render_widget(
         Paragraph::new(seat_status_line(state, snapshot, seat)).alignment(Alignment::Center),
+        rows[1],
+    );
+    frame.render_widget(
+        Paragraph::new(seat_committed_line(seat)).alignment(Alignment::Center),
         rows[2],
     );
     frame.render_widget(
-        Paragraph::new(seat_bet_balance_line(seat)).alignment(Alignment::Center),
+        Paragraph::new(seat_balance_line(seat)).alignment(Alignment::Center),
         rows[3],
     );
     frame.render_widget(
@@ -374,6 +374,67 @@ fn seat_border_color(
     } else {
         theme::BORDER_DIM()
     }
+}
+
+fn seat_title_left(
+    seat: &PokerSeat,
+    is_you: bool,
+    usernames: &HashMap<Uuid, String>,
+) -> Line<'static> {
+    let Some(user_id) = seat.user_id else {
+        return Line::from(Span::styled(
+            format!(" Seat {} ", seat.index + 1),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    };
+    let name = usernames
+        .get(&user_id)
+        .cloned()
+        .unwrap_or_else(|| "player".to_string());
+    let max_chars = 14usize;
+    let truncated: String = if name.chars().count() > max_chars {
+        let head: String = name.chars().take(max_chars - 1).collect();
+        format!("{head}…")
+    } else {
+        name
+    };
+    let (display, style) = if is_you {
+        (
+            format!(" > {truncated} "),
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (format!(" {truncated} "), Style::default().fg(theme::TEXT()))
+    };
+    Line::from(Span::styled(display, style))
+}
+
+fn seat_committed_line(seat: &PokerSeat) -> Line<'static> {
+    if seat.user_id.is_none() || seat.committed == 0 {
+        return Line::from("");
+    }
+    Line::from(vec![
+        Span::styled("pot ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            seat.committed.to_string(),
+            Style::default().fg(theme::AMBER()),
+        ),
+    ])
+}
+
+fn seat_balance_line(seat: &PokerSeat) -> Line<'static> {
+    if seat.user_id.is_none() {
+        return Line::from("");
+    }
+    Line::from(vec![
+        Span::styled("$", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            seat.balance.to_string(),
+            Style::default().fg(theme::SUCCESS()),
+        ),
+    ])
 }
 
 fn identity_span(

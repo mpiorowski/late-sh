@@ -472,11 +472,13 @@ Cache:
 
 | Entry | Keys |
 |-------|------|
-| News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `Esc` cancel |
-| Showcase | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields, `Esc` cancel |
-| Work | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy profile summary, Tab cycle fields, `Esc` cancel |
+| News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
+| Showcase | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields, `/` toggle filter to mine, `Esc` cancel |
+| Work | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy profile summary, Tab cycle fields, `/` toggle filter to mine, `Esc` cancel |
 | Mentions | `j/k` navigate, Enter jump to referenced room/message |
 | Discover | `j/k` navigate, Enter join selected public room |
+
+Showcase and Work reshuffle their listing on every visit (entering or re-entering the entry via room list, room-jump, or mouse). News keeps its chronological order — only mine-only filtering applies. The slash-command composer in `app/input.rs` skips itself when News/Showcase/Work is selected so `/` reaches the synthetic-entry handler.
 
 When changing keybindings, update root `CONTEXT.md`'s keybinding checklist plus the relevant input handler, help modal, footer hints, and tests.
 
