@@ -20,7 +20,8 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
     },
-    dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, settings_modal,
+    dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_search_modal,
+    settings_modal,
     state::{App, NotificationMode},
     terminal_help_modal,
     visualizer::Visualizer,
@@ -178,6 +179,10 @@ struct DrawContext<'a> {
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
     show_cli_install_modal: bool,
+    room_search_modal_open: bool,
+    room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    chat_state: &'a chat::state::ChatState,
+    user_id: uuid::Uuid,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
     is_draining: bool,
     icon_picker_open: bool,
@@ -531,6 +536,10 @@ impl App {
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         show_cli_install_modal: self.show_cli_install_modal,
+                        room_search_modal_open: self.room_search_modal_state.is_open(),
+                        room_search_modal_state: &self.room_search_modal_state,
+                        chat_state: &self.chat,
+                        user_id: self.user_id,
                         news_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
@@ -847,6 +856,16 @@ impl App {
 
         if ctx.show_cli_install_modal {
             super::common::cli_install::draw(frame, inner);
+        }
+
+        if ctx.room_search_modal_open {
+            room_search_modal::ui::draw(
+                frame,
+                inner,
+                ctx.room_search_modal_state,
+                ctx.chat_state,
+                ctx.user_id,
+            );
         }
 
         if ctx.icon_picker_open

@@ -88,7 +88,7 @@ pub(crate) enum RoomSlot {
     Work,
 }
 
-pub(super) fn is_chat_list_room(room: &ChatRoom) -> bool {
+pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
     if room.kind == "game" {
         return false;
     }

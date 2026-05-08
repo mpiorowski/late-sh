@@ -14,6 +14,7 @@ pub mod profile;
 pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;
 mod render;
+pub(crate) mod room_search_modal;
 pub mod rooms;
 pub(crate) mod settings_modal;
 pub mod state;

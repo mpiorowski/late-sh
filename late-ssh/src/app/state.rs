@@ -242,6 +242,7 @@ pub struct App {
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
+    pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
 
     /// Which favorite room the dashboard's chat card is currently showing,
     /// when the user has 2+ favorites pinned. Clamped on read against the
@@ -729,6 +730,8 @@ impl App {
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            room_search_modal_state:
+                crate::app::room_search_modal::state::RoomSearchModalState::default(),
             dashboard_favorite_index: 0,
             dashboard_previous_favorite_index: None,
             dashboard_g_prefix_armed: false,

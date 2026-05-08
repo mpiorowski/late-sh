@@ -1,6 +1,6 @@
 use super::{
     chat, dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm,
-    settings_modal, state::App, terminal_help_modal,
+    room_search_modal, settings_modal, state::App, terminal_help_modal,
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -346,6 +346,10 @@ impl Perform for VtCollector {
             'u' if (p0 == Some(127) || p0 == Some(8)) && p1 == Some(5) => {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
+            // Kitty keyboard protocol for Ctrl+/.
+            'u' if p0 == Some(b'/' as u16) && p1 == Some(5) => {
+                self.events.push(ParsedInput::Byte(0x1F));
+            }
             // Shift+Tab: xterm `CSI Z`.
             'Z' if intermediates.is_empty() => {
                 self.events.push(ParsedInput::BackTab);
@@ -608,6 +612,20 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             app.show_web_chat_qr = false;
             app.web_chat_qr_url = None;
         }
+        return;
+    }
+
+    if is_room_search_shortcut(&event) {
+        if app.room_search_modal_state.is_open() {
+            app.room_search_modal_state.close();
+        } else {
+            open_room_search_modal_globally(app);
+        }
+        return;
+    }
+
+    if app.room_search_modal_state.is_open() {
+        room_search_modal::input::handle_input(app, event);
         return;
     }
 
@@ -1066,6 +1084,10 @@ fn dispatch_escape(app: &mut App) {
     if app.show_web_chat_qr {
         app.show_web_chat_qr = false;
         app.web_chat_qr_url = None;
+        return;
+    }
+    if app.room_search_modal_state.is_open() {
+        app.room_search_modal_state.close();
         return;
     }
     if app.chat.has_news_modal() {
@@ -1568,6 +1590,28 @@ fn reset_composers_for_page_change(app: &mut App) {
     app.chat.showcase.stop_composing();
     app.chat.work.stop_composing();
     app.chat.close_news_modal();
+}
+
+fn is_room_search_shortcut(event: &ParsedInput) -> bool {
+    matches!(event, ParsedInput::Byte(0x1F))
+}
+
+fn open_room_search_modal_globally(app: &mut App) {
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_settings = false;
+    app.show_terminal_help = false;
+    app.show_web_chat_qr = false;
+    app.web_chat_qr_url = None;
+    app.show_cli_install_modal = false;
+    app.show_quit_confirm = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.room_search_modal_state.open();
 }
 
 fn open_settings_modal_globally(app: &mut App) {
@@ -2155,6 +2199,7 @@ mod tests {
         );
         assert_eq!(parser.feed(b"\x1b[8;5u"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[8;5~"), vec![ParsedInput::CtrlBackspace]);
+        assert_eq!(parser.feed(b"\x1b[47;5u"), vec![ParsedInput::Byte(0x1F)]);
     }
 
     #[test]

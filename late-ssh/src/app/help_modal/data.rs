@@ -129,6 +129,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /settings          open your settings modal",
         "  /exit              open quit confirm",
         "  Ctrl+O             open your settings modal anywhere",
+        "  Ctrl+/             search and jump to a room or DM",
         "",
         "Messages",
         "  j / k              select older / newer message",
