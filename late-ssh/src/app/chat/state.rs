@@ -6,7 +6,7 @@ use std::{
 use late_core::{
     MutexRecover,
     models::{
-        article::NEWS_MARKER,
+        article::{ArticleFeedItem, NEWS_MARKER},
         chat_message::ChatMessage,
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_room::ChatRoom,
@@ -74,6 +74,7 @@ pub(crate) struct ModCommandOutput {
 pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
     pub meta: String,
+    pub article_id: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -429,6 +430,21 @@ impl ChatState {
             .map(|modal| modal.payload.url.as_str())
     }
 
+    pub(crate) fn jump_to_news_modal_article(&mut self) -> bool {
+        let Some(modal) = self.news_modal.take() else {
+            return false;
+        };
+        self.select_news();
+        if let Some(article_id) = modal.article_id {
+            self.news.select_article_by_id(article_id);
+            return true;
+        }
+        if let Some(article_id) = self.news.article_id_by_url(&modal.payload.url) {
+            self.news.select_article_by_id(article_id);
+        }
+        true
+    }
+
     pub fn close_overlay(&mut self) {
         self.overlay = None;
         self.pending_reaction_owners_message_id = None;
@@ -698,7 +714,7 @@ impl ChatState {
 
     pub fn open_selected_news_modal_in_room(&mut self, room_id: Uuid) -> bool {
         self.reaction_leader_active = false;
-        let Some((payload, user_id, created)) =
+        let Some((chat_payload, user_id, created)) =
             self.selected_message_in_room(room_id).and_then(|m| {
                 parse_news_payload(&m.body).map(|payload| (payload, m.user_id, m.created))
             })
@@ -706,19 +722,25 @@ impl ChatState {
             return false;
         };
 
-        let author = self
-            .usernames
-            .get(&user_id)
-            .map(|name| name.trim())
-            .filter(|name| !name.is_empty())
-            .map(|name| format!("@{name}"))
-            .unwrap_or_else(|| short_user_id(user_id));
+        let (payload, author, created, article_id) = if let Some((payload, author, created, id)) =
+            news_modal_source_from_articles(self.news.all_articles(), &chat_payload.url)
+        {
+            (payload, author, created, Some(id))
+        } else {
+            let author =
+                modal_author_label(self.usernames.get(&user_id).map(String::as_str), user_id);
+            (chat_payload, author, created, None)
+        };
         let relative = crate::app::common::primitives::format_relative_time(created);
         let meta = format!(
             "{author} - {relative} - {}",
             created.format("%a %Y-%m-%d %H:%M UTC")
         );
-        self.news_modal = Some(NewsModalState { payload, meta });
+        self.news_modal = Some(NewsModalState {
+            payload,
+            meta,
+            article_id,
+        });
         true
     }
 
@@ -2588,6 +2610,39 @@ fn adjacent_composer_room(
     Some(rooms[wrapped_index(current, delta, rooms.len())])
 }
 
+fn news_modal_source_from_articles(
+    articles: &[ArticleFeedItem],
+    url: &str,
+) -> Option<(NewsPayload, String, chrono::DateTime<chrono::Utc>, Uuid)> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+
+    let item = articles
+        .iter()
+        .find(|item| item.article.url.trim() == url)?;
+    Some((
+        NewsPayload {
+            title: item.article.title.clone(),
+            summary: item.article.summary.clone(),
+            url: item.article.url.clone(),
+            ascii_art: item.article.ascii_art.clone(),
+        },
+        modal_author_label(Some(&item.author_username), item.article.user_id),
+        item.article.created,
+        item.article.id,
+    ))
+}
+
+fn modal_author_label(username: Option<&str>, user_id: Uuid) -> String {
+    username
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("@{name}"))
+        .unwrap_or_else(|| short_user_id(user_id))
+}
+
 fn resolve_room_jump_target(targets: &[(u8, RoomSlot)], byte: u8) -> Option<RoomSlot> {
     targets
         .iter()
@@ -2921,6 +2976,41 @@ mod tests {
             "---NEWS--- Rust 1.95 Released || summary || https://example.com || ascii",
         );
         assert_eq!(preview, "Rust 1.95 Released");
+    }
+
+    #[test]
+    fn news_modal_source_uses_full_article_snapshot_payload() {
+        use late_core::models::article::{Article, ArticleFeedItem};
+
+        let created = chrono::DateTime::parse_from_rfc3339("2026-05-08T11:28:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let user_id = Uuid::from_u128(9);
+        let item = ArticleFeedItem {
+            article: Article {
+                id: Uuid::from_u128(1),
+                created,
+                updated: created,
+                user_id,
+                url: "https://example.com/full".to_string(),
+                title: "Full article title".to_string(),
+                summary: "First full bullet keeps all words for two-line modal wrapping.\nSecond full bullet also keeps all words without chat truncation.\nThird full bullet remains available."
+                    .to_string(),
+                ascii_art: ".:-".to_string(),
+            },
+            author_username: "mat".to_string(),
+        };
+
+        let (payload, author, source_created, article_id) =
+            news_modal_source_from_articles(&[item], " https://example.com/full ").unwrap();
+
+        assert_eq!(payload.title, "Full article title");
+        assert!(payload.summary.contains("without chat truncation"));
+        assert!(!payload.summary.contains("..."));
+        assert_eq!(payload.ascii_art, ".:-");
+        assert_eq!(author, "@mat");
+        assert_eq!(source_created, created);
+        assert_eq!(article_id, Uuid::from_u128(1));
     }
 
     #[test]

@@ -556,6 +556,11 @@ fn handle_news_modal_input(app: &mut App, event: &ParsedInput) {
                     "Link copied!",
                 ));
             }
+            app.chat.close_news_modal();
+        }
+        ParsedInput::Byte(b'n' | b'N') | ParsedInput::Char('n' | 'N') => {
+            app.chat.jump_to_news_modal_article();
+            app.set_screen(Screen::Chat);
         }
         ParsedInput::Byte(0x1B) => app.chat.close_news_modal(),
         _ => {}

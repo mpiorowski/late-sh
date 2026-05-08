@@ -29,6 +29,8 @@ const ITEM_HEIGHT: u16 = 10;
 const THUMB_WIDTH: u16 = 14;
 const THUMB_LINES: usize = 6;
 const SUMMARY_LINES: usize = 3;
+const MODAL_SUMMARY_BULLETS: usize = 3;
+const MODAL_SUMMARY_LINES_PER_BULLET: usize = 2;
 const MODAL_MAX_WIDTH: u16 = 160;
 const MODAL_MIN_WIDTH: u16 = 24;
 
@@ -205,6 +207,9 @@ pub(crate) fn draw_article_modal(frame: &mut Frame, area: Rect, view: ArticleMod
             Span::styled(" Enter", Style::default().fg(theme::AMBER_DIM())),
             Span::styled(" copy link", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(" ── ", Style::default().fg(theme::BORDER())),
+            Span::styled("N", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" open in News", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" ── ", Style::default().fg(theme::BORDER())),
             Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
             Span::styled(" close ", Style::default().fg(theme::TEXT_DIM())),
         ]))
@@ -283,8 +288,14 @@ fn build_article_modal_lines(view: &ArticleModalView<'_>, width: usize) -> Vec<L
             right_rows.push((row, meta_style));
         }
     }
-    for bullet in split_summary_bullets(&view.payload.summary) {
-        for row in wrap_plain_display_width(&bullet, right_width) {
+    for bullet in split_summary_bullets(&view.payload.summary)
+        .into_iter()
+        .take(MODAL_SUMMARY_BULLETS)
+    {
+        for row in wrap_plain_display_width(&bullet, right_width)
+            .into_iter()
+            .take(MODAL_SUMMARY_LINES_PER_BULLET)
+        {
             right_rows.push((row, body_style));
         }
     }
@@ -545,5 +556,34 @@ mod tests {
         assert!(rendered.contains("  *"));
         assert!(rendered.contains("Tiny art"));
         assert!(rendered.contains("One summary line."));
+    }
+
+    #[test]
+    fn article_modal_lines_expand_each_summary_bullet_to_two_rows() {
+        let payload = NewsPayload {
+            title: "Modal expansion".to_string(),
+            summary: [
+                "First bullet has enough words to wrap into a second visible row in the modal.",
+                "Second bullet also has enough words to use two visible rows in the modal.",
+                "Third bullet should still appear with the same two row budget.",
+                "Fourth bullet should not appear because the modal caps summary bullets.",
+            ]
+            .join("\n"),
+            url: "https://example.com/news".to_string(),
+            ascii_art: String::new(),
+        };
+        let view = ArticleModalView {
+            payload: &payload,
+            meta: "",
+        };
+        let rendered = lines_to_strings(&build_article_modal_lines(&view, 48));
+        let body = rendered.join("\n");
+
+        assert!(body.contains("First bullet"));
+        assert!(body.contains("second visible"));
+        assert!(body.contains("Second bullet"));
+        assert!(body.contains("two visible"));
+        assert!(body.contains("Third bullet"));
+        assert!(!body.contains("Fourth bullet"));
     }
 }
