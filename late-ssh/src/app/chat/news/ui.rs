@@ -197,37 +197,46 @@ pub(crate) fn draw_article_modal(frame: &mut Frame, area: Rect, view: ArticleMod
         .min(area.width);
     let content_width = popup_width.saturating_sub(4) as usize;
     let content_lines = build_article_modal_lines(&view, content_width);
-    let popup_height = (content_lines.len() as u16 + 2).min(area.height).max(5);
+    let popup_height = (content_lines.len() as u16 + 3).min(area.height).max(5);
     let popup = centered_rect(popup_width, popup_height, area);
     frame.render_widget(Clear, popup);
 
+    let modal_bg = Style::default().bg(theme::BG_CANVAS());
     let block = Block::default()
         .title(" News Item ")
-        .title_bottom(Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" copy link", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(" ── ", Style::default().fg(theme::BORDER())),
-            Span::styled("N", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" open in News", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(" ── ", Style::default().fg(theme::BORDER())),
-            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" close ", Style::default().fg(theme::TEXT_DIM())),
-        ]))
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
         )
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
+        .style(modal_bg);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let content = inner.inner(Margin {
+    let layout = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+    let content = layout[0].inner(Margin {
         horizontal: 1,
         vertical: 0,
     });
-    frame.render_widget(Paragraph::new(content_lines), content);
+    frame.render_widget(Paragraph::new(content_lines).style(modal_bg), content);
+
+    let footer = Line::from(vec![
+        Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" copy link", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("  ", Style::default().fg(theme::BORDER())),
+        Span::styled("N", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" open in News", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("  ", Style::default().fg(theme::BORDER())),
+        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    let footer_area = layout[1].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    frame.render_widget(Paragraph::new(footer).style(modal_bg), footer_area);
 }
 
 fn ascii_preview_if_fit(ascii_art: &str, target_width: usize, max_lines: usize) -> Vec<String> {
