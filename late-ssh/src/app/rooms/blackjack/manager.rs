@@ -8,6 +8,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::{
+    activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
     rooms::{
         backend::{
@@ -28,16 +29,22 @@ use crate::app::{
 pub struct BlackjackTableManager {
     chip_svc: ChipService,
     player_directory: BlackjackPlayerDirectory,
+    activity: ActivityPublisher,
     tables: Arc<Mutex<HashMap<Uuid, BlackjackService>>>,
     event_tx: broadcast::Sender<BlackjackEvent>,
 }
 
 impl BlackjackTableManager {
-    pub fn new(chip_svc: ChipService, player_directory: BlackjackPlayerDirectory) -> Self {
+    pub fn new(
+        chip_svc: ChipService,
+        player_directory: BlackjackPlayerDirectory,
+        activity: ActivityPublisher,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel::<BlackjackEvent>(256);
         Self {
             chip_svc,
             player_directory,
+            activity,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -63,6 +70,7 @@ impl BlackjackTableManager {
                     self.chip_svc.clone(),
                     self.player_directory.clone(),
                     event_tx,
+                    self.activity.clone(),
                     settings,
                 )
             })

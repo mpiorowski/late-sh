@@ -6,7 +6,7 @@ use rand_core::{OsRng, RngCore};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::state::ActivityEvent;
+use crate::app::activity::event::ActivityEvent;
 
 const MISSED_PRUNE_GROWTH_LOSS: i32 = 10;
 
@@ -49,11 +49,9 @@ impl BonsaiService {
 
                     let username =
                         late_core::models::profile::fetch_username(&client, user_id).await;
-                    let _ = self.activity_feed.send(ActivityEvent {
-                        username,
-                        action: format!("lost their bonsai ({survived}d)"),
-                        at: std::time::Instant::now(),
-                    });
+                    let _ = self
+                        .activity_feed
+                        .send(ActivityEvent::bonsai_lost(user_id, username, survived));
                 }
             }
             tree
@@ -111,11 +109,9 @@ impl BonsaiService {
 
         // Broadcast
         let username = late_core::models::profile::fetch_username(&client, user_id).await;
-        let _ = self.activity_feed.send(ActivityEvent {
-            username,
-            action: "watered their bonsai".to_string(),
-            at: std::time::Instant::now(),
-        });
+        let _ = self
+            .activity_feed
+            .send(ActivityEvent::bonsai_watered(user_id, username));
 
         Ok(true)
     }

@@ -11,10 +11,10 @@ use ratatui::{
 };
 
 use super::theme;
+use crate::app::activity::event::ActivityEvent;
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::visualizer::Visualizer;
 use crate::session::ClientAudioState;
-use crate::state::ActivityEvent;
 
 pub struct SidebarProps<'a> {
     pub game_selection: usize,

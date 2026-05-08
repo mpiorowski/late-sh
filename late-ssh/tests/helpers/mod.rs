@@ -6,6 +6,8 @@ use late_core::{
     rate_limit::IpRateLimiter,
     test_utils::{TestDb, test_db},
 };
+use late_ssh::app::activity::event::ActivityEvent;
+use late_ssh::app::activity::publisher::ActivityPublisher;
 use late_ssh::app::ai::svc::AiService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
@@ -33,7 +35,6 @@ use late_ssh::app::vote::svc::VoteService;
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
 use late_ssh::session::{PairControlMessage, PairedClientRegistry, SessionRegistry};
-use late_ssh::state::ActivityEvent;
 use late_ssh::state::State;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -56,12 +57,17 @@ fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArt
 
 fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let chip_service = ChipService::new(db.clone());
-    let blackjack_table_manager =
-        BlackjackTableManager::new(chip_service.clone(), BlackjackPlayerDirectory::new(db));
+    let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
+    let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx);
+    let blackjack_table_manager = BlackjackTableManager::new(
+        chip_service.clone(),
+        BlackjackPlayerDirectory::new(db),
+        activity_publisher.clone(),
+    );
     RoomGameRegistry::new(
         blackjack_table_manager,
-        PokerTableManager::new(chip_service),
-        TicTacToeTableManager::new(),
+        PokerTableManager::new(chip_service, activity_publisher.clone()),
+        TicTacToeTableManager::new(activity_publisher),
     )
 }
 
@@ -140,8 +146,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let chip_service = ChipService::new(db.clone());
     let rooms_service = RoomsService::new(db.clone());
     let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
-    let blackjack_table_manager =
-        BlackjackTableManager::new(chip_service.clone(), blackjack_player_directory.clone());
+    let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
+    let blackjack_table_manager = BlackjackTableManager::new(
+        chip_service.clone(),
+        blackjack_player_directory.clone(),
+        activity_publisher.clone(),
+    );
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let nonogram_service =
         NonogramService::new(db.clone(), activity_tx.clone(), chip_service.clone());
@@ -180,8 +190,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
             blackjack_table_manager,
-            PokerTableManager::new(chip_service.clone()),
-            TicTacToeTableManager::new(),
+            PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            TicTacToeTableManager::new(activity_publisher),
         ),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),

@@ -6,24 +6,31 @@ use std::{
 use late_core::MutexRecover;
 use uuid::Uuid;
 
-use crate::app::rooms::{
-    backend::{ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager},
-    svc::{GameKind, RoomListItem},
-    tictactoe::{
-        create_modal::TicTacToeCreateModal,
-        state::{State, Winner},
-        svc::TicTacToeService,
+use crate::app::{
+    activity::publisher::ActivityPublisher,
+    rooms::{
+        backend::{
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager,
+        },
+        svc::{GameKind, RoomListItem},
+        tictactoe::{
+            create_modal::TicTacToeCreateModal,
+            state::{State, Winner},
+            svc::TicTacToeService,
+        },
     },
 };
 
 #[derive(Clone)]
 pub struct TicTacToeTableManager {
+    activity: ActivityPublisher,
     tables: Arc<Mutex<HashMap<Uuid, TicTacToeService>>>,
 }
 
 impl TicTacToeTableManager {
-    pub fn new() -> Self {
+    pub fn new(activity: ActivityPublisher) -> Self {
         Self {
+            activity,
             tables: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -32,14 +39,8 @@ impl TicTacToeTableManager {
         let mut tables = self.tables.lock_recover();
         tables
             .entry(room_id)
-            .or_insert_with(|| TicTacToeService::new(room_id))
+            .or_insert_with(|| TicTacToeService::new(room_id, self.activity.clone()))
             .clone()
-    }
-}
-
-impl Default for TicTacToeTableManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

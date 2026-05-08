@@ -7,6 +7,7 @@ use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
+    activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::{cards::PlayingCard, chips::svc::ChipService},
     rooms::blackjack::{
         player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
@@ -32,6 +33,7 @@ pub struct BlackjackService {
     snapshot_tx: watch::Sender<BlackjackSnapshot>,
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_tx: broadcast::Sender<BlackjackEvent>,
+    activity: ActivityPublisher,
     table: Arc<Mutex<SharedTableState>>,
 }
 
@@ -192,12 +194,14 @@ impl BlackjackService {
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
+        activity: ActivityPublisher,
     ) -> Self {
         Self::new_with_settings(
             room_id,
             chip_svc,
             player_directory,
             event_tx,
+            activity,
             BlackjackTableSettings::default(),
         )
     }
@@ -207,6 +211,7 @@ impl BlackjackService {
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
+        activity: ActivityPublisher,
         settings: BlackjackTableSettings,
     ) -> Self {
         let table = SharedTableState::new(settings);
@@ -219,6 +224,7 @@ impl BlackjackService {
             snapshot_tx,
             snapshot_rx,
             event_tx,
+            activity,
             table: Arc::new(Mutex::new(table)),
         }
     }
@@ -1040,6 +1046,17 @@ impl BlackjackService {
                 credit: settlement.credit,
                 new_balance,
             });
+            if matches!(
+                settlement.outcome,
+                Outcome::PlayerBlackjack | Outcome::PlayerWin
+            ) {
+                self.activity.game_won_task(
+                    settlement.user_id,
+                    ActivityGame::Blackjack,
+                    Some(format!("bet {}", settlement.bet)),
+                    None,
+                );
+            }
         }
         Ok(())
     }

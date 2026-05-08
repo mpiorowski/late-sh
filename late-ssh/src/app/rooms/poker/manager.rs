@@ -7,6 +7,7 @@ use late_core::MutexRecover;
 use uuid::Uuid;
 
 use crate::app::{
+    activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
     rooms::{
         backend::{
@@ -24,13 +25,15 @@ use crate::app::{
 #[derive(Clone)]
 pub struct PokerTableManager {
     chip_svc: ChipService,
+    activity: ActivityPublisher,
     tables: Arc<Mutex<HashMap<Uuid, PokerService>>>,
 }
 
 impl PokerTableManager {
-    pub fn new(chip_svc: ChipService) -> Self {
+    pub fn new(chip_svc: ChipService, activity: ActivityPublisher) -> Self {
         Self {
             chip_svc,
+            activity,
             tables: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -39,7 +42,9 @@ impl PokerTableManager {
         let mut tables = self.tables.lock_recover();
         tables
             .entry(room_id)
-            .or_insert_with(|| PokerService::new(room_id, self.chip_svc.clone()))
+            .or_insert_with(|| {
+                PokerService::new(room_id, self.chip_svc.clone(), self.activity.clone())
+            })
             .clone()
     }
 }

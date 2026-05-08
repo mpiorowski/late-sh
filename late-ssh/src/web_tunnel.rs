@@ -30,10 +30,11 @@ use tokio::{
 };
 
 use crate::{
+    app::activity::event::ActivityEvent,
     app::state::App,
     metrics,
     session_bootstrap::{SessionBootstrapInputs, build_session_config},
-    state::{ActiveSession, ActiveUser, ActivityEvent, State},
+    state::{ActiveSession, ActiveUser, State},
 };
 
 const INPUT_QUEUE_CAP: usize = 256;
@@ -187,11 +188,9 @@ pub async fn ws_handler(
     track_active_user(&state, &user, peer_ip, &session_token);
     guard.active_user_incremented = true;
 
-    let _ = state.activity_feed.send(ActivityEvent {
-        username: user.username.clone(),
-        action: "joined".to_string(),
-        at: Instant::now(),
-    });
+    let _ = state
+        .activity_feed
+        .send(ActivityEvent::joined(user.id, user.username.clone()));
 
     tracing::info!(
         peer_ip = %peer_ip,

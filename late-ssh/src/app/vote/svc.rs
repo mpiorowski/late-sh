@@ -7,8 +7,9 @@ use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use super::liquidsoap;
+use crate::app::activity::event::ActivityEvent;
 use crate::metrics;
-use crate::state::{ActiveUsers, ActivityEvent};
+use crate::state::ActiveUsers;
 
 #[derive(Clone)]
 pub struct VoteService {
@@ -347,11 +348,7 @@ impl VoteService {
                 None => return,
             }
         };
-        let _ = activity_tx.send(ActivityEvent {
-            username,
-            action: format!("voted {genre}"),
-            at: Instant::now(),
-        });
+        let _ = activity_tx.send(ActivityEvent::vote_cast(user_id, username, genre));
     }
 }
 

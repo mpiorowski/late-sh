@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use super::helpers::new_test_db;
 use late_core::test_utils::create_test_user;
+use late_ssh::app::activity::event::ActivityEvent;
 use late_ssh::app::vote::svc::{Genre, VoteEvent, VoteService};
-use late_ssh::state::ActivityEvent;
 use tokio::sync::broadcast;
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;

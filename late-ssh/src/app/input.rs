@@ -1,6 +1,6 @@
 use super::{
     chat, dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm,
-    settings_modal, state::App,
+    settings_modal, state::App, terminal_help_modal,
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -623,9 +623,25 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // Ctrl+L (0x0C) is the global "why can't I copy/click links?" chord.
+    // Toggles the terminal-help modal so users can dismiss with the same key.
+    if matches!(event, ParsedInput::Byte(0x0C)) && !app.show_mod_modal {
+        if app.show_terminal_help {
+            app.show_terminal_help = false;
+        } else {
+            open_terminal_help_modal_globally(app);
+        }
+        return;
+    }
+
     // The quit confirm is topmost. Otherwise the existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_terminal_help {
+        terminal_help_modal::input::handle_input(app, event);
         return;
     }
 
@@ -1017,6 +1033,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_help {
         help_modal::input::handle_escape(app);
+        return;
+    }
+    if app.show_terminal_help {
+        terminal_help_modal::input::handle_escape(app);
         return;
     }
     if app.show_mod_modal {
@@ -1555,6 +1575,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_mod_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_terminal_help = false;
     app.show_web_chat_qr = false;
     app.show_cli_install_modal = false;
     app.show_quit_confirm = false;
@@ -1568,6 +1589,23 @@ fn open_settings_modal_globally(app: &mut App) {
         crate::app::settings_modal::ui::MODAL_WIDTH,
     );
     app.show_settings = true;
+}
+
+fn open_terminal_help_modal_globally(app: &mut App) {
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_settings = false;
+    app.show_web_chat_qr = false;
+    app.show_cli_install_modal = false;
+    app.show_quit_confirm = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.terminal_help_modal_state.open();
+    app.show_terminal_help = true;
 }
 
 pub(crate) fn trigger_global_quit(app: &mut App) {

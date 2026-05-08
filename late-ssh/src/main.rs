@@ -27,10 +27,10 @@ use late_ssh::{
     moderation::service::ModerationInfra,
     session::SessionRegistry,
     ssh,
-    state::{ActivityEvent, State},
+    state::State,
 };
 use tokio::{
-    sync::{Semaphore, broadcast, watch},
+    sync::{Semaphore, watch},
     task::JoinSet,
 };
 
@@ -109,7 +109,9 @@ async fn main() -> anyhow::Result<()> {
     let conn_limit = Arc::new(Semaphore::new(config.max_conns_global));
     let conn_counts = Arc::new(Mutex::new(HashMap::new()));
     let active_users = Arc::new(Mutex::new(HashMap::new()));
-    let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
+    let (activity_tx, _) = late_ssh::app::activity::channel::new(512);
+    let activity_publisher =
+        late_ssh::app::activity::publisher::ActivityPublisher::new(db.clone(), activity_tx.clone());
     let (now_playing_tx, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
@@ -150,11 +152,16 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(
             chip_service.clone(),
             late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
+            activity_publisher.clone(),
         );
     let tictactoe_table_manager =
-        late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new();
-    let poker_table_manager =
-        late_ssh::app::rooms::poker::manager::PokerTableManager::new(chip_service.clone());
+        late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new(
+            activity_publisher.clone(),
+        );
+    let poker_table_manager = late_ssh::app::rooms::poker::manager::PokerTableManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+    );
     let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
         blackjack_table_manager.clone(),
         poker_table_manager,

@@ -9,9 +9,12 @@ use rand_core::{OsRng, RngCore};
 use tokio::sync::{Mutex, watch};
 use uuid::Uuid;
 
-use crate::app::games::{
-    cards::{CardRank, CardSuit, PlayingCard},
-    chips::svc::ChipService,
+use crate::app::{
+    activity::{event::ActivityGame, publisher::ActivityPublisher},
+    games::{
+        cards::{CardRank, CardSuit, PlayingCard},
+        chips::svc::ChipService,
+    },
 };
 
 pub const MAX_SEATS: usize = 4;
@@ -24,6 +27,7 @@ const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
 pub struct PokerService {
     room_id: Uuid,
     chip_svc: ChipService,
+    activity: ActivityPublisher,
     public_tx: watch::Sender<PokerPublicSnapshot>,
     public_rx: watch::Receiver<PokerPublicSnapshot>,
     private_txs: Arc<StdMutex<HashMap<Uuid, watch::Sender<PokerPrivateSnapshot>>>>,
@@ -133,13 +137,14 @@ impl PokerAction {
 }
 
 impl PokerService {
-    pub fn new(room_id: Uuid, chip_svc: ChipService) -> Self {
+    pub fn new(room_id: Uuid, chip_svc: ChipService, activity: ActivityPublisher) -> Self {
         let state = SharedState::new(room_id);
         let initial_snapshot = state.public_snapshot();
         let (public_tx, public_rx) = watch::channel(initial_snapshot);
         Self {
             room_id,
             chip_svc,
+            activity,
             public_tx,
             public_rx,
             private_txs: Arc::new(StdMutex::new(HashMap::new())),
@@ -386,7 +391,17 @@ impl PokerService {
                 };
 
                 match result {
-                    Ok(new_balance) => updates.push((settlement.user_id, new_balance)),
+                    Ok(new_balance) => {
+                        if settlement.credit > 0 {
+                            svc.activity.game_won_task(
+                                settlement.user_id,
+                                ActivityGame::Poker,
+                                Some(format!("pot {}", settlement.credit)),
+                                None,
+                            );
+                        }
+                        updates.push((settlement.user_id, new_balance));
+                    }
                     Err(e) => {
                         failed = true;
                         tracing::error!(
