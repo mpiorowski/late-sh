@@ -57,10 +57,10 @@ fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArt
 fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let chip_service = ChipService::new(db.clone());
     let blackjack_table_manager =
-        BlackjackTableManager::new(chip_service, BlackjackPlayerDirectory::new(db));
+        BlackjackTableManager::new(chip_service.clone(), BlackjackPlayerDirectory::new(db));
     RoomGameRegistry::new(
         blackjack_table_manager,
-        PokerTableManager::new(),
+        PokerTableManager::new(chip_service),
         TicTacToeTableManager::new(),
     )
 }
@@ -133,7 +133,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         config.ws_pair_rate_limit_window_secs,
     );
     let (_, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
-    let profile_service = ProfileService::new(db.clone(), active_users.clone());
+    let profile_service = ProfileService::new(db.clone(), active_users.clone())
+        .with_session_registry(session_registry.clone());
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = TetrisService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
@@ -174,12 +175,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         minesweeper_service,
         bonsai_service,
         nonogram_library: NonogramLibrary::default(),
-        chip_service,
+        chip_service: chip_service.clone(),
         rooms_service,
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
             blackjack_table_manager,
-            PokerTableManager::new(),
+            PokerTableManager::new(chip_service.clone()),
             TicTacToeTableManager::new(),
         ),
         dartboard_server,

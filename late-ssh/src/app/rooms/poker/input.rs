@@ -14,6 +14,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
 
     match byte {
         0x1B | b'q' | b'Q' => InputAction::Leave,
+        b'[' | b'-' => {
+            state.decrease_raise();
+            InputAction::Handled
+        }
+        b']' | b'+' | b'=' => {
+            state.increase_raise();
+            InputAction::Handled
+        }
         b'l' | b'L' => {
             state.leave_seat();
             InputAction::Handled
@@ -26,8 +34,16 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.fold();
             InputAction::Handled
         }
+        b'b' | b'B' | b'r' | b'R' => {
+            state.bet_or_raise();
+            InputAction::Handled
+        }
+        b'a' | b'A' => {
+            state.all_in();
+            InputAction::Handled
+        }
         b'c' | b'C' | b' ' | b'\r' | b'\n' => {
-            state.check();
+            state.call_or_check();
             InputAction::Handled
         }
         _ => InputAction::Ignored,

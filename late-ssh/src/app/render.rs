@@ -658,6 +658,7 @@ impl App {
         if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
             block = block.title_top(hud);
         }
+        block = block.title_bottom(app_frame_sponsor_title());
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -951,6 +952,21 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
         spans.push(Span::styled(" · ", dim));
         spans.push(Span::styled(format!("{open} open "), dim));
     }
+}
+
+fn app_frame_sponsor_title() -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            " thanks for hanging out ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled("☕ ", Style::default().fg(theme::AMBER())),
+        Span::styled(
+            "ko-fi.com/mateuszpiorowski ",
+            Style::default().fg(theme::AMBER_DIM()),
+        ),
+    ])
+    .right_aligned()
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {

@@ -6,20 +6,31 @@ use std::{
 use late_core::MutexRecover;
 use uuid::Uuid;
 
-use crate::app::rooms::{
-    backend::{ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager},
-    poker::{create_modal::PokerCreateModal, state::State, svc::PokerService},
-    svc::{GameKind, RoomListItem},
+use crate::app::{
+    games::chips::svc::ChipService,
+    rooms::{
+        backend::{
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager,
+        },
+        poker::{
+            create_modal::PokerCreateModal,
+            state::State,
+            svc::{BIG_BLIND, PokerService, SMALL_BLIND},
+        },
+        svc::{GameKind, RoomListItem},
+    },
 };
 
 #[derive(Clone)]
 pub struct PokerTableManager {
+    chip_svc: ChipService,
     tables: Arc<Mutex<HashMap<Uuid, PokerService>>>,
 }
 
 impl PokerTableManager {
-    pub fn new() -> Self {
+    pub fn new(chip_svc: ChipService) -> Self {
         Self {
+            chip_svc,
             tables: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -28,14 +39,8 @@ impl PokerTableManager {
         let mut tables = self.tables.lock_recover();
         tables
             .entry(room_id)
-            .or_insert_with(|| PokerService::new(room_id))
+            .or_insert_with(|| PokerService::new(room_id, self.chip_svc.clone()))
             .clone()
-    }
-}
-
-impl Default for PokerTableManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -68,7 +73,7 @@ impl RoomGameManager for PokerTableManager {
         DirectoryMeta {
             seats: 4,
             pace: "turn-based".to_string(),
-            stakes: "no stakes".to_string(),
+            stakes: format!("{SMALL_BLIND}/{BIG_BLIND} blinds"),
         }
     }
 
@@ -86,9 +91,13 @@ impl RoomGameManager for PokerTableManager {
         &self,
         room: &RoomListItem,
         user_id: Uuid,
-        _chip_balance: i64,
+        chip_balance: i64,
     ) -> Box<dyn ActiveRoomBackend> {
-        Box::new(State::new(self.get_or_create(room.id), user_id))
+        Box::new(State::new(
+            self.get_or_create(room.id),
+            user_id,
+            chip_balance,
+        ))
     }
 }
 
@@ -141,7 +150,19 @@ impl ActiveRoomBackend for State {
         Some(crate::app::rooms::backend::RoomTitleDetails {
             seated: Some(format!("{occupied}/4 seated")),
             role: Some(format!("{role} · {}", snapshot.phase.label())),
-            balance: None,
+            balance: Some(self.balance()),
         })
+    }
+
+    fn chip_balance(&self) -> Option<i64> {
+        Some(self.balance())
+    }
+
+    fn can_sync_external_chip_balance(&self) -> bool {
+        State::can_sync_external_chip_balance(self)
+    }
+
+    fn sync_external_chip_balance(&mut self, balance: i64) {
+        State::sync_external_chip_balance(self, balance);
     }
 }

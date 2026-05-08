@@ -99,10 +99,7 @@ impl State {
 
         self.articles = next;
         if let Some(id) = prev_id
-            && let Some(idx) = self
-                .articles
-                .iter()
-                .position(|item| item.article.id == id)
+            && let Some(idx) = self.articles.iter().position(|item| item.article.id == id)
         {
             self.selected = idx;
         } else {
