@@ -63,6 +63,7 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 qrcodegen = "1.8.0"
 rand = "0.8"
 rand_core = "0.6"
+sha2 = "0.10"
 ratatui = "0.30"
 ringbuf = "0.4.8"
 rstest = "0.26.1"

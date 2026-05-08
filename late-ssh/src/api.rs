@@ -91,6 +91,7 @@ pub async fn run_api_server_with_listener(
         .route("/api/ws/pair", get(ws_handler))
         .route("/api/ws/tunnel", get(crate::web_tunnel::ws_handler))
         .route("/api/ws/chat", get(crate::web::ws_chat_handler))
+        .merge(crate::native_api::router())
         .layer(cors)
         .layer(middleware::from_fn(http_telemetry_middleware))
         .with_state(state);
@@ -333,7 +334,7 @@ fn token_hint(token: &str) -> String {
     format!("{prefix}..({})", token.len())
 }
 
-fn effective_client_ip(headers: &HeaderMap, peer_addr: SocketAddr, state: &State) -> IpAddr {
+pub(crate) fn effective_client_ip(headers: &HeaderMap, peer_addr: SocketAddr, state: &State) -> IpAddr {
     if is_trusted_proxy_peer(peer_addr.ip(), &state.config.ssh_proxy_trusted_cidrs)
         && let Some(ip) = forwarded_for_ip(headers)
     {

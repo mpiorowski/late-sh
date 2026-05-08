@@ -38,6 +38,7 @@ rustfft.workspace = true
 symphonia = { workspace = true, features = ["mp3"] }
 image.workspace = true
 axum.workspace = true
+sha2.workspace = true
 
 # Telemetry (optional, heavy deps — gated behind "otel" feature)
 opentelemetry = { workspace = true, optional = true }

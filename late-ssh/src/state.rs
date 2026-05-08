@@ -29,7 +29,7 @@ use std::{
     collections::HashMap,
     net::IpAddr,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{Semaphore, broadcast, watch};
 use uuid::Uuid;
@@ -52,6 +52,71 @@ pub struct ActiveUser {
 }
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
+
+const CHALLENGE_TTL: Duration = Duration::from_secs(60);
+const WS_TICKET_TTL: Duration = Duration::from_secs(30);
+
+/// In-memory store for short-lived auth nonces issued by `GET /api/native/challenge`.
+#[derive(Clone, Default)]
+pub struct NativeChallengeStore {
+    inner: Arc<Mutex<HashMap<String, Instant>>>,
+}
+
+impl NativeChallengeStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Mint a new nonce, storing it with a 60-second TTL. Returns the nonce.
+    pub fn issue(&self, nonce: String) -> String {
+        let expiry = Instant::now() + CHALLENGE_TTL;
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, exp| *exp > Instant::now());
+        map.insert(nonce.clone(), expiry);
+        nonce
+    }
+
+    /// Remove and return whether the nonce was valid (present and not expired).
+    pub fn consume(&self, nonce: &str) -> bool {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match map.remove(nonce) {
+            Some(exp) => exp > Instant::now(),
+            None => false,
+        }
+    }
+}
+
+/// One-time short-lived tickets for WebSocket authentication.
+/// Minted by `GET /api/native/ws-ticket` (requires bearer auth), consumed on WS connect.
+#[derive(Clone, Default)]
+pub struct NativeWsTicketStore {
+    inner: Arc<Mutex<HashMap<String, (Uuid, String, Instant)>>>,
+}
+
+impl NativeWsTicketStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Mint a ticket valid for `WS_TICKET_TTL`. Returns the ticket string.
+    pub fn mint(&self, user_id: Uuid, username: String) -> String {
+        let ticket = crate::session::new_session_token();
+        let expiry = Instant::now() + WS_TICKET_TTL;
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, (_, _, exp)| *exp > Instant::now());
+        map.insert(ticket.clone(), (user_id, username, expiry));
+        ticket
+    }
+
+    /// Consume and validate a ticket. Returns `(user_id, username)` if valid.
+    pub fn consume(&self, ticket: &str) -> Option<(Uuid, String)> {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match map.remove(ticket) {
+            Some((user_id, username, exp)) if exp > Instant::now() => Some((user_id, username)),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ActivityEvent {
@@ -98,5 +163,10 @@ pub struct State {
     pub web_chat_registry: WebChatRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
+    pub native_challenges: NativeChallengeStore,
+    pub native_ws_tickets: NativeWsTicketStore,
+    pub native_challenge_limiter: IpRateLimiter,
+    pub native_token_limiter: IpRateLimiter,
+    pub native_ws_limiter: IpRateLimiter,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
 }

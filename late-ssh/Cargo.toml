@@ -29,6 +29,7 @@ futures-util = { workspace = true }
 tikv-jemallocator = "0.6"
 
 # Database
+deadpool-postgres = { workspace = true }
 tokio-postgres = { workspace = true }
 crossterm.workspace = true
 dartboard-core.workspace = true
