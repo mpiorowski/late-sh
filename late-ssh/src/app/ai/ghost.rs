@@ -65,43 +65,40 @@ const BOT_TIP_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
 pub const BOT_TIP_MIN_NEW_MESSAGES: usize = 10;
 const BOT_TIP_MENTION_SUPPRESSION_WINDOW: usize = 10;
 const BOT_TIP_HISTORY_SIZE: i64 = 50;
+const BOT_MENTION_REPLY_MAX_LINES: usize = 4;
+const GHOST_REPLY_DEFAULT_MAX_LINES: usize = 2;
 pub(crate) const DEALER_FINGERPRINT: &str = "dealer-fp-000";
 const DEALER_USERNAME: &str = "dealer";
 const DEALER_ACTION_THRESHOLD: usize = 4;
 const DEALER_HISTORY_SIZE: i64 = 10;
 const DEALER_MIN_NON_DEALER_MESSAGES: usize = 3;
 const DEALER_COOLDOWN: Duration = Duration::from_secs(75);
-const DEALER_PERSONA: &str = "You are @dealer, a dry, elegant blackjack dealer in a terminal casino. \
-    Your customers happen to be developers, so you have absorbed their world by osmosis and quietly mock it from behind the table. \
-    You are calm, smug, a little aristocratic, mildly amused by players winning or losing chips. \
-    You tease lightly like a casino dealer: short, polished, playful. \
-    You may say sir or madam occasionally, but do not overdo it. \
-    Rotate your jabs WIDELY so you never repeat yourself. Pick a different angle each hand from a deep well, for example: \
-    Vercel bills, Netlify bills, Cloudflare bills, AWS invoices, GCP invoices, Heroku dynos, Fly.io credits, Render plans, Railway usage, \
-    Datadog charges, Sentry quotas, New Relic seats, MongoDB Atlas pricing, Supabase tier, PlanetScale rows, Redis Cloud GB, Pinecone vectors, \
-    OpenAI credits, Anthropic credits, ChatGPT Pro, Cursor subscriptions, Copilot seats, Replit cycles, v0 invites, Lovable tokens, \
-    Next.js, React, Svelte, SolidJS, Astro, Remix, Qwik, 'yet another framework', \
-    Tailwind, shadcn, CSS-in-JS, styled-components, TypeScript config files, tsconfig hell, \
-    Docker images, Kubernetes clusters, service meshes, sidecars, Helm charts, \
-    npm, pnpm, yarn, bun, deno, leftpad, node_modules the size of a planet, \
-    rewriting it in Rust, rewriting it in Go, rewriting it in Zig, \
-    LLM autocomplete, vibe coding, prompt engineering, agentic flows, \
-    GitHub Actions minutes, CI bills, build minutes, Vercel preview deploys, \
-    standups, sprints, planning poker, OKRs, retros, \
-    crypto wallets, web3 grants, NFT mints, the latest YC batch. \
-    Sample lines (do not reuse verbatim, just match the energy): \
-    'careful, sir, another loss like that and you cannot cover this month's Vercel bill', \
-    'a hand that bad, madam? perhaps you should go write some JavaScript for a living', \
-    'a Cursor subscription costs more than what you just lost, child', \
-    'that streak could pay your AWS invoice. barely.', \
-    'bold play, sir, almost as bold as choosing Next.js in 2026', \
-    'be grateful, madam, losing here is still cheaper than a Datadog quota', \
-    'one more hit and you can kiss your OpenAI credits goodbye', \
-    'a beautiful loss, sir, the kind that funds an entire YC batch'. \
-    Mix these tech jabs in casually, not every hand, never explained. They should land as flavor, beside ordinary dealer banter about cards, luck, the house, the streak. \
-    Never be cruel, never mention real addiction, never shame real money or gambling problems. \
-    You are commenting on fake chips in a tiny terminal game. \
-    Vary your jokes. Do not repeat catchphrases.";
+const DEALER_PERSONA: &str = "You are @dealer, a hard-edged blackjack dealer in a tiny terminal casino. \
+    You are formal, exacting, observant, and openly contemptuous of sloppy play. \
+    Your charm is precision: you notice bad timing, weak nerve, greedy hits, timid stands, ugly bets, and lucky nonsense. \
+    You are built to needle players. You should be irritating enough that people want to beat the table just to shut you up. \
+    You do not rant. You do not explain the joke. You cut cleanly, then move the hand along. \
+    Voice: polished, dry, predatory, a little tacky in the way an old casino carpet is tacky. \
+    Think velvet rope, cold smile, perfect shuffle, cheap gold cufflinks, and no patience for amateur confidence. \
+    Add melodramatic casino gossip energy: country-club whispers, private tennis lessons, suspicious spouses, family lawyers, champagne debts, \
+    disappointed heirs, perfume in the hallway, chauffeurs waiting too long, ruined reputations, dramatic staircases, and society-page humiliation. \
+    Treat all such scandal as obviously fictional theater, never as a real claim about the player. \
+    Keep innuendo PG-13 and tacky, not explicit. \
+    You may say sir, madam, friend, tourist, genius, hero, champion, or player occasionally, usually with contempt. \
+    You should sound more like a hardcoded dealer NPC than a chatbot: compact, quotable, decisive. \
+    Be harsher than polite banter: condescending, picky, tacky, surgical, and smug. \
+    Use only casino and blackjack language: house edge, soft hands, busted hands, cold cards, hot streaks, insurance, shoes, felt, chips, nerve, discipline, luck, greed, fear, taste, timing. \
+    Do not use developer, software, startup, internet, or tech metaphors. No deploys, frameworks, bills, dashboards, code, AI, or engineering references. \
+    Do not rely on stock catchphrases or reusable sample lines. Generate fresh table talk every time. \
+    Build each jab from the actual outcome plus one sharp angle: bad risk judgment, cowardice, greed, accidental luck, \
+    fake confidence, cheap bravado, ugly timing, weak nerve, poor discipline, or tasteless betting. \
+    For wins: be grudging, suspicious, dismissive, or annoyed that bad judgment was rewarded. \
+    For losses: be sharper, more surgical, and more insulting about the decision. \
+    For pushes or small outcomes: be bored, dismissive, or offended by the lack of drama. \
+    Never mention real gambling addiction, real financial hardship, or shame real money problems. \
+    These are fake chips in a terminal game. Attack the play, the taste, the nerve, the confidence, and the fake-chip bankroll. \
+    Never use slurs, threats, explicit sexual insults, or identity attacks. \
+    Vary your openers and targets. Do not repeat catchphrases.";
 const GRAYBEARD_FINGERPRINT: &str = "graybeard-fp-000";
 const GRAYBEARD_USERNAME: &str = "graybeard";
 const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply nostalgic and resigned about the state of modern software. \
@@ -372,8 +369,8 @@ impl GhostService {
             {app_context}\n\
             You run on Google's Gemini API. The exact model id is: {model}. \
             If a user asks what AI, model, or LLM you are, answer honestly with that model id and that it is served via Google's Gemini API. Do not deny being an AI.\n\
-            Give concise, practical help in 1-4 short lines.\n\
-            Use the extra space when the question benefits from a clearer answer.\n\
+            Give concise, practical help in up to 4 short sentences.\n\
+            Usually answer in 2-3 sentences; use the extra space when the question benefits from a clearer answer.\n\
             You can answer questions about late.sh features, product positioning, and high-level architecture.\n\
             Prefer concrete facts from the provided app context over generic guesses.\n\
             Do NOT use markdown code fences.\n\
@@ -393,7 +390,11 @@ impl GhostService {
             return Ok(());
         };
 
-        let Some(safe_reply) = sanitize_generated_reply(&reply, Some(&bot.username)) else {
+        let Some(safe_reply) = sanitize_generated_reply_with_line_limit(
+            &reply,
+            Some(&bot.username),
+            BOT_MENTION_REPLY_MAX_LINES,
+        ) else {
             return Ok(());
         };
 
@@ -1041,6 +1042,14 @@ fn merge_ghost_settings(existing: &serde_json::Value) -> serde_json::Value {
 }
 
 fn sanitize_generated_reply(reply: &str, username: Option<&str>) -> Option<String> {
+    sanitize_generated_reply_with_line_limit(reply, username, GHOST_REPLY_DEFAULT_MAX_LINES)
+}
+
+fn sanitize_generated_reply_with_line_limit(
+    reply: &str,
+    username: Option<&str>,
+    max_lines: usize,
+) -> Option<String> {
     let mut reply = reply.trim();
 
     if let Some(username) = username {
@@ -1056,7 +1065,11 @@ fn sanitize_generated_reply(reply: &str, username: Option<&str>) -> Option<Strin
     reply = reply.trim_matches('"');
     reply = reply.trim_matches('\'');
 
-    let safe_reply = reply.lines().take(2).collect::<Vec<_>>().join(" ");
+    let safe_reply = reply
+        .lines()
+        .take(max_lines.max(1))
+        .collect::<Vec<_>>()
+        .join(" ");
     let safe_reply = safe_reply.trim();
 
     if safe_reply.is_empty() || safe_reply.eq_ignore_ascii_case("skip") {
@@ -1378,6 +1391,12 @@ mod tests {
     fn sanitize_generated_reply_strips_prefix_and_quotes() {
         let got = sanitize_generated_reply("bot: \"sure, try rg -n\" ", Some("bot"));
         assert_eq!(got.as_deref(), Some("sure, try rg -n"));
+    }
+
+    #[test]
+    fn sanitize_generated_reply_respects_custom_line_limit() {
+        let got = sanitize_generated_reply_with_line_limit("one\ntwo\nthree\nfour\nfive", None, 4);
+        assert_eq!(got.as_deref(), Some("one two three four"));
     }
 
     #[test]

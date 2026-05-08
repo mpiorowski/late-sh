@@ -324,9 +324,10 @@ impl App {
             },
         };
         let news_view = chat::news::ui::ArticleListView {
-            articles: self.chat.news.all_articles(),
+            articles: self.chat.news.displayed_articles(),
             selected_index: self.chat.news.selected_index(),
             marker_read_at: self.chat.news.marker_read_at(),
+            mine_only: self.chat.news.mine_only(),
         };
         let feeds_view = chat::feeds::ui::FeedListView {
             entries: self.chat.feeds.all_entries(),
@@ -350,6 +351,7 @@ impl App {
             current_user_id: self.user_id,
             is_admin: self.chat.showcase.is_admin(),
             marker_read_at: self.chat.showcase.marker_read_at(),
+            mine_only: self.chat.showcase.mine_only(),
         };
         let showcase_unread_count = self.chat.showcase.unread_count();
         let showcase_composing = self.chat.showcase.composing();
@@ -364,6 +366,7 @@ impl App {
             is_admin: self.chat.work.is_admin(),
             marker_read_at: self.chat.work.marker_read_at(),
             profile_base_url: web_base_url,
+            mine_only: self.chat.work.mine_only(),
         };
         let work_unread_count = self.chat.work.unread_count();
         let work_composing = self.chat.work.composing();
@@ -953,7 +956,10 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
 
 fn app_frame_sponsor_title() -> Line<'static> {
     Line::from(vec![
-        Span::styled(" thanks for hanging out ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            " thanks for hanging out ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
         Span::styled("☕ ", Style::default().fg(theme::AMBER())),
         Span::styled(
             "ko-fi.com/mateuszpiorowski ",

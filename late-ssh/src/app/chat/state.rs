@@ -33,7 +33,8 @@ use super::{
     work,
 };
 
-pub(crate) const ROOM_JUMP_KEYS: &[u8] = b"asdfghjklqwertyuiopzxcvbnm1234567890";
+pub(crate) const ROOM_JUMP_KEYS: &[u8] =
+    b"asdfghjklqwertyuiopzxcvbnm1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const USER_CREATED_CHANNEL_NAME_MAX_CHARS: usize = 16;
 const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
 const REACTION_OWNER_COLUMNS: usize = 3;
@@ -1435,6 +1436,7 @@ impl ChatState {
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.showcase.list();
+        self.showcase.shuffle_for_visit();
         self.showcase.mark_read();
     }
 
@@ -1449,6 +1451,7 @@ impl ChatState {
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
+        self.work.shuffle_for_visit();
         self.work.mark_read();
     }
 
@@ -2528,7 +2531,6 @@ fn adjacent_composer_room(
 }
 
 fn resolve_room_jump_target(targets: &[(u8, RoomSlot)], byte: u8) -> Option<RoomSlot> {
-    let byte = byte.to_ascii_lowercase();
     targets
         .iter()
         .find_map(|(key, slot)| (*key == byte).then_some(*slot))
@@ -3186,10 +3188,20 @@ mod tests {
     }
 
     #[test]
-    fn resolve_room_jump_target_is_case_insensitive() {
+    fn room_jump_keys_continue_with_uppercase_after_digits() {
+        assert_eq!(
+            ROOM_JUMP_KEYS,
+            b"asdfghjklqwertyuiopzxcvbnm1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        );
+    }
+
+    #[test]
+    fn resolve_room_jump_target_is_case_sensitive() {
         let room_id = Uuid::from_u128(7);
+        let uppercase_room_id = Uuid::from_u128(8);
         let targets = [
             (b'a', RoomSlot::Room(room_id)),
+            (b'A', RoomSlot::Room(uppercase_room_id)),
             (b's', RoomSlot::News),
             (b'd', RoomSlot::Showcase),
             (b'w', RoomSlot::Work),
@@ -3199,16 +3211,13 @@ mod tests {
 
         assert_eq!(
             resolve_room_jump_target(&targets, b'A'),
-            Some(RoomSlot::Room(room_id))
+            Some(RoomSlot::Room(uppercase_room_id))
         );
         assert_eq!(
             resolve_room_jump_target(&targets, b's'),
             Some(RoomSlot::News)
         );
-        assert_eq!(
-            resolve_room_jump_target(&targets, b'D'),
-            Some(RoomSlot::Showcase)
-        );
+        assert_eq!(resolve_room_jump_target(&targets, b'D'), None);
         assert_eq!(
             resolve_room_jump_target(&targets, b'w'),
             Some(RoomSlot::Work)
@@ -3217,10 +3226,7 @@ mod tests {
             resolve_room_jump_target(&targets, b'f'),
             Some(RoomSlot::Notifications)
         );
-        assert_eq!(
-            resolve_room_jump_target(&targets, b'G'),
-            Some(RoomSlot::Discover)
-        );
+        assert_eq!(resolve_room_jump_target(&targets, b'G'), None);
         assert_eq!(resolve_room_jump_target(&targets, b'x'), None);
     }
 

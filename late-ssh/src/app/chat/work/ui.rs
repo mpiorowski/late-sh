@@ -22,6 +22,7 @@ pub struct WorkListView<'a> {
     pub is_admin: bool,
     pub marker_read_at: Option<DateTime<Utc>>,
     pub profile_base_url: &'a str,
+    pub mine_only: bool,
 }
 
 const ITEM_HEIGHT: u16 = 9;
@@ -33,7 +34,11 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
     } else {
         view.selected_index.min(view.items.len() - 1) + 1
     };
-    let title = format!(" Work ({selected}/{}) ", view.items.len());
+    let title = if view.mine_only {
+        format!(" Work · mine ({selected}/{}) ", view.items.len())
+    } else {
+        format!(" Work ({selected}/{}) ", view.items.len())
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
@@ -355,7 +360,7 @@ pub fn draw_work_composer(frame: &mut Frame, area: Rect, view: &WorkComposerView
 
     if !composing {
         let hint = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate - Enter/c copy profile - i create/edit yours - e edit selected - d delete own",
+            " j/k navigate - Enter/c copy profile - i create/edit yours - e edit selected - d delete own - / filter mine",
             Style::default().fg(theme::TEXT_DIM()),
         )));
         frame.render_widget(hint, inner);

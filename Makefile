@@ -10,7 +10,7 @@ INSTANCE ?= late                                            # Prefix for contain
 # --- SSH ---
 LATE_FORCE_ADMIN ?= 1
 LATE_SSH_PORT ?= 2222                                       # SSH server listen port
-LATE_API_PORT ?= 4000                                       # HTTP API listen port
+LATE_API_PORT ?= 4001                                       # HTTP API listen port
 LATE_SSH_OPEN ?= 1                                          # Allow connections without auth (1=open, 0=require key)
 LATE_SSH_KEY_PATH ?= /app/server_key                        # Path to Ed25519 host key inside container
 LATE_MAX_CONNS_GLOBAL ?= 10000                              # Max total concurrent SSH connections

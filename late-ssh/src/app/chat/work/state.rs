@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use late_core::models::work_profile::WorkProfileParams;
+use rand_core::{OsRng, RngCore};
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -78,7 +79,11 @@ pub struct State {
     service: WorkService,
     user_id: Uuid,
     is_admin: bool,
+    source_items: Vec<WorkFeedItem>,
     items: Vec<WorkFeedItem>,
+    display_order: Option<Vec<Uuid>>,
+    shuffle_pending: bool,
+    mine_only: bool,
     selected: usize,
     snapshot_rx: watch::Receiver<WorkSnapshot>,
     event_rx: broadcast::Receiver<WorkEvent>,
@@ -116,7 +121,11 @@ impl State {
             service,
             user_id,
             is_admin,
+            source_items: Vec::new(),
             items: Vec::new(),
+            display_order: None,
+            shuffle_pending: false,
+            mine_only: false,
             selected: 0,
             snapshot_rx,
             event_rx,
@@ -150,6 +159,80 @@ impl State {
 
     pub fn list(&self) {
         self.service.list_task();
+    }
+
+    pub fn mine_only(&self) -> bool {
+        self.mine_only
+    }
+
+    pub fn toggle_mine_only(&mut self) {
+        self.mine_only = !self.mine_only;
+        self.rebuild_display();
+    }
+
+    /// Reshuffle the display order. Called whenever the user (re-)visits the
+    /// work entry so each visit presents profiles in a fresh random order.
+    /// Defers to the next snapshot when the source isn't loaded yet.
+    pub fn shuffle_for_visit(&mut self) {
+        if self.source_items.is_empty() {
+            self.shuffle_pending = true;
+        } else {
+            self.apply_shuffle_now();
+        }
+        self.rebuild_display();
+    }
+
+    fn apply_shuffle_now(&mut self) {
+        let mut ids: Vec<Uuid> = self.source_items.iter().map(|i| i.profile.id).collect();
+        shuffle_in_place(&mut ids);
+        self.display_order = Some(ids);
+        self.shuffle_pending = false;
+    }
+
+    fn rebuild_display(&mut self) {
+        let prev_selected_id = self
+            .items
+            .get(self.selected.min(self.items.len().saturating_sub(1)))
+            .map(|item| item.profile.id);
+
+        let mut next: Vec<WorkFeedItem> = if let Some(order) = &self.display_order {
+            let mut by_id: std::collections::HashMap<Uuid, WorkFeedItem> = self
+                .source_items
+                .iter()
+                .map(|item| (item.profile.id, item.clone()))
+                .collect();
+            let mut out = Vec::with_capacity(self.source_items.len());
+            for id in order {
+                if let Some(item) = by_id.remove(id) {
+                    out.push(item);
+                }
+            }
+            for item in &self.source_items {
+                if by_id.contains_key(&item.profile.id) {
+                    out.push(item.clone());
+                    by_id.remove(&item.profile.id);
+                }
+            }
+            out
+        } else {
+            self.source_items.clone()
+        };
+
+        if self.mine_only {
+            next.retain(|item| item.profile.user_id == self.user_id);
+        }
+
+        self.items = next;
+        if let Some(prev_id) = prev_selected_id
+            && let Some(idx) = self
+                .items
+                .iter()
+                .position(|item| item.profile.id == prev_id)
+        {
+            self.selected = idx;
+        } else {
+            self.selected = clamp_index(self.selected, self.items.len());
+        }
     }
 
     pub fn refresh_unread_count(&self) {
@@ -267,7 +350,7 @@ impl State {
     }
 
     fn start_editing_profile(&mut self, id: Uuid, slug: String) -> bool {
-        let Some(item) = self.items.iter().find(|item| item.profile.id == id) else {
+        let Some(item) = self.source_items.iter().find(|item| item.profile.id == id) else {
             return false;
         };
         let profile = item.profile.clone();
@@ -420,8 +503,11 @@ impl State {
     fn drain_snapshot(&mut self) {
         if let Ok(true) = self.snapshot_rx.has_changed() {
             let snapshot = self.snapshot_rx.borrow_and_update().clone();
-            self.items = snapshot.items;
-            self.selected = clamp_index(self.selected, self.items.len());
+            self.source_items = snapshot.items;
+            if self.shuffle_pending && !self.source_items.is_empty() {
+                self.apply_shuffle_now();
+            }
+            self.rebuild_display();
         }
     }
 
@@ -533,7 +619,7 @@ impl State {
     }
 
     fn own_profile_id_slug(&self) -> Option<(Uuid, String)> {
-        self.items
+        self.source_items
             .iter()
             .find(|item| item.profile.user_id == self.user_id)
             .map(|item| (item.profile.id, item.profile.slug.clone()))
@@ -577,6 +663,18 @@ pub(crate) fn profile_url(base_url: &str, slug: &str) -> String {
 
 fn clamp_index(index: usize, len: usize) -> usize {
     if len == 0 { 0 } else { index.min(len - 1) }
+}
+
+fn shuffle_in_place<T>(items: &mut [T]) {
+    let mut rng = OsRng;
+    let len = items.len();
+    if len < 2 {
+        return;
+    }
+    for i in (1..len).rev() {
+        let j = (rng.next_u64() % (i as u64 + 1)) as usize;
+        items.swap(i, j);
+    }
 }
 
 fn move_index(current: usize, delta: isize, len: usize) -> usize {
