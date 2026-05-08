@@ -197,7 +197,10 @@ pub struct App {
     pub(crate) show_mod_modal: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
+    pub(crate) show_terminal_help: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
+    pub(crate) terminal_help_modal_state:
+        crate::app::terminal_help_modal::state::TerminalHelpModalState,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -677,7 +680,10 @@ impl App {
             show_mod_modal: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
+            show_terminal_help: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
+            terminal_help_modal_state:
+                crate::app::terminal_help_modal::state::TerminalHelpModalState::new(),
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,

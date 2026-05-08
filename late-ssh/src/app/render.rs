@@ -22,6 +22,7 @@ use super::{
     },
     dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, settings_modal,
     state::{App, NotificationMode},
+    terminal_help_modal,
     visualizer::Visualizer,
 };
 use crate::session::ClientAudioState;
@@ -169,6 +170,8 @@ struct DrawContext<'a> {
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
+    show_terminal_help: bool,
+    terminal_help_modal_state: &'a terminal_help_modal::state::TerminalHelpModalState,
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
@@ -520,6 +523,8 @@ impl App {
                         bonsai_care_state: &self.bonsai_care_state,
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
+                        show_terminal_help: self.show_terminal_help,
+                        terminal_help_modal_state: &self.terminal_help_modal_state,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
@@ -675,6 +680,7 @@ impl App {
         if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
             block = block.title_top(hud);
         }
+        block = block.title_bottom(app_frame_help_hint_title());
         block = block.title_bottom(app_frame_sponsor_title());
 
         let inner = block.inner(area);
@@ -814,6 +820,10 @@ impl App {
 
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state);
+        }
+
+        if ctx.show_terminal_help {
+            terminal_help_modal::ui::draw(frame, inner, ctx.terminal_help_modal_state);
         }
 
         if ctx.show_quit_confirm {
@@ -988,6 +998,21 @@ fn app_frame_sponsor_title() -> Line<'static> {
         ),
     ])
     .right_aligned()
+}
+
+fn app_frame_help_hint_title() -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            " Why I cannot copy/open/click links? ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(
+            "Ctrl+L ",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {

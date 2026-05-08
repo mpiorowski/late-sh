@@ -17,6 +17,7 @@ mod render;
 pub mod rooms;
 pub(crate) mod settings_modal;
 pub mod state;
+pub(crate) mod terminal_help_modal;
 mod tick;
 pub mod visualizer;
 pub mod vote;

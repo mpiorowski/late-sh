@@ -28,7 +28,7 @@
 - `tictactoe/svc.rs` is the authoritative in-memory Tic-Tac-Toe board runtime.
 - `tictactoe/state.rs` is the per-session Tic-Tac-Toe client wrapper.
 - `tictactoe/ui.rs` renders the Tic-Tac-Toe board and seats.
-- Global user-action activity lives outside Rooms in `late-ssh/src/app/activity`. The room `touch_activity` methods below are inactivity timers only. When room game outcomes need to feed dashboard Activity or daily challenges, publish structured `ActivityEvent` values through the global activity channel instead of overloading room touch state.
+- Global user-action activity lives outside Rooms in `late-ssh/src/app/activity`. The room `touch_activity` methods below are inactivity timers only. Blackjack, Poker, and Tic-Tac-Toe win outcomes publish structured `ActivityEvent::game_won(...)` values through `ActivityPublisher`; add future room-game challenge signals there instead of overloading room touch state.
 
 ## Persistence Model
 - `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Blackjack`, `Poker`, and `TicTacToe`.
@@ -108,6 +108,7 @@
 - A seated player who misses 3 deals without a locked bet is removed from the table.
 - A seated player who sends no active-room input for 5 minutes is removed from the table; active-room keys, arrows, and scrolls refresh this room timer while seated.
 - Settlements use `ChipService`: zero-credit losses call `restore_floor`, payouts call `credit_payout`, and `BlackjackEvent::HandSettled` updates client balances.
+- Winning Blackjack settlements (`PlayerWin` or `PlayerBlackjack`) publish `ActivityGame::Blackjack` events with the bet in `detail`.
 - House rules: 6-deck shoe, reshuffle at 52-card penetration, dealer stands on soft 17, natural blackjack requires exactly two cards, and blackjack pays 3:2.
 - `Phase::BetPending` exists in the shared enum and input/UI paths, but current pending debit state is expressed per seat as `SeatPhase::BetPending`; the service does not currently transition the whole table into `Phase::BetPending`.
 - `BlackjackService::deal_task` exists as a manual deal API, but active room input does not currently route a key to it. Normal play deals by all seated players locking bets or by the 30s betting cap.
@@ -121,6 +122,7 @@
 - The board UI scales cell size to the available area (`pick_cell_dims` picks from `(11,5)`, `(9,5)`, `(7,3)` and falls back to `(5,3)`); `pick_glyph` selects a 5×5 or 3×3 block-character X/O glyph that fits inside the chosen cell. The compact path renders when `inner.height < 11` or `inner.width < 28`.
 - `preferred_game_height` returns `min(area.height * 9 / 20, 19)` — the game caps at 19 rows (enough for the 11×5 cell tier: 17 board rows + 2 border rows) so the embedded chat below it keeps the rest of the active-room area.
 - Tic-Tac-Toe has no chip-balance hook; `ActiveRoomBackend::chip_balance` returns `None`.
+- Mark wins publish `ActivityGame::TicTacToe` events with the winning mark (`X`/`O`) in `detail`; draws do not publish win activity.
 
 ## Poker Runtime
 - `PokerTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `PokerService`.
@@ -135,6 +137,7 @@
 - Showdown currently auto-reveals every non-folded contender's hole cards. Real poker can allow players to muck at showdown instead of showing if they do not want to contest the pot; this app does not model a `show`/`muck` reveal phase yet.
 - A seated player who sends no active-room input for 5 minutes is removed from the table when idle outside an active hand. During an active hand, inactivity folds the player and reconciles the hand.
 - Poker wires `ActiveRoomBackend::chip_balance`, syncs external chip balance while safely idle, debits chips when they are committed to a pot, credits winning pot shares at settlement, and restores the chip floor for zero-credit losers.
+- Positive Poker settlement credits publish `ActivityGame::Poker` events with the credited pot share in `detail`. Split-pot hands can publish one win event per credited winner.
 - `poker/ui.rs` mirrors the Blackjack table thresholds and broad layout: dealer/board block on top, felt divider, four seat panels, status line, and key bar. The current user's panel renders private hole cards face-up from the private snapshot; other players render card backs.
 
 ## Blackjack UI Invariants

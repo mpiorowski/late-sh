@@ -40,10 +40,13 @@ impl ActivityKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivityGame {
+    Blackjack,
     Minesweeper,
     Nonogram,
+    Poker,
     Solitaire,
     Sudoku,
+    TicTacToe,
 }
 
 #[derive(Clone, Debug)]
@@ -85,10 +88,13 @@ impl ActivityEvent {
         score: Option<i32>,
     ) -> Self {
         let base_action = match game {
+            ActivityGame::Blackjack => "won Blackjack hand",
             ActivityGame::Minesweeper => "cleared Minesweeper",
             ActivityGame::Nonogram => "solved Nonogram",
+            ActivityGame::Poker => "won Poker hand",
             ActivityGame::Solitaire => "won Solitaire",
             ActivityGame::Sudoku => "solved Sudoku",
+            ActivityGame::TicTacToe => "won Tic-Tac-Toe",
         };
         let action = match detail.as_deref() {
             Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),
