@@ -9,7 +9,11 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::Context;
 use late_core::{
-    api_types::NowPlaying, db::Db, icecast, models::chat_room::ChatRoom, rate_limit::IpRateLimiter,
+    api_types::NowPlaying,
+    db::Db,
+    icecast,
+    models::{chat_room::ChatRoom, native_token::NativeToken},
+    rate_limit::IpRateLimiter,
     shutdown::CancellationToken,
 };
 use late_ssh::{
@@ -272,6 +276,10 @@ async fn main() -> anyhow::Result<()> {
         ssh_attempt_limiter,
         ws_pair_limiter,
         native_challenges: late_ssh::state::NativeChallengeStore::new(),
+        native_ws_tickets: late_ssh::state::NativeWsTicketStore::new(),
+        native_challenge_limiter: IpRateLimiter::new(20, 60),
+        native_token_limiter: IpRateLimiter::new(10, 60),
+        native_ws_limiter: IpRateLimiter::new(10, 60),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
@@ -291,6 +299,21 @@ async fn main() -> anyhow::Result<()> {
     tasks.spawn(async move {
         let _ = leaderboard_service.start_refresh_loop().await;
         Ok(())
+    });
+
+    let purge_db = state.db.clone();
+    tasks.spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+        loop {
+            interval.tick().await;
+            if let Ok(client) = purge_db.get().await {
+                match NativeToken::purge_expired(&client).await {
+                    Ok(n) if n > 0 => tracing::info!(n, "purged expired native tokens"),
+                    Err(e) => tracing::warn!("native token purge failed: {e}"),
+                    _ => {}
+                }
+            }
+        }
     });
 
     let ssh_shutdown = accept_shutdown.clone();

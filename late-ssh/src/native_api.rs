@@ -1,22 +1,24 @@
 use axum::{
     Json, Router,
     extract::{
-        FromRequestParts, Path, Query, State as AxumState, WebSocketUpgrade,
+        ConnectInfo, FromRequestParts, Path, Query, State as AxumState, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    http::{StatusCode, header::AUTHORIZATION, request::Parts},
+    http::{HeaderMap, StatusCode, header::AUTHORIZATION, request::Parts},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use chrono::{Duration, Utc};
 use late_core::models::{
     bonsai::Tree,
     chat_message::ChatMessage,
     chat_room::ChatRoom,
+    chat_room_member::ChatRoomMember,
     native_token::NativeToken,
     user::User,
 };
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::{
@@ -37,6 +39,7 @@ const TOKEN_DAYS: i64 = 30;
 pub struct NativeAuthUser {
     pub user_id: Uuid,
     pub username: String,
+    pub raw_token: String,
 }
 
 fn api_error(status: StatusCode, msg: &'static str) -> (StatusCode, Json<serde_json::Value>) {
@@ -67,7 +70,7 @@ impl FromRequestParts<State> for NativeAuthUser {
             .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
             .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "invalid or expired token"))?;
 
-        Ok(NativeAuthUser { user_id, username })
+        Ok(NativeAuthUser { user_id, username, raw_token: token })
     }
 }
 
@@ -77,6 +80,8 @@ pub fn router() -> Router<State> {
     Router::new()
         .route("/api/native/challenge", get(get_challenge))
         .route("/api/native/token", post(post_token))
+        .route("/api/native/logout", delete(delete_token))
+        .route("/api/native/ws-ticket", get(get_ws_ticket))
         .route("/api/native/me", get(get_me))
         .route("/api/native/rooms", get(get_rooms))
         .route("/api/native/rooms/{room}/history", get(get_room_history))
@@ -97,10 +102,18 @@ struct ChallengeResponse {
     expires_in: u32,
 }
 
-async fn get_challenge(AxumState(state): AxumState<State>) -> Json<ChallengeResponse> {
+async fn get_challenge(
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    AxumState(state): AxumState<State>,
+) -> impl IntoResponse {
+    let client_ip = crate::api::effective_client_ip(&headers, peer_addr, &state);
+    if !state.native_challenge_limiter.allow(client_ip) {
+        return api_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
+    }
     let nonce = crate::session::new_session_token();
     state.native_challenges.issue(nonce.clone());
-    Json(ChallengeResponse { nonce, expires_in: 60 })
+    Json(ChallengeResponse { nonce, expires_in: 60 }).into_response()
 }
 
 #[derive(Deserialize)]
@@ -122,14 +135,20 @@ struct TokenResponse {
 }
 
 async fn post_token(
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     AxumState(state): AxumState<State>,
     Json(body): Json<TokenRequest>,
 ) -> Result<Json<TokenResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let client_ip = crate::api::effective_client_ip(&headers, peer_addr, &state);
+    if !state.native_token_limiter.allow(client_ip) {
+        return Err(api_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded"));
+    }
+
     if !state.native_challenges.consume(&body.nonce) {
         return Err(api_error(StatusCode::UNAUTHORIZED, "nonce invalid or expired"));
     }
 
-    // Verify the SSH signature before touching the DB.
     verify_ssh_sig(&body.public_key, &body.public_key_fingerprint, &body.nonce, &body.signature_pem)
         .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "signature verification failed"))?;
 
@@ -144,13 +163,26 @@ async fn post_token(
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "no user with that fingerprint"))?;
 
-    let token = crate::session::new_session_token();
+    let raw_token = crate::session::new_session_token();
     let expires_at = Utc::now() + Duration::days(TOKEN_DAYS);
-    NativeToken::create(&client, &token, user.id, expires_at)
-        .await
-        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create token"))?;
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+    let created_ip = client_ip.to_string();
 
-    Ok(Json(TokenResponse { token, expires_at: expires_at.to_rfc3339() }))
+    NativeToken::create(
+        &client,
+        &raw_token,
+        user.id,
+        expires_at,
+        user_agent.as_deref(),
+        Some(&created_ip),
+    )
+    .await
+    .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create token"))?;
+
+    Ok(Json(TokenResponse { token: raw_token, expires_at: expires_at.to_rfc3339() }))
 }
 
 // ── REST handlers ─────────────────────────────────────────────────────────────
@@ -166,6 +198,35 @@ async fn get_me(auth: NativeAuthUser) -> Json<MeResponse> {
         user_id: auth.user_id.to_string(),
         username: auth.username,
     })
+}
+
+#[derive(Serialize)]
+struct WsTicketResponse {
+    ticket: String,
+    expires_in: u32,
+}
+
+async fn get_ws_ticket(
+    auth: NativeAuthUser,
+    AxumState(state): AxumState<State>,
+) -> Json<WsTicketResponse> {
+    let ticket = state.native_ws_tickets.mint(auth.user_id, auth.username);
+    Json(WsTicketResponse { ticket, expires_in: 30 })
+}
+
+async fn delete_token(
+    auth: NativeAuthUser,
+    AxumState(state): AxumState<State>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
+    NativeToken::delete(&client, &auth.raw_token)
+        .await
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]
@@ -230,7 +291,6 @@ async fn get_room_history(
     Query(params): Query<HistoryParams>,
     AxumState(state): AxumState<State>,
 ) -> Result<Json<Vec<MessageItem>>, (StatusCode, Json<serde_json::Value>)> {
-    let _ = auth;
     let limit = params.limit.unwrap_or(50).min(200);
     let client = state
         .db
@@ -239,6 +299,14 @@ async fn get_room_history(
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
 
     let room_id = resolve_room_id(&client, &room).await?;
+
+    let is_member = ChatRoomMember::is_member(&client, room_id, auth.user_id)
+        .await
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
+    if !is_member {
+        return Err(api_error(StatusCode::FORBIDDEN, "not a member of this room"));
+    }
+
     let messages = ChatMessage::list_recent(&client, room_id, limit)
         .await
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
@@ -418,25 +486,52 @@ async fn post_bonsai_water(
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct WsNativeParams {
-    token: String,
+    /// Short-lived one-time ticket from `GET /api/native/ws-ticket` (preferred).
+    ticket: Option<String>,
+    /// Long-lived bearer token fallback for clients that cannot use tickets.
+    token: Option<String>,
 }
 
 async fn ws_native_handler(
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
     Query(params): Query<WsNativeParams>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     AxumState(state): AxumState<State>,
 ) -> impl IntoResponse {
-    let Ok(client) = state.db.get().await else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let client_ip = crate::api::effective_client_ip(&headers, peer_addr, &state);
+    if !state.native_ws_limiter.allow(client_ip) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
+    // Auth priority: short-lived ticket → Authorization header → raw token query param.
+    let identity: Option<(uuid::Uuid, String)> = if let Some(ticket) = params.ticket {
+        state.native_ws_tickets.consume(&ticket)
+    } else {
+        // Header or raw token — both require a DB lookup.
+        let raw_token = headers
+            .get(AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|s| s.trim().to_owned())
+            .or(params.token);
+
+        if let Some(raw_token) = raw_token {
+            let Ok(client) = state.db.get().await else {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            };
+            NativeToken::find_user_by_token(&client, &raw_token).await.ok().flatten()
+        } else {
+            None
+        }
     };
-    let Ok(Some((user_id, username))) =
-        NativeToken::find_user_by_token(&client, &params.token).await
-    else {
+
+    let Some((user_id, username)) = identity else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    drop(client);
+
     ws.on_upgrade(move |socket| handle_native_socket(socket, user_id, username, state))
 }
 
@@ -573,7 +668,6 @@ async fn handle_native_socket(
                 match payload.kind.as_str() {
                     "send" => {
                         if let Some(body) = payload.body.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
-                            // Resolve the slug for DM/non-general rooms if needed.
                             let slug = if active_room_id == room_id { Some("general".to_string()) } else { None };
                             state.chat_service.send_message_task(
                                 user_id,
@@ -587,7 +681,11 @@ async fn handle_native_socket(
                     }
                     "subscribe" => {
                         if let Some(new_id) = payload.room_id.as_ref().and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok()) {
-                            active_room_id = new_id;
+                            if let Ok(client) = state.db.get().await {
+                                if ChatRoomMember::is_member(&client, new_id, user_id).await.unwrap_or(false) {
+                                    active_room_id = new_id;
+                                }
+                            }
                         }
                     }
                     "vote" => {

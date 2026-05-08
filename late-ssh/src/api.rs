@@ -334,7 +334,7 @@ fn token_hint(token: &str) -> String {
     format!("{prefix}..({})", token.len())
 }
 
-fn effective_client_ip(headers: &HeaderMap, peer_addr: SocketAddr, state: &State) -> IpAddr {
+pub(crate) fn effective_client_ip(headers: &HeaderMap, peer_addr: SocketAddr, state: &State) -> IpAddr {
     if is_trusted_proxy_peer(peer_addr.ip(), &state.config.ssh_proxy_trusted_cidrs)
         && let Some(ip) = forwarded_for_ip(headers)
     {

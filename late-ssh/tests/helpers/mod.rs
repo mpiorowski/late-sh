@@ -193,6 +193,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         web_chat_registry: late_ssh::web::WebChatRegistry::new(),
         ssh_attempt_limiter,
         ws_pair_limiter,
+        native_challenges: late_ssh::state::NativeChallengeStore::new(),
+        native_ws_tickets: late_ssh::state::NativeWsTicketStore::new(),
+        native_challenge_limiter: IpRateLimiter::new(0, 60),
+        native_token_limiter: IpRateLimiter::new(0, 60),
+        native_ws_limiter: IpRateLimiter::new(0, 60),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
