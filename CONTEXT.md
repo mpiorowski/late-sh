@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-05 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
+- Last updated: 2026-05-08 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, and a shared multi-user ASCII Artboard. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -220,7 +220,7 @@ flowchart LR
     BJM["BlackjackTableManager"] -->|"room id"| BJS["BlackjackService<br/>per table"]
     BJS -->|"watch"| BJSS["BlackjackSnapshot"]
     BJS -->|"broadcast"| BJSE["BlackjackEvent"]
-    AF["Activity Feed"] -->|"broadcast"| AFE["ActivityEvent"]
+    AF["Activity channel<br/>app/activity"] -->|"broadcast"| AFE["ActivityEvent"]
     LB["LeaderboardService"] -->|"watch"| LBS["Arc&lt;LeaderboardData&gt;"]
 
     VSS --> APP["App TUI<br/>mixed: global + per-user subscriptions"]
@@ -245,6 +245,7 @@ flowchart LR
 - `ProfileService` (in `app/profile/svc.rs`) exposes per-user `watch` snapshots backed by service-owned maps (`subscribe_snapshot(user_id)`).
 - `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, streak leaders, per-user streak map (used for chat badges and profile achievements), all-time high scores (Tetris + 2048), and chip leaders (top balances).
 - `ChipService` (in `app/games/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` grants the daily 500-chip stipend on login, `grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips on daily puzzle completion. All 4 daily game services hold a `ChipService` clone and call it in `record_win_task()`.
+- `Activity` (in `app/activity`) owns the structured global user-action event type and channel helpers. `ActivityEvent` carries `user_id`, `username`, display `action`, structured `ActivityKind`, category, and timestamp. Dashboard/sidebar display drains the same global broadcast stream through `ActivityFilter::dashboard()`. Future daily-challenge systems should subscribe to this channel and consume every event in order rather than adding per-feature challenge hooks.
 - `RoomsService` (in `app/rooms/svc.rs`) owns persistent game-room creation/listing/deletion over `game_rooms` + associated `chat_rooms`, publishes `RoomsSnapshot` via `watch`, and emits `RoomsEvent` success/failure banners.
 - `BlackjackTableManager` / `BlackjackService` own process-local per-room Blackjack runtime state. Detailed Rooms/Blackjack contracts live in `late-ssh/src/app/rooms/CONTEXT.md`.
 - Events remain `broadcast` for all subscribers; targeted variants carry `user_id` and are filtered in UI state.
@@ -822,7 +823,7 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, dashboard favorite
 - **Activity feed broadcast timing:** `broadcast::Receiver` only sees messages sent AFTER subscription. The receiver must be created in `auth_publickey` (before login event is sent), stored on `ClientHandler`, then `.take()`'d into `SessionConfig` in `pty_request`. Creating the receiver later misses the user's own login event.
 - **Leaderboard refresh is async, badges are eventually consistent:** `LeaderboardService` refreshes every 30s. A new daily win won't appear in the leaderboard or chat badges until the next refresh cycle. Activity feed callouts are immediate (fire-and-forget from `record_win_task`).
 - **Streak SQL uses gaps-and-islands:** A streak is "current" if its last day is today or yesterday. This means a user who hasn't played today still keeps their streak visible until midnight UTC tomorrow. The `UNION` across `sudoku_daily_wins` and `nonogram_daily_wins` deduplicates dates so playing both games on the same day counts as one streak day.
-- **Game services hold `activity_feed` sender:** `SudokuService` and `NonogramService` both hold a clone of the `broadcast::Sender<ActivityEvent>` for win callouts. The username is looked up from `users` inside the fire-and-forget task (via `late_core::models::profile::fetch_username`), not passed from the caller.
+- **Game services hold `activity_feed` sender:** Daily puzzle services hold a clone of the global `broadcast::Sender<ActivityEvent>` and publish structured `ActivityEvent::game_won(...)` callouts from their `record_win_task()` paths. The username is looked up from `users` inside the fire-and-forget task (via `late_core::models::profile::fetch_username`), not passed from the caller.
 - **Bonsai death check runs on login:** `BonsaiService::ensure_tree()` checks `last_watered` against UTC today on every SSH session start. If 7+ days have passed, the tree is killed and a graveyard record is created. This means death is only detected when the user reconnects, not while offline.
 - **Bonsai daily care is UTC-based:** session startup ensures today's `bonsai_daily_care` row and applies unapplied penalties from prior care rows once. Missing water does not directly reduce growth, but 7+ dry days kills the tree. Missing the generated daily wrong-branch cuts costs 10 growth. The global `w` opens the care modal; watering now happens inside that modal.
 - **Bonsai passive growth is per-session:** The tick counter in `BonsaiState` grants 1 growth point every ~9000 ticks (~10 min at 15fps). If a user has multiple sessions, each grants growth independently. This is acceptable — it rewards being connected, not gaming the system.

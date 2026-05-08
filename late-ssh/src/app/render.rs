@@ -152,7 +152,7 @@ struct DrawContext<'a> {
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
-    activity: &'a std::collections::VecDeque<crate::state::ActivityEvent>,
+    activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
     is_moderator: bool,

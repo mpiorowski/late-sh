@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod ai;
 pub mod artboard;
 pub mod bonsai;

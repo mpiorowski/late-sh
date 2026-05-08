@@ -1,12 +1,13 @@
 use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
 
+use crate::app::activity::event::ActivityEvent;
 use crate::app::artboard::svc::ArtboardSnapshotService;
 use crate::app::common::theme;
 use crate::app::state::SessionConfig;
 use crate::authz::Permissions;
 use crate::session::SessionMessage;
-use crate::state::{ActivityEvent, State};
+use crate::state::State;
 
 pub struct SessionBootstrapInputs {
     pub user: User,

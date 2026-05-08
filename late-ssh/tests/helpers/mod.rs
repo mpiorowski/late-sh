@@ -6,6 +6,7 @@ use late_core::{
     rate_limit::IpRateLimiter,
     test_utils::{TestDb, test_db},
 };
+use late_ssh::app::activity::event::ActivityEvent;
 use late_ssh::app::ai::svc::AiService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
@@ -33,7 +34,6 @@ use late_ssh::app::vote::svc::VoteService;
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
 use late_ssh::session::{PairControlMessage, PairedClientRegistry, SessionRegistry};
-use late_ssh::state::ActivityEvent;
 use late_ssh::state::State;
 use std::collections::HashMap;
 use std::net::IpAddr;

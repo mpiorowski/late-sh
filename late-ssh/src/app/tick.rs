@@ -3,6 +3,7 @@ use std::time::Instant;
 use late_core::audio::VizFrame;
 
 use super::state::{App, GAME_SELECTION_TETRIS};
+use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
 use crate::session::{BrowserVizFrame, SessionMessage};
 
@@ -151,7 +152,11 @@ impl App {
         }
 
         if let Some(rx) = &mut self.activity_feed_rx {
+            let activity_filter = ActivityFilter::dashboard();
             while let Ok(event) = rx.try_recv() {
+                if !activity_filter.includes(&event) {
+                    continue;
+                }
                 self.activity.push_back(event);
                 if self.activity.len() > 7 {
                     self.activity.pop_front();

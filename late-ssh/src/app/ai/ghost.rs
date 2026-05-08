@@ -18,11 +18,12 @@ use tokio::time::{Instant as TokioInstant, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::{
+    app::activity::event::ActivityEvent,
     app::ai::svc::AiService,
     app::chat::svc::{ChatEvent, ChatService},
     app::help_modal::data::bot_app_context,
     app::rooms::blackjack::{manager::BlackjackTableManager, state::Outcome, svc::BlackjackEvent},
-    state::{ActiveUser, ActiveUsers, ActivityEvent},
+    state::{ActiveUser, ActiveUsers},
 };
 
 #[derive(Clone)]
@@ -252,11 +253,9 @@ impl GhostService {
                 last_login_at: Instant::now(),
             },
         );
-        let _ = self.activity_tx.send(ActivityEvent {
-            username: bot.username.clone(),
-            action: "joined".to_string(),
-            at: Instant::now(),
-        });
+        let _ = self
+            .activity_tx
+            .send(ActivityEvent::joined(bot.id, bot.username.clone()));
     }
 
     async fn run_bot_mention_task(

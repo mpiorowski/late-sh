@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-07
+- Last updated: 2026-05-08
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -28,6 +28,7 @@
 - `tictactoe/svc.rs` is the authoritative in-memory Tic-Tac-Toe board runtime.
 - `tictactoe/state.rs` is the per-session Tic-Tac-Toe client wrapper.
 - `tictactoe/ui.rs` renders the Tic-Tac-Toe board and seats.
+- Global user-action activity lives outside Rooms in `late-ssh/src/app/activity`. The room `touch_activity` methods below are inactivity timers only. When room game outcomes need to feed dashboard Activity or daily challenges, publish structured `ActivityEvent` values through the global activity channel instead of overloading room touch state.
 
 ## Persistence Model
 - `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Blackjack`, `Poker`, and `TicTacToe`.

@@ -4,8 +4,8 @@ use late_core::db::Db;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::app::activity::event::{ActivityEvent, ActivityGame};
 use crate::app::games::chips::svc::ChipService;
-use crate::state::ActivityEvent;
 use late_core::models::nonogram::{DailyWin, Game, GameParams};
 use late_core::models::profile::fetch_username;
 
@@ -69,11 +69,13 @@ impl NonogramService {
                 .grant_daily_bonus_task(user_id, size_key.clone());
             if let Ok(client) = svc.db.get().await {
                 let username = fetch_username(&client, user_id).await;
-                let _ = svc.activity_feed.send(ActivityEvent {
+                let _ = svc.activity_feed.send(ActivityEvent::game_won(
+                    user_id,
                     username,
-                    action: "solved Nonogram".to_string(),
-                    at: std::time::Instant::now(),
-                });
+                    ActivityGame::Nonogram,
+                    Some(size_key.clone()),
+                    None,
+                ));
             }
         });
     }

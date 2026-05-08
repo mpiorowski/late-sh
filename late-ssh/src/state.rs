@@ -1,3 +1,4 @@
+use crate::app::activity::event::ActivityEvent;
 use crate::app::ai::svc::AiService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::bonsai::svc::BonsaiService;
@@ -52,13 +53,6 @@ pub struct ActiveUser {
 }
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
-
-#[derive(Clone, Debug)]
-pub struct ActivityEvent {
-    pub username: String,
-    pub action: String, // "voted Jazz", "joined", "sent a message"
-    pub at: Instant,
-}
 
 #[derive(Clone)]
 pub struct State {

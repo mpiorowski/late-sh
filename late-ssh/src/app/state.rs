@@ -19,6 +19,7 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::profile::Profile;
 
 use crate::{
+    app::activity::event::ActivityEvent,
     app::{
         chat,
         chat::news::svc::ArticleService,
@@ -36,7 +37,7 @@ use crate::{
     session::{
         ClientAudioState, PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry,
     },
-    state::{ActiveUsers, ActivityEvent},
+    state::ActiveUsers,
     web::WebChatRegistry,
 };
 

@@ -17,20 +17,21 @@ use std::net::{IpAddr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{self, Duration, Instant};
+use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
+use crate::app::activity::event::ActivityEvent;
 use crate::app::{
     common::theme,
     state::{App, SessionConfig},
 };
 use crate::authz::Permissions as AuthzPermissions;
 use crate::metrics;
-use crate::state::{ActiveSession, ActivityEvent, State};
+use crate::state::{ActiveSession, State};
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 const PROXY_V1_MAX_LEN: usize = 108;
@@ -588,6 +589,7 @@ impl russh::server::Handler for ClientHandler {
             metrics::add_ssh_session(1);
         }
 
+        let user_id = user.id;
         let username = user.username.clone();
 
         tracing::info!(
@@ -598,11 +600,10 @@ impl russh::server::Handler for ClientHandler {
 
         self.user = Some(user);
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
-        let _ = self.state.activity_feed.send(ActivityEvent {
-            username,
-            action: "joined".to_string(),
-            at: time::Instant::now(),
-        });
+        let _ = self
+            .state
+            .activity_feed
+            .send(ActivityEvent::joined(user_id, username));
         Ok(Auth::Accept)
     }
 
