@@ -1012,7 +1012,7 @@ fn app_frame_sponsor_title() -> Line<'static> {
         ),
         Span::styled("☕ ", Style::default().fg(theme::AMBER())),
         Span::styled(
-            "ko-fi.com/mateuszpiorowski ",
+            "https://ko-fi.com/mateuszpiorowski ",
             Style::default().fg(theme::AMBER_DIM()),
         ),
     ])
@@ -1022,7 +1022,7 @@ fn app_frame_sponsor_title() -> Line<'static> {
 fn app_frame_help_hint_title() -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            " Why I cannot copy/open/click links? ",
+            " Why I cannot copy/select/open/click links? ",
             Style::default().fg(theme::TEXT_DIM()),
         ),
         Span::styled(

@@ -15,7 +15,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &TerminalHelpModalState) {
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Why I cannot copy/open/click links? ")
+        .title(" Why I cannot copy/select/open/click links? ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
