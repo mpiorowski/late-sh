@@ -1516,7 +1516,6 @@ impl ChatState {
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.showcase.list();
-        self.showcase.shuffle_for_visit();
         self.showcase.mark_read();
     }
 
@@ -1531,7 +1530,6 @@ impl ChatState {
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
-        self.work.shuffle_for_visit();
         self.work.mark_read();
     }
 

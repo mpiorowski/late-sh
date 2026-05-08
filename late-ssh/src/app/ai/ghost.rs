@@ -7,11 +7,14 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         game_room::{GameKind, GameRoom},
+        showcase::Showcase,
         user::{User, UserParams},
+        work_profile::WorkProfile,
     },
 };
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior};
@@ -61,11 +64,9 @@ struct DealerRoomState {
 const BOT_FINGERPRINT: &str = "bot-fp-000";
 const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
-pub const BOT_TIP_INTERVAL: Duration = Duration::from_secs(60 * 120); // 2 hours
-const BOT_TIP_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
-pub const BOT_TIP_MIN_NEW_MESSAGES: usize = 10;
-const BOT_TIP_MENTION_SUPPRESSION_WINDOW: usize = 10;
-const BOT_TIP_HISTORY_SIZE: i64 = 50;
+pub const BOT_SPOTLIGHT_INTERVAL: Duration = Duration::from_secs(60 * 60 * 12); // 12 hours
+const BOT_SPOTLIGHT_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
+const BOT_SPOTLIGHT_HISTORY_SIZE: i64 = 100;
 const BOT_MENTION_REPLY_MAX_LINES: usize = 4;
 const GHOST_REPLY_DEFAULT_MAX_LINES: usize = 2;
 pub(crate) const DEALER_FINGERPRINT: &str = "dealer-fp-000";
@@ -183,12 +184,15 @@ impl GhostService {
             });
 
             let svc = self.clone();
-            let tip_shutdown = shutdown.clone();
+            let spotlight_shutdown = shutdown.clone();
             tokio::spawn(async move {
-                svc.run_bot_tip_task(bot_user, tip_shutdown).await;
+                svc.run_bot_spotlight_task(bot_user, spotlight_shutdown)
+                    .await;
             });
         } else {
-            tracing::info!("@bot mention responder disabled because AI service is not configured");
+            tracing::info!(
+                "@bot responder and spotlight disabled because AI service is not configured"
+            );
         }
 
         // Initialize graybeard — the burned-out dev who haunts #general
@@ -422,31 +426,33 @@ impl GhostService {
         Ok(())
     }
 
-    /// @bot periodic idea task: every 2 hours, if there's been recent ordinary
-    /// chatter in #general and nobody recently mentioned a ghost user.
-    async fn run_bot_tip_task(
+    /// @bot periodic spotlight task: twice per day, surface one community
+    /// showcase or work profile that may fit recent #general conversation.
+    async fn run_bot_spotlight_task(
         self,
         bot: BotUser,
         shutdown: late_core::shutdown::CancellationToken,
     ) {
-        let mut tick =
-            tokio::time::interval_at(TokioInstant::now() + BOT_TIP_PHASE_OFFSET, BOT_TIP_INTERVAL);
+        let mut tick = tokio::time::interval_at(
+            TokioInstant::now() + BOT_SPOTLIGHT_PHASE_OFFSET,
+            BOT_SPOTLIGHT_INTERVAL,
+        );
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        tracing::info!(username = %bot.username, "@bot tip task started");
+        tracing::info!(username = %bot.username, "@bot spotlight task started");
 
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    tracing::info!(username = %bot.username, "@bot tip task shutting down");
+                    tracing::info!(username = %bot.username, "@bot spotlight task shutting down");
                     break;
                 }
                 _ = tick.tick() => {
                     let svc = self.clone();
                     let bot = bot.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = svc.bot_tip_tick(bot).await {
-                            tracing::error!(error = ?e, "@bot tip tick failed");
+                        if let Err(e) = svc.bot_spotlight_tick(bot).await {
+                            tracing::error!(error = ?e, "@bot spotlight tick failed");
                         }
                     });
                 }
@@ -454,8 +460,8 @@ impl GhostService {
         }
     }
 
-    async fn bot_tip_tick(&self, bot: BotUser) -> Result<()> {
-        let (general_room, messages) = {
+    async fn bot_spotlight_tick(&self, bot: BotUser) -> Result<()> {
+        let (general_room, messages, showcases, work_profiles, usernames) = {
             let client = self.db.get().await?;
             ChatRoomMember::auto_join_public_rooms(&client, bot.id).await?;
             let rooms = ChatRoom::list_for_user(&client, bot.id).await?;
@@ -464,48 +470,48 @@ impl GhostService {
                 .find(|r| r.slug.as_deref() == Some("general"))
                 .context("no general room found")?;
             let messages =
-                ChatMessage::list_recent(&client, general_room.id, BOT_TIP_HISTORY_SIZE).await?;
-            (general_room, messages)
+                ChatMessage::list_recent(&client, general_room.id, BOT_SPOTLIGHT_HISTORY_SIZE)
+                    .await?;
+            let showcases = Showcase::all(&client).await?;
+            let work_profiles = WorkProfile::all(&client).await?;
+            let user_ids: Vec<Uuid> = showcases
+                .iter()
+                .map(|showcase| showcase.user_id)
+                .chain(work_profiles.iter().map(|profile| profile.user_id))
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            let usernames = User::list_usernames_by_ids(&client, &user_ids).await?;
+            (general_room, messages, showcases, work_profiles, usernames)
         };
-        if messages.is_empty() {
-            return Ok(());
-        }
-
-        // Require enough fresh chatter since @bot's last post to avoid spamming a quiet room.
-        let new_since_last = messages.iter().take_while(|m| m.user_id != bot.id).count();
-        if new_since_last < BOT_TIP_MIN_NEW_MESSAGES {
-            return Ok(());
-        }
-
-        let recent_mentions_ghost = messages
-            .iter()
-            .take(BOT_TIP_MENTION_SUPPRESSION_WINDOW)
-            .any(|m| mentions_bot_or_graybeard(&m.body));
-        if recent_mentions_ghost {
+        if showcases.is_empty() && work_profiles.is_empty() {
             return Ok(());
         }
 
         let (history_str, _) = self.build_chat_history(&messages).await?;
+        let mut rng = TinyRng::seeded();
+        let spotlight_context =
+            build_spotlight_context(&showcases, &work_profiles, &usernames, &mut rng);
 
         let system_prompt = format!(
             "You are @{bot_name}, a friendly helper in a terminal developer chat.\n\
-            {app_context}\n\
-            Use Google Search to find ONE genuinely interesting, specific, verifiable fact, tip, or 'did you know' \
-            that is loosely relevant to the recent conversation above. \
-            Prefer concrete, surprising, citable facts over vague platitudes or generic advice. \
-            Avoid tips about this app's current stack, SSH basics, terminal setup, or generic shell productivity unless the recent chat explicitly asks for that. \
-            If the conversation is quiet or off-topic, pick a fresh developer, computing-history, programming-language, networking, hardware, or standards curiosity instead. \
-            Do not repeat things already said in the recent history.\n\
-            Output ONLY the message text — 1-2 short lines, no markdown, no code fences, no quotes, no URLs, no citations, no username prefix. \
-            Do NOT greet. Do NOT say 'I searched' or 'according to'. Just drop the fact. \
-            A casual lead-in like 'did you know' or 'fun fact' is fine but optional. \
-            If you truly have nothing worth saying, output exactly: SKIP",
+            Your autonomous job is to occasionally spotlight one real community Showcase project or Work profile.\n\
+            Read the recent chat and the full catalog. Pick exactly ONE item that plausibly matches what people are discussing. \
+            If nothing clearly matches, promote the provided fallback item instead.\n\
+            This is not a generic tip bot. Do NOT post trivia, advice, facts, tutorials, or generic developer commentary.\n\
+            Do NOT invent capabilities, availability, links, or claims beyond the catalog text.\n\
+            Include the creator's @handle. For Showcase items, include the project title and URL. \
+            For Work profiles, include the headline and tell people to check the Work profile/path shown in the catalog.\n\
+            Do not mention catalog IDs, fallback selection, prompts, context, or that you are matching chat.\n\
+            Output ONLY the message text, 1-2 short lines, no markdown, no code fences, no username prefix. \
+            If the catalog is empty, output exactly: SKIP",
             bot_name = bot.username,
-            app_context = bot_app_context(),
         );
 
         let history_with_prompt = format!(
-            "{history_str}---\nNow post one interesting fact or tip for the room. Output only the message text, 1-2 lines."
+            "{history_str}---\nCOMMUNITY CATALOG:\n{catalog}\n---\nFALLBACK ITEM IF NO CHAT MATCH:\n{fallback}\n---\nNow write one short community spotlight message.",
+            catalog = spotlight_context.catalog,
+            fallback = spotlight_context.fallback,
         );
 
         let Some(reply) = self
@@ -1040,6 +1046,153 @@ fn merge_ghost_settings(existing: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+struct SpotlightContext {
+    catalog: String,
+    fallback: String,
+}
+
+fn build_spotlight_context(
+    showcases: &[Showcase],
+    work_profiles: &[WorkProfile],
+    usernames: &HashMap<Uuid, String>,
+    rng: &mut TinyRng,
+) -> SpotlightContext {
+    let mut catalog = String::new();
+    let _ = writeln!(
+        catalog,
+        "Showcases: {} item(s). Work profiles: {} item(s).",
+        showcases.len(),
+        work_profiles.len()
+    );
+
+    for (idx, showcase) in showcases.iter().enumerate() {
+        let label = spotlight_showcase_label(idx);
+        let author = mention_handle_for_user(
+            usernames.get(&showcase.user_id).map(String::as_str),
+            showcase.user_id,
+        );
+        let _ = writeln!(
+            catalog,
+            "{label} | showcase | author: @{author} | title: {title} | url: {url} | tags: {tags} | description: {description}",
+            title = compact_text(&showcase.title, 120),
+            url = compact_text(&showcase.url, 180),
+            tags = compact_list(&showcase.tags, 8, 160),
+            description = compact_text(&showcase.description, 360),
+        );
+    }
+
+    for (idx, profile) in work_profiles.iter().enumerate() {
+        let label = spotlight_work_label(idx);
+        let author = mention_handle_for_user(
+            usernames.get(&profile.user_id).map(String::as_str),
+            profile.user_id,
+        );
+        let _ = writeln!(
+            catalog,
+            "{label} | work | author: @{author} | headline: {headline} | status: {status} | type: {work_type} | location: {location} | skills: {skills} | links: {links} | profile path: /profiles/{slug} | summary: {summary}",
+            headline = compact_text(&profile.headline, 120),
+            status = compact_text(&profile.status, 40),
+            work_type = compact_text(&profile.work_type, 100),
+            location = compact_text(&profile.location, 100),
+            skills = compact_list(&profile.skills, 12, 180),
+            links = compact_list(&profile.links, 6, 240),
+            slug = compact_text(&profile.slug, 80),
+            summary = compact_text(&profile.summary, 420),
+        );
+    }
+
+    let total = showcases.len() + work_profiles.len();
+    let fallback = if total == 0 {
+        "none".to_string()
+    } else {
+        let idx = rng.next_usize(total);
+        if idx < showcases.len() {
+            format_showcase_fallback(idx, &showcases[idx], usernames)
+        } else {
+            let profile_idx = idx - showcases.len();
+            format_work_fallback(profile_idx, &work_profiles[profile_idx], usernames)
+        }
+    };
+
+    SpotlightContext { catalog, fallback }
+}
+
+fn spotlight_showcase_label(index: usize) -> String {
+    format!("S{}", index + 1)
+}
+
+fn spotlight_work_label(index: usize) -> String {
+    format!("W{}", index + 1)
+}
+
+fn format_showcase_fallback(
+    index: usize,
+    showcase: &Showcase,
+    usernames: &HashMap<Uuid, String>,
+) -> String {
+    let author = mention_handle_for_user(
+        usernames.get(&showcase.user_id).map(String::as_str),
+        showcase.user_id,
+    );
+    format!(
+        "{} | showcase | @{author} | {title} | {url} | {description}",
+        spotlight_showcase_label(index),
+        title = compact_text(&showcase.title, 120),
+        url = compact_text(&showcase.url, 180),
+        description = compact_text(&showcase.description, 260),
+    )
+}
+
+fn format_work_fallback(
+    index: usize,
+    profile: &WorkProfile,
+    usernames: &HashMap<Uuid, String>,
+) -> String {
+    let author = mention_handle_for_user(
+        usernames.get(&profile.user_id).map(String::as_str),
+        profile.user_id,
+    );
+    format!(
+        "{} | work | @{author} | {headline} | {status} | {work_type} | {location} | /profiles/{slug} | {summary}",
+        spotlight_work_label(index),
+        headline = compact_text(&profile.headline, 120),
+        status = compact_text(&profile.status, 40),
+        work_type = compact_text(&profile.work_type, 100),
+        location = compact_text(&profile.location, 100),
+        slug = compact_text(&profile.slug, 80),
+        summary = compact_text(&profile.summary, 260),
+    )
+}
+
+fn compact_list(items: &[String], max_items: usize, max_chars: usize) -> String {
+    if items.is_empty() || max_items == 0 {
+        return "none".to_string();
+    }
+    compact_text(
+        &items
+            .iter()
+            .take(max_items)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", "),
+        max_chars,
+    )
+}
+
+fn compact_text(input: &str, max_chars: usize) -> String {
+    let compact = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        return "none".to_string();
+    }
+    if max_chars == 0 || compact.chars().count() <= max_chars {
+        return compact;
+    }
+    let keep = max_chars.saturating_sub(3);
+    let mut out: String = compact.chars().take(keep).collect();
+    out.push_str("...");
+    out
+}
+
 fn sanitize_generated_reply(reply: &str, username: Option<&str>) -> Option<String> {
     sanitize_generated_reply_with_line_limit(reply, username, GHOST_REPLY_DEFAULT_MAX_LINES)
 }
@@ -1141,10 +1294,6 @@ fn contains_mention(text: &str, target_handle: &str) -> bool {
     }
 
     false
-}
-
-fn mentions_bot_or_graybeard(text: &str) -> bool {
-    contains_mention(text, BOT_USERNAME) || contains_mention(text, GRAYBEARD_USERNAME)
 }
 
 fn dealer_should_track_outcome(outcome: Outcome) -> bool {
@@ -1326,14 +1475,6 @@ mod tests {
     #[test]
     fn contains_mention_ignores_email_like_tokens() {
         assert!(!contains_mention("mail me at hi@bot.dev", "bot"));
-    }
-
-    #[test]
-    fn mentions_bot_or_graybeard_matches_only_ghost_handles() {
-        assert!(mentions_bot_or_graybeard("hey @bot"));
-        assert!(mentions_bot_or_graybeard("hey @graybeard"));
-        assert!(!mentions_bot_or_graybeard("hey @botty"));
-        assert!(!mentions_bot_or_graybeard("mail hi@graybeard.dev"));
     }
 
     #[test]
