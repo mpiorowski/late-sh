@@ -1672,7 +1672,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter copy link · i paste URL",
+                " j/k navigate · Enter copy link · i paste URL · / filter mine",
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
@@ -1822,6 +1822,7 @@ mod tests {
                 articles: &[],
                 selected_index: 0,
                 marker_read_at: None,
+                mine_only: false,
             },
             discover_selected: false,
             discover_view: crate::app::chat::discover::ui::DiscoverListView {
@@ -1871,6 +1872,7 @@ mod tests {
                 current_user_id: Uuid::nil(),
                 is_admin: false,
                 marker_read_at: None,
+                mine_only: false,
             },
             showcase_state: None,
             showcase_composing: false,
@@ -1883,6 +1885,7 @@ mod tests {
                 is_admin: false,
                 marker_read_at: None,
                 profile_base_url: "http://localhost:3000",
+                mine_only: false,
             },
             work_state: None,
             work_composing: false,

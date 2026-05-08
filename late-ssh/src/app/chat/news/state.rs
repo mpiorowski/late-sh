@@ -12,7 +12,9 @@ pub struct State {
     article_service: ArticleService,
     user_id: Uuid,
     is_admin: bool,
+    source_articles: Vec<ArticleFeedItem>,
     articles: Vec<ArticleFeedItem>,
+    mine_only: bool,
     selected: usize,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     event_rx: broadcast::Receiver<ArticleEvent>,
@@ -36,7 +38,9 @@ impl State {
             article_service,
             user_id,
             is_admin,
+            source_articles: Vec::new(),
             articles: Vec::new(),
+            mine_only: false,
             selected: 0,
             snapshot_rx,
             event_rx,
@@ -51,7 +55,17 @@ impl State {
         }
     }
 
+    /// All articles known to the client, ignoring any mine-only filter.
+    /// Used by surfaces that should not be affected by chat-page filtering
+    /// (e.g. the dashboard wire).
     pub fn all_articles(&self) -> &[ArticleFeedItem] {
+        &self.source_articles
+    }
+
+    /// Articles in current display order, with the mine-only filter applied
+    /// when active. This is what the chat news view renders and what the
+    /// j/k/d/Enter selection operates on.
+    pub fn displayed_articles(&self) -> &[ArticleFeedItem] {
         &self.articles
     }
 
@@ -61,6 +75,36 @@ impl State {
 
     pub fn list_articles(&self) {
         self.article_service.list_articles_task();
+    }
+
+    pub fn mine_only(&self) -> bool {
+        self.mine_only
+    }
+
+    pub fn toggle_mine_only(&mut self) {
+        self.mine_only = !self.mine_only;
+        self.rebuild_display();
+    }
+
+    fn rebuild_display(&mut self) {
+        let prev_id = self
+            .articles
+            .get(self.selected.min(self.articles.len().saturating_sub(1)))
+            .map(|item| item.article.id);
+
+        let mut next: Vec<ArticleFeedItem> = self.source_articles.clone();
+        if self.mine_only {
+            next.retain(|item| item.article.user_id == self.user_id);
+        }
+
+        self.articles = next;
+        if let Some(id) = prev_id
+            && let Some(idx) = self.articles.iter().position(|item| item.article.id == id)
+        {
+            self.selected = idx;
+        } else {
+            self.selected = clamp_index(self.selected, self.articles.len());
+        }
     }
 
     pub fn selected_index(&self) -> usize {
@@ -74,6 +118,27 @@ impl State {
             .position(|item| item.article.id == article_id)
         {
             self.selected = index;
+            return;
+        }
+
+        // The article exists but is hidden by the mine-only filter (e.g.
+        // dashboard wire jumped to someone else's article). Drop the filter
+        // so the article becomes visible and selectable.
+        if self.mine_only
+            && self
+                .source_articles
+                .iter()
+                .any(|item| item.article.id == article_id)
+        {
+            self.mine_only = false;
+            self.rebuild_display();
+            if let Some(index) = self
+                .articles
+                .iter()
+                .position(|item| item.article.id == article_id)
+            {
+                self.selected = index;
+            }
         }
     }
 
@@ -242,8 +307,8 @@ impl State {
     fn drain_snapshot(&mut self) {
         if let Ok(true) = self.snapshot_rx.has_changed() {
             let snapshot = self.snapshot_rx.borrow_and_update().clone();
-            self.articles = snapshot.articles;
-            self.selected = clamp_index(self.selected, self.articles.len());
+            self.source_articles = snapshot.articles;
+            self.rebuild_display();
         }
     }
 

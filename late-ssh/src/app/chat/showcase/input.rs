@@ -116,6 +116,16 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             }
             true
         }
+        b'/' => {
+            app.chat.showcase.toggle_mine_only();
+            let banner = if app.chat.showcase.mine_only() {
+                Banner::success("Showing only your showcases.")
+            } else {
+                Banner::success("Showing all showcases.")
+            };
+            app.banner = Some(banner);
+            true
+        }
         _ => false,
     }
 }

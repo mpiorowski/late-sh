@@ -1511,6 +1511,14 @@ fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
         return false;
     }
 
+    // On synthetic chat entries (News/Showcase/Work), `/` is the
+    // filter-mine toggle, not a slash-command starter.
+    if screen == Screen::Chat
+        && (app.chat.news_selected || app.chat.showcase_selected || app.chat.work_selected)
+    {
+        return false;
+    }
+
     let room_id = match screen {
         Screen::Dashboard => app.dashboard_active_room_id(),
         Screen::Chat => app.chat.selected_room_id,

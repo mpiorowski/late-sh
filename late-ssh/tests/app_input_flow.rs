@@ -97,6 +97,32 @@ async fn ctrl_c_does_not_quit_the_app() {
 }
 
 #[tokio::test]
+async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "account-delete-flow").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "account-delete-flow-it");
+
+    app.handle_input(b"\x0f");
+    wait_for_render_contains(&mut app, "Account").await;
+    wait_for_render_contains(&mut app, "account-delete-flow").await;
+    for _ in 0..5 {
+        app.handle_input(b"\t");
+    }
+    wait_for_render_contains(&mut app, "Delete Account").await;
+
+    app.handle_input(b"\rwrong-name\r");
+    wait_for_render_contains(&mut app, "Typed username does not match current username.").await;
+
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Typed username does not match current username."),
+        "expected Esc to dismiss delete confirmation; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn screen_number_keys_switch_between_dashboard_chat_games_rooms_and_artboard() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-it").await;

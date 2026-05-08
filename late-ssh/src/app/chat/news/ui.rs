@@ -17,6 +17,7 @@ pub struct ArticleListView<'a> {
     pub articles: &'a [ArticleFeedItem],
     pub selected_index: usize,
     pub marker_read_at: Option<DateTime<Utc>>,
+    pub mine_only: bool,
 }
 
 pub(crate) struct ArticleModalView<'a> {
@@ -37,7 +38,11 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
     } else {
         view.selected_index.min(view.articles.len() - 1) + 1
     };
-    let title = format!(" News Feed ({selected}/{}) ", view.articles.len());
+    let title = if view.mine_only {
+        format!(" News Feed · mine ({selected}/{}) ", view.articles.len())
+    } else {
+        format!(" News Feed ({selected}/{}) ", view.articles.len())
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)

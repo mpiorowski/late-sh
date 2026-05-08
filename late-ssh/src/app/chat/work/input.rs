@@ -114,6 +114,16 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             }
             true
         }
+        b'/' => {
+            app.chat.work.toggle_mine_only();
+            let banner = if app.chat.work.mine_only() {
+                Banner::success("Showing only your work profile.")
+            } else {
+                Banner::success("Showing all work profiles.")
+            };
+            app.banner = Some(banner);
+            true
+        }
         _ => false,
     }
 }
