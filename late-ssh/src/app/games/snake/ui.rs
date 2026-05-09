@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
+    style::{Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -10,7 +10,7 @@ use crate::app::common::theme;
 use crate::app::games::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
 };
-use super::state::{State, ThingOnScreen};
+use super::state::{State, ThingOnScreen, CobraState};
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
     
@@ -19,6 +19,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
             ("score", state.score.to_string(), theme::AMBER_GLOW()),
             ("best", state.best_score.to_string(), theme::SUCCESS()),
             ("level", state.level.to_string(), theme::TEXT_BRIGHT()),
+            ("lives left", state.cobra.lives.to_string(), theme::TEXT_BRIGHT()),
             ("tick", state.field_tick.to_string(), theme::TEXT_BRIGHT()),
         ]),
         keys: keys_line(vec![
@@ -54,6 +55,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
             board_area,
             "GAME OVER",
             "Press r for a fresh run",
+            theme::ERROR(),
+        );
+    } else if let CobraState::Dead = state.cobra.state {
+        draw_game_overlay(
+            frame,
+            board_area,
+            "YOU DIED!",
+            "Restarting level...",
             theme::ERROR(),
         );
     }

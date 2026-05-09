@@ -1,3 +1,4 @@
+use late_core::models::snake::GameParams;
 use ratatui::style::Color;
 use uuid::Uuid;
 
@@ -19,6 +20,7 @@ pub struct State {
     pub cobra: Cobra,
     pub set_exit: bool,
     pub input_queue: Vec<u8>,
+    pub restart_countdown: i32,
     last_key: Option<u8>,
 }
 
@@ -46,38 +48,34 @@ impl State {
             is_paused: false,
             svc,
             user_id,
+            restart_countdown: 0
         };
         state.reset_level(true);
         state.reset_game();
         state
     }
-    pub fn persist_state(&self) {}
+    pub fn persist_progress(&self) {
+        self.svc.save_game_task(GameParams {
+            user_id: self.user_id,
+            score: self.score,
+            level: self.level.number as i32,
+            lives: self.cobra.lives as i32,
+            is_game_over: self.is_game_over,
+        });
+        if self.score > 0 {
+            self.svc.submit_score_task(self.user_id, self.score);
+        }
+    }
+ 
     pub fn restore(&self) {}
-    pub fn toggle_pause(&self) {}
-
-    fn show_game_over(&mut self) {
-        //utilprint("Game Over!".red());
-        println!(
-            "Congratulations you've reached level {} and your score was {:05}!",
-            self.level.number, self.score
-        );
-        println!("Press R to try again! Or Q to exit!");
-        // blocks until lock is dropped
-        // while self.tick.is_locked() {
-        //     std::thread::sleep(Duration::from_secs(1));
-        //     let queue = self.input_queue.lock().unwrap();
-        //     let key = queue.first();
-        //     if let Some(EventType::KeyPress(Key::KeyR)) = key {
-        //         println!("Restarting Game...");
-        //         std::thread::sleep(Duration::from_secs(1));
-        //         break;
-        //     } else if let Some(EventType::KeyPress(Key::KeyQ)) = key {
-        //         println!("Quiting Game...");
-        //         std::thread::sleep(Duration::from_secs(1));
-        //         break;
-        //     }
-        // }
-        self.is_game_over = false;
+    pub fn toggle_pause(&mut self) {
+        match self.is_paused {
+            false => {
+                self.is_paused = true;
+                self.persist_progress();
+            }
+            true => {self.is_paused = false;}
+        }
     }
 
     fn bye(&mut self) {
@@ -112,10 +110,10 @@ impl State {
             self.cobra.lives -= 1;
         } else {
             self.is_game_over = true;
+            self.persist_progress();
         }
-        println!("You died, restarting level!");
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        self.reset_level(true);
+        // Number of ticks to wait for
+        self.restart_countdown = 80;
     }
 
     pub fn reset_game(&mut self) {
@@ -123,6 +121,7 @@ impl State {
         self.cobra.lives = 3;
         self.score = 0;
         self.level.number = 1;
+        self.is_game_over = false;
         self.reset_level(true);
     }
 
@@ -133,6 +132,7 @@ impl State {
         self.field.things.clear();
         self.field.gen_things(self.level.number, &self.cobra);
         self.last_key = None;
+        self.persist_progress();
     }
 
     fn level_up(&mut self) {
@@ -179,18 +179,32 @@ impl State {
 
     pub fn tick(&mut self) -> bool {
         let accel = self.handle_key();
+        if self.is_paused || self.is_game_over {
+            return false;
+        }
         if self.set_exit {
             self.bye();
             return false;
         }
         let mut effect: Option<CobraEffect> = None;
-        if let CobraState::Alive = self.cobra.state {
-            effect = self.cobra.move_cobra(&mut self.field);
-        } else if let CobraState::PoweredUp = self.cobra.state {
-            effect = self.cobra.move_cobra(&mut self.field);
-            self.cobra.power_ticks_left -= 1;
-            if self.cobra.power_ticks_left == 0 {
-                self.cobra.state = CobraState::Alive;
+        match self.cobra.state {
+            CobraState::Alive => {
+                effect = self.cobra.move_cobra(&mut self.field);
+            }
+            CobraState::PoweredUp => {
+                effect = self.cobra.move_cobra(&mut self.field);
+                self.cobra.power_ticks_left -= 1;
+                if self.cobra.power_ticks_left == 0 {
+                    self.cobra.state = CobraState::Alive;
+                }
+            }
+            CobraState::Dead => {
+                if self.restart_countdown == 0 {
+                    self.reset_level(true);
+                } else {
+                    self.restart_countdown -= 1;
+                }
+                return false;
             }
         }
 
@@ -416,7 +430,7 @@ enum Direction {
 }
 
 #[derive(Debug)]
-enum CobraState {
+pub enum CobraState {
     Alive,
     PoweredUp,
     Dead,
@@ -425,8 +439,8 @@ enum CobraState {
 pub struct Cobra {
     body: Vec<Position>,
     head_dir: Direction,
-    state: CobraState,
-    lives: u8,
+    pub state: CobraState,
+    pub lives: u8,
     power_ticks_left: u8,
 }
 
