@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use ratatui::{
     Frame,
@@ -766,11 +766,18 @@ fn draw_table_compact(
 }
 
 fn status_text(snapshot: &PokerPublicSnapshot) -> String {
-    match snapshot.action_countdown_secs {
+    match action_countdown_secs(snapshot) {
         Some(0) => format!("{} Action timer expired.", snapshot.status_message),
         Some(secs) => format!("{} {secs}s left.", snapshot.status_message),
         None => snapshot.status_message.clone(),
     }
+}
+
+fn action_countdown_secs(snapshot: &PokerPublicSnapshot) -> Option<u64> {
+    let deadline = snapshot.action_deadline?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let millis = remaining.as_millis() as u64;
+    Some(millis.div_ceil(1000))
 }
 
 fn compact_seat_line(

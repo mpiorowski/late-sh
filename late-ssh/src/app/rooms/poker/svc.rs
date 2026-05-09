@@ -52,7 +52,7 @@ pub struct PokerPublicSnapshot {
     pub min_raise: i64,
     pub small_blind: i64,
     pub big_blind: i64,
-    pub action_countdown_secs: Option<u64>,
+    pub action_deadline: Option<Instant>,
     pub settlement_pending: bool,
 }
 
@@ -490,30 +490,37 @@ impl PokerService {
         let svc = self.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                let sleep_for = {
+                    let state = svc.state.lock().await;
+                    if !state.action_countdown_matches(countdown_id) {
+                        return;
+                    }
+                    state.action_countdown_remaining().unwrap_or_default()
+                };
 
-                let (done, settlements, next_countdown_id) = {
+                tokio::time::sleep(sleep_for).await;
+
+                let (settlements, next_countdown_id) = {
                     let mut state = svc.state.lock().await;
                     if !state.action_countdown_matches(countdown_id) {
                         return;
                     }
 
-                    if state.action_countdown_secs().is_some_and(|secs| secs > 0) {
-                        svc.publish(&state);
-                        (false, Vec::new(), None)
-                    } else {
-                        let settlements = state
-                            .timeout_active_action(countdown_id)
-                            .unwrap_or_default();
-                        let next_countdown_id = state.start_action_countdown_if_needed();
-                        svc.publish(&state);
-                        (true, settlements, next_countdown_id)
+                    if state
+                        .action_countdown_remaining()
+                        .is_some_and(|remaining| !remaining.is_zero())
+                    {
+                        continue;
                     }
+
+                    let settlements = state
+                        .timeout_active_action(countdown_id)
+                        .unwrap_or_default();
+                    let next_countdown_id = state.start_action_countdown_if_needed();
+                    svc.publish(&state);
+                    (settlements, next_countdown_id)
                 };
 
-                if !done {
-                    continue;
-                }
                 if let Some(countdown_id) = next_countdown_id {
                     svc.schedule_action_timeout(countdown_id);
                 }
@@ -655,7 +662,7 @@ impl SharedState {
             min_raise: self.min_raise,
             small_blind: self.settings.small_blind(),
             big_blind: self.settings.big_blind(),
-            action_countdown_secs: self.action_countdown_secs(),
+            action_deadline: self.action_deadline,
             settlement_pending: self.settlement_pending,
         }
     }
@@ -692,11 +699,9 @@ impl SharedState {
         }
     }
 
-    fn action_countdown_secs(&self) -> Option<u64> {
+    fn action_countdown_remaining(&self) -> Option<Duration> {
         let deadline = self.action_deadline?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let millis = remaining.as_millis() as u64;
-        Some(millis.div_ceil(1000))
+        Some(deadline.saturating_duration_since(Instant::now()))
     }
 
     fn start_action_countdown_if_needed(&mut self) -> Option<u64> {

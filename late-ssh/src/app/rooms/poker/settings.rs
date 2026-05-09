@@ -47,9 +47,17 @@ pub struct PokerTableSettings {
 
 impl PokerTableSettings {
     pub fn from_json(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone())
-            .unwrap_or_default()
-            .normalized()
+        let default = Self::default();
+        let pace = value
+            .get("pace")
+            .and_then(|value| serde_json::from_value::<PokerPace>(value.clone()).ok())
+            .unwrap_or(default.pace);
+        let small_blind = value
+            .get("small_blind")
+            .and_then(Value::as_i64)
+            .unwrap_or(default.small_blind);
+
+        Self { pace, small_blind }.normalized()
     }
 
     pub fn to_json(&self) -> Value {
@@ -102,7 +110,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn invalid_settings_fall_back_to_default() {
+    fn invalid_small_blind_falls_back_to_default() {
         let settings = PokerTableSettings::from_json(&serde_json::json!({
             "pace": "standard",
             "small_blind": 999
@@ -110,6 +118,18 @@ mod tests {
 
         assert_eq!(settings.small_blind(), 10);
         assert_eq!(settings.big_blind(), 20);
+    }
+
+    #[test]
+    fn invalid_pace_preserves_valid_small_blind() {
+        let settings = PokerTableSettings::from_json(&serde_json::json!({
+            "pace": "typo",
+            "small_blind": 50
+        }));
+
+        assert_eq!(settings.pace, PokerPace::Standard);
+        assert_eq!(settings.small_blind(), 50);
+        assert_eq!(settings.big_blind(), 100);
     }
 
     #[test]
