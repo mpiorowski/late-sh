@@ -71,6 +71,20 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    let initial_snake_game = match state.snake_service.load_game(user_id).await {
+        Ok(game) => game,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load snake game state");
+            None
+        }
+    };
+    let initial_snake_high_score = match state.snake_service.load_high_score(user_id).await {
+        Ok(score) => score,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load snake high score");
+            None
+        }
+    };
     let initial_sudoku_games = match state.sudoku_service.load_games(user_id).await {
         Ok(games) => games,
         Err(e) => {
@@ -143,8 +157,11 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_2048_game,
         initial_2048_high_score,
         tetris_service: state.tetris_service.clone(),
+        snake_service: state.snake_service.clone(),
         initial_tetris_game,
+        initial_snake_game,
         initial_tetris_high_score,
+        initial_snake_high_score,
         sudoku_service: state.sudoku_service.clone(),
         initial_sudoku_games,
         nonogram_service: state.nonogram_service.clone(),

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use late_core::db::Db;
-use late_core::models::tetris::{Game, GameParams, HighScore};
+use late_core::models::snake::{Game, GameParams, HighScore};
 use uuid::Uuid;
 
 #[derive(Clone)]

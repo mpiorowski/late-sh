@@ -258,6 +258,7 @@ pub struct GamesHubView<'a> {
     pub is_playing_game: bool,
     pub twenty_forty_eight_state: &'a super::twenty_forty_eight::state::State,
     pub tetris_state: &'a super::tetris::state::State,
+    pub snake_state: &'a super::snake::state::State,
     pub sudoku_state: &'a super::sudoku::state::State,
     pub nonogram_state: &'a super::nonogram::state::State,
     pub solitaire_state: &'a super::solitaire::state::State,
@@ -279,6 +280,9 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         } else if view.game_selection == GAME_SELECTION_TETRIS {
             super::tetris::ui::draw_game(frame, area, view.tetris_state, view.show_sidebar);
             return;
+        } else if view.game_selection == GAME_SELECTION_SNAKE {
+            super::snake::ui::draw_game(frame, area, view.snake_state, view.show_sidebar);
+            return;
         } else if view.game_selection == GAME_SELECTION_SUDOKU {
             super::sudoku::ui::draw_game(frame, area, view.sudoku_state, view.show_sidebar);
             return;
@@ -295,9 +299,6 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             return;
         } else if view.game_selection == GAME_SELECTION_SOLITAIRE {
             super::solitaire::ui::draw_game(frame, area, view.solitaire_state, view.show_sidebar);
-            return;
-        } else if view.game_selection == GAME_SELECTION_SNAKE {
-            super::snake::ui::draw_game(frame, area, view.solitaire_state, view.show_sidebar);
             return;
         }
     }
@@ -318,7 +319,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(9), // Header (added 1 for top padding)
+                Constraint::Length(10), // Header (added 1 for top padding)
                 Constraint::Length(1), // Spacer
                 Constraint::Min(0),    // Content
             ])
@@ -490,6 +491,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             "Tetris",
             "Endless falling blocks. Speed rises as you survive.",
             format!("Best {}", view.tetris_state.best_score),
+        ),
+        (
+            GAME_SELECTION_SNAKE,
+            "Snake",
+            "Eat grow and avoid danger. Speed rises as you survive.",
+            format!("Best {}", view.snake_state.best_score),
         ),
     ] {
         draw_game_entry(

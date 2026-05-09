@@ -729,7 +729,21 @@ impl russh::server::Handler for ClientHandler {
                     None
                 }
             };
-
+        let initial_snake_game = match self.state.snake_service.load_game(user_id).await {
+            Ok(game) => game,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load snake game state");
+                None
+            }
+        };
+        let initial_snake_high_score =
+            match self.state.snake_service.load_high_score(user_id).await {
+                Ok(score) => score,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load snake high score");
+                    None
+                }
+            };
         let initial_sudoku_games = match self.state.sudoku_service.load_games(user_id).await {
             Ok(g) => g,
             Err(e) => {
@@ -812,8 +826,11 @@ impl russh::server::Handler for ClientHandler {
             initial_2048_game,
             initial_2048_high_score,
             tetris_service: self.state.tetris_service.clone(),
+            snake_service: self.state.snake_service.clone(),
             initial_tetris_game,
+            initial_snake_game,
             initial_tetris_high_score,
+            initial_snake_high_score,
             sudoku_service,
             initial_sudoku_games,
             nonogram_service,

@@ -27,6 +27,7 @@ pub mod showcase_feed_read;
 pub mod solitaire;
 pub mod sudoku;
 pub mod tetris;
+pub mod snake;
 pub mod twenty_forty_eight;
 pub mod user;
 pub mod vote;

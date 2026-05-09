@@ -1,7 +1,8 @@
 use uuid::Uuid;
-use std::sync::{Arc, Mutex};
 use super::svc::SnakeService;
-use rdev::{Event, EventType, Key, listen};
+use rand::{Rng};
+use std::time::Duration;
+use std::sync::Mutex;
 
 pub struct State {
     pub user_id: Uuid,
@@ -10,55 +11,50 @@ pub struct State {
     pub is_game_over: bool,
     pub is_paused: bool,
     pub svc: SnakeService,
-    pub tick: i32,
+    pub tick: Mutex<i32>,
     pub level: Level,
     pub field: Field,
     pub cobra: Cobra,
     pub set_exit: bool,
-    pub game_over: bool,
-    input_queue: Vec<u8>,
+    pub input_queue: Vec<u8>,
     last_key: Option<u8>,
     key_is_pressed: bool,
 }
 
 impl State {
-    fn new(
+    pub fn new(
         user_id: Uuid,
         svc: SnakeService,
         best_score: i32,
         height: u32,
         width: u32,
-        input_queue: Arc<Mutex<Vec<EventType>>>,
-        key_is_pressed: Arc<Mutex<bool>>,
-        tick: i32,
     ) -> Self {
         let field = Field::new_empty(height - 3, width - 2);
         let cobra = Cobra::new(&field, 3);
         Self {
             score: 0,
-            tick,
+            tick: Mutex::new(0),
             level: Level::new(1),
             field,
             cobra,
             set_exit: false,
-            game_over: false,
-            input_queue,
-            last_key: None,
-            key_is_pressed,
-            best_score: 0,
             is_game_over: false,
+            input_queue: vec!(),
+            last_key: None,
+            key_is_pressed: false,
+            best_score,
             is_paused: false,
             svc,
-            user_id
+            user_id,
         }
     }
-    fn persist_state(&self) {}
-    fn restore(&self) {}
-    fn toggle_pause(&self) {}
+    pub fn persist_state(&self) {}
+    pub fn restore(&self) {}
+    pub fn toggle_pause(&self) {}
 
     fn show_game_over(&mut self) {
         self.clear_screen();
-        utilprint("Game Over!".red());
+        //utilprint("Game Over!".red());
         println!(
             "Congratulations you've reached level {} and your score was {:05}!",
             self.level.number, self.score
@@ -66,21 +62,21 @@ impl State {
         println!("Press R to try again! Or Q to exit!");
         let _tick = self.tick.lock();
         // blocks until lock is dropped
-        while self.tick.is_locked() {
-            std::thread::sleep(Duration::from_secs(1));
-            let queue = self.input_queue.lock().unwrap();
-            let key = queue.first();
-            if let Some(EventType::KeyPress(Key::KeyR)) = key {
-                println!("Restarting Game...");
-                std::thread::sleep(Duration::from_secs(1));
-                break;
-            } else if let Some(EventType::KeyPress(Key::KeyQ)) = key {
-                println!("Quiting Game...");
-                std::thread::sleep(Duration::from_secs(1));
-                break;
-            }
-        }
-        self.game_over = false;
+        // while self.tick.is_locked() {
+        //     std::thread::sleep(Duration::from_secs(1));
+        //     let queue = self.input_queue.lock().unwrap();
+        //     let key = queue.first();
+        //     if let Some(EventType::KeyPress(Key::KeyR)) = key {
+        //         println!("Restarting Game...");
+        //         std::thread::sleep(Duration::from_secs(1));
+        //         break;
+        //     } else if let Some(EventType::KeyPress(Key::KeyQ)) = key {
+        //         println!("Quiting Game...");
+        //         std::thread::sleep(Duration::from_secs(1));
+        //         break;
+        //     }
+        // }
+        self.is_game_over = false;
     }
 
     fn bye(&mut self) {
@@ -88,26 +84,23 @@ impl State {
         println!("You pressed Q, Good bye!!!");
     }
 
-    fn handle_key(&mut self) -> bool {
-        let mut queue = self.input_queue.lock().unwrap();
-        let key = queue.pop();
+    pub fn handle_key(&mut self) -> bool {
+        let key = self.input_queue.pop();
         let mut accel = false;
         if let Some(k) = key {
             let key_dir = self.cobra.dir_from_key(&k);
             if let Some(d) = key_dir
-                && d != self.cobra.head_dir
-            {
+                && d != self.cobra.head_dir {
                 accel = true;
-            } else if *self.key_is_pressed.lock().unwrap() {
+            }
+            if key == self.last_key {
                 accel = true;
             }
             self.last_key = key;
         }
         if let Some(k) = self.last_key {
             let dir = self.cobra.dir_from_key(&k);
-            if let EventType::KeyPress(Key::KeyQ) = k {
-                self.set_exit = true;
-            } else if let Some(d) = dir {
+            if let Some(d) = dir && d != self.cobra.head_dir {
                 self.cobra.set_direction(d);
             }
         }
@@ -118,7 +111,7 @@ impl State {
         if self.cobra.lives > 0 {
             self.cobra.lives -= 1;
         } else {
-            self.game_over = true;
+            self.is_game_over = true;
         }
         self.clear_screen();
         println!("You died, restarting level!");
@@ -126,17 +119,18 @@ impl State {
         self.reset_level(true);
     }
 
-    fn reset_game(&mut self) {
-        let mut tick = self.tick.lock();
-        *tick = 0;
-        drop(tick);
+    pub fn reset_game(&mut self) {
+        {
+            let mut tick = self.tick.lock().unwrap();
+            *tick = 0;
+        }
         self.cobra.lives = 3;
         self.score = 0;
         self.level.number = 1;
         self.reset_level(true);
     }
 
-    fn reset_level(&mut self, reset_cobra: bool) {
+    pub fn reset_level(&mut self, reset_cobra: bool) {
         if reset_cobra {
             self.cobra.reset(&self.field);
         }
@@ -182,7 +176,7 @@ impl State {
 
     fn clear_screen(&mut self) {
         print!("\x1B[2J\x1B[1;1H");
-        io::stdout().flush().unwrap();
+        //io::stdout().flush().unwrap();
     }
 
     fn score_up(&mut self, value: i32) {
@@ -201,7 +195,7 @@ impl State {
             &self.field.width,
             &self.score,
             &self.cobra.lives,
-            &self.input_queue.lock().unwrap().len(),
+            &self.input_queue.len(),
             &self.cobra.head_dir,
             &self.level.number,
             self.field.food_left(),
@@ -218,7 +212,7 @@ impl State {
                     line += " "
                 }
             }
-            utilprint(line);
+            //utilprint(line);
         }
     }
 
@@ -241,7 +235,7 @@ impl State {
 
         if let Some(CobraEffect::Blow) = effect {
             if self.cobra.lives == 0 {
-                self.game_over = true;
+                self.is_game_over = true;
                 return;
             } else {
                 self.kill_cobra();
@@ -264,12 +258,13 @@ impl State {
         }
         self.score_up(1);
         self.render();
-        let mut tick = self.tick.lock();
+        let mut tick = self.tick.lock().unwrap();
         *tick += 1;
-        let tick = self.tick.try_lock_for(dur);
-        if tick.is_some() {
-            drop(tick);
-        }
+    //     let tick = self.tick.try_lock_for(dur);
+    //     if tick.is_some() {
+    //         drop(tick);
+    //     }
+    // }
     }
 }
 
@@ -290,10 +285,10 @@ struct Position {
 
 impl Position {
     fn new(field: &Field) -> Self {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         Self {
-            x: rng.random_range(0..=(field.width - 1)),
-            y: rng.random_range(0..=(field.height - 1)),
+            x: rng.gen_range(0..=(field.width - 1)),
+            y: rng.gen_range(0..=(field.height - 1)),
         }
     }
 
@@ -425,8 +420,15 @@ impl ThingOnScreen {
     }
 }
 
-struct Level {
+pub struct Level {
     number: u8,
+}
+
+impl std::fmt::Display for Level{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+       write!(f, "{}", self.number); 
+       Ok(()) 
+    }
 }
 
 impl Level {
@@ -536,12 +538,12 @@ impl Cobra {
         collides
     }
 
-    fn dir_from_key(&self, key: &EventType) -> Option<Direction> {
+    fn dir_from_key(&self, key: &u8) -> Option<Direction> {
         match key {
-            EventType::KeyPress(Key::UpArrow) => Some(Direction::Up),
-            EventType::KeyPress(Key::DownArrow) => Some(Direction::Down),
-            EventType::KeyPress(Key::RightArrow) => Some(Direction::Right),
-            EventType::KeyPress(Key::LeftArrow) => Some(Direction::Left),
+            b'A' => Some(Direction::Up),
+            b'B' => Some(Direction::Down),
+            b'C' => Some(Direction::Right),
+            b'D' => Some(Direction::Left),
             _ => None,
         }
     }

@@ -124,8 +124,11 @@ pub struct SessionConfig {
     pub initial_2048_game: Option<late_core::models::twenty_forty_eight::Game>,
     pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
     pub tetris_service: crate::app::games::tetris::svc::TetrisService,
+    pub snake_service: crate::app::games::snake::svc::SnakeService,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
+    pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
+    pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
     pub sudoku_service: crate::app::games::sudoku::svc::SudokuService,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub nonogram_service: crate::app::games::nonogram::svc::NonogramService,
@@ -581,7 +584,13 @@ impl App {
                     .unwrap_or(0),
             )
         };
-
+        let snake_state = crate::app::games::snake::state::State::new(
+            config.user_id,
+            config.snake_service.clone(),
+            0,
+            60,
+            60,
+        );
         let sudoku_state = crate::app::games::sudoku::state::State::new(
             config.user_id,
             config.sudoku_service.clone(),
@@ -769,6 +778,7 @@ impl App {
             rooms_snapshot,
             twenty_forty_eight_state,
             tetris_state,
+            snake_state,
             sudoku_state,
             nonogram_state,
             solitaire_state,
