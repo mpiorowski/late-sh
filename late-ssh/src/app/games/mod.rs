@@ -4,6 +4,7 @@ pub mod input;
 pub mod leaderboard;
 pub mod minesweeper;
 pub mod nonogram;
+pub mod snake;
 pub mod solitaire;
 pub mod sudoku;
 pub mod tetris;

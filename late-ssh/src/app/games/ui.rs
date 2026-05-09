@@ -13,6 +13,7 @@ use crate::app::{
     state::{
         GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
         GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
+        GAME_SELECTION_SNAKE,
     },
 };
 use late_core::models::leaderboard::{BadgeTier, LeaderboardData};
@@ -295,6 +296,9 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         } else if view.game_selection == GAME_SELECTION_SOLITAIRE {
             super::solitaire::ui::draw_game(frame, area, view.solitaire_state, view.show_sidebar);
             return;
+        } else if view.game_selection == GAME_SELECTION_SNAKE {
+            super::snake::ui::draw_game(frame, area, view.solitaire_state, view.show_sidebar);
+            return;
         }
     }
 
@@ -415,6 +419,19 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Classic Klondike, dealt fresh every day.",
             "     ",
         ),
+        GAME_SELECTION_SNAKE => (
+            vec![
+                r#"     ███████╗███╗   ██╗ █████╗ ██╗██████╗ ███████╗"#,
+                r#"     ██╔════╝████╗  ██║██╔══██╗██║██╔══██╗██╔════╝"#,
+                r#"     ███████╗██╔██╗ ██║███████║██║██████╔╝█████╗  "#,
+                r#"     ╚════██║██║╚██╗██║██╔══██║██║██╔══██╗██╔══╝  "#,
+                r#"     ███████║██║ ╚████║██║  ██║██║██║  ██║███████╗"#,
+                r#"     ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚══════╝"#,
+            ],
+            "Classic Snake game, eat, grow and survive!",
+            "     ",
+        ),
+
         _ => (
             vec![
                 r#"     ██████╗ ██████╗  ██████╗ █████╗ ██████╗ ███████╗"#,

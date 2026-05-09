@@ -56,6 +56,7 @@ pub(crate) const GAME_SELECTION_SUDOKU: usize = 2;
 pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
+pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +294,7 @@ pub struct App {
     pub(crate) rooms_snapshot: crate::app::rooms::svc::RoomsSnapshot,
     pub(crate) twenty_forty_eight_state: crate::app::games::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::games::tetris::state::State,
+    pub(crate) snake_state: crate::app::games::snake::state::State,
     pub(crate) sudoku_state: crate::app::games::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,

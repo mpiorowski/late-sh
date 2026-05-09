@@ -2,10 +2,10 @@ use crate::app::common::primitives::Screen;
 use crate::app::state::{
     App, DashboardGameToggleTarget, GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER,
     GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
-    GAME_SELECTION_TETRIS,
+    GAME_SELECTION_TETRIS, GAME_SELECTION_SNAKE
 };
 
-const LOBBY_GAME_COUNT: usize = 6;
+const LOBBY_GAME_COUNT: usize = 7;
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.is_playing_game {
@@ -31,6 +31,12 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return true;
             }
             return super::tetris::input::handle_key(&mut app.tetris_state, byte);
+        } else if app.game_selection == GAME_SELECTION_SNAKE {
+            if byte == 0x1B || byte == b'q' || byte == b'Q' {
+                app.is_playing_game = false;
+                return true;
+            }
+            return super::snake::input::handle_key(&mut app.snake_state, byte);
         } else if app.game_selection == GAME_SELECTION_SUDOKU {
             if byte == 0x1B || byte == b'q' || byte == b'Q' {
                 app.is_playing_game = false;
