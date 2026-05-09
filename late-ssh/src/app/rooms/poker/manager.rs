@@ -14,9 +14,8 @@ use crate::app::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager,
         },
         poker::{
-            create_modal::PokerCreateModal,
-            state::State,
-            svc::{BIG_BLIND, PokerService, SMALL_BLIND},
+            create_modal::PokerCreateModal, settings::PokerTableSettings, state::State,
+            svc::PokerService,
         },
         svc::{GameKind, RoomListItem},
     },
@@ -38,12 +37,17 @@ impl PokerTableManager {
         }
     }
 
-    pub fn get_or_create(&self, room_id: Uuid) -> PokerService {
+    pub fn get_or_create(&self, room_id: Uuid, settings: PokerTableSettings) -> PokerService {
         let mut tables = self.tables.lock_recover();
         tables
             .entry(room_id)
             .or_insert_with(|| {
-                PokerService::new(room_id, self.chip_svc.clone(), self.activity.clone())
+                PokerService::new_with_settings(
+                    room_id,
+                    self.chip_svc.clone(),
+                    self.activity.clone(),
+                    settings,
+                )
             })
             .clone()
     }
@@ -67,18 +71,19 @@ impl RoomGameManager for PokerTableManager {
     }
 
     fn default_settings(&self) -> serde_json::Value {
-        serde_json::json!({})
+        PokerTableSettings::default().to_json()
     }
 
     fn open_create_modal(&self) -> Box<dyn CreateRoomModal> {
         Box::new(PokerCreateModal::new(self.default_room_name()))
     }
 
-    fn directory_meta(&self, _room: &RoomListItem) -> DirectoryMeta {
+    fn directory_meta(&self, room: &RoomListItem) -> DirectoryMeta {
+        let settings = PokerTableSettings::from_json(&room.settings);
         DirectoryMeta {
             seats: 4,
-            pace: "turn-based".to_string(),
-            stakes: format!("{SMALL_BLIND}/{BIG_BLIND} blinds"),
+            pace: settings.pace_label().to_string(),
+            stakes: settings.stake_label(),
         }
     }
 
@@ -98,8 +103,9 @@ impl RoomGameManager for PokerTableManager {
         user_id: Uuid,
         chip_balance: i64,
     ) -> Box<dyn ActiveRoomBackend> {
+        let settings = PokerTableSettings::from_json(&room.settings);
         Box::new(State::new(
-            self.get_or_create(room.id),
+            self.get_or_create(room.id, settings),
             user_id,
             chip_balance,
         ))

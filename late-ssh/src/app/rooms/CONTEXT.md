@@ -127,7 +127,7 @@
 ## Poker Runtime
 - `PokerTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `PokerService`.
 - Restarting the SSH process drops in-memory poker state. Existing open `game_rooms` survive, but re-entering creates a fresh table.
-- Poker is a fixed-blind Texas Hold'em-style table: four seats, one 52-card deck, private two-card hole hands, shared flop/turn/river, 10/20 blinds, call/check, bet/raise, fold, all-in, side pots, showdown hand ranking, and chip settlement through `ChipService`.
+- Poker is a configurable-blind Texas Hold'em-style table: four seats, one 52-card deck, private two-card hole hands, shared flop/turn/river, room-configured blinds, call/check, bet/raise, fold, all-in, side pots, showdown hand ranking, and chip settlement through `ChipService`.
 - The service uses one public `watch::Sender<PokerPublicSnapshot>` plus per-user `watch::Sender<PokerPrivateSnapshot>` channels keyed by `user_id`. Public snapshots include seat occupancy, visible stacks, committed chips, pot/current bet, card counts, folded/all-in/pending state, dealer button, board, phase, active seat, and winners. Private snapshots include the current user's hole cards, balance, call amount, and minimum raise.
 - The deck and all hole cards live only in `SharedState`; clients never receive other users' hole cards. `publish` lazily prunes orphaned private senders where `receiver_count() == 0`.
 - Entering starts as a viewer. `s` or `Enter` sits in the first open seat. Seated players press `n` to deal when the table is waiting or at showdown, `c`/Space/Enter to check or call when active, `b`/`r` to bet or raise by the selected amount, `[`/`]` or `-`/`+` to adjust that amount, `a` to shove all-in, `f` to fold, and `l` to leave a seat.
@@ -163,10 +163,14 @@
 - Cleanup of orphaned private channels (session disconnect drops the receiver but not the sender): prefer lazy GC inside the service's `publish` path — prune entries where `tx.receiver_count() == 0`.
 - Keep the deck/un-dealt cards inside `SharedState` only, never put them on any snapshot. Hole cards get sliced into the per-user private snapshot at publish time. Clients never receive secret state they aren't entitled to.
 
+## Room Timeouts
+- Blackjack has three runtime timers. The first confirmed bet starts a fixed 30s betting/deal cap; the cap does not restart for later bets and deals immediately if all seated players lock. Player action starts a pace-specific action timer (`Quick` 2m, `Standard` 5m, `Chill` 10m) that auto-stands unresolved hands on expiry and removes those missed-action seats after settlement. Seated player inactivity is a separate 5m active-room idle timer; active-room input refreshes it, idle players leave immediately when safe or after settlement when a live bet blocks immediate removal.
+- Poker has two timer types plus a missed-action policy. The per-turn action timer starts whenever `active_seat` is assigned in an action phase and restarts when action moves; on expiry it auto-checks when nothing is owed, otherwise auto-folds. A player who misses 3 turn timers is marked to leave at the nearest safe hand boundary, so one seated player cannot repeatedly consume the full turn clock. The existing 5m seat idle timer remains broader AFK cleanup: idle players leave outside active hands, and during active hands they fold and leave after the hand.
+- Tic-Tac-Toe has no service-side turn clock or AFK seat timer. A seated player can keep a seat until they leave, the opponent leaves/resets, or the process restarts; future timeout work should be added explicitly instead of assuming Blackjack/Poker timers apply.
+
 ## Known Gaps
 - Blackjack table state is not durable across process restart.
 - Poker table state is not durable across process restart.
-- Poker blind/stake settings are fixed in code at 10/20 and are not configurable from room settings yet.
 - Poker showdown reveal is simplified: all non-folded contenders auto-show, with no optional muck flow.
 - There is no AFK/disconnect cleanup path tied to SSH session lifecycle.
 - Dashboard showcases remain Blackjack-only.

@@ -693,7 +693,7 @@ fn draw_status_line(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsho
     };
     let line = Line::from(vec![
         Span::styled("* ", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(snapshot.status_message.clone(), Style::default().fg(tone)),
+        Span::styled(status_text(snapshot), Style::default().fg(tone)),
     ]);
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
@@ -757,12 +757,20 @@ fn draw_table_compact(
     }));
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
-        snapshot.status_message.clone(),
+        status_text(snapshot),
         Style::default().fg(theme::TEXT()),
     )));
     lines.push(key_line(state, snapshot));
 
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn status_text(snapshot: &PokerPublicSnapshot) -> String {
+    match snapshot.action_countdown_secs {
+        Some(0) => format!("{} Action timer expired.", snapshot.status_message),
+        Some(secs) => format!("{} {secs}s left.", snapshot.status_message),
+        None => snapshot.status_message.clone(),
+    }
 }
 
 fn compact_seat_line(
