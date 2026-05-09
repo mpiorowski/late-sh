@@ -1,6 +1,6 @@
 use super::{
-    chat, dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_search_modal, settings_modal, state::App, terminal_help_modal,
+    chat, dashboard, help_modal, icon_picker, leaderboard_modal, mod_modal, profile_modal,
+    quit_confirm, room_search_modal, settings_modal, state::App, terminal_help_modal,
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -86,6 +86,7 @@ pub enum ParsedInput {
     // Alt+Enter inserts a newline. `ESC`-prefixed control chords that would
     // otherwise wedge vte are pre-scanned before the parser sees them.
     AltEnter,
+    CtrlM,
     // Alt+S submits without closing the composer. Picked over Ctrl+Enter
     // because tmux collapses Ctrl-modified Enter to bare `\r` unless the
     // kitty keyboard protocol is forwarded, which it isn't by default.
@@ -349,6 +350,15 @@ impl Perform for VtCollector {
             // Kitty keyboard protocol for Ctrl+/.
             'u' if p0 == Some(b'/' as u16) && p1 == Some(5) => {
                 self.events.push(ParsedInput::Byte(0x1F));
+            }
+            // Kitty/CSI-u modified-key forms for Ctrl+M. The legacy C0 byte
+            // is indistinguishable from Enter (CR), so only the explicit
+            // modified-key encoding can be routed globally without breaking
+            // normal Enter.
+            'u' if matches!(p0, Some(13) | Some(77) | Some(109))
+                && matches!(p1, Some(5) | Some(6)) =>
+            {
+                self.events.push(ParsedInput::CtrlM);
             }
             // Shift+Tab: xterm `CSI Z`.
             'Z' if intermediates.is_empty() => {
@@ -641,6 +651,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // Ctrl+M's legacy byte is CR (Enter). Only route explicit modified-key
+    // encodings so normal Enter stays usable.
+    if matches!(event, ParsedInput::CtrlM) {
+        open_leaderboard_modal_globally(app);
+        return;
+    }
+
     // Ctrl+L (0x0C) is the global "why can't I copy/click links?" chord.
     // Toggles the terminal-help modal so users can dismiss with the same key.
     if matches!(event, ParsedInput::Byte(0x0C)) && !app.show_mod_modal {
@@ -665,6 +682,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     if app.show_mod_modal {
         mod_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_leaderboard_modal {
+        leaderboard_modal::input::handle_input(app, event);
         return;
     }
 
@@ -747,6 +769,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::AltC => {}
+        ParsedInput::CtrlM => {}
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
@@ -1059,6 +1082,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_mod_modal {
         app.show_mod_modal = false;
+        return;
+    }
+    if app.show_leaderboard_modal {
+        leaderboard_modal::input::handle_escape(app);
         return;
     }
     if app.show_settings {
@@ -1599,6 +1626,7 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 fn open_room_search_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
+    app.show_leaderboard_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_settings = false;
@@ -1617,6 +1645,7 @@ fn open_room_search_modal_globally(app: &mut App) {
 fn open_settings_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
+    app.show_leaderboard_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_terminal_help = false;
@@ -1635,9 +1664,28 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
+fn open_leaderboard_modal_globally(app: &mut App) {
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_settings = false;
+    app.show_terminal_help = false;
+    app.show_web_chat_qr = false;
+    app.web_chat_qr_url = None;
+    app.show_cli_install_modal = false;
+    app.show_quit_confirm = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.show_leaderboard_modal = true;
+}
+
 fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
+    app.show_leaderboard_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_settings = false;
@@ -1811,6 +1859,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_settings = false;
+            app.show_leaderboard_modal = false;
             app.show_quit_confirm = false;
             app.show_bonsai_modal = true;
             true

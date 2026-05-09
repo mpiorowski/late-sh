@@ -51,10 +51,19 @@ pub struct LeaderboardEntry {
 }
 
 #[derive(Clone)]
+pub struct RankedEntry {
+    pub username: String,
+    pub user_id: Uuid,
+    pub rank: i64,
+    pub value: i64,
+}
+
+#[derive(Clone)]
 pub struct HighScoreEntry {
     pub game: &'static str,
     pub username: String,
     pub user_id: Uuid,
+    pub rank: i64,
     pub score: i32,
 }
 
@@ -90,6 +99,10 @@ pub struct LeaderboardData {
     pub high_scores: Vec<HighScoreEntry>,
     pub chip_leaders: Vec<ChipLeader>,
     pub user_chips: HashMap<Uuid, i64>,
+    pub monthly_chip_earners: Vec<RankedEntry>,
+    pub arcade_champions: Vec<RankedEntry>,
+    pub monthly_tetris_high_scores: Vec<HighScoreEntry>,
+    pub monthly_2048_high_scores: Vec<HighScoreEntry>,
 }
 
 impl LeaderboardData {
@@ -108,13 +121,28 @@ impl LeaderboardData {
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {
-    let (champions, streaks, daily_statuses, high_scores, chip_leaders, all_chips) = tokio::try_join!(
+    let (
+        champions,
+        streaks,
+        daily_statuses,
+        high_scores,
+        chip_leaders,
+        all_chips,
+        monthly_chip_earners,
+        arcade_champions,
+        monthly_tetris_high_scores,
+        monthly_2048_high_scores,
+    ) = tokio::try_join!(
         fetch_today_champions(client, 10),
         fetch_all_streaks(client),
         fetch_today_daily_statuses(client),
         fetch_high_scores(client, 3),
         UserChips::top_balances(client, 10),
         UserChips::all_balances(client),
+        fetch_monthly_chip_earners(client, 500),
+        fetch_arcade_champions(client, 500),
+        fetch_monthly_tetris_high_scores(client, 500),
+        fetch_monthly_2048_high_scores(client, 500),
     )?;
 
     let user_streaks: HashMap<Uuid, u32> = streaks.iter().map(|e| (e.user_id, e.count)).collect();
@@ -129,7 +157,116 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         high_scores,
         chip_leaders,
         user_chips: all_chips,
+        monthly_chip_earners,
+        arcade_champions,
+        monthly_tetris_high_scores,
+        monthly_2048_high_scores,
     })
+}
+
+async fn fetch_monthly_chip_earners(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
+    let rows = client
+        .query(
+            "WITH totals AS (
+                SELECT user_id, SUM(delta)::bigint AS earned
+                FROM chip_ledger
+                WHERE delta > 0
+                  AND reason <> 'floor_restore'
+                  AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                GROUP BY user_id
+            ),
+            ranked AS (
+                SELECT u.username,
+                       t.user_id,
+                       t.earned,
+                       RANK() OVER (ORDER BY t.earned DESC) AS rank
+                FROM totals t
+                JOIN users u ON u.id = t.user_id
+            )
+            SELECT username, user_id, earned, rank
+            FROM ranked
+            ORDER BY rank ASC, username ASC
+            LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            value: row.get("earned"),
+        })
+        .collect())
+}
+
+async fn fetch_arcade_champions(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
+    let rows = client
+        .query(
+            "WITH monthly AS (
+                SELECT user_id, difficulty_key
+                FROM sudoku_daily_wins
+                WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                UNION ALL
+                SELECT user_id, size_key AS difficulty_key
+                FROM nonogram_daily_wins
+                WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                UNION ALL
+                SELECT user_id, difficulty_key
+                FROM solitaire_daily_wins
+                WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                UNION ALL
+                SELECT user_id, difficulty_key
+                FROM minesweeper_daily_wins
+                WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+            ),
+            scored AS (
+                SELECT user_id,
+                       CASE difficulty_key
+                         WHEN 'easy' THEN 1
+                         WHEN '10x10' THEN 1
+                         WHEN 'draw-1' THEN 1
+                         WHEN 'medium' THEN 3
+                         WHEN '15x15' THEN 3
+                         WHEN 'hard' THEN 5
+                         WHEN '20x20' THEN 5
+                         WHEN 'draw-3' THEN 5
+                         ELSE 1
+                       END AS points
+                FROM monthly
+            ),
+            totals AS (
+                SELECT user_id, SUM(points)::bigint AS points
+                FROM scored
+                GROUP BY user_id
+            ),
+            ranked AS (
+                SELECT u.username,
+                       t.user_id,
+                       t.points,
+                       RANK() OVER (ORDER BY t.points DESC) AS rank
+                FROM totals t
+                JOIN users u ON u.id = t.user_id
+            )
+            SELECT username, user_id, points, rank
+            FROM ranked
+            ORDER BY rank ASC, username ASC
+            LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            value: row.get("points"),
+        })
+        .collect())
 }
 
 async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreEntry>> {
@@ -138,10 +275,17 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
     // Tetris top scores
     let rows = client
         .query(
-            "SELECT u.username, h.user_id, h.score
-             FROM tetris_high_scores h
-             JOIN users u ON u.id = h.user_id
-             ORDER BY h.score DESC
+            "WITH ranked AS (
+                SELECT u.username,
+                       h.user_id,
+                       h.score,
+                       RANK() OVER (ORDER BY h.score DESC) AS rank
+                FROM tetris_high_scores h
+                JOIN users u ON u.id = h.user_id
+             )
+             SELECT username, user_id, score, rank
+             FROM ranked
+             ORDER BY rank ASC, username ASC
              LIMIT $1",
             &[&limit],
         )
@@ -151,6 +295,7 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
             game: "Tetris",
             username: row.get("username"),
             user_id: row.get("user_id"),
+            rank: row.get("rank"),
             score: row.get("score"),
         });
     }
@@ -158,10 +303,17 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
     // 2048 top scores
     let rows = client
         .query(
-            "SELECT u.username, h.user_id, h.score
-             FROM twenty_forty_eight_high_scores h
-             JOIN users u ON u.id = h.user_id
-             ORDER BY h.score DESC
+            "WITH ranked AS (
+                SELECT u.username,
+                       h.user_id,
+                       h.score,
+                       RANK() OVER (ORDER BY h.score DESC) AS rank
+                FROM twenty_forty_eight_high_scores h
+                JOIN users u ON u.id = h.user_id
+             )
+             SELECT username, user_id, score, rank
+             FROM ranked
+             ORDER BY rank ASC, username ASC
              LIMIT $1",
             &[&limit],
         )
@@ -171,11 +323,83 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
             game: "2048",
             username: row.get("username"),
             user_id: row.get("user_id"),
+            rank: row.get("rank"),
             score: row.get("score"),
         });
     }
 
     Ok(entries)
+}
+
+async fn fetch_monthly_tetris_high_scores(
+    client: &Client,
+    limit: i64,
+) -> Result<Vec<HighScoreEntry>> {
+    fetch_monthly_score_board(client, "Tetris", "tetris", "tetris_high_scores", limit).await
+}
+
+async fn fetch_monthly_2048_high_scores(
+    client: &Client,
+    limit: i64,
+) -> Result<Vec<HighScoreEntry>> {
+    fetch_monthly_score_board(
+        client,
+        "2048",
+        "2048",
+        "twenty_forty_eight_high_scores",
+        limit,
+    )
+    .await
+}
+
+async fn fetch_monthly_score_board(
+    client: &Client,
+    display_game: &'static str,
+    score_event_game: &str,
+    legacy_table: &str,
+    limit: i64,
+) -> Result<Vec<HighScoreEntry>> {
+    let query = format!(
+        "WITH scores AS (
+            SELECT user_id, score
+            FROM game_score_events
+            WHERE game = $1
+              AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+            UNION ALL
+            SELECT user_id, score
+            FROM {legacy_table}
+            WHERE updated >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+         ),
+         best AS (
+            SELECT user_id, MAX(score)::int AS score
+            FROM scores
+            GROUP BY user_id
+         ),
+         ranked AS (
+            SELECT u.username,
+                   b.user_id,
+                   b.score,
+                   RANK() OVER (ORDER BY b.score DESC) AS rank
+            FROM best b
+            JOIN users u ON u.id = b.user_id
+         )
+         SELECT username, user_id, score, rank
+         FROM ranked
+         ORDER BY rank ASC, username ASC
+         LIMIT $2"
+    );
+    let rows = client.query(&query, &[&score_event_game, &limit]).await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| HighScoreEntry {
+            game: display_game,
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            score: row.get("score"),
+        })
+        .collect())
 }
 
 async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<LeaderboardEntry>> {

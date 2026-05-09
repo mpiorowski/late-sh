@@ -164,6 +164,7 @@ struct DrawContext<'a> {
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
     show_mod_modal: bool,
+    show_leaderboard_modal: bool,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
@@ -521,6 +522,7 @@ impl App {
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
+                        show_leaderboard_modal: self.show_leaderboard_modal,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
@@ -727,7 +729,6 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
-                    leaderboard: ctx.leaderboard,
                     show_sidebar: ctx.show_games_sidebar,
                 },
             ),
@@ -811,6 +812,10 @@ impl App {
 
         if ctx.show_mod_modal {
             mod_modal::ui::draw(frame, inner, ctx.mod_modal_state);
+        }
+
+        if ctx.show_leaderboard_modal {
+            crate::app::leaderboard_modal::ui::draw(frame, inner, ctx.leaderboard, ctx.user_id);
         }
 
         if ctx.show_profile_modal {

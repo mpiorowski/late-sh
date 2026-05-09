@@ -195,6 +195,7 @@ pub struct App {
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
     pub(crate) show_mod_modal: bool,
+    pub(crate) show_leaderboard_modal: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_terminal_help: bool,
@@ -347,6 +348,7 @@ impl App {
         self.show_splash = false;
         self.show_settings = false;
         self.show_quit_confirm = false;
+        self.show_leaderboard_modal = false;
         self.show_bonsai_modal = false;
     }
 
@@ -679,6 +681,7 @@ impl App {
             show_quit_confirm: false,
             show_help: false,
             show_mod_modal: false,
+            show_leaderboard_modal: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
             show_terminal_help: false,

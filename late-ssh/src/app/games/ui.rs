@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -15,13 +13,11 @@ use crate::app::{
         GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
     },
 };
-use late_core::models::leaderboard::{BadgeTier, LeaderboardData};
 
 // ── Shared game frame ──────────────────────────────────────────
 
 enum GamesSidebarContent<'a> {
     Info(Vec<Line<'a>>),
-    Leaderboard(&'a Arc<LeaderboardData>),
 }
 
 pub struct GameBottomBar {
@@ -116,12 +112,8 @@ fn games_sidebar_layout(area: Rect, show_sidebar: bool) -> (Rect, Option<Rect>) 
 }
 
 fn draw_games_sidebar(frame: &mut Frame, area: Rect, content: GamesSidebarContent<'_>) {
-    let title = match &content {
-        GamesSidebarContent::Info(_) => " Info ",
-        GamesSidebarContent::Leaderboard(_) => " Leaderboard (🗘 30s) ",
-    };
     let block = Block::default()
-        .title(title)
+        .title(" Info ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let block_inner = block.inner(area);
@@ -131,19 +123,8 @@ fn draw_games_sidebar(frame: &mut Frame, area: Rect, content: GamesSidebarConten
         return;
     }
 
-    let inner = match content {
-        GamesSidebarContent::Info(_) => block_inner,
-        GamesSidebarContent::Leaderboard(_) => Rect {
-            x: block_inner.x + 1,
-            y: block_inner.y,
-            width: block_inner.width.saturating_sub(2),
-            height: block_inner.height,
-        },
-    };
-
     match content {
-        GamesSidebarContent::Info(lines) => frame.render_widget(Paragraph::new(lines), inner),
-        GamesSidebarContent::Leaderboard(data) => draw_leaderboard_sidebar_body(frame, inner, data),
+        GamesSidebarContent::Info(lines) => frame.render_widget(Paragraph::new(lines), block_inner),
     }
 }
 
@@ -261,7 +242,6 @@ pub struct GamesHubView<'a> {
     pub nonogram_state: &'a super::nonogram::state::State,
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
-    pub leaderboard: &'a Arc<LeaderboardData>,
     pub show_sidebar: bool,
 }
 
@@ -306,8 +286,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         return;
     }
 
-    // Two-column layout: game list (left) + leaderboard (right)
-    let (content_area, sidebar_area) = games_sidebar_layout(area, view.show_sidebar);
+    let content_area = area;
 
     let show_header = content_area.height >= 25;
     let layout = if show_header {
@@ -331,13 +310,6 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
         draw_game_list(frame, layout[2], view);
     } else {
         draw_game_list(frame, layout[0], view);
-    }
-    if let Some(sidebar_area) = sidebar_area {
-        draw_games_sidebar(
-            frame,
-            sidebar_area,
-            GamesSidebarContent::Leaderboard(view.leaderboard),
-        );
     }
 }
 
@@ -686,269 +658,6 @@ fn draw_game_entry(
         ]));
     }
     lines.push(Line::from(""));
-}
-
-// ── Leaderboard sidebar (right panel in arcade lobby) ──────────
-
-fn draw_leaderboard_sidebar_body(frame: &mut Frame, inner: Rect, data: &Arc<LeaderboardData>) {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // ── Chip Leaders ──
-    if !data.chip_leaders.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "Chip Leaders",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
-
-        for (i, entry) in data.chip_leaders.iter().take(5).enumerate() {
-            let medal = match i {
-                0 => "\u{25c6} ", // ◆
-                _ => "  ",
-            };
-            let medal_style = if i == 0 {
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT_DIM())
-            };
-            let name_style = if i == 0 {
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let max_name = (inner.width as usize).saturating_sub(10);
-            let name: String = entry.username.chars().take(max_name).collect();
-            lines.push(Line::from(vec![
-                Span::styled(medal, medal_style),
-                Span::styled(name, name_style),
-                Span::styled(
-                    format!(" {}", entry.balance),
-                    Style::default().fg(theme::SUCCESS()),
-                ),
-            ]));
-        }
-
-        lines.push(Line::from(""));
-    }
-
-    // ── Today's Champions ──
-    lines.push(Line::from(Span::styled(
-        "Today's Champions",
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-
-    if data.today_champions.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "No wins yet today",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    } else {
-        for (i, entry) in data.today_champions.iter().take(5).enumerate() {
-            let medal = match i {
-                0 => "\u{25c6} ", // ◆
-                _ => "  ",
-            };
-            let medal_style = if i == 0 {
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT_DIM())
-            };
-            let name_style = if i == 0 {
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let max_name = (inner.width as usize).saturating_sub(8);
-            let name: String = entry.username.chars().take(max_name).collect();
-            lines.push(Line::from(vec![
-                Span::styled(medal, medal_style),
-                Span::styled(name, name_style),
-                Span::styled(
-                    format!(" {}", entry.count),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ]));
-        }
-    }
-
-    lines.push(Line::from(""));
-
-    // ── Streak Leaders ──
-    lines.push(Line::from(Span::styled(
-        "Streak Leaders",
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-
-    if data.streak_leaders.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "No active streaks",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    } else {
-        for (i, entry) in data.streak_leaders.iter().take(5).enumerate() {
-            let badge = BadgeTier::from_streak(entry.count);
-            let badge_str = badge.map(|b| b.label()).unwrap_or("");
-            let badge_color = match badge {
-                Some(BadgeTier::Gold) => theme::AMBER_GLOW(),
-                Some(BadgeTier::Silver) => theme::TEXT_BRIGHT(),
-                Some(BadgeTier::Bronze) => theme::AMBER_DIM(),
-                None => theme::TEXT_DIM(),
-            };
-            let medal = if i == 0 {
-                "\u{25c6} " // ◆
-            } else {
-                ""
-            };
-            let medal_style = Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD);
-            let name_style = if i == 0 {
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let max_name = (inner.width as usize).saturating_sub(10);
-            let name: String = entry.username.chars().take(max_name).collect();
-            lines.push(Line::from(vec![
-                Span::styled(format!("{badge_str} "), Style::default().fg(badge_color)),
-                Span::styled(medal, medal_style),
-                Span::styled(name, name_style),
-                Span::styled(
-                    format!(" {}d", entry.count),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ]));
-        }
-    }
-
-    // ── All-Time High Scores ──
-    if !data.high_scores.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "All-Time High Scores",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
-
-        let mut current_game: &str = "";
-        let mut game_first = true;
-        for entry in &data.high_scores {
-            if entry.game != current_game {
-                current_game = entry.game;
-                game_first = true;
-                lines.push(Line::from(Span::styled(
-                    current_game.to_string(),
-                    Style::default().fg(theme::TEXT_DIM()),
-                )));
-            }
-            let medal = if game_first {
-                "\u{25c6} " // ◆
-            } else {
-                "  "
-            };
-            let medal_style = if game_first {
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT_DIM())
-            };
-            let name_style = if game_first {
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            game_first = false;
-            let max_name = (inner.width as usize).saturating_sub(10);
-            let name: String = entry.username.chars().take(max_name).collect();
-            lines.push(Line::from(vec![
-                Span::styled(medal, medal_style),
-                Span::styled(name, name_style),
-                Span::styled(
-                    format!(" {}", entry.score),
-                    Style::default().fg(theme::SUCCESS()),
-                ),
-            ]));
-        }
-    }
-
-    // ── Info ──
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Info",
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-
-    let muted = Style::default().fg(theme::TEXT_MUTED());
-
-    // Streak tiers
-    lines.push(Line::from(Span::styled("Streak tiers:", muted)));
-    lines.push(Line::from(vec![
-        Span::styled("  ", muted),
-        Span::styled("\u{2605}", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled("   Bronze   3+d", muted),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  ", muted),
-        Span::styled(
-            "\u{2605}\u{2605}",
-            Style::default().fg(theme::TEXT_BRIGHT()),
-        ),
-        Span::styled("  Silver   7+d", muted),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  ", muted),
-        Span::styled(
-            "\u{2605}\u{2605}\u{2605}",
-            Style::default().fg(theme::AMBER_GLOW()),
-        ),
-        Span::styled(" Gold    14+d", muted),
-    ]));
-
-    lines.push(Line::from(""));
-
-    // Chip economy
-    lines.push(Line::from(Span::styled("Late Chips:", muted)));
-    for hint in [
-        "  Bonsai water +200/day",
-        "  Easy win      +50",
-        "  Medium win   +100",
-        "  Hard win     +150",
-        "  Floor         100",
-    ] {
-        lines.push(Line::from(Span::styled(hint, muted)));
-    }
-    lines.push(Line::from(""));
-    for hint in ["Sudoku, Nonograms,", "Minesweeper, Solitaire"] {
-        lines.push(Line::from(Span::styled(hint, muted)));
-    }
-
-    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 #[cfg(test)]

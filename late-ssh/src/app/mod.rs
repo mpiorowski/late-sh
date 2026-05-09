@@ -9,6 +9,7 @@ pub mod games;
 pub(crate) mod help_modal;
 pub(crate) mod icon_picker;
 pub mod input;
+pub(crate) mod leaderboard_modal;
 pub(crate) mod mod_modal;
 pub mod profile;
 pub(crate) mod profile_modal;

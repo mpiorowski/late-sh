@@ -48,18 +48,27 @@ impl TwentyFortyEightService {
     }
 
     /// Fire-and-forget task to submit a new score (only updates if it's a high score)
-    pub fn submit_score_task(&self, user_id: Uuid, score: i32) {
+    pub fn submit_score_task(&self, user_id: Uuid, score: i32, final_score: bool) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.submit_score(user_id, score).await {
+            if let Err(e) = svc.submit_score(user_id, score, final_score).await {
                 tracing::error!(error = ?e, "failed to submit 2048 high score");
             }
         });
     }
 
-    async fn submit_score(&self, user_id: Uuid, score: i32) -> Result<()> {
+    async fn submit_score(&self, user_id: Uuid, score: i32, final_score: bool) -> Result<()> {
         let client = self.db.get().await?;
         HighScore::update_score_if_higher(&client, user_id, score).await?;
+        if final_score {
+            client
+                .execute(
+                    "INSERT INTO game_score_events (user_id, game, score)
+                     VALUES ($1, '2048', $2)",
+                    &[&user_id, &score],
+                )
+                .await?;
+        }
         Ok(())
     }
 

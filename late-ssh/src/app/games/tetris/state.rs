@@ -390,7 +390,8 @@ impl State {
 
     fn submit_score(&self) {
         if self.score > 0 {
-            self.svc.submit_score_task(self.user_id, self.score);
+            self.svc
+                .submit_score_task(self.user_id, self.score, self.is_game_over);
         }
     }
 

@@ -134,7 +134,7 @@ impl State {
         }
 
         self.is_game_over = true;
-        self.svc.submit_score_task(self.user_id, self.score);
+        self.svc.submit_score_task(self.user_id, self.score, true);
     }
 
     // --- Movement Logic ---
@@ -244,7 +244,7 @@ impl State {
 
             // Also proactively submit score if it went up significantly, though Game Over guarantees it
             if self.score > 0 && self.score % 100 == 0 {
-                self.svc.submit_score_task(self.user_id, self.score);
+                self.svc.submit_score_task(self.user_id, self.score, false);
             }
         }
 
