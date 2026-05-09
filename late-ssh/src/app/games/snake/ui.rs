@@ -10,7 +10,7 @@ use crate::app::common::theme;
 use crate::app::games::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
 };
-use super::state::State;
+use super::state::{State, ThingOnScreen};
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
     let bottom = GameBottomBar {
@@ -32,11 +32,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
     let board_area = draw_game_frame(frame, area, "Snake", bottom, show_sidebar);
     let board_rect = centered_rect(
         board_area,
-        60.min(board_area.width),
-        60.min(board_area.height),
+        state.field.width as u16,
+        state.field.height as u16,
     );
-    let board = Paragraph::new("hi").alignment(Alignment::Center);
-    frame.render_widget(board, board_rect);
+    let field = Paragraph::new(board_lines(state)).alignment(Alignment::Center);
+    frame.render_widget(field, board_rect);
 
     if state.is_paused {
         draw_game_overlay(
@@ -57,4 +57,46 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
     }
 }
 
+fn board_lines(state: &State) -> Vec<Line<'static>> {
+    let field = state.get_field();
+    let mut lines = Vec::with_capacity(state.field.height as usize);
+    lines.push(Line::from(Span::styled(
+        format!("┌{}┐", "─".repeat(state.field.width as usize)),
+        Style::default().fg(theme::BORDER_ACTIVE()),
+    )));
+
+    for row in field {
+        let mut spans = vec![Span::styled(
+            "│",
+            Style::default().fg(theme::BORDER_ACTIVE()),
+        )];
+        for cell in row {
+            spans.push(cell_span(cell));
+        }
+        spans.push(Span::styled(
+            "│",
+            Style::default().fg(theme::BORDER_ACTIVE()),
+        ));
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::from(Span::styled(
+        format!("└{}┘", "─".repeat(state.field.width as usize)),
+        Style::default().fg(theme::BORDER_ACTIVE()),
+    )));
+
+    lines
+}
+
+fn cell_span(something: Option<&ThingOnScreen>) -> Span<'static> {
+    match something {
+        Some(thing) => Span::styled(
+            thing.value.clone(),
+            Style::default()
+                .fg(thing.color)
+        ),
+        None => Span::styled(" ", Style::default()
+            .bg(theme::BG_SELECTION())),
+    }
+}
 

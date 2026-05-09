@@ -79,6 +79,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         b'\r' | b'\n' => {
             if app.game_selection == GAME_SELECTION_2048
                 || app.game_selection == GAME_SELECTION_TETRIS
+                || app.game_selection == GAME_SELECTION_SNAKE
                 || app.game_selection == GAME_SELECTION_SUDOKU
                 || (app.game_selection == GAME_SELECTION_NONOGRAMS
                     && app.nonogram_state.has_puzzles())
@@ -103,6 +104,8 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
             );
         } else if app.game_selection == GAME_SELECTION_TETRIS {
             return super::tetris::input::handle_arrow(&mut app.tetris_state, key);
+        } else if app.game_selection == GAME_SELECTION_SNAKE {
+            return super::snake::input::handle_arrow(&mut app.snake_state, key);
         } else if app.game_selection == GAME_SELECTION_SUDOKU {
             return super::sudoku::input::handle_arrow(&mut app.sudoku_state, key);
         } else if app.game_selection == GAME_SELECTION_NONOGRAMS {

@@ -1,4 +1,6 @@
+use ratatui::style::Color;
 use uuid::Uuid;
+
 use super::svc::SnakeService;
 use rand::{Rng};
 use std::time::Duration;
@@ -18,7 +20,6 @@ pub struct State {
     pub set_exit: bool,
     pub input_queue: Vec<u8>,
     last_key: Option<u8>,
-    key_is_pressed: bool,
 }
 
 impl State {
@@ -31,7 +32,7 @@ impl State {
     ) -> Self {
         let field = Field::new_empty(height - 3, width - 2);
         let cobra = Cobra::new(&field, 3);
-        Self {
+        let mut state = Self {
             score: 0,
             tick: Mutex::new(0),
             level: Level::new(1),
@@ -41,19 +42,20 @@ impl State {
             is_game_over: false,
             input_queue: vec!(),
             last_key: None,
-            key_is_pressed: false,
             best_score,
             is_paused: false,
             svc,
             user_id,
-        }
+        };
+        state.reset_level(true);
+        state.reset_game();
+        state
     }
     pub fn persist_state(&self) {}
     pub fn restore(&self) {}
     pub fn toggle_pause(&self) {}
 
     fn show_game_over(&mut self) {
-        self.clear_screen();
         //utilprint("Game Over!".red());
         println!(
             "Congratulations you've reached level {} and your score was {:05}!",
@@ -80,7 +82,6 @@ impl State {
     }
 
     fn bye(&mut self) {
-        self.clear_screen();
         println!("You pressed Q, Good bye!!!");
     }
 
@@ -113,7 +114,6 @@ impl State {
         } else {
             self.is_game_over = true;
         }
-        self.clear_screen();
         println!("You died, restarting level!");
         std::thread::sleep(std::time::Duration::from_secs(2));
         self.reset_level(true);
@@ -145,7 +145,7 @@ impl State {
         self.reset_level(false);
     }
 
-    fn get_field(&mut self) -> Vec<Vec<Option<&ThingOnScreen>>> {
+    pub fn get_field(&self) -> Vec<Vec<Option<&ThingOnScreen>>> {
         let mut grid: Vec<Vec<Option<&ThingOnScreen>>> =
             Vec::with_capacity(self.field.height as usize);
         for _ in 0..self.field.height {
@@ -174,46 +174,12 @@ impl State {
         grid
     }
 
-    fn clear_screen(&mut self) {
-        print!("\x1B[2J\x1B[1;1H");
-        //io::stdout().flush().unwrap();
-    }
-
     fn score_up(&mut self, value: i32) {
         let mut multiplier = (1.max(self.level.number / 2)) as f32;
         if let CobraState::PoweredUp = self.cobra.state {
             multiplier *= 2.0;
         }
         self.score += (value as f32 * multiplier) as i32;
-    }
-
-    fn render(&mut self) {
-        self.clear_screen();
-        println!(
-            "Field: {}x{}  Score: {:05}   lives: {}  Queue: {},   Head Dir: {:?}  Level:{} Food left: {} State: {:?}",
-            &self.field.height,
-            &self.field.width,
-            &self.score,
-            &self.cobra.lives,
-            &self.input_queue.len(),
-            &self.cobra.head_dir,
-            &self.level.number,
-            self.field.food_left(),
-            &self.cobra.state
-        );
-
-        let field = self.get_field();
-        for l in field {
-            let mut line = String::with_capacity(l.len());
-            for p in l {
-                if let Some(pixel) = p {
-                    line += &pixel.value[..]
-                } else {
-                    line += " "
-                }
-            }
-            //utilprint(line);
-        }
     }
 
     fn next_tick(&mut self) {
@@ -257,7 +223,6 @@ impl State {
             dur /= 2;
         }
         self.score_up(1);
-        self.render();
         let mut tick = self.tick.lock().unwrap();
         *tick += 1;
     //     let tick = self.tick.try_lock_for(dur);
@@ -327,9 +292,10 @@ enum ThingKind {
     Edge,
 }
 
-struct ThingOnScreen {
+pub struct ThingOnScreen {
     position: Position,
-    value: String,
+    pub value: String,
+    pub color: Color,
     effect: Option<CobraEffect>,
     kind: ThingKind,
 }
@@ -340,40 +306,46 @@ impl ThingOnScreen {
             ThingKind::Food => Self {
                 position,
                 kind,
+                color: Color::Yellow,
                 effect: Some(CobraEffect::Grow),
-                value: String::from("@Y#25C9"),
+                value: String::from("◉"),
             },
             ThingKind::Drug => Self {
                 position,
                 kind,
+                color: Color::Magenta,
                 effect: Some(CobraEffect::PowerUp),
-                value: String::from("@M#2605"),
+                value: String::from("★"),
             },
             ThingKind::Rock => Self {
                 position,
                 kind,
+                color: Color::Gray,
                 effect: Some(CobraEffect::Blow),
-                value: String::from("@W#2620"),
+                value: String::from("☠"),
             },
             ThingKind::Cobra => Self {
                 position,
                 kind,
+                color: Color::Green,
                 effect: None,
-                value: String::from("@G#2501"),
+                value: String::from("━"),
             },
             _ => Self {
                 position,
                 kind,
+                color: Color::White,
                 effect: None,
                 value: String::new(),
             },
         }
     }
 
-    fn get_cobra_pixel(value: String, position: Position) -> Self {
+    pub fn get_cobra_pixel(value: String, position: Position) -> Self {
         Self {
             position,
             kind: ThingKind::Cobra,
+            color: Color::Green,
             effect: None,
             value,
         }
@@ -384,24 +356,25 @@ impl ThingOnScreen {
     }
 
     fn get_edge(x: u32, y: u32, height: u32, width: u32) -> Option<Self> {
-        let mut value = String::from("@W");
+        let mut value = String::new();
         if x == 0 && y == 0 {
-            value += "#2554"
+            value += "╔"
         } else if x == width - 1 && y == height - 1 {
-            value += "#255D"
+            value += "╝"
         } else if x == 0 && y == height - 1 {
-            value += "#255A"
+            value += "╚"
         } else if y == 0 && x == width - 1 {
-            value += "#2557"
+            value += "╗"
         } else if x == 0 || x == width - 1 {
-            value += "#2551"
+            value += "║"
         } else if y == 0 || y == height - 1 {
-            value += "#2550"
+            value += "═"
         }
-        if value.contains("#") {
+        if value.len() > 0 {
             Some(Self {
                 effect: Some(CobraEffect::Blow),
                 position: Position { x, y },
+                color: Color::White,
                 kind: ThingKind::Edge,
                 value,
             })
@@ -456,7 +429,7 @@ enum CobraState {
     Dead,
 }
 
-struct Cobra {
+pub struct Cobra {
     body: Vec<Position>,
     head_dir: Direction,
     state: CobraState,
@@ -618,12 +591,12 @@ impl Cobra {
     }
 }
 
-struct Field {
+pub struct Field {
     edges: Vec<ThingOnScreen>,
     things: Vec<ThingOnScreen>,
     cobra_things: Vec<ThingOnScreen>,
-    height: u32,
-    width: u32,
+    pub height: u32,
+    pub width: u32,
 }
 
 impl Field {
