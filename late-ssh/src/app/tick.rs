@@ -104,11 +104,11 @@ impl App {
         }
         self.expire_artboard_ban_if_needed();
 
-        if self.screen == Screen::Games
-            && self.is_playing_game
-            && self.game_selection == GAME_SELECTION_TETRIS
-        {
-            self.tetris_state.tick();
+        if self.screen == Screen::Games && self.is_playing_game {
+            match self.game_selection {
+                GAME_SELECTION_TETRIS => {self.tetris_state.tick();}
+                GAME_SELECTION_SNAKE => {self.snake_state.tick();}
+            }
         }
         if let Some(active_room_game) = &mut self.active_room_game {
             active_room_game.tick();

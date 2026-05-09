@@ -13,11 +13,13 @@ use crate::app::games::ui::{
 use super::state::{State, ThingOnScreen};
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
+    
     let bottom = GameBottomBar {
         status: status_line(vec![
             ("score", state.score.to_string(), theme::AMBER_GLOW()),
             ("best", state.best_score.to_string(), theme::SUCCESS()),
             ("level", state.level.to_string(), theme::TEXT_BRIGHT()),
+            ("tick", state.field_tick.to_string(), theme::TEXT_BRIGHT()),
         ]),
         keys: keys_line(vec![
             ("h/l/j/k", "direction"),
@@ -35,7 +37,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         state.field.width as u16,
         state.field.height as u16,
     );
-    let field = Paragraph::new(board_lines(state)).alignment(Alignment::Center);
+    let field = Paragraph::new(get_field_lines(state)).alignment(Alignment::Center);
     frame.render_widget(field, board_rect);
 
     if state.is_paused {
@@ -57,9 +59,10 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
     }
 }
 
-fn board_lines(state: &State) -> Vec<Line<'static>> {
+fn get_field_lines(state: &State) -> Vec<Line<'static>> {
     let field = state.get_field();
-    let mut lines = Vec::with_capacity(state.field.height as usize);
+    let mut lines = Vec::with_capacity(state.field.height as usize+4);
+
     lines.push(Line::from(Span::styled(
         format!("┌{}┐", "─".repeat(state.field.width as usize)),
         Style::default().fg(theme::BORDER_ACTIVE()),
@@ -94,6 +97,7 @@ fn cell_span(something: Option<&ThingOnScreen>) -> Span<'static> {
             thing.value.clone(),
             Style::default()
                 .fg(thing.color)
+                .bg(theme::BG_SELECTION())
         ),
         None => Span::styled(" ", Style::default()
             .bg(theme::BG_SELECTION())),

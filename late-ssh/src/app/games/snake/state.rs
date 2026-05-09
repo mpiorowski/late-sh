@@ -13,7 +13,7 @@ pub struct State {
     pub is_game_over: bool,
     pub is_paused: bool,
     pub svc: SnakeService,
-    pub tick: Mutex<i32>,
+    pub field_tick: i32,
     pub level: Level,
     pub field: Field,
     pub cobra: Cobra,
@@ -34,7 +34,7 @@ impl State {
         let cobra = Cobra::new(&field, 3);
         let mut state = Self {
             score: 0,
-            tick: Mutex::new(0),
+            field_tick: 0,
             level: Level::new(1),
             field,
             cobra,
@@ -62,7 +62,6 @@ impl State {
             self.level.number, self.score
         );
         println!("Press R to try again! Or Q to exit!");
-        let _tick = self.tick.lock();
         // blocks until lock is dropped
         // while self.tick.is_locked() {
         //     std::thread::sleep(Duration::from_secs(1));
@@ -120,10 +119,7 @@ impl State {
     }
 
     pub fn reset_game(&mut self) {
-        {
-            let mut tick = self.tick.lock().unwrap();
-            *tick = 0;
-        }
+        self.field_tick = 0;
         self.cobra.lives = 3;
         self.score = 0;
         self.level.number = 1;
@@ -137,7 +133,6 @@ impl State {
         self.field.things.clear();
         self.field.gen_things(self.level.number, &self.cobra);
         self.last_key = None;
-        self.next_tick();
     }
 
     fn level_up(&mut self) {
@@ -182,11 +177,11 @@ impl State {
         self.score += (value as f32 * multiplier) as i32;
     }
 
-    fn next_tick(&mut self) {
+    pub fn tick(&mut self) -> bool {
         let accel = self.handle_key();
         if self.set_exit {
             self.bye();
-            return;
+            return false;
         }
         let mut effect: Option<CobraEffect> = None;
         if let CobraState::Alive = self.cobra.state {
@@ -202,7 +197,7 @@ impl State {
         if let Some(CobraEffect::Blow) = effect {
             if self.cobra.lives == 0 {
                 self.is_game_over = true;
-                return;
+                return false;
             } else {
                 self.kill_cobra();
             }
@@ -223,17 +218,10 @@ impl State {
             dur /= 2;
         }
         self.score_up(1);
-        let mut tick = self.tick.lock().unwrap();
-        *tick += 1;
-    //     let tick = self.tick.try_lock_for(dur);
-    //     if tick.is_some() {
-    //         drop(tick);
-    //     }
-    // }
+        self.field_tick += 1;
+        true
     }
 }
-
-
 
 #[derive(Clone, Copy, PartialEq)]
 enum CobraEffect {
@@ -341,11 +329,16 @@ impl ThingOnScreen {
         }
     }
 
-    pub fn get_cobra_pixel(value: String, position: Position) -> Self {
+    pub fn get_cobra_pixel(value: String, position: Position, state: &CobraState) -> Self {
+        let color: Color;
+        match state {
+            CobraState::PoweredUp => color = Color::Magenta,
+            _ => color = Color::Green
+        }
         Self {
             position,
             kind: ThingKind::Cobra,
-            color: Color::Green,
+            color,
             effect: None,
             value,
         }
@@ -453,11 +446,6 @@ impl Cobra {
 
     fn get_value(&self, index: usize) -> String {
         let mut value = String::new();
-        if let CobraState::PoweredUp = self.state {
-            value += "@M"
-        } else {
-            value += "@G"
-        }
         let mut prev_thing: Option<&Position> = None;
         if index > 0 {
             prev_thing = self.body.get(0.max(index - 1));
@@ -466,13 +454,13 @@ impl Cobra {
 
         if prev_thing.is_some() && next_thing.is_some() {
             // is body
-            value += "#25C9";
+            value += "◉";
         } else if prev_thing.is_some() && next_thing.is_none() {
             // is head
-            value += "#263B";
+            value += "☻";
         } else if next_thing.is_some() && prev_thing.is_none() {
             // is tail
-            value += "#25CF";
+            value += "●";
         }
         value
     }
@@ -585,7 +573,7 @@ impl Cobra {
             let value = self.get_value(p);
             field
                 .cobra_things
-                .push(ThingOnScreen::get_cobra_pixel(value, position.clone()));
+                .push(ThingOnScreen::get_cobra_pixel(value, position.clone(), &self.state));
         }
         effect
     }
