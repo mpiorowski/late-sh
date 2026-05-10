@@ -736,14 +736,14 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        let initial_snake_high_score =
-            match self.state.snake_service.load_high_score(user_id).await {
-                Ok(score) => score,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load snake high score");
-                    None
-                }
-            };
+        let initial_snake_high_score = match self.state.snake_service.load_high_score(user_id).await
+        {
+            Ok(score) => score,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load snake high score");
+                None
+            }
+        };
         let initial_sudoku_games = match self.state.sudoku_service.load_games(user_id).await {
             Ok(g) => g,
             Err(e) => {

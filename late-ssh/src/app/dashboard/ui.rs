@@ -42,10 +42,9 @@ const DASHBOARD_BOX_GRID_MIN_WIDTH: u16 = 52;
 const DASHBOARD_BOX_GRID_COLUMNS: usize = 3;
 const DASHBOARD_BOX_GRID_TEXT_ROWS: u16 = 2;
 const DASHBOARD_BOX_GRID_HEIGHT: u16 = DASHBOARD_BOX_GRID_TEXT_ROWS + 1; // + bottom rule
-const DASHBOARD_BOX_GRID_HEIGHT_WITH_TOP: u16 = DASHBOARD_BOX_GRID_HEIGHT + 1; // + top rule
-// Keep the top pinned-rule variant for roomy panes so tight layouts keep the
-// pin in the bottom rule and preserve the old scan order.
-const DASHBOARD_BOX_GRID_TOP_RULE_MIN_HEIGHT: u16 = 10;
+// Pin block: 1 text row + 1 underline row (`─...─ [b+4]`). No top or side
+// borders — just a bottom rule under the pinned message.
+const DASHBOARD_PIN_BOX_HEIGHT: u16 = 2;
 pub(crate) const DASHBOARD_DAILY_CYCLE_SECONDS: u64 = 60;
 /// 1 minute per wire headline. The wire is meant as a slow ambient feed —
 /// you might glance at the dashboard every few minutes and see something new
@@ -129,8 +128,8 @@ pub struct DashboardRenderInput<'a> {
     /// quick-switch strip directly above the chat card. Each entry is
     /// `(room_id, label, is_active, unread_count)`. `None` hides the strip.
     pub favorites_strip: Option<&'a [(uuid::Uuid, String, bool, i64)]>,
-    /// Pinned chat messages visible to this user; the newest pin is embedded
-    /// into the dashboard box rule when the box row is visible.
+    /// Pinned chat messages visible to this user; the newest pin renders as a
+    /// plain text row directly above the box grid when the grid is visible.
     pub pinned_messages: &'a [ChatMessage],
     pub featured_room: Option<&'a DashboardRoomCard>,
     pub box_prefix_armed: bool,
@@ -187,51 +186,36 @@ fn draw_dashboard_boxes_and_chat_section(
         return;
     };
 
-    // Two layouts ordered by available height:
-    //   1. Roomy: pinned msg embedded in a TOP rule above the grid (own row,
-    //      tied to columns by `┌┬┬┐` junctions)
-    //   2. Standard: grid only, pinned msg falls into the BOTTOM rule
+    // Pinned messages render as their own self-contained amber-bordered box
+    // directly above the grid, separate from the 3-box chrome below.
     let pinned_present = !view.pinned_messages.is_empty();
-    let has_room_for_top_rule = area.height >= DASHBOARD_BOX_GRID_TOP_RULE_MIN_HEIGHT;
+    let has_room_for_pin = area.height >= grid_height + DASHBOARD_PIN_BOX_HEIGHT;
+    let grid_view = DashboardBoxGridView {
+        featured_room: view.featured_room,
+        prefix_armed: view.box_prefix_armed,
+        daily_statuses: view.daily_statuses,
+        wire_news_articles: view.wire_news_articles,
+        cycle_secs: view.dashboard_cycle_secs,
+    };
 
-    if pinned_present && has_room_for_top_rule {
+    if pinned_present && has_room_for_pin {
         let split = Layout::vertical([
-            Constraint::Length(DASHBOARD_BOX_GRID_HEIGHT_WITH_TOP),
+            Constraint::Length(DASHBOARD_PIN_BOX_HEIGHT),
+            Constraint::Length(grid_height),
             Constraint::Fill(1),
         ])
         .split(area);
-        draw_dashboard_box_grid(
-            frame,
-            split[0],
-            DashboardBoxGridView {
-                featured_room: view.featured_room,
-                prefix_armed: view.box_prefix_armed,
-                top_rule_pinned: view.pinned_messages.first(),
-                bottom_rule_pinned: None,
-                daily_statuses: view.daily_statuses,
-                wire_news_articles: view.wire_news_articles,
-                cycle_secs: view.dashboard_cycle_secs,
-            },
-        );
-        draw_chat_section(frame, split[1], view.favorites_strip, view.chat_view);
+        if let Some(msg) = view.pinned_messages.first() {
+            draw_pin_box(frame, split[0], msg, view.box_prefix_armed);
+        }
+        draw_dashboard_box_grid(frame, split[1], grid_view);
+        draw_chat_section(frame, split[2], view.favorites_strip, view.chat_view);
         return;
     }
 
     let split =
         Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
-    draw_dashboard_box_grid(
-        frame,
-        split[0],
-        DashboardBoxGridView {
-            featured_room: view.featured_room,
-            prefix_armed: view.box_prefix_armed,
-            top_rule_pinned: None,
-            bottom_rule_pinned: view.pinned_messages.first(),
-            daily_statuses: view.daily_statuses,
-            wire_news_articles: view.wire_news_articles,
-            cycle_secs: view.dashboard_cycle_secs,
-        },
-    );
+    draw_dashboard_box_grid(frame, split[0], grid_view);
     draw_chat_section(frame, split[1], view.favorites_strip, view.chat_view);
 }
 
@@ -246,36 +230,22 @@ fn dashboard_box_grid_height(area: Rect) -> Option<u16> {
 struct DashboardBoxGridView<'a> {
     featured_room: Option<&'a DashboardRoomCard>,
     prefix_armed: bool,
-    top_rule_pinned: Option<&'a ChatMessage>,
-    bottom_rule_pinned: Option<&'a ChatMessage>,
     daily_statuses: &'a [DashboardDailyStatus],
     wire_news_articles: &'a [ArticleFeedItem],
     cycle_secs: u64,
 }
 
 fn draw_dashboard_box_grid(frame: &mut Frame, area: Rect, view: DashboardBoxGridView<'_>) {
-    let has_top_rule = view.top_rule_pinned.is_some();
-    let required_height = if has_top_rule {
-        DASHBOARD_BOX_GRID_HEIGHT_WITH_TOP
-    } else {
-        DASHBOARD_BOX_GRID_HEIGHT
-    };
-    if area.height < required_height {
+    if area.height < DASHBOARD_BOX_GRID_HEIGHT {
         return;
     }
 
-    let mut constraints: Vec<Constraint> = Vec::with_capacity(3);
-    if has_top_rule {
-        constraints.push(Constraint::Length(1));
-    }
-    constraints.push(Constraint::Length(DASHBOARD_BOX_GRID_TEXT_ROWS));
-    constraints.push(Constraint::Length(1));
-    let chunks = Layout::vertical(constraints).split(area);
-    let (top_rule_area, text_area, bottom_rule_area) = if has_top_rule {
-        (Some(chunks[0]), chunks[1], chunks[2])
-    } else {
-        (None, chunks[0], chunks[1])
-    };
+    let chunks = Layout::vertical([
+        Constraint::Length(DASHBOARD_BOX_GRID_TEXT_ROWS),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    let (text_area, bottom_rule_area) = (chunks[0], chunks[1]);
 
     // 7-track horizontal layout: vert | col1 | vert | col2 | vert | col3 | vert
     let cols = Layout::horizontal([
@@ -339,183 +309,82 @@ fn draw_dashboard_box_grid(frame: &mut Frame, area: Rect, view: DashboardBoxGrid
         }
     }
 
-    if let Some(top_area) = top_rule_area
-        && let Some(msg) = view.top_rule_pinned
-    {
-        draw_pin_strip(frame, top_area, msg, view.prefix_armed);
-    }
-
     let bottom_junctions = [
         (cols[0].x.saturating_sub(bottom_rule_area.x) as usize, '└'),
         (cols[2].x.saturating_sub(bottom_rule_area.x) as usize, '┴'),
         (cols[4].x.saturating_sub(bottom_rule_area.x) as usize, '┴'),
         (cols[6].x.saturating_sub(bottom_rule_area.x) as usize, '┘'),
     ];
-    draw_dashboard_box_rule(
-        frame,
-        bottom_rule_area,
-        &bottom_junctions,
-        view.bottom_rule_pinned,
-        view.prefix_armed,
-    );
+    draw_dashboard_box_rule(frame, bottom_rule_area, &bottom_junctions);
 }
 
-/// Renders one horizontal row of the grid chrome (top OR bottom). Junction
-/// chars are positioned at column splits; if `newest_pinned` is `Some`, the
-/// message is centered between rule chars in the row, with junctions
-/// preserved wherever the message doesn't cover them.
-fn draw_dashboard_box_rule(
-    frame: &mut Frame,
-    area: Rect,
-    junctions: &[(usize, char)],
-    newest_pinned: Option<&ChatMessage>,
-    prefix_armed: bool,
-) {
+/// Renders the bottom horizontal row of the grid chrome. Junction chars are
+/// positioned at column splits.
+fn draw_dashboard_box_rule(frame: &mut Frame, area: Rect, junctions: &[(usize, char)]) {
     let total_w = area.width as usize;
     if total_w == 0 {
         return;
     }
-
-    let make_rule_char = |i: usize| -> char {
-        junctions
-            .iter()
-            .find_map(|(off, ch)| if *off == i { Some(*ch) } else { None })
-            .unwrap_or('─')
-    };
 
     let border_style = Style::default().fg(theme::BORDER_DIM());
-
-    let render_plain_rule = |frame: &mut Frame| {
-        let rule: String = (0..total_w).map(make_rule_char).collect();
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(rule, border_style))),
-            area,
-        );
-    };
-
-    let Some(msg) = newest_pinned else {
-        render_plain_rule(frame);
-        return;
-    };
-
-    let first_line = msg.body.split('\n').next().unwrap_or("").trim();
-    if first_line.is_empty() {
-        render_plain_rule(frame);
-        return;
-    }
-
-    // Centered "  <body>  " between rule chars. Outer-pad spaces on each side
-    // keep the message from butting against the rule; junctions are preserved
-    // wherever the message doesn't cover them.
-    let outer_pad = 2usize;
-    let chrome_w = outer_pad * 2;
-    let min_pad = 3usize;
-    let min_body = 3usize;
-    let key_tag = dashboard_key_tag(3, prefix_armed, true);
-    let key_text = key_tag.content.as_ref();
-    let key_w = UnicodeWidthStr::width(key_text);
-    let key_gap = 1usize;
-    let min_required = min_pad * 2 + chrome_w + min_body + key_gap + key_w;
-    if total_w < min_required {
-        render_plain_rule(frame);
-        return;
-    }
-
-    let max_body = total_w - min_pad * 2 - chrome_w - key_gap - key_w;
-    let body = truncate(first_line, max_body);
-    let body_w = UnicodeWidthStr::width(body.as_str());
-    let middle_w = chrome_w + body_w;
-    let left_rule_w = (total_w - middle_w - key_gap - key_w) / 2;
-    let right_rule_w = total_w - left_rule_w - middle_w - key_gap - key_w;
-
-    let left: String = (0..left_rule_w).map(make_rule_char).collect();
-    let right: String = (left_rule_w + middle_w..left_rule_w + middle_w + right_rule_w)
-        .map(make_rule_char)
+    let rule: String = (0..total_w)
+        .map(|i| {
+            junctions
+                .iter()
+                .find_map(|(off, ch)| if *off == i { Some(*ch) } else { None })
+                .unwrap_or('─')
+        })
         .collect();
-    let outer_space: String = " ".repeat(outer_pad);
-
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(left, border_style),
-            Span::raw(outer_space.clone()),
-            Span::styled(
-                body,
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(outer_space),
-            Span::styled(right, border_style),
-            Span::raw(" ".repeat(key_gap)),
-            key_tag,
-        ])),
+        Paragraph::new(Line::from(Span::styled(rule, border_style))),
         area,
     );
 }
 
-/// Renders the pinned-message strip that floats above the grid as its own
-/// detached element. Plain `─` rule chars (no column junctions) and an amber
-/// tint mark it as a pin rather than box chrome.
-fn draw_pin_strip(frame: &mut Frame, area: Rect, msg: &ChatMessage, prefix_armed: bool) {
-    let total_w = area.width as usize;
-    if total_w == 0 {
+/// Renders the pinned message as: one row of text, then a single amber `─`
+/// rule directly below it with the `[b+4]` tag on the right end. No top or
+/// side borders, no junctions tying it to the grid below.
+fn draw_pin_box(frame: &mut Frame, area: Rect, msg: &ChatMessage, prefix_armed: bool) {
+    if area.height < 2 || area.width == 0 {
         return;
     }
-
-    let rule_style = Style::default().fg(theme::AMBER_DIM());
-
-    let render_plain_rule = |frame: &mut Frame| {
-        let rule: String = "─".repeat(total_w);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(rule, rule_style))),
-            area,
-        );
-    };
 
     let first_line = msg.body.split('\n').next().unwrap_or("").trim();
     if first_line.is_empty() {
-        render_plain_rule(frame);
         return;
     }
 
-    let outer_pad = 2usize;
-    let chrome_w = outer_pad * 2;
-    let min_pad = 3usize;
-    let min_body = 3usize;
-    let key_tag = dashboard_key_tag(3, prefix_armed, true);
-    let key_text = key_tag.content.as_ref();
-    let key_w = UnicodeWidthStr::width(key_text);
-    let key_gap = 1usize;
-    let min_required = min_pad * 2 + chrome_w + min_body + key_gap + key_w;
-    if total_w < min_required {
-        render_plain_rule(frame);
-        return;
-    }
+    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
+    let text_area = chunks[0];
+    let rule_area = chunks[1];
 
-    let max_body = total_w - min_pad * 2 - chrome_w - key_gap - key_w;
-    let body = truncate(first_line, max_body);
+    let total_w = area.width as usize;
+    let body_style = Style::default()
+        .fg(theme::AMBER())
+        .add_modifier(Modifier::BOLD);
+    let body = truncate(first_line, total_w);
     let body_w = UnicodeWidthStr::width(body.as_str());
-    let middle_w = chrome_w + body_w;
-    let left_rule_w = (total_w - middle_w - key_gap - key_w) / 2;
-    let right_rule_w = total_w - left_rule_w - middle_w - key_gap - key_w;
-    let outer_space: String = " ".repeat(outer_pad);
-
+    let left_pad = total_w.saturating_sub(body_w) / 2;
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("─".repeat(left_rule_w), rule_style),
-            Span::raw(outer_space.clone()),
-            Span::styled(
-                body,
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(outer_space),
-            Span::styled("─".repeat(right_rule_w), rule_style),
+            Span::raw(" ".repeat(left_pad)),
+            Span::styled(body, body_style),
+        ])),
+        text_area,
+    );
+
+    let key_tag = dashboard_key_tag(3, prefix_armed, true);
+    let key_w = UnicodeWidthStr::width(key_tag.content.as_ref());
+    let key_gap = 1usize;
+    let rule_w = total_w.saturating_sub(key_w + key_gap);
+    let rule_style = Style::default().fg(theme::AMBER_DIM());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("─".repeat(rule_w), rule_style),
             Span::raw(" ".repeat(key_gap)),
             key_tag,
         ])),
-        area,
+        rule_area,
     );
 }
 
@@ -1423,42 +1292,42 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_pinned_floats_above_grid_when_roomy() {
+    fn dashboard_pinned_renders_text_row_with_underline_rule_and_key_tag() {
         let pinned = vec![test_pinned_message("Pin this above the grid")];
         let lines = render_dashboard_section(100, 10, &pinned, &[], &[], 0);
-        let pinned_y = lines
+        let text_y = lines
             .iter()
             .position(|line| line.contains("Pin this above the grid"))
-            .expect("pinned strip");
+            .expect("pinned text row");
         let grid_y = lines
             .iter()
             .position(|line| line.contains("loading…"))
             .expect("grid row");
 
-        assert!(pinned_y < grid_y);
-        assert!(lines[pinned_y].contains("[b+4]"));
-        // Pin strip is detached from the grid: plain `─` rule, no column junctions.
-        assert!(lines[pinned_y].contains('─'));
-        assert!(!lines[pinned_y].contains('┬'));
-        assert!(!lines[pinned_y].contains('┌'));
-        assert!(!lines[pinned_y].contains('┐'));
+        assert!(text_y < grid_y);
+        // Text row is just the message — no `─`, no `[b+4]`, no top border.
+        assert!(!lines[text_y].contains('─'));
+        assert!(!lines[text_y].contains("[b+4]"));
+        assert!(!lines[text_y].contains('┌'));
+
+        // Underline row directly below: `─` rule with `[b+4]` on the right,
+        // no junctions tying it to the grid columns.
+        let underline = &lines[text_y + 1];
+        assert!(underline.contains('─'));
+        assert!(underline.contains("[b+4]"));
+        assert!(!underline.contains('┬'));
+        assert!(!underline.contains('┴'));
+        assert!(!underline.contains('┌'));
+        assert!(!underline.contains('┐'));
     }
 
     #[test]
-    fn dashboard_pinned_falls_back_into_grid_rule_at_nine_rows() {
-        let pinned = vec![test_pinned_message("Pin in the rule")];
-        let lines = render_dashboard_section(100, 9, &pinned, &[], &[], 0);
-        let pinned_y = lines
-            .iter()
-            .position(|line| line.contains("Pin in the rule"))
-            .expect("pinned rule");
-        let grid_y = lines
-            .iter()
-            .position(|line| line.contains("loading…"))
-            .expect("grid row");
-
-        assert!(pinned_y > grid_y);
-        assert!(lines[pinned_y].contains("[b+4]"));
+    fn dashboard_pinned_box_skipped_when_no_room() {
+        // 4 rows fits the grid (3) but not the grid + pin block (3 + 2 = 5).
+        let pinned = vec![test_pinned_message("Should not appear")];
+        let rendered = render_dashboard_section(100, 4, &pinned, &[], &[], 0).join("\n");
+        assert!(!rendered.contains("Should not appear"));
+        assert!(rendered.contains("loading…"));
     }
 
     #[test]

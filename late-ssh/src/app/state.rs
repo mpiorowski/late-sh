@@ -585,17 +585,29 @@ impl App {
                     .unwrap_or(0),
             )
         };
-        let snake_state = crate::app::games::snake::state::State::new(
-            config.user_id,
-            config.snake_service.clone(),
-            config
-                    .initial_snake_high_score
-                    .as_ref()
-                    .map(|score| score.score)
-                    .unwrap_or(0),
-            25,
-            60,
-        );
+        let snake_best_score = config
+            .initial_snake_high_score
+            .as_ref()
+            .map(|score| score.score)
+            .unwrap_or(0);
+        let snake_state = if let Some(game) = config.initial_snake_game {
+            crate::app::games::snake::state::State::restore(
+                config.user_id,
+                config.snake_service.clone(),
+                snake_best_score,
+                25,
+                60,
+                game,
+            )
+        } else {
+            crate::app::games::snake::state::State::new(
+                config.user_id,
+                config.snake_service.clone(),
+                snake_best_score,
+                25,
+                60,
+            )
+        };
         let sudoku_state = crate::app::games::sudoku::state::State::new(
             config.user_id,
             config.sudoku_service.clone(),

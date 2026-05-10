@@ -12,8 +12,8 @@ use crate::app::{
     common::theme,
     state::{
         GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
-        GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
-        GAME_SELECTION_SNAKE,
+        GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
+        GAME_SELECTION_TETRIS,
     },
 };
 use late_core::models::leaderboard::{BadgeTier, LeaderboardData};
@@ -320,8 +320,8 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &GamesHubView<'_>) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(10), // Header (added 1 for top padding)
-                Constraint::Length(1), // Spacer
-                Constraint::Min(0),    // Content
+                Constraint::Length(1),  // Spacer
+                Constraint::Min(0),     // Content
             ])
             .split(content_area)
     } else {

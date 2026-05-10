@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use late_core::audio::VizFrame;
 
-use super::state::{App, GAME_SELECTION_TETRIS, GAME_SELECTION_SNAKE};
+use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
 use crate::session::{BrowserVizFrame, SessionMessage};
@@ -106,9 +106,13 @@ impl App {
 
         if self.screen == Screen::Games && self.is_playing_game {
             match self.game_selection {
-                GAME_SELECTION_TETRIS => {self.tetris_state.tick();}
-                GAME_SELECTION_SNAKE => {self.snake_state.tick();}
-                _ => ()
+                GAME_SELECTION_TETRIS => {
+                    self.tetris_state.tick();
+                }
+                GAME_SELECTION_SNAKE => {
+                    self.snake_state.tick();
+                }
+                _ => (),
             }
         }
         if let Some(active_room_game) = &mut self.active_room_game {

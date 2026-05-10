@@ -1,9 +1,11 @@
-use late_core::models::snake::GameParams;
+use late_core::models::snake::{Game, GameParams};
 use ratatui::style::Color;
 use uuid::Uuid;
 
 use super::svc::SnakeService;
-use rand::{Rng};
+use rand::Rng;
+
+const MAX_LEVEL: u8 = 125;
 
 pub struct State {
     pub user_id: Uuid,
@@ -18,22 +20,41 @@ pub struct State {
     pub cobra: Cobra,
     pub set_exit: bool,
     pub input_queue: Vec<u8>,
-    pub restart_countdown: i32,
     pub stutter_left: u8,
     last_key: Option<u8>,
 }
 
 impl State {
-    pub fn new(
+    pub fn new(user_id: Uuid, svc: SnakeService, best_score: i32, height: u32, width: u32) -> Self {
+        let mut state = Self::empty(user_id, svc, best_score, height, width);
+        state.reset_game();
+        state
+    }
+
+    pub fn restore(
         user_id: Uuid,
         svc: SnakeService,
         best_score: i32,
         height: u32,
         width: u32,
+        game: Game,
     ) -> Self {
+        let mut state = Self::empty(user_id, svc, best_score.max(game.score), height, width);
+        state.score = game.score.max(0);
+        state.level = Level::new(game.level.clamp(1, u8::MAX as i32) as u8);
+        state.is_game_over = game.is_game_over;
+        state.cobra.lives = if state.is_game_over { 0 } else { 1 };
+        state.reset_level_without_persist(true);
+        if state.is_game_over {
+            state.cobra.state = CobraState::Dead;
+        }
+        state
+    }
+
+    fn empty(user_id: Uuid, svc: SnakeService, best_score: i32, height: u32, width: u32) -> Self {
         let field = Field::new_empty(height - 3, width - 2);
-        let cobra = Cobra::new(&field, 3);
-        let mut state = Self {
+        let cobra = Cobra::new(&field, 1);
+        Self {
             score: 0,
             field_tick: 0,
             level: Level::new(1),
@@ -41,19 +62,16 @@ impl State {
             cobra,
             set_exit: false,
             is_game_over: false,
-            input_queue: vec!(),
+            input_queue: vec![],
             last_key: None,
             best_score,
             is_paused: false,
             svc,
             user_id,
-            restart_countdown: 0,
-            stutter_left: 0
-        };
-        state.reset_level(true);
-        state.reset_game();
-        state
+            stutter_left: 0,
+        }
     }
+
     pub fn persist_progress(&self) {
         self.svc.save_game_task(GameParams {
             user_id: self.user_id,
@@ -66,15 +84,19 @@ impl State {
             self.svc.submit_score_task(self.user_id, self.score);
         }
     }
- 
-    pub fn restore(&self) {}
+
     pub fn toggle_pause(&mut self) {
+        if self.is_game_over {
+            return;
+        }
         match self.is_paused {
             false => {
                 self.is_paused = true;
                 self.persist_progress();
             }
-            true => {self.is_paused = false;}
+            true => {
+                self.is_paused = false;
+            }
         }
     }
 
@@ -88,7 +110,8 @@ impl State {
         if let Some(k) = key {
             let key_dir = self.cobra.dir_from_key(&k);
             if let Some(d) = key_dir
-                && d != self.cobra.head_dir {
+                && d != self.cobra.head_dir
+            {
                 accel = true;
             }
             if key == self.last_key {
@@ -98,45 +121,58 @@ impl State {
         }
         if let Some(k) = self.last_key {
             let dir = self.cobra.dir_from_key(&k);
-            if let Some(d) = dir && d != self.cobra.head_dir {
+            if let Some(d) = dir
+                && d != self.cobra.head_dir
+            {
                 self.cobra.set_direction(d);
             }
         }
         accel
     }
 
-    fn kill_cobra(&mut self) {
-        if self.cobra.lives > 0 {
-            self.cobra.lives -= 1;
-        } else {
-            self.is_game_over = true;
-            self.persist_progress();
-        }
-        // Number of ticks to wait for
-        self.restart_countdown = 20;
+    fn end_game(&mut self) {
+        self.cobra.lives = 0;
+        self.cobra.state = CobraState::Dead;
+        self.is_game_over = true;
+        self.persist_progress();
     }
 
     pub fn reset_game(&mut self) {
+        if self.score > 0 {
+            self.svc.submit_score_task(self.user_id, self.score);
+        }
         self.field_tick = 0;
-        self.cobra.lives = 3;
+        self.cobra.lives = 1;
         self.score = 0;
         self.level.number = 1;
         self.is_game_over = false;
+        self.is_paused = false;
+        self.stutter_left = 0;
         self.reset_level(true);
     }
 
     pub fn reset_level(&mut self, reset_cobra: bool) {
+        self.reset_level_inner(reset_cobra, true);
+    }
+
+    fn reset_level_without_persist(&mut self, reset_cobra: bool) {
+        self.reset_level_inner(reset_cobra, false);
+    }
+
+    fn reset_level_inner(&mut self, reset_cobra: bool, persist: bool) {
         if reset_cobra {
             self.cobra.reset(&self.field);
         }
         self.field.things.clear();
         self.field.gen_things(self.level.number, &self.cobra);
         self.last_key = None;
-        self.persist_progress();
+        if persist {
+            self.persist_progress();
+        }
     }
 
     fn level_up(&mut self) {
-        self.level.number += 1;
+        self.level.number = self.level.number.saturating_add(1).min(MAX_LEVEL);
         self.stutter_left = self.level.get_stutter();
         self.reset_level(false);
     }
@@ -176,6 +212,7 @@ impl State {
             multiplier *= 2.0;
         }
         self.score += (value as f32 * multiplier) as i32;
+        self.best_score = self.best_score.max(self.score);
     }
 
     pub fn tick(&mut self) -> bool {
@@ -190,7 +227,7 @@ impl State {
         if self.stutter_left == 0 || accel {
             // reset stutter_left
             let stutter = self.level.get_stutter();
-            let double_speed = (stutter as f32/2.0).ceil() as u8;
+            let double_speed = (stutter as f32 / 2.0).ceil() as u8;
             if let CobraState::PoweredUp = self.cobra.state {
                 self.stutter_left = double_speed;
             } else {
@@ -213,27 +250,21 @@ impl State {
                 }
             }
             CobraState::Dead => {
-                if self.restart_countdown == 0 {
-                    self.reset_level(true);
-                } else {
-                    self.restart_countdown -= 1;
-                }
                 return false;
             }
         }
 
         if let Some(CobraEffect::Blow) = effect {
-            if self.cobra.lives == 0 {
-                self.is_game_over = true;
-                return false;
-            } else {
-                self.kill_cobra();
-            }
+            self.end_game();
+            return false;
+        } else if let Some(CobraEffect::Grow) = effect {
+            self.score_up(10);
+        } else if let Some(CobraEffect::PowerUp) = effect {
+            self.score_up(25);
         } else if self.field.food_left() == 0 {
             self.level_up();
             self.score_up(100 * self.level.number as i32);
         }
-        self.score_up(1);
         self.field_tick += 1;
         true
     }
@@ -326,7 +357,7 @@ impl ThingOnScreen {
                 kind,
                 color: Color::Gray,
                 effect: Some(CobraEffect::Blow),
-                value: String::from("☠"),
+                value: String::from("×"),
             },
             ThingKind::Cobra => Self {
                 position,
@@ -346,11 +377,10 @@ impl ThingOnScreen {
     }
 
     pub fn get_cobra_pixel(value: String, position: Position, state: &CobraState) -> Self {
-        let color: Color;
-        match state {
-            CobraState::PoweredUp => color = Color::Magenta,
-            _ => color = Color::Green
-        }
+        let color = match state {
+            CobraState::PoweredUp => Color::Magenta,
+            _ => Color::Green,
+        };
         Self {
             position,
             kind: ThingKind::Cobra,
@@ -374,12 +404,14 @@ impl ThingOnScreen {
             value += "╚"
         } else if y == 0 && x == width - 1 {
             value += "╗"
-        } else if x == 0 || x == width - 1 {
-            value += "║"
+        } else if x == 0 {
+            value += "║ "
+        } else if x == width - 1 {
+            value += " ║"
         } else if y == 0 || y == height - 1 {
             value += "═"
         }
-        if value.len() > 0 {
+        if !value.is_empty() {
             Some(Self {
                 effect: Some(CobraEffect::Blow),
                 position: Position { x, y },
@@ -406,10 +438,9 @@ pub struct Level {
     number: u8,
 }
 
-impl std::fmt::Display for Level{
+impl std::fmt::Display for Level {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-       let _ = write!(f, "{}", self.number); 
-       Ok(()) 
+        write!(f, "{}", self.number)
     }
 }
 
@@ -421,22 +452,34 @@ impl Level {
     fn get_stutter(&self) -> u8 {
         // Calculate the number of frames to wait for in
         // each level
-        // max_frame_stut is based on the fact that 
+        // max_frame_stut is based on the fact that
         // server runs at 15 fps so the max stutter (slowest)
         // will be 10 frames, reducing by 1 on every level
         // up to level 10, where we run at max speed with stutter 0
         let max_frame_stut: f32 = 5.0;
         let max_lev_mod: f32 = 5.0;
-        (max_frame_stut*(1.0-(max_lev_mod.min(self.number as f32)*0.1))).ceil() as u8
+        (max_frame_stut * (1.0 - (max_lev_mod.min(self.number as f32) * 0.1))).ceil() as u8
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Direction {
     Up,
     Down,
     Right,
     Left,
+}
+
+impl Direction {
+    fn is_opposite(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::Up, Self::Down)
+                | (Self::Down, Self::Up)
+                | (Self::Right, Self::Left)
+                | (Self::Left, Self::Right)
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -472,7 +515,7 @@ impl Cobra {
         let mut value = String::new();
         let mut prev_thing: Option<&Position> = None;
         if index > 0 {
-            prev_thing = self.body.get(0.max(index - 1));
+            prev_thing = self.body.get(index - 1);
         }
         let next_thing = self.body.get(index + 1);
 
@@ -534,6 +577,9 @@ impl Cobra {
     }
 
     fn set_direction(&mut self, direction: Direction) {
+        if self.head_dir.is_opposite(direction) {
+            return;
+        }
         self.head_dir = direction
     }
 
@@ -595,9 +641,11 @@ impl Cobra {
         field.cobra_things.clear();
         for (p, position) in self.body.iter().enumerate() {
             let value = self.get_value(p);
-            field
-                .cobra_things
-                .push(ThingOnScreen::get_cobra_pixel(value, position.clone(), &self.state));
+            field.cobra_things.push(ThingOnScreen::get_cobra_pixel(
+                value,
+                position.clone(),
+                &self.state,
+            ));
         }
         effect
     }
@@ -670,11 +718,4 @@ impl Field {
         }
         food_left
     }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
 }
