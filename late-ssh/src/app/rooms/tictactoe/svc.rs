@@ -20,6 +20,7 @@ pub struct TicTacToeService {
     room_id: Uuid,
     activity: ActivityPublisher,
     room_display_name: String,
+    room_meta_label: String,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TicTacToeSnapshot>,
     snapshot_rx: watch::Receiver<TicTacToeSnapshot>,
@@ -43,6 +44,7 @@ impl TicTacToeService {
             room_id,
             activity,
             "Tic-Tac-Toe Board".to_string(),
+            String::new(),
             room_event_tx,
         )
     }
@@ -51,6 +53,7 @@ impl TicTacToeService {
         room_id: Uuid,
         activity: ActivityPublisher,
         room_display_name: String,
+        room_meta_label: String,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
     ) -> Self {
         let state = SharedState::new(room_id);
@@ -60,6 +63,7 @@ impl TicTacToeService {
             room_id,
             activity,
             room_display_name,
+            room_meta_label,
             room_event_tx,
             snapshot_tx,
             snapshot_rx,
@@ -99,6 +103,7 @@ impl TicTacToeService {
                     game_kind: GameKind::TicTacToe,
                     display_name: svc.room_display_name.clone(),
                     seat_index,
+                    meta: svc.room_meta_label.clone(),
                 });
             }
         });

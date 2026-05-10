@@ -31,6 +31,7 @@ pub struct PokerService {
     chip_svc: ChipService,
     activity: ActivityPublisher,
     room_display_name: String,
+    room_meta_label: String,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     public_tx: watch::Sender<PokerPublicSnapshot>,
     public_rx: watch::Receiver<PokerPublicSnapshot>,
@@ -154,12 +155,14 @@ impl PokerService {
         settings: PokerTableSettings,
     ) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
+        let meta = settings.meta_label();
         Self::new_with_settings_and_events(
             room_id,
             chip_svc,
             activity,
             settings,
             "Poker Table".to_string(),
+            meta,
             room_event_tx,
         )
     }
@@ -170,6 +173,7 @@ impl PokerService {
         activity: ActivityPublisher,
         settings: PokerTableSettings,
         room_display_name: String,
+        room_meta_label: String,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
     ) -> Self {
         let state = SharedState::new_with_settings(room_id, settings);
@@ -180,6 +184,7 @@ impl PokerService {
             chip_svc,
             activity,
             room_display_name,
+            room_meta_label,
             room_event_tx,
             public_tx,
             public_rx,
@@ -239,6 +244,7 @@ impl PokerService {
                     game_kind: GameKind::Poker,
                     display_name: svc.room_display_name.clone(),
                     seat_index,
+                    meta: svc.room_meta_label.clone(),
                 });
             }
         });

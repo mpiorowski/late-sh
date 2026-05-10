@@ -1078,7 +1078,6 @@ mod tests {
     use super::*;
     use crate::app::chat::ui::ChatRowsCache;
     use crate::app::rooms::svc::GameKind;
-    use late_core::models::leaderboard::BadgeTier;
     use ratatui::{Terminal, backend::TestBackend};
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -1099,7 +1098,6 @@ mod tests {
         let mut rows_cache = ChatRowsCache::default();
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
-        let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
@@ -1130,7 +1128,6 @@ mod tests {
                             rows_cache: &mut rows_cache,
                             usernames: &usernames,
                             countries: &countries,
-                            badges: &badges,
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
@@ -1182,7 +1179,6 @@ mod tests {
         let mut rows_cache = ChatRowsCache::default();
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
-        let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
@@ -1212,7 +1208,6 @@ mod tests {
                             rows_cache: &mut rows_cache,
                             usernames: &usernames,
                             countries: &countries,
-                            badges: &badges,
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
@@ -1545,7 +1540,6 @@ mod tests {
         let mut rows_cache = ChatRowsCache::default();
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
-        let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
@@ -1576,7 +1570,6 @@ mod tests {
                             rows_cache: &mut rows_cache,
                             usernames: &usernames,
                             countries: &countries,
-                            badges: &badges,
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,
@@ -1626,7 +1619,6 @@ mod tests {
         let mut rows_cache = ChatRowsCache::default();
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
-        let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
@@ -1662,7 +1654,6 @@ mod tests {
                             rows_cache: &mut rows_cache,
                             usernames: &usernames,
                             countries: &countries,
-                            badges: &badges,
                             message_reactions: &message_reactions,
                             current_user_id: Uuid::nil(),
                             selected_message_id: None,

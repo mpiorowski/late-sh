@@ -30,6 +30,13 @@ impl std::fmt::Display for GameKind {
     }
 }
 
+/// Chat-body marker for "user took a seat at a game room" announcements.
+/// The chat renderer detects this prefix and replaces the plain message
+/// with a styled card. Payload after the marker is
+/// `{game_kind} || {room_name} || {meta}`.
+pub const ROOM_SEAT_MARKER: &str = "---ROOM-SEAT---";
+pub const ROOM_SEAT_SEPARATOR: &str = " || ";
+
 impl TryFrom<&str> for GameKind {
     type Error = anyhow::Error;
 

@@ -91,6 +91,11 @@ impl PokerTableSettings {
         self.pace.action_timeout_secs()
     }
 
+    /// Compact one-liner shown in the chat seat-joined card.
+    pub fn meta_label(&self) -> String {
+        format!("{} · {}s/turn", self.stake_label(), self.action_timeout_secs())
+    }
+
     fn normalized_ref(&self) -> Self {
         self.clone().normalized()
     }

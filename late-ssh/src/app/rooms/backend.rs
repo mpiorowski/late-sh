@@ -48,6 +48,10 @@ pub enum RoomGameEvent {
         game_kind: GameKind,
         display_name: String,
         seat_index: usize,
+        /// Short room-level info ("50/100 blinds · 30s/turn", "10 chips · fast",
+        /// "best of 1") shown alongside the room name in the chat announcement.
+        /// Empty when the game has nothing meaningful to add.
+        meta: String,
     },
 }
 

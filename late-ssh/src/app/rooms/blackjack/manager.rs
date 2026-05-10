@@ -69,7 +69,13 @@ impl BlackjackTableManager {
             .entry(room_id)
             .or_insert_with(|| {
                 let (event_tx, _) = broadcast::channel::<BlackjackEvent>(64);
-                self.forward_table_events(room_id, display_name.clone(), event_tx.subscribe());
+                let meta = settings.meta_label();
+                self.forward_table_events(
+                    room_id,
+                    display_name.clone(),
+                    meta,
+                    event_tx.subscribe(),
+                );
                 BlackjackService::new_with_settings(
                     room_id,
                     self.chip_svc.clone(),
@@ -86,6 +92,7 @@ impl BlackjackTableManager {
         &self,
         room_id: Uuid,
         display_name: String,
+        meta: String,
         mut rx: broadcast::Receiver<BlackjackEvent>,
     ) {
         let event_tx = self.event_tx.clone();
@@ -105,6 +112,7 @@ impl BlackjackTableManager {
                                 game_kind: GameKind::Blackjack,
                                 display_name: display_name.clone(),
                                 seat_index: *seat_index,
+                                meta: meta.clone(),
                             });
                         }
                         let _ = event_tx.send(event);
