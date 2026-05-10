@@ -83,7 +83,7 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 - Shared `watch<Arc<Vec<String>>>` username directory for mention autocomplete, refreshed every 30s.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
 - `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, discover, and pinned-message reads.
-- `announce_general_task` is an internal producer for non-composer announcements. It resolves/joins `#general`, then sends through the normal `send_message` path without emitting composer request success/failure events. Rooms uses it for seat-join announcements.
+- `send_general_message_task` is the shared internal producer for custom `#general` announcements. It resolves `#general`, optionally joins the author first, then sends through the normal `send_message` path. Rooms uses it silently for seat-join announcements; News uses it with a request id so normal composer-style send success/failure events are preserved.
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`

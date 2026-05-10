@@ -78,7 +78,7 @@
 ## Room Game Events
 - `RoomGameManager::subscribe_room_events` is the cross-game event interface. Every concrete room-game manager must expose a `broadcast::Receiver<RoomGameEvent>`.
 - Successful first-time seating emits `RoomGameEvent::SeatJoined { room_id, user_id, game_kind, display_name, seat_index }`. Repeated sit presses by an already seated user must not emit another join event.
-- `RoomGameRegistry::start_general_seat_announcer_task` is started from `main.rs`. It listens to all manager event streams and posts a normal `#general` chat message from the seated user via `ChatService::announce_general_task`.
+- `RoomGameRegistry::start_general_seat_announcer_task` is started from `main.rs`. It listens to all manager event streams and posts a normal `#general` chat message from the seated user via `ChatService::send_general_message_task`.
 - The announcer sanitizes room display names for a single-line message and neutralizes `@` mentions. Individual games must not know about chat or post directly.
 
 ## Dashboard Integration

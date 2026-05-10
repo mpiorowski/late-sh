@@ -84,6 +84,27 @@ pub struct SendMessageTask {
     pub is_admin: bool,
 }
 
+pub struct SendGeneralMessageTask {
+    pub user_id: Uuid,
+    pub body: String,
+    pub request_id: Option<Uuid>,
+    pub join_if_needed: bool,
+    pub failure_log: &'static str,
+}
+
+fn send_error_message(error: &anyhow::Error) -> &'static str {
+    let error = error.to_string();
+    if error.contains("not a member") {
+        "You are not a member of this room."
+    } else if error.contains("banned from this room") {
+        "You are banned from this room."
+    } else if error.contains("admin-only") {
+        "Only admins can post in #announcements."
+    } else {
+        "Could not send message. Please try again."
+    }
+}
+
 #[derive(Clone)]
 struct ChatRefreshSession {
     user_id: Uuid,
@@ -936,15 +957,7 @@ impl ChatService {
                     .await
                 {
                     Err(e) => {
-                        let message = if e.to_string().contains("not a member") {
-                            "You are not a member of this room."
-                        } else if e.to_string().contains("banned from this room") {
-                            "You are banned from this room."
-                        } else if e.to_string().contains("admin-only") {
-                            "Only admins can post in #announcements."
-                        } else {
-                            "Could not send message. Please try again."
-                        };
+                        let message = send_error_message(&e);
                         let _ = service.evt_tx.send(ChatEvent::SendFailed {
                             user_id,
                             request_id,
@@ -973,24 +986,59 @@ impl ChatService {
         );
     }
 
-    pub fn announce_general_task(&self, user_id: Uuid, body: String) {
+    pub fn send_general_message_task(&self, task: SendGeneralMessageTask) {
+        let SendGeneralMessageTask {
+            user_id,
+            body,
+            request_id,
+            join_if_needed,
+            failure_log,
+        } = task;
         let service = self.clone();
         tokio::spawn(
             async move {
-                if let Err(e) = service.announce_general(user_id, body).await {
-                    tracing::warn!(error = ?e, %user_id, "failed to announce in general chat");
+                match service
+                    .send_general_message(user_id, body, join_if_needed)
+                    .await
+                {
+                    Ok(()) => {
+                        if let Some(request_id) = request_id {
+                            let _ = service.evt_tx.send(ChatEvent::SendSucceeded {
+                                user_id,
+                                request_id,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(request_id) = request_id {
+                            let message = send_error_message(&e);
+                            let _ = service.evt_tx.send(ChatEvent::SendFailed {
+                                user_id,
+                                request_id,
+                                message: message.to_string(),
+                            });
+                        }
+                        tracing::warn!(error = ?e, %user_id, failure_log);
+                    }
                 }
             }
-            .instrument(info_span!("chat.announce_general_task", user_id = %user_id)),
+            .instrument(info_span!("chat.send_general_message_task", user_id = %user_id)),
         );
     }
 
-    async fn announce_general(&self, user_id: Uuid, body: String) -> Result<()> {
+    async fn send_general_message(
+        &self,
+        user_id: Uuid,
+        body: String,
+        join_if_needed: bool,
+    ) -> Result<()> {
         let client = self.db.get().await?;
         let room = ChatRoom::find_general(&client)
             .await?
             .ok_or_else(|| anyhow::anyhow!("general room not found"))?;
-        ChatRoomMember::join(&client, room.id, user_id).await?;
+        if join_if_needed {
+            ChatRoomMember::join(&client, room.id, user_id).await?;
+        }
         drop(client);
 
         self.send_message(

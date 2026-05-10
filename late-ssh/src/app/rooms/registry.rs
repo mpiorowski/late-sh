@@ -11,7 +11,7 @@ use late_core::{
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::app::chat::svc::ChatService;
+use crate::app::chat::svc::{ChatService, SendGeneralMessageTask};
 
 use super::{
     backend::{
@@ -130,7 +130,13 @@ impl RoomGameRegistry {
                             }
                             let body =
                                 room_seat_announcement(game_label, &display_name, &meta, ascii);
-                            chat_service.announce_general_task(user_id, body);
+                            chat_service.send_general_message_task(SendGeneralMessageTask {
+                                user_id,
+                                body,
+                                request_id: None,
+                                join_if_needed: true,
+                                failure_log: "failed to announce room seat in general chat",
+                            });
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                             tracing::warn!(
