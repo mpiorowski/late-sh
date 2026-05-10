@@ -379,7 +379,7 @@ impl ThingOnScreen {
         } else if y == 0 || y == height - 1 {
             value += "═"
         }
-        if value.is_empty() {
+        if value.len() > 0 {
             Some(Self {
                 effect: Some(CobraEffect::Blow),
                 position: Position { x, y },

@@ -587,7 +587,11 @@ impl App {
         let snake_state = crate::app::games::snake::state::State::new(
             config.user_id,
             config.snake_service.clone(),
-            0,
+            config
+                    .initial_snake_high_score
+                    .as_ref()
+                    .map(|score| score.score)
+                    .unwrap_or(0),
             25,
             60,
         );

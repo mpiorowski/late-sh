@@ -20,8 +20,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
             ("best", state.best_score.to_string(), theme::SUCCESS()),
             ("level", state.level.to_string(), theme::TEXT_BRIGHT()),
             ("lives left", state.cobra.lives.to_string(), theme::TEXT_BRIGHT()),
-            ("tick", state.field_tick.to_string(), theme::TEXT_BRIGHT()),
-            ("stutter_left", state.stutter_left.to_string(), theme::TEXT_BRIGHT()),
+            // ("tick", state.field_tick.to_string(), theme::TEXT_BRIGHT()),
+            // ("stutter_left", state.stutter_left.to_string(), theme::TEXT_BRIGHT()),
         ]),
         keys: keys_line(vec![
             ("h/l/j/k", "direction"),
