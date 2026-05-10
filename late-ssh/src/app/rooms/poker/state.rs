@@ -1,9 +1,7 @@
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use super::svc::{BIG_BLIND, PokerPhase, PokerPrivateSnapshot, PokerPublicSnapshot, PokerService};
-
-const RAISE_STEP: i64 = BIG_BLIND;
+use super::svc::{PokerPhase, PokerPrivateSnapshot, PokerPublicSnapshot, PokerService};
 
 pub struct State {
     user_id: Uuid,
@@ -22,6 +20,7 @@ impl State {
         let private_rx = svc.subscribe_private(user_id);
         let public_snapshot = public_rx.borrow().clone();
         let private_snapshot = private_rx.borrow().clone();
+        let selected_raise = public_snapshot.big_blind;
         Self {
             user_id,
             public_snapshot,
@@ -30,7 +29,7 @@ impl State {
             public_rx,
             private_rx,
             balance,
-            selected_raise: BIG_BLIND,
+            selected_raise,
         }
     }
 
@@ -106,6 +105,10 @@ impl State {
         self.svc.fold_task(self.user_id);
     }
 
+    pub fn toggle_auto_check_fold(&self) {
+        self.svc.toggle_auto_check_fold_task(self.user_id);
+    }
+
     pub fn touch_activity(&self) {
         if self.is_seated() {
             self.svc.touch_activity_task(self.user_id);
@@ -121,11 +124,14 @@ impl State {
     }
 
     pub fn increase_raise(&mut self) {
-        self.selected_raise = self.selected_raise.saturating_add(RAISE_STEP);
+        self.selected_raise = self
+            .selected_raise
+            .saturating_add(self.public_snapshot.big_blind);
     }
 
     pub fn decrease_raise(&mut self) {
-        self.selected_raise = (self.selected_raise - RAISE_STEP).max(BIG_BLIND);
+        self.selected_raise = (self.selected_raise - self.public_snapshot.big_blind)
+            .max(self.public_snapshot.big_blind);
     }
 
     pub fn to_call(&self) -> i64 {
@@ -133,7 +139,9 @@ impl State {
     }
 
     pub fn min_raise(&self) -> i64 {
-        self.private_snapshot.min_raise.max(BIG_BLIND)
+        self.private_snapshot
+            .min_raise
+            .max(self.public_snapshot.big_blind)
     }
 
     pub fn can_raise(&self) -> bool {
@@ -142,6 +150,10 @@ impl State {
 
     pub fn can_all_in(&self) -> bool {
         self.can_raise() || (self.to_call() > 0 && self.balance <= self.to_call())
+    }
+
+    pub fn auto_check_fold(&self) -> bool {
+        self.private_snapshot.auto_check_fold
     }
 
     pub fn can_sync_external_chip_balance(&self) -> bool {

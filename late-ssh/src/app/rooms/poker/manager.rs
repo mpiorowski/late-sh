@@ -4,6 +4,7 @@ use std::{
 };
 
 use late_core::MutexRecover;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::{
@@ -11,12 +12,12 @@ use crate::app::{
     games::chips::svc::ChipService,
     rooms::{
         backend::{
-            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager,
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
+            RoomGameManager,
         },
         poker::{
-            create_modal::PokerCreateModal,
-            state::State,
-            svc::{BIG_BLIND, PokerService, SMALL_BLIND},
+            create_modal::PokerCreateModal, settings::PokerTableSettings, state::State,
+            svc::PokerService,
         },
         svc::{GameKind, RoomListItem},
     },
@@ -27,23 +28,35 @@ pub struct PokerTableManager {
     chip_svc: ChipService,
     activity: ActivityPublisher,
     tables: Arc<Mutex<HashMap<Uuid, PokerService>>>,
+    event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl PokerTableManager {
     pub fn new(chip_svc: ChipService, activity: ActivityPublisher) -> Self {
+        let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
             activity,
             tables: Arc::new(Mutex::new(HashMap::new())),
+            event_tx,
         }
     }
 
-    pub fn get_or_create(&self, room_id: Uuid) -> PokerService {
+    pub fn get_or_create(&self, room: &RoomListItem, settings: PokerTableSettings) -> PokerService {
         let mut tables = self.tables.lock_recover();
         tables
-            .entry(room_id)
+            .entry(room.id)
             .or_insert_with(|| {
-                PokerService::new(room_id, self.chip_svc.clone(), self.activity.clone())
+                let meta = settings.meta_label();
+                PokerService::new_with_settings_and_events(
+                    room.id,
+                    self.chip_svc.clone(),
+                    self.activity.clone(),
+                    settings,
+                    room.display_name.clone(),
+                    meta,
+                    self.event_tx.clone(),
+                )
             })
             .clone()
     }
@@ -67,18 +80,19 @@ impl RoomGameManager for PokerTableManager {
     }
 
     fn default_settings(&self) -> serde_json::Value {
-        serde_json::json!({})
+        PokerTableSettings::default().to_json()
     }
 
     fn open_create_modal(&self) -> Box<dyn CreateRoomModal> {
         Box::new(PokerCreateModal::new(self.default_room_name()))
     }
 
-    fn directory_meta(&self, _room: &RoomListItem) -> DirectoryMeta {
+    fn directory_meta(&self, room: &RoomListItem) -> DirectoryMeta {
+        let settings = PokerTableSettings::from_json(&room.settings);
         DirectoryMeta {
             seats: 4,
-            pace: "turn-based".to_string(),
-            stakes: format!("{SMALL_BLIND}/{BIG_BLIND} blinds"),
+            pace: settings.pace_label().to_string(),
+            stakes: settings.stake_label(),
         }
     }
 
@@ -92,14 +106,23 @@ impl RoomGameManager for PokerTableManager {
         Some(DirectoryHints { occupied, total: 4 })
     }
 
+    fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
+        self.event_tx.subscribe()
+    }
+
+    fn seat_join_ascii(&self) -> &'static [&'static str] {
+        &["╭───╮╭───╮", "│A♠ ││K♥ │", "╰───╯╰───╯"]
+    }
+
     fn enter(
         &self,
         room: &RoomListItem,
         user_id: Uuid,
         chip_balance: i64,
     ) -> Box<dyn ActiveRoomBackend> {
+        let settings = PokerTableSettings::from_json(&room.settings);
         Box::new(State::new(
-            self.get_or_create(room.id),
+            self.get_or_create(room, settings),
             user_id,
             chip_balance,
         ))

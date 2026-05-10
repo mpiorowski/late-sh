@@ -3,7 +3,7 @@
   "uid": "observability",
   "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 12,
+  "version": 14,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -52,6 +52,22 @@
   },
   "panels": [
     {
+      "type": "row",
+      "title": "Services",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
       "type": "timeseries",
       "title": "Throughput (RPS)",
       "datasource": {
@@ -81,7 +97,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 0
+        "y": 1
       }
     },
     {
@@ -114,7 +130,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 0
+        "y": 1
       }
     },
     {
@@ -147,157 +163,23 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 0
+        "y": 1
       }
     },
     {
-      "type": "table",
-      "title": "Service Call Edges",
-      "description": "Request rate between services from the OTel servicegraph connector. Shows who calls whom.",
+      "type": "row",
+      "title": "Logs",
+      "collapsed": false,
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
       },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (client, server) (rate(traces_service_graph_request_total[$__rate_interval]))",
-          "legendFormat": "__auto",
-          "instant": true,
-          "format": "table"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "renameByName": {
-              "client": "Client",
-              "server": "Server",
-              "Value": "Requests/s"
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Requests/s"
-            },
-            "properties": [
-              {
-                "id": "custom.displayMode",
-                "value": "gradient-gauge"
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "yellow",
-                      "value": 1
-                    },
-                    {
-                      "color": "red",
-                      "value": 10
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": false
-        },
-        "sortBy": [
-          {
-            "displayName": "Requests/s",
-            "desc": true
-          }
-        ],
-        "cellHeight": "sm"
-      },
+      "targets": [],
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 1,
+        "w": 24,
         "x": 0,
-        "y": 48
-      }
-    },
-    {
-      "type": "bargauge",
-      "title": "Top Slowest Routes (p99)",
-      "description": "Slowest HTTP routes by p99 latency across all services",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "topk(10, histogram_quantile(0.99, sum by (le, service_name, http_request_method, http_route) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\", http_route!=\"\"}[$__rate_interval]))))",
-          "legendFormat": "{{service_name}} {{http_request_method}} {{http_route}}",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 100
-              },
-              {
-                "color": "red",
-                "value": 500
-              }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "minVizWidth": 0,
-        "minVizHeight": 10
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 48
+        "y": 9
       }
     },
     {
@@ -351,7 +233,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 8
+        "y": 10
       }
     },
     {
@@ -401,7 +283,61 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 8
+        "y": 10
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Top Error Messages",
+      "description": "Highest-count raw ERROR messages in the selected time range. Useful for seeing repeated noise before filtering it.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service.name=~\"$service\"} severity:ERROR | stats by (\"service.name\", _msg) count() error_logs_total | sort by (error_logs_total desc) | limit 8",
+          "queryType": "stats",
+          "legendFormat": "{{service.name}} - {{_msg}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 10
       }
     },
     {
@@ -515,61 +451,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 16
-      }
-    },
-    {
-      "type": "bargauge",
-      "title": "Top Error Messages",
-      "description": "Highest-count raw ERROR messages in the selected time range. Useful for seeing repeated noise before filtering it.",
-      "datasource": {
-        "uid": "victorialogs",
-        "type": "victoriametrics-logs-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "{service.name=~\"$service\"} severity:ERROR | stats by (\"service.name\", _msg) count() error_logs_total | sort by (error_logs_total desc) | limit 8",
-          "queryType": "stats",
-          "legendFormat": "{{service.name}} - {{_msg}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 10
-              },
-              {
-                "color": "red",
-                "value": 50
-              }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "minVizWidth": 0,
-        "minVizHeight": 10
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 8
+        "y": 18
       }
     },
     {
@@ -601,231 +483,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 24
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "SSH Sessions",
-      "description": "Current active SSH sessions",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "late_ssh_sessions_active",
-          "legendFormat": "active sessions"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "lineWidth": 2,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 80
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "SSH Traffic",
-      "description": "SSH connections and successful browser pairings",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "rate(late_ssh_connections_total[$__rate_interval])",
-          "legendFormat": "connections"
-        },
-        {
-          "refId": "B",
-          "expr": "rate(late_ssh_ws_pair_success_total[$__rate_interval])",
-          "legendFormat": "ws pairs"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "lineWidth": 2,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 80
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Interaction Rate",
-      "description": "Chat sends, votes, and page views",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "rate(late_ssh_chat_messages_sent_total[$__rate_interval])",
-          "legendFormat": "chat messages"
-        },
-        {
-          "refId": "B",
-          "expr": "sum(rate(late_ssh_votes_cast_total[$__rate_interval]))",
-          "legendFormat": "votes"
-        },
-        {
-          "refId": "C",
-          "expr": "sum by (page) (rate(late_web_page_views_total[$__rate_interval]))",
-          "legendFormat": "page {{page}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "lineWidth": 2,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 88
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Reliability Signals",
-      "description": "Frame drops and late-web now-playing fetch results",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "rate(late_ssh_render_frame_drops_total[$__rate_interval])",
-          "legendFormat": "frame drops"
-        },
-        {
-          "refId": "B",
-          "expr": "sum by (result) (rate(late_web_now_playing_fetch_total[$__rate_interval]))",
-          "legendFormat": "now-playing {{result}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "lineWidth": 2,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 88
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "CLI Pair Starts",
-      "description": "Pair session starts by SSH mode and client platform",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (ssh_mode, platform) (rate(late_ssh_cli_pair_usage_total[$__rate_interval]))",
-          "legendFormat": "{{ssh_mode}} / {{platform}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "lineWidth": 2,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 96
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "CLI Pair Active",
-      "description": "Current active pair sessions by SSH mode and client platform",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (ssh_mode, platform) (late_ssh_cli_pair_active)",
-          "legendFormat": "{{ssh_mode}} / {{platform}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "lineWidth": 2,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 96
+        "y": 26
       }
     },
     {
@@ -857,7 +515,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 36
+        "y": 38
       }
     },
     {
@@ -889,7 +547,189 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 36
+        "y": 38
+      }
+    },
+    {
+      "type": "row",
+      "title": "Dependencies",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      }
+    },
+    {
+      "type": "table",
+      "title": "Service Call Edges",
+      "description": "Request rate between services from the OTel servicegraph connector. Shows who calls whom.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (client, server) (rate(traces_service_graph_request_total[$__rate_interval]))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "client": "Client",
+              "server": "Server",
+              "Value": "Requests/s"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Requests/s"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "gradient-gauge"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "Requests/s",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Top Slowest Routes (p99)",
+      "description": "Slowest HTTP routes by p99 latency across all services",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, histogram_quantile(0.99, sum by (le, service_name, http_request_method, http_route) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\", http_route!=\"\"}[$__rate_interval]))))",
+          "legendFormat": "{{service_name}} {{http_request_method}} {{http_route}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      }
+    },
+    {
+      "type": "row",
+      "title": "Traces",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 59
       }
     },
     {
@@ -962,7 +802,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 56
+        "y": 60
       }
     },
     {
@@ -1035,7 +875,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 56
+        "y": 60
       }
     },
     {
@@ -1108,7 +948,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 68
+        "y": 72
       }
     },
     {
@@ -1181,8 +1021,343 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 68
+        "y": 72
       }
+    },
+    {
+      "type": "row",
+      "title": "late.sh App",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SSH Sessions",
+      "description": "Current active SSH sessions",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "late_ssh_sessions_active",
+          "legendFormat": "active sessions"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 85
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SSH Traffic",
+      "description": "SSH connections and successful browser pairings",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(late_ssh_connections_total[$__rate_interval])",
+          "legendFormat": "connections"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(late_ssh_ws_pair_success_total[$__rate_interval])",
+          "legendFormat": "ws pairs"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 85
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Interaction Rate",
+      "description": "Chat sends, votes, and page views",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(late_ssh_chat_messages_sent_total[$__rate_interval])",
+          "legendFormat": "chat messages"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(late_ssh_votes_cast_total[$__rate_interval]))",
+          "legendFormat": "votes"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (page) (rate(late_web_page_views_total[$__rate_interval]))",
+          "legendFormat": "page {{page}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 93
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reliability Signals",
+      "description": "Frame drops and late-web now-playing fetch results",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(late_ssh_render_frame_drops_total[$__rate_interval])",
+          "legendFormat": "frame drops"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (result) (rate(late_web_now_playing_fetch_total[$__rate_interval]))",
+          "legendFormat": "now-playing {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 93
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CLI Pair Starts",
+      "description": "Pair session starts by SSH mode and client platform",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (ssh_mode, platform) (rate(late_ssh_cli_pair_usage_total[$__rate_interval]))",
+          "legendFormat": "{{ssh_mode}} / {{platform}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 101
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CLI Pair Active",
+      "description": "Current active pair sessions by SSH mode and client platform",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (ssh_mode, platform) (late_ssh_cli_pair_active)",
+          "legendFormat": "{{ssh_mode}} / {{platform}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 101
+      }
+    },
+    {
+      "type": "row",
+      "title": "Games",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 109
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Game Wins",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (game) (increase(late_ssh_game_wins_total[$__range]))",
+          "legendFormat": "{{game}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 110
+      },
+      "description": "Wins over the selected time range, keyed by the low-cardinality game label."
+    },
+    {
+      "type": "timeseries",
+      "title": "Game Win Rate",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (game) (rate(late_ssh_game_wins_total[$__rate_interval]))",
+          "legendFormat": "{{game}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 1,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 110
+      },
+      "description": "Per-second win rate by game."
     }
   ]
 }

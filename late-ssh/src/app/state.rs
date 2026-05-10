@@ -261,9 +261,10 @@ pub struct App {
     /// Any non-digit keystroke disarms and falls through to its normal
     /// handling.
     pub(crate) dashboard_g_prefix_armed: bool,
-    /// `true` after `b` on the dashboard, waiting for a blackjack room slot
-    /// key (`1..9`, `0`, `-`, `=`, `[`, `]`, `\`).
-    pub(crate) dashboard_blackjack_prefix_armed: bool,
+    /// `true` after `b` on the dashboard, waiting for a dashboard box slot
+    /// key (`1` for the featured room, `2` for dailies, `3` for wire,
+    /// `4` for announcements).
+    pub(crate) dashboard_box_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -750,7 +751,7 @@ impl App {
             dashboard_favorite_index: 0,
             dashboard_previous_favorite_index: None,
             dashboard_g_prefix_armed: false,
-            dashboard_blackjack_prefix_armed: false,
+            dashboard_box_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,

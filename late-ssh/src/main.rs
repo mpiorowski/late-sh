@@ -168,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
         poker_table_manager,
         tictactoe_table_manager,
     );
+    room_game_registry.start_general_seat_announcer_task(chat_service.clone());
     let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
         db.clone(),
         activity_tx.clone(),

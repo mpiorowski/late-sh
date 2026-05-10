@@ -2,6 +2,8 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
+use crate::metrics;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivityCategory {
     Session,
@@ -87,6 +89,7 @@ impl ActivityEvent {
         detail: Option<String>,
         score: Option<i32>,
     ) -> Self {
+        metrics::record_game_win(game);
         let base_action = match game {
             ActivityGame::Blackjack => "won Blackjack hand",
             ActivityGame::Minesweeper => "cleared Minesweeper",

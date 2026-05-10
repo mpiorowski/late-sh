@@ -242,8 +242,8 @@ fn submit_create_modal(
     display_name: String,
     settings: serde_json::Value,
 ) {
-    if !can_create_room(app.is_admin, app.is_moderator, game_kind) {
-        app.banner = Some(Banner::error(&role_gate_message("create", game_kind)));
+    if !can_create_room(game_kind) {
+        app.banner = Some(Banner::error("You cannot create this room."));
         return;
     }
 
@@ -284,8 +284,8 @@ fn open_selected_create_modal(app: &mut App, kind_index: usize) {
     else {
         return;
     };
-    if !can_create_room(app.is_admin, app.is_moderator, kind) {
-        app.banner = Some(Banner::error(&role_gate_message("create", kind)));
+    if !can_create_room(kind) {
+        app.banner = Some(Banner::error("You cannot create this room."));
         return;
     }
     let modal = app.room_game_registry.open_create_modal(kind);
@@ -446,8 +446,8 @@ fn enter_selected_room(app: &mut App) {
 }
 
 pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListItem) -> bool {
-    if !can_enter_room(app.is_admin, app.is_moderator, room.game_kind) {
-        app.banner = Some(Banner::error(&role_gate_message("enter", room.game_kind)));
+    if !can_enter_room(room.game_kind) {
+        app.banner = Some(Banner::error("You cannot enter this room."));
         return false;
     }
 
@@ -583,19 +583,12 @@ fn can_delete_room(is_admin: bool) -> bool {
     is_admin
 }
 
-fn can_create_room(is_admin: bool, is_moderator: bool, game_kind: GameKind) -> bool {
-    !matches!(game_kind, GameKind::Poker) || is_admin || is_moderator
+fn can_create_room(_game_kind: GameKind) -> bool {
+    true
 }
 
-fn can_enter_room(is_admin: bool, is_moderator: bool, game_kind: GameKind) -> bool {
-    !matches!(game_kind, GameKind::Poker) || is_admin || is_moderator
-}
-
-fn role_gate_message(action: &'static str, game_kind: GameKind) -> String {
-    match game_kind {
-        GameKind::Poker => format!("Only admins and moderators can {action} Poker rooms."),
-        _ => format!("You cannot {action} this room."),
-    }
+fn can_enter_room(_game_kind: GameKind) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -611,26 +604,19 @@ mod tests {
 
     #[test]
     fn blackjack_creation_and_entry_allow_all_users() {
-        assert!(can_create_room(false, false, GameKind::Blackjack));
-        assert!(can_enter_room(false, false, GameKind::Blackjack));
+        assert!(can_create_room(GameKind::Blackjack));
+        assert!(can_enter_room(GameKind::Blackjack));
     }
 
     #[test]
     fn tictactoe_creation_and_entry_allow_all_users() {
-        assert!(can_create_room(false, false, GameKind::TicTacToe));
-        assert!(can_enter_room(false, false, GameKind::TicTacToe));
+        assert!(can_create_room(GameKind::TicTacToe));
+        assert!(can_enter_room(GameKind::TicTacToe));
     }
 
     #[test]
-    fn poker_creation_and_entry_require_admin_or_moderator() {
-        assert!(can_create_room(true, false, GameKind::Poker));
-        assert!(can_create_room(false, true, GameKind::Poker));
-        assert!(can_create_room(true, true, GameKind::Poker));
-        assert!(!can_create_room(false, false, GameKind::Poker));
-
-        assert!(can_enter_room(true, false, GameKind::Poker));
-        assert!(can_enter_room(false, true, GameKind::Poker));
-        assert!(can_enter_room(true, true, GameKind::Poker));
-        assert!(!can_enter_room(false, false, GameKind::Poker));
+    fn poker_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(GameKind::Poker));
+        assert!(can_enter_room(GameKind::Poker));
     }
 }
