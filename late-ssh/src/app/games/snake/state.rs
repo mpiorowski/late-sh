@@ -4,8 +4,6 @@ use uuid::Uuid;
 
 use super::svc::SnakeService;
 use rand::{Rng};
-use std::time::Duration;
-use std::sync::Mutex;
 
 pub struct State {
     pub user_id: Uuid,
@@ -115,7 +113,7 @@ impl State {
             self.persist_progress();
         }
         // Number of ticks to wait for
-        self.restart_countdown = 80;
+        self.restart_countdown = 20;
     }
 
     pub fn reset_game(&mut self) {
@@ -189,20 +187,18 @@ impl State {
             self.bye();
             return false;
         }
-        if self.stutter_left > 0 {
-            self.stutter_left -= 1;
-            return false;
-        } else {
+        if self.stutter_left == 0 || accel {
             // reset stutter_left
             let stutter = self.level.get_stutter();
             let double_speed = (stutter as f32/2.0).ceil() as u8;
             if let CobraState::PoweredUp = self.cobra.state {
                 self.stutter_left = double_speed;
-            } else if accel {
-                self.stutter_left = double_speed;
             } else {
                 self.stutter_left = stutter
             }
+        } else {
+            self.stutter_left -= 1;
+            return false;
         }
         let effect: Option<CobraEffect>;
         match self.cobra.state {
@@ -251,9 +247,9 @@ enum CobraEffect {
 }
 
 #[derive(Debug, Clone)]
-struct Position {
-    x: u32,
-    y: u32,
+pub struct Position {
+    pub x: u32,
+    pub y: u32,
 }
 
 impl Position {
@@ -383,7 +379,7 @@ impl ThingOnScreen {
         } else if y == 0 || y == height - 1 {
             value += "═"
         }
-        if value.len() > 0 {
+        if value.is_empty() {
             Some(Self {
                 effect: Some(CobraEffect::Blow),
                 position: Position { x, y },
@@ -412,7 +408,7 @@ pub struct Level {
 
 impl std::fmt::Display for Level{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-       write!(f, "{}", self.number); 
+       let _ = write!(f, "{}", self.number); 
        Ok(()) 
     }
 }
@@ -587,7 +583,7 @@ impl Cobra {
             Some(CobraEffect::Blow) => self.state = CobraState::Dead,
             Some(CobraEffect::PowerUp) => {
                 self.state = CobraState::PoweredUp;
-                self.power_ticks_left = u8::MAX;
+                self.power_ticks_left = 100;
                 self.body.remove(0);
             }
             Some(CobraEffect::Grow) => (),
