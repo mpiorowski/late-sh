@@ -20,7 +20,7 @@ use super::{
     },
     blackjack::manager::BlackjackTableManager,
     poker::manager::PokerTableManager,
-    svc::{GameKind, RoomListItem},
+    svc::{GameKind, RoomListItem, sanitize_room_display_name},
     tictactoe::manager::TicTacToeTableManager,
 };
 
@@ -186,21 +186,31 @@ fn room_seat_announcement(
     meta: &str,
     ascii_lines: &[&str],
 ) -> String {
-    let room_name = display_name.split('\n').next().unwrap_or("").trim();
+    let room_name = sanitize_room_display_name(display_name);
     let title = if room_name.is_empty() {
         format!("{game_label} table")
     } else {
         format!("{game_label} · {room_name}")
     };
+    let meta = sanitize_room_seat_field(meta);
     let ascii_escaped = ascii_lines.join("\\n");
     format!(
         "{marker} {title}{sep}{meta}{sep}{ascii}",
         marker = ROOM_SEAT_MARKER,
         title = title,
         sep = ROOM_SEAT_SEPARATOR,
-        meta = meta.trim(),
+        meta = meta,
         ascii = ascii_escaped,
     )
+}
+
+fn sanitize_room_seat_field(input: &str) -> String {
+    input
+        .replace(ROOM_SEAT_SEPARATOR, " | ")
+        .replace('@', "＠")
+        .replace(['\n', '\r'], " ")
+        .trim()
+        .to_string()
 }
 
 /// Returns true if this seat join should be announced. Updates the
@@ -237,11 +247,11 @@ mod tests {
     }
 
     #[test]
-    fn seat_announcement_strips_newlines_from_room_name() {
+    fn seat_announcement_sanitizes_newlines_from_room_name() {
         let ascii: &[&str] = &[];
         assert_eq!(
             room_seat_announcement("Tic-Tac-Toe", "Quick\nBoard", "", ascii),
-            "---ROOM-SEAT--- Tic-Tac-Toe · Quick ||  || "
+            "---ROOM-SEAT--- Tic-Tac-Toe · Quick Board ||  || "
         );
     }
 
@@ -251,6 +261,28 @@ mod tests {
         assert_eq!(
             room_seat_announcement("Blackjack", "   ", "10 chips", ascii),
             "---ROOM-SEAT--- Blackjack table || 10 chips || "
+        );
+    }
+
+    #[test]
+    fn seat_announcement_neutralizes_room_name_mentions() {
+        let ascii: &[&str] = &[];
+        let body = room_seat_announcement("Poker", "@everyone fall sale", "50/100", ascii);
+
+        assert_eq!(
+            body,
+            "---ROOM-SEAT--- Poker · ＠everyone fall sale || 50/100 || "
+        );
+        assert!(!body.contains("@everyone"));
+    }
+
+    #[test]
+    fn seat_announcement_sanitizes_separator_in_fields() {
+        let ascii: &[&str] = &[];
+
+        assert_eq!(
+            room_seat_announcement("Poker", "Casual || Fun", "10 || fast", ascii),
+            "---ROOM-SEAT--- Poker · Casual | Fun || 10 | fast || "
         );
     }
 

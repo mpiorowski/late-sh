@@ -101,13 +101,7 @@ impl RoomGameManager for TicTacToeTableManager {
     }
 
     fn seat_join_ascii(&self) -> &'static [&'static str] {
-        &[
-            " X │ · │ · ",
-            "───┼───┼───",
-            " · │ · │ · ",
-            "───┼───┼───",
-            " · │ · │ · ",
-        ]
+        &[" X │ · │ · ", " · │ · │ · ", " · │ · │ · "]
     }
 
     fn enter(

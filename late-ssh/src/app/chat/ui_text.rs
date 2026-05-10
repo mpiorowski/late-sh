@@ -99,8 +99,7 @@ pub(crate) struct NewsPayload {
 }
 
 pub(crate) fn parse_news_payload(body: &str) -> Option<NewsPayload> {
-    let marker_pos = body.find(NEWS_MARKER)?;
-    let raw = body[marker_pos + NEWS_MARKER.len()..].trim();
+    let raw = body.trim_start().strip_prefix(NEWS_MARKER)?.trim();
     if raw.is_empty() {
         return Some(NewsPayload {
             title: "news update".to_string(),
@@ -258,8 +257,10 @@ pub(crate) struct RoomSeatPayload {
 }
 
 pub(crate) fn parse_room_seat_payload(body: &str) -> Option<RoomSeatPayload> {
-    let marker_pos = body.find(ROOM_SEAT_MARKER)?;
-    let raw = body[marker_pos + ROOM_SEAT_MARKER.len()..].trim_start();
+    let raw = body
+        .trim_start()
+        .strip_prefix(ROOM_SEAT_MARKER)?
+        .trim_start();
     let mut parts = raw.splitn(3, ROOM_SEAT_SEPARATOR);
     let title = parts.next().unwrap_or_default().trim().to_string();
     let meta = parts.next().unwrap_or_default().trim().to_string();
@@ -359,11 +360,8 @@ fn wrap_room_seat_to_lines(
             .unwrap_or(("", body_style));
         lines.push(Line::from(vec![
             Span::styled("│", border_style),
-            Span::styled(
-                format!(" {}", pad_to_display_width(left, left_width)),
-                card_style,
-            ),
-            Span::raw("  "),
+            Span::styled(pad_to_display_width(left, left_width), card_style),
+            Span::styled(" │ ", border_style),
             Span::styled(pad_to_display_width(right, right_width), right_style),
             Span::styled("│", border_style),
         ]));
@@ -581,6 +579,32 @@ mod tests {
         assert_eq!(payload.summary, "Summary line");
         assert_eq!(payload.url, "https://example.com");
         assert_eq!(payload.ascii_art, ".:-\n+*#");
+    }
+
+    #[test]
+    fn parse_news_payload_requires_marker_at_start() {
+        assert!(parse_news_payload("hello ---NEWS--- Fake || summary || url || ascii").is_none());
+        assert!(parse_news_payload("  ---NEWS--- Title || Summary || url || ascii").is_some());
+    }
+
+    #[test]
+    fn parse_room_seat_payload_splits_marker_payload() {
+        let body = "---ROOM-SEAT--- Poker · Night Table || 50/100 blinds || ╭───╮\\n╰───╯";
+        let payload = parse_room_seat_payload(body).expect("payload");
+        assert_eq!(payload.title, "Poker · Night Table");
+        assert_eq!(payload.meta, "50/100 blinds");
+        assert_eq!(
+            payload.ascii_lines,
+            vec!["╭───╮".to_string(), "╰───╯".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_room_seat_payload_requires_marker_at_start() {
+        assert!(parse_room_seat_payload("hello ---ROOM-SEAT--- Fake || meta || ascii").is_none());
+        assert!(
+            parse_room_seat_payload("  ---ROOM-SEAT--- Poker · Table || meta || ascii").is_some()
+        );
     }
 
     #[test]
