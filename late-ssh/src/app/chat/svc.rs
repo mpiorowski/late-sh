@@ -973,6 +973,37 @@ impl ChatService {
         );
     }
 
+    pub fn announce_general_task(&self, user_id: Uuid, body: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.announce_general(user_id, body).await {
+                    tracing::warn!(error = ?e, %user_id, "failed to announce in general chat");
+                }
+            }
+            .instrument(info_span!("chat.announce_general_task", user_id = %user_id)),
+        );
+    }
+
+    async fn announce_general(&self, user_id: Uuid, body: String) -> Result<()> {
+        let client = self.db.get().await?;
+        let room = ChatRoom::find_general(&client)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("general room not found"))?;
+        ChatRoomMember::join(&client, room.id, user_id).await?;
+        drop(client);
+
+        self.send_message(
+            user_id,
+            room.id,
+            Some("general".to_string()),
+            body,
+            None,
+            false,
+        )
+        .await
+    }
+
     #[tracing::instrument(skip(self, body), fields(user_id = %user_id, room_id = %room_id, body_len = body.len()))]
     async fn send_message(
         &self,

@@ -3,10 +3,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
-use crate::app::activity::{event::ActivityGame, publisher::ActivityPublisher};
+use crate::app::{
+    activity::{event::ActivityGame, publisher::ActivityPublisher},
+    rooms::{backend::RoomGameEvent, svc::GameKind},
+};
 
 use super::state::{Mark, Winner, winning_mark};
 
@@ -16,6 +19,8 @@ const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
 pub struct TicTacToeService {
     room_id: Uuid,
     activity: ActivityPublisher,
+    room_display_name: String,
+    room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TicTacToeSnapshot>,
     snapshot_rx: watch::Receiver<TicTacToeSnapshot>,
     state: Arc<Mutex<SharedState>>,
@@ -33,12 +38,29 @@ pub struct TicTacToeSnapshot {
 
 impl TicTacToeService {
     pub fn new(room_id: Uuid, activity: ActivityPublisher) -> Self {
+        let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
+        Self::new_with_events(
+            room_id,
+            activity,
+            "Tic-Tac-Toe Board".to_string(),
+            room_event_tx,
+        )
+    }
+
+    pub fn new_with_events(
+        room_id: Uuid,
+        activity: ActivityPublisher,
+        room_display_name: String,
+        room_event_tx: broadcast::Sender<RoomGameEvent>,
+    ) -> Self {
         let state = SharedState::new(room_id);
         let initial_snapshot = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
         Self {
             room_id,
             activity,
+            room_display_name,
+            room_event_tx,
             snapshot_tx,
             snapshot_rx,
             state: Arc::new(Mutex::new(state)),
@@ -60,15 +82,24 @@ impl TicTacToeService {
     pub fn sit_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let activity_generation = {
+            let (activity_generation, seat_joined) = {
                 let mut state = svc.state.lock().await;
-                state.sit(user_id);
+                let seat_joined = state.sit(user_id);
                 let activity_generation = state.record_activity(user_id);
                 svc.publish(&state);
-                activity_generation
+                (activity_generation, seat_joined)
             };
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
+            }
+            if let Some(seat_index) = seat_joined {
+                let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
+                    room_id: svc.room_id,
+                    user_id,
+                    game_kind: GameKind::TicTacToe,
+                    display_name: svc.room_display_name.clone(),
+                    seat_index,
+                });
             }
         });
     }
@@ -189,13 +220,13 @@ impl SharedState {
         }
     }
 
-    fn sit(&mut self, user_id: Uuid) {
+    fn sit(&mut self, user_id: Uuid) -> Option<usize> {
         if self.seats.contains(&Some(user_id)) {
-            return;
+            return None;
         }
         let Some(index) = self.seats.iter().position(Option::is_none) else {
             self.status_message = "Table is full.".to_string();
-            return;
+            return None;
         };
         self.seats[index] = Some(user_id);
         self.status_message = if self.seats.iter().all(Option::is_some) {
@@ -203,6 +234,7 @@ impl SharedState {
         } else {
             "Waiting for a second player.".to_string()
         };
+        Some(index)
     }
 
     fn leave(&mut self, user_id: Uuid) {

@@ -4,13 +4,15 @@ use std::{
 };
 
 use late_core::MutexRecover;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::{
     activity::publisher::ActivityPublisher,
     rooms::{
         backend::{
-            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager,
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
+            RoomGameManager,
         },
         svc::{GameKind, RoomListItem},
         tictactoe::{
@@ -25,21 +27,31 @@ use crate::app::{
 pub struct TicTacToeTableManager {
     activity: ActivityPublisher,
     tables: Arc<Mutex<HashMap<Uuid, TicTacToeService>>>,
+    event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl TicTacToeTableManager {
     pub fn new(activity: ActivityPublisher) -> Self {
+        let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             activity,
             tables: Arc::new(Mutex::new(HashMap::new())),
+            event_tx,
         }
     }
 
-    pub fn get_or_create(&self, room_id: Uuid) -> TicTacToeService {
+    pub fn get_or_create(&self, room: &RoomListItem) -> TicTacToeService {
         let mut tables = self.tables.lock_recover();
         tables
-            .entry(room_id)
-            .or_insert_with(|| TicTacToeService::new(room_id, self.activity.clone()))
+            .entry(room.id)
+            .or_insert_with(|| {
+                TicTacToeService::new_with_events(
+                    room.id,
+                    self.activity.clone(),
+                    room.display_name.clone(),
+                    self.event_tx.clone(),
+                )
+            })
             .clone()
     }
 }
@@ -83,13 +95,17 @@ impl RoomGameManager for TicTacToeTableManager {
         Some(DirectoryHints { occupied, total: 2 })
     }
 
+    fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
+        self.event_tx.subscribe()
+    }
+
     fn enter(
         &self,
         room: &RoomListItem,
         user_id: Uuid,
         _chip_balance: i64,
     ) -> Box<dyn ActiveRoomBackend> {
-        Box::new(State::new(self.get_or_create(room.id), user_id))
+        Box::new(State::new(self.get_or_create(room), user_id))
     }
 }
 

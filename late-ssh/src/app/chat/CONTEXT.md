@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat feeds, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-05
+- Last updated: 2026-05-10
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -83,6 +83,7 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 - Shared `watch<Arc<Vec<String>>>` username directory for mention autocomplete, refreshed every 30s.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
 - `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, discover, and pinned-message reads.
+- `announce_general_task` is an internal producer for non-composer announcements. It resolves/joins `#general`, then sends through the normal `send_message` path without emitting composer request success/failure events. Rooms uses it for seat-join announcements.
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`
@@ -190,7 +191,7 @@ Dashboard favorite controls:
 
 Dashboard box row:
 - The three dashboard boxes are always the top dashboard body when the content width/height can fit them, even if the stream/vote header is hidden.
-- `b` then `1` enters the left Blackjack room slot.
+- `b` then `1` enters the featured room-game box, currently the room with the most occupied seats across Rooms.
 - `b` then `2` launches the currently displayed unfinished daily game.
 - `b` then `3` opens the Chat screen with News selected and the currently displayed wire article selected.
 - `b` then `4` opens the Chat screen with `#announcements` selected; its chip renders on pinned dashboard messages.

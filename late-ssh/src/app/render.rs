@@ -267,7 +267,8 @@ impl App {
         let message_reactions = self.chat.message_reactions();
         let dashboard_active_room = self.dashboard_active_room_id();
         let dashboard_strip_pins = self.dashboard_strip_pins();
-        let rooms_blackjack_snapshots = self.room_game_registry.blackjack().table_snapshots();
+        let dashboard_featured_room =
+            dashboard::ui::featured_dashboard_room(&self.rooms_snapshot, &self.room_game_registry);
         let online_count = self
             .active_users
             .as_ref()
@@ -306,9 +307,8 @@ impl App {
             show_header: show_dashboard_header,
             favorites_strip: dashboard_strip_pins.as_deref(),
             pinned_messages: self.chat.pinned_messages(),
-            rooms_snapshot: &self.rooms_snapshot,
-            blackjack_snapshots: &rooms_blackjack_snapshots,
-            blackjack_prefix_armed: self.dashboard_blackjack_prefix_armed,
+            featured_room: dashboard_featured_room.as_ref(),
+            box_prefix_armed: self.dashboard_box_prefix_armed,
             daily_statuses: &dashboard_daily_statuses,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,

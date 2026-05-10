@@ -272,37 +272,26 @@ fn draw_felt_divider(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapshot
     let dim = Style::default().fg(theme::AMBER_DIM());
     let amber = Style::default().fg(theme::AMBER());
 
-    let line = match countdown_label(snapshot) {
-        Some(label) => {
-            // chip: "─[ " + label + " ]─" → label.len() + 6
-            let chip_w = label.chars().count() + 6;
-            let side_each = (area.width as usize).saturating_sub(chip_w) / 2;
-            let half_pattern = "─ ".repeat(side_each / 2);
-            Line::from(vec![
-                Span::styled(half_pattern.clone(), dim),
-                Span::styled("─[ ", dim),
-                Span::styled(label, amber),
-                Span::styled(" ]─", dim),
-                Span::styled(half_pattern, dim),
-            ])
-        }
-        None => {
-            let pattern = "─ ".repeat(area.width as usize / 2);
-            Line::from(Span::styled(pattern, dim))
-        }
-    };
+    let seated = snapshot
+        .seats
+        .iter()
+        .filter(|s| s.user_id.is_some())
+        .count();
+    let total = snapshot.seats.len();
+    let label = format!("seats {seated}/{total} · min bet {}", snapshot.min_bet);
+
+    let chip_w = label.chars().count() + 6;
+    let side_each = (area.width as usize).saturating_sub(chip_w) / 2;
+    let half_pattern = "─ ".repeat(side_each / 2);
+    let line = Line::from(vec![
+        Span::styled(half_pattern.clone(), dim),
+        Span::styled("─[ ", dim),
+        Span::styled(label, amber),
+        Span::styled(" ]─", dim),
+        Span::styled(half_pattern, dim),
+    ]);
 
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
-}
-
-fn countdown_label(snapshot: &BlackjackSnapshot) -> Option<String> {
-    if let Some(secs) = snapshot.betting_countdown_secs {
-        return Some(format!("dealing in {secs}s"));
-    }
-    if let Some(secs) = snapshot.action_countdown_secs {
-        return Some(format!("auto-stand in {secs}s"));
-    }
-    None
 }
 
 fn draw_seats_strip(
@@ -939,6 +928,14 @@ fn draw_status_line(
         return;
     }
     let (headline, tone) = phase_headline(snapshot, user_seat_index, user_is_active);
+    let headline = match snapshot
+        .betting_countdown_secs
+        .or(snapshot.action_countdown_secs)
+    {
+        Some(0) => format!("{headline} timer expired."),
+        Some(secs) => format!("{headline} {secs}s left."),
+        None => headline,
+    };
     let mut body_style = Style::default().fg(match tone {
         HeadlineTone::Normal => theme::TEXT(),
         HeadlineTone::Error | HeadlineTone::Loss => theme::ERROR(),

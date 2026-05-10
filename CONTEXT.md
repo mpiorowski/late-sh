@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-08 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
+- Last updated: 2026-05-10 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -807,7 +807,7 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, dashboard favorite
 
 ### 8.4 Easy-to-break gotchas
 
-- **Rooms/Blackjack invariants live locally:** directory filters/placeholders, Blackjack render tiers, service-owned stake chips, seat player hydration, dashboard Blackjack slots, and active-room chat routing are documented in `late-ssh/src/app/rooms/CONTEXT.md`.
+- **Rooms/Blackjack invariants live locally:** directory filters/placeholders, Blackjack render tiers, service-owned stake chips, seat player hydration, room-game seat events, dashboard featured-room box, and active-room chat routing are documented in `late-ssh/src/app/rooms/CONTEXT.md`.
 - **Chat invariants live locally:** room ordering, composer targets, replies, reactions, pins, ignores, snapshots/tails, row caches, synthetic entries, and chat keybindings are documented in `late-ssh/src/app/chat/CONTEXT.md`.
 - **Artboard invariants live locally:** dartboard lifecycle, persistence/archives, provenance, active-vs-view input routing, swatches, glyph picker, and gallery lag caveats are documented in `late-ssh/src/app/artboard/CONTEXT.md`.
 - **Render loop missed ticks:** 66ms interval with `MissedTickBehavior::Skip` - if a frame takes too long, next ticks are skipped rather than queued (prevents snowball lag)
@@ -985,7 +985,7 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
 | **Chat** | 2 | Active | Full room-list chat screen with DMs, public/private rooms, mentions, News, Showcase, Work, and Discover synthetic entries. Detailed commands, keybindings, service flow, and gotchas live in `late-ssh/src/app/chat/CONTEXT.md`. |
 | **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`) and daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`). Blackjack lives in Rooms. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Rooms** | 4 | Active | Persistent game-room directory plus active Blackjack table/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
+| **Rooms** | 4 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
 | **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 
 ### Layout
@@ -1061,7 +1061,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
-| `b` then `1` / `2` / `3` / `4` | Dashboard | Activate a dashboard chord: Blackjack room, current daily game, current News wire article, or `#announcements` |
+| `b` then `1` / `2` / `3` / `4` | Dashboard | Activate a dashboard chord: featured room game, current daily game, current News wire article, or `#announcements` |
 | `P` | Dashboard / Chat | Show browser-pairing QR (copies pairing URL) |
 | `B` | Dashboard / Chat | Open CLI install/build-source modal |
 | Dashboard chat keys | Dashboard | See `late-ssh/src/app/chat/CONTEXT.md`. |

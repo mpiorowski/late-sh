@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use ratatui::{Frame, layout::Rect};
 use serde_json::Value;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::input::ParsedInput;
@@ -37,6 +38,17 @@ pub struct RoomTitleDetails {
 
 pub struct GameDrawCtx<'a> {
     pub usernames: &'a HashMap<Uuid, String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RoomGameEvent {
+    SeatJoined {
+        room_id: Uuid,
+        user_id: Uuid,
+        game_kind: GameKind,
+        display_name: String,
+        seat_index: usize,
+    },
 }
 
 pub enum CreateModalAction {
@@ -94,6 +106,7 @@ pub trait RoomGameManager: Send + Sync {
     fn open_create_modal(&self) -> Box<dyn CreateRoomModal>;
     fn directory_meta(&self, room: &RoomListItem) -> DirectoryMeta;
     fn directory_hints(&self, room_id: Uuid) -> Option<DirectoryHints>;
+    fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent>;
     fn enter(
         &self,
         room: &RoomListItem,
