@@ -2037,7 +2037,8 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
     }
 
     let ctx = InputContext::from_app(app);
-    if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing {
+    if matches!(ctx.screen, Screen::Dashboard | Screen::Chat | Screen::Rooms) && ctx.chat_composing
+    {
         for ch in icon_str.chars() {
             app.chat.composer_push(ch);
         }

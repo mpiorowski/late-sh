@@ -216,10 +216,10 @@ fn wrap_news_to_lines(
         right_rows.push(("📰 news update".to_string(), title_style));
     }
 
-    lines.push(Line::from(Span::styled(
-        format!("┌{}┐", "─".repeat(inner_width)),
-        border_style,
-    )));
+    lines.push(Line::from(vec![
+        pad.clone(),
+        Span::styled("─".repeat(inner_width), border_style),
+    ]));
 
     let row_count = ascii_lines.len().max(right_rows.len()).max(1);
     for idx in 0..row_count {
@@ -229,21 +229,15 @@ fn wrap_news_to_lines(
             .map(|(text, style)| (text.as_str(), *style))
             .unwrap_or(("", body_style));
         lines.push(Line::from(vec![
-            Span::styled("│", border_style),
+            pad.clone(),
             Span::styled(
                 pad_to_display_width(left, left_width),
                 Style::default().fg(theme::AMBER_DIM()),
             ),
             Span::styled(" │ ", border_style),
             Span::styled(pad_to_display_width(right, right_width), right_style),
-            Span::styled("│", border_style),
         ]));
     }
-
-    lines.push(Line::from(Span::styled(
-        format!("└{}┘", "─".repeat(inner_width)),
-        border_style,
-    )));
     lines
 }
 
@@ -342,10 +336,10 @@ fn wrap_room_seat_to_lines(
         right_rows.push((payload.title.clone(), title_style));
     }
 
-    lines.push(Line::from(Span::styled(
-        format!("┌{}┐", "─".repeat(inner_width)),
-        border_style,
-    )));
+    lines.push(Line::from(vec![
+        pad.clone(),
+        Span::styled("─".repeat(inner_width), border_style),
+    ]));
 
     let row_count = payload.ascii_lines.len().max(right_rows.len()).max(1);
     for idx in 0..row_count {
@@ -359,18 +353,12 @@ fn wrap_room_seat_to_lines(
             .map(|(text, style)| (text.as_str(), *style))
             .unwrap_or(("", body_style));
         lines.push(Line::from(vec![
-            Span::styled("│", border_style),
+            pad.clone(),
             Span::styled(pad_to_display_width(left, left_width), card_style),
             Span::styled(" │ ", border_style),
             Span::styled(pad_to_display_width(right, right_width), right_style),
-            Span::styled("│", border_style),
         ]));
     }
-
-    lines.push(Line::from(Span::styled(
-        format!("└{}┘", "─".repeat(inner_width)),
-        border_style,
-    )));
     lines
 }
 
@@ -632,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn wrap_news_to_lines_renders_box_with_ascii_left() {
+    fn wrap_news_to_lines_renders_top_rule_with_ascii_left() {
         let lines = wrap_news_to_lines(
             "[1m]",
             "mat: ",
@@ -656,9 +644,18 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        for row in lines_to_strings(&lines) {
+            assert!(
+                row.starts_with(' '),
+                "custom card row lost left padding: {row:?}"
+            );
+        }
         assert!(rendered.contains("shared news"));
-        assert!(rendered.contains("┌"));
-        assert!(rendered.contains("└"));
+        assert!(!rendered.contains("┌"));
+        assert!(!rendered.contains("┐"));
+        assert!(!rendered.contains("└"));
+        assert!(!rendered.contains("┘"));
+        assert!(rendered.contains("──"));
         assert!(rendered.contains(".:-"));
         assert!(rendered.contains(" │ "));
         assert!(rendered.contains("Title"));
