@@ -110,6 +110,10 @@ impl RoomGameManager for PokerTableManager {
         self.event_tx.subscribe()
     }
 
+    fn seat_join_ascii(&self) -> &'static [&'static str] {
+        &["╭───╮╭───╮", "│A♠ ││K♥ │", "╰───╯╰───╯"]
+    }
+
     fn enter(
         &self,
         room: &RoomListItem,

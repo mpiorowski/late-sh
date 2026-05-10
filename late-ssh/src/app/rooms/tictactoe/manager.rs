@@ -49,6 +49,7 @@ impl TicTacToeTableManager {
                     room.id,
                     self.activity.clone(),
                     room.display_name.clone(),
+                    String::new(),
                     self.event_tx.clone(),
                 )
             })
@@ -97,6 +98,16 @@ impl RoomGameManager for TicTacToeTableManager {
 
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
         self.event_tx.subscribe()
+    }
+
+    fn seat_join_ascii(&self) -> &'static [&'static str] {
+        &[
+            " X │ · │ · ",
+            "───┼───┼───",
+            " · │ · │ · ",
+            "───┼───┼───",
+            " · │ · │ · ",
+        ]
     }
 
     fn enter(

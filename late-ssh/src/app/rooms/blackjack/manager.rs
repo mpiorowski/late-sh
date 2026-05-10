@@ -186,6 +186,10 @@ impl RoomGameManager for BlackjackTableManager {
         self.room_event_tx.subscribe()
     }
 
+    fn seat_join_ascii(&self) -> &'static [&'static str] {
+        &["╭───╮╭───╮", "│░░░││10♣│", "╰───╯╰───╯"]
+    }
+
     fn enter(
         &self,
         room: &RoomListItem,

@@ -111,6 +111,9 @@ pub trait RoomGameManager: Send + Sync {
     fn directory_meta(&self, room: &RoomListItem) -> DirectoryMeta;
     fn directory_hints(&self, room_id: Uuid) -> Option<DirectoryHints>;
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent>;
+    /// ASCII art shown on the left side of the seat-joined chat card.
+    /// Each entry is one row; rows must be the same display width.
+    fn seat_join_ascii(&self) -> &'static [&'static str];
     fn enter(
         &self,
         room: &RoomListItem,
