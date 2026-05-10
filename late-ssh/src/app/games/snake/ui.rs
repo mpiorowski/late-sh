@@ -21,6 +21,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
             ("level", state.level.to_string(), theme::TEXT_BRIGHT()),
             ("lives left", state.cobra.lives.to_string(), theme::TEXT_BRIGHT()),
             ("tick", state.field_tick.to_string(), theme::TEXT_BRIGHT()),
+            ("stutter_left", state.stutter_left.to_string(), theme::TEXT_BRIGHT()),
         ]),
         keys: keys_line(vec![
             ("h/l/j/k", "direction"),
@@ -35,8 +36,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
     let board_area = draw_game_frame(frame, area, "Snake", bottom, show_sidebar);
     let board_rect = centered_rect(
         board_area,
-        state.field.width as u16,
-        state.field.height as u16,
+        state.field.width as u16 + 4,
+        state.field.height as u16 + 4,
     );
     let field = Paragraph::new(get_field_lines(state)).alignment(Alignment::Center);
     frame.render_widget(field, board_rect);
@@ -70,7 +71,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
 
 fn get_field_lines(state: &State) -> Vec<Line<'static>> {
     let field = state.get_field();
-    let mut lines = Vec::with_capacity(state.field.height as usize+4);
+    let mut lines = Vec::new();
 
     lines.push(Line::from(Span::styled(
         format!("┌{}┐", "─".repeat(state.field.width as usize)),

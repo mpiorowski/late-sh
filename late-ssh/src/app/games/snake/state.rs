@@ -21,6 +21,7 @@ pub struct State {
     pub set_exit: bool,
     pub input_queue: Vec<u8>,
     pub restart_countdown: i32,
+    pub stutter_left: u8,
     last_key: Option<u8>,
 }
 
@@ -48,7 +49,8 @@ impl State {
             is_paused: false,
             svc,
             user_id,
-            restart_countdown: 0
+            restart_countdown: 0,
+            stutter_left: 0
         };
         state.reset_level(true);
         state.reset_game();
@@ -137,6 +139,7 @@ impl State {
 
     fn level_up(&mut self) {
         self.level.number += 1;
+        self.stutter_left = self.level.get_stutter();
         self.reset_level(false);
     }
 
@@ -186,7 +189,22 @@ impl State {
             self.bye();
             return false;
         }
-        let mut effect: Option<CobraEffect> = None;
+        if self.stutter_left > 0 {
+            self.stutter_left -= 1;
+            return false;
+        } else {
+            // reset stutter_left
+            let stutter = self.level.get_stutter();
+            let double_speed = (stutter as f32/2.0).ceil() as u8;
+            if let CobraState::PoweredUp = self.cobra.state {
+                self.stutter_left = double_speed;
+            } else if accel {
+                self.stutter_left = double_speed;
+            } else {
+                self.stutter_left = stutter
+            }
+        }
+        let effect: Option<CobraEffect>;
         match self.cobra.state {
             CobraState::Alive => {
                 effect = self.cobra.move_cobra(&mut self.field);
@@ -218,18 +236,6 @@ impl State {
         } else if self.field.food_left() == 0 {
             self.level_up();
             self.score_up(100 * self.level.number as i32);
-        }
-        let mut min_delay = 1000.0;
-        let mut cobra_speed = self.level.get_speed(&min_delay);
-        if let CobraState::PoweredUp = self.cobra.state {
-            cobra_speed *= 2.0;
-        }
-        if cobra_speed > 0.0 {
-            min_delay /= cobra_speed;
-        }
-        let mut dur = Duration::from_secs_f32(min_delay);
-        if accel {
-            dur /= 2;
         }
         self.score_up(1);
         self.field_tick += 1;
@@ -416,8 +422,16 @@ impl Level {
         Self { number }
     }
 
-    fn get_speed(&self, min_delay: &f32) -> f32 {
-        self.number as f32 * min_delay
+    fn get_stutter(&self) -> u8 {
+        // Calculate the number of frames to wait for in
+        // each level
+        // max_frame_stut is based on the fact that 
+        // server runs at 15 fps so the max stutter (slowest)
+        // will be 10 frames, reducing by 1 on every level
+        // up to level 10, where we run at max speed with stutter 0
+        let max_frame_stut: f32 = 5.0;
+        let max_lev_mod: f32 = 5.0;
+        (max_frame_stut*(1.0-(max_lev_mod.min(self.number as f32)*0.1))).ceil() as u8
     }
 }
 

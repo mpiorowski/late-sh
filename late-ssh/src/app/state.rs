@@ -588,8 +588,8 @@ impl App {
             config.user_id,
             config.snake_service.clone(),
             0,
-            40,
-            60,
+            30,
+            80,
         );
         let sudoku_state = crate::app::games::sudoku::state::State::new(
             config.user_id,
