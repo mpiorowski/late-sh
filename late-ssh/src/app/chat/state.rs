@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use late_core::{
@@ -39,7 +40,18 @@ const USER_CREATED_CHANNEL_NAME_MAX_CHARS: usize = 16;
 const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
 const REACTION_OWNER_COLUMNS: usize = 3;
 const INLINE_IMAGE_FETCHES_PER_TICK: usize = 8;
+const INLINE_IMAGE_SCAN_LIMIT: usize = 100;
 const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
+const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
+
+pub(crate) type InlineImageLines = Vec<ratatui::text::Line<'static>>;
+pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImageLines, String>);
+
+#[derive(Clone, Copy, Debug)]
+struct InlineImageFailure {
+    attempts: u8,
+    next_retry_at: Instant,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionMatch {
@@ -179,18 +191,15 @@ pub struct ChatState {
     pub(crate) image_upload_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
     pub(crate) image_upload_pending: bool,
     pub(crate) image_upload_target_room_id: Option<Uuid>,
-    pub(crate) image_upload_fallback_text: Option<String>,
     pub(crate) requested_url_upload: Option<PendingUrlUpload>,
 
     // inline image rendering
-    pub(crate) inline_image_rx: Option<
-        tokio::sync::mpsc::UnboundedReceiver<(uuid::Uuid, Vec<ratatui::text::Line<'static>>)>,
-    >,
-    pub(crate) inline_image_tx:
-        Option<tokio::sync::mpsc::UnboundedSender<(uuid::Uuid, Vec<ratatui::text::Line<'static>>)>>,
-    pub(crate) inline_image_cache:
-        std::collections::HashMap<uuid::Uuid, Vec<ratatui::text::Line<'static>>>,
-    pub(crate) inline_image_requested: std::collections::HashSet<uuid::Uuid>,
+    pub(crate) inline_image_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<InlineImageRenderResult>>,
+    pub(crate) inline_image_tx: Option<tokio::sync::mpsc::UnboundedSender<InlineImageRenderResult>>,
+    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImageLines>,
+    pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
+    inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
     inline_image_tracked_order: VecDeque<uuid::Uuid>,
     pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
@@ -309,12 +318,12 @@ impl ChatState {
             image_upload_rx: None,
             image_upload_pending: false,
             image_upload_target_room_id: None,
-            image_upload_fallback_text: None,
             requested_url_upload: None,
             inline_image_rx: Some(inline_image_rx),
             inline_image_tx: Some(inline_image_tx),
             inline_image_cache: HashMap::new(),
             inline_image_requested: HashSet::new(),
+            inline_image_failures: HashMap::new(),
             inline_image_tracked_order: VecDeque::new(),
             last_image_upload_at: None,
         }
@@ -322,13 +331,6 @@ impl ChatState {
 
     pub(crate) fn composer(&self) -> &TextArea<'static> {
         &self.composer
-    }
-
-    pub(crate) fn composer_is_blank(&self) -> bool {
-        self.composer
-            .lines()
-            .iter()
-            .all(|line| line.trim().is_empty())
     }
 
     pub(crate) fn refresh_composer_theme(&mut self) {
@@ -1516,22 +1518,15 @@ impl ChatState {
     }
 
     pub(crate) fn upload_target_room_id(&self) -> Option<Uuid> {
-        self.composer_room_id.or(self.selected_room_id)
+        self.composer_room_id
+            .or(self.visible_room_id)
+            .or(self.selected_room_id)
     }
 
     pub(crate) fn begin_image_upload(
         &mut self,
         room_id: Option<Uuid>,
         rx: tokio::sync::oneshot::Receiver<Result<String, String>>,
-    ) -> Option<Banner> {
-        self.begin_image_upload_with_fallback(room_id, rx, None)
-    }
-
-    pub(crate) fn begin_image_upload_with_fallback(
-        &mut self,
-        room_id: Option<Uuid>,
-        rx: tokio::sync::oneshot::Receiver<Result<String, String>>,
-        fallback_text: Option<String>,
     ) -> Option<Banner> {
         if self.image_upload_pending {
             return Some(Banner::error("An image upload is already in progress"));
@@ -1551,17 +1546,12 @@ impl ChatState {
         self.image_upload_rx = Some(rx);
         self.image_upload_pending = true;
         self.image_upload_target_room_id = room_id;
-        self.image_upload_fallback_text = fallback_text;
         self.last_image_upload_at = Some(std::time::Instant::now());
         None
     }
 
     pub(crate) fn take_image_upload_target_room_id(&mut self) -> Option<Uuid> {
         self.image_upload_target_room_id.take()
-    }
-
-    pub(crate) fn take_image_upload_fallback_text(&mut self) -> Option<String> {
-        self.image_upload_fallback_text.take()
     }
 
     pub(crate) fn take_requested_url_upload(&mut self) -> Option<PendingUrlUpload> {
@@ -1572,18 +1562,12 @@ impl ChatState {
         let rx = self.image_upload_rx.as_mut()?;
         match rx.try_recv() {
             Ok(result) => {
-                if result.is_err() && self.image_upload_fallback_text.is_some() {
-                    self.last_image_upload_at = None;
-                }
                 self.image_upload_rx = None;
                 self.image_upload_pending = false;
                 Some(result)
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                if self.image_upload_fallback_text.is_some() {
-                    self.last_image_upload_at = None;
-                }
                 self.image_upload_rx = None;
                 self.image_upload_pending = false;
                 Some(Err("Upload cancelled".to_string()))
@@ -1595,9 +1579,43 @@ impl ChatState {
         let Some(rx) = self.inline_image_rx.as_mut() else {
             return;
         };
+        let now = Instant::now();
+        let mut completed = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            completed.push(result);
+        }
+
         let mut received_ids = Vec::new();
-        while let Ok((msg_id, lines)) = rx.try_recv() {
-            self.inline_image_cache.insert(msg_id, lines);
+        for (msg_id, result) in completed {
+            self.inline_image_requested.remove(&msg_id);
+            match result {
+                Ok(lines) => {
+                    self.inline_image_failures.remove(&msg_id);
+                    self.inline_image_cache.insert(msg_id, lines);
+                }
+                Err(error) => {
+                    let attempts = self
+                        .inline_image_failures
+                        .get(&msg_id)
+                        .map(|failure| failure.attempts)
+                        .unwrap_or(0)
+                        .saturating_add(1);
+                    let next_retry_at = now + inline_image_retry_delay(attempts);
+                    self.inline_image_failures.insert(
+                        msg_id,
+                        InlineImageFailure {
+                            attempts,
+                            next_retry_at,
+                        },
+                    );
+                    tracing::trace!(
+                        message_id = %msg_id,
+                        attempts,
+                        error,
+                        "inline image render failed"
+                    );
+                }
+            }
             received_ids.push(msg_id);
         }
         for msg_id in received_ids {
@@ -1617,47 +1635,13 @@ impl ChatState {
             return;
         }
 
-        let mut requests = Vec::new();
-        for msg in messages.iter().rev().take(100) {
-            if self.inline_image_requested.contains(&msg.id)
-                || self.inline_image_cache.contains_key(&msg.id)
-            {
-                continue;
-            }
-            if let Some(url_start) = msg.body.find("http") {
-                let url_str = &msg.body[url_start..];
-                let end_idx = url_str
-                    .find(|c: char| c.is_ascii_whitespace() || c == ')' || c == ']' || c == '}')
-                    .unwrap_or(url_str.len());
-                let mut url = &url_str[..end_idx];
-                while url.ends_with('.')
-                    || url.ends_with(',')
-                    || url.ends_with(';')
-                    || url.ends_with('!')
-                    || url.ends_with('?')
-                {
-                    url = &url[..url.len() - 1];
-                }
-
-                let lower_url = url.to_ascii_lowercase();
-                let is_image = lower_url.ends_with(".jpg")
-                    || lower_url.ends_with(".jpeg")
-                    || lower_url.ends_with(".png")
-                    || lower_url.ends_with(".gif")
-                    || lower_url.ends_with(".webp")
-                    || lower_url.contains("uguu.se")
-                    || lower_url.contains("0x0.st")
-                    || lower_url.contains("catbox.moe");
-
-                if is_image {
-                    tracing::trace!("found image url in chat: {}", url);
-                    requests.push((msg.id, url.to_string()));
-                    if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
-                        break;
-                    }
-                }
-            }
-        }
+        let requests = inline_image_request_candidates(
+            messages,
+            &self.inline_image_requested,
+            &self.inline_image_cache,
+            &self.inline_image_failures,
+            now,
+        );
 
         for (msg_id, url) in requests {
             self.inline_image_requested.insert(msg_id);
@@ -1666,11 +1650,11 @@ impl ChatState {
                 let tx_clone = tx.clone();
                 tokio::spawn(async move {
                     // High-detail thumbnail: 96 wide, max 10 rows (20 pixels)
-                    if let Ok(lines) =
-                        crate::app::files::inline_image::fetch_and_render_image(url, 96, 10).await
-                    {
-                        let _ = tx_clone.send((msg_id, lines));
-                    }
+                    let result =
+                        crate::app::files::inline_image::fetch_and_render_image(url, 96, 10)
+                            .await
+                            .map_err(|e| e.to_string());
+                    let _ = tx_clone.send((msg_id, result));
                 });
             }
         }
@@ -1679,6 +1663,7 @@ impl ChatState {
     fn track_inline_image_id(&mut self, msg_id: Uuid) {
         if !self.inline_image_cache.contains_key(&msg_id)
             && !self.inline_image_requested.contains(&msg_id)
+            && !self.inline_image_failures.contains_key(&msg_id)
         {
             return;
         }
@@ -1689,6 +1674,7 @@ impl ChatState {
             if let Some(old_id) = self.inline_image_tracked_order.pop_front() {
                 self.inline_image_requested.remove(&old_id);
                 self.inline_image_cache.remove(&old_id);
+                self.inline_image_failures.remove(&old_id);
             }
         }
     }
@@ -2548,6 +2534,84 @@ impl ChatState {
         }
         self.sync_selection();
     }
+}
+
+fn inline_image_request_candidates(
+    messages: &[ChatMessage],
+    requested: &HashSet<Uuid>,
+    cached: &HashMap<Uuid, InlineImageLines>,
+    failures: &HashMap<Uuid, InlineImageFailure>,
+    now: Instant,
+) -> Vec<(Uuid, String)> {
+    let mut requests = Vec::new();
+    for msg in messages.iter().take(INLINE_IMAGE_SCAN_LIMIT) {
+        if requested.contains(&msg.id) || cached.contains_key(&msg.id) {
+            continue;
+        }
+        if let Some(failure) = failures.get(&msg.id)
+            && (failure.attempts >= INLINE_IMAGE_MAX_FAILURES || now < failure.next_retry_at)
+        {
+            continue;
+        }
+        if let Some(url) = inline_image_url_in_body(&msg.body) {
+            tracing::trace!("found image url in chat: {}", url);
+            requests.push((msg.id, url));
+            if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
+                break;
+            }
+        }
+    }
+    requests
+}
+
+fn inline_image_url_in_body(body: &str) -> Option<String> {
+    let mut rest = body;
+    while let Some(url_start) = rest.find("http") {
+        let url_str = &rest[url_start..];
+        let end_idx = url_str
+            .find(|c: char| c.is_ascii_whitespace() || c == ')' || c == ']' || c == '}')
+            .unwrap_or(url_str.len());
+        let mut url = &url_str[..end_idx];
+        while url.ends_with('.')
+            || url.ends_with(',')
+            || url.ends_with(';')
+            || url.ends_with('!')
+            || url.ends_with('?')
+        {
+            url = &url[..url.len() - 1];
+        }
+
+        if is_inline_image_url(url) {
+            return Some(url.to_string());
+        }
+
+        rest = &url_str["http".len()..];
+    }
+    None
+}
+
+fn is_inline_image_url(url: &str) -> bool {
+    let lower_url = url.to_ascii_lowercase();
+    if lower_url.contains("uguu.se")
+        || lower_url.contains("0x0.st")
+        || lower_url.contains("catbox.moe")
+    {
+        return true;
+    }
+
+    let path = reqwest::Url::parse(url)
+        .ok()
+        .map(|parsed| parsed.path().to_ascii_lowercase())
+        .unwrap_or(lower_url);
+
+    [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+        .iter()
+        .any(|ext| path.ends_with(ext))
+}
+
+fn inline_image_retry_delay(attempts: u8) -> Duration {
+    let exp = attempts.saturating_sub(1).min(5) as u32;
+    Duration::from_secs((1_u64 << exp).min(30))
 }
 
 fn visual_order_for_rooms(
@@ -3944,6 +4008,104 @@ mod tests {
             reply_to_message_id: Some(reply_to_message_id),
             ..make_msg(id)
         }
+    }
+
+    #[test]
+    fn inline_image_url_in_body_accepts_image_url_with_query() {
+        assert_eq!(
+            inline_image_url_in_body("look https://example.com/image.webp?size=large"),
+            Some("https://example.com/image.webp?size=large".to_string())
+        );
+    }
+
+    #[test]
+    fn inline_image_request_candidates_scan_newest_messages_first() {
+        let now = Instant::now();
+        let mut messages: Vec<ChatMessage> = (1..=101)
+            .map(|idx| make_msg(Uuid::from_u128(idx)))
+            .collect();
+        messages[0].body = "https://files.example.com/newest.png".to_string();
+
+        let requests = inline_image_request_candidates(
+            &messages,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            now,
+        );
+
+        assert_eq!(
+            requests,
+            vec![(
+                messages[0].id,
+                "https://files.example.com/newest.png".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn inline_image_request_candidates_respect_retry_backoff() {
+        let now = Instant::now();
+        let mut message = make_msg(Uuid::from_u128(1));
+        message.body = "https://files.example.com/pending.png".to_string();
+        let messages = vec![message.clone()];
+        let mut failures = HashMap::from([(
+            message.id,
+            InlineImageFailure {
+                attempts: 1,
+                next_retry_at: now + Duration::from_secs(5),
+            },
+        )]);
+
+        assert!(
+            inline_image_request_candidates(
+                &messages,
+                &HashSet::new(),
+                &HashMap::new(),
+                &failures,
+                now,
+            )
+            .is_empty()
+        );
+
+        failures.insert(
+            message.id,
+            InlineImageFailure {
+                attempts: 1,
+                next_retry_at: now - Duration::from_secs(1),
+            },
+        );
+        assert_eq!(
+            inline_image_request_candidates(
+                &messages,
+                &HashSet::new(),
+                &HashMap::new(),
+                &failures,
+                now,
+            ),
+            vec![(
+                message.id,
+                "https://files.example.com/pending.png".to_string()
+            )]
+        );
+
+        failures.insert(
+            message.id,
+            InlineImageFailure {
+                attempts: INLINE_IMAGE_MAX_FAILURES,
+                next_retry_at: now - Duration::from_secs(1),
+            },
+        );
+        assert!(
+            inline_image_request_candidates(
+                &messages,
+                &HashSet::new(),
+                &HashMap::new(),
+                &failures,
+                now,
+            )
+            .is_empty()
+        );
     }
 
     #[test]
