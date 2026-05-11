@@ -247,6 +247,7 @@ User commands:
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
 - `/settings` opens settings.
 - `/unignore [@user]` removes an ignored user.
+- `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.
 
 Admin commands:
 - `/create-room #room` creates/promotes a permanent auto-join room and bulk-adds existing users.
@@ -290,6 +291,15 @@ Autocomplete:
 - Tab/Enter confirms.
 - Esc dismisses popup without leaving compose mode.
 - Pressing `/` while not composing on Dashboard/Chat starts command compose for the active room.
+
+Image uploads and inline rendering:
+- File-upload storage is optional. It is enabled only when `LATE_FILES_S3_ENDPOINT`/`S3_ENDPOINT`, `LATE_FILES_S3_BUCKET`, `LATE_FILES_PUBLIC_BASE_URL`, and S3 credentials are present. Infra variable details live in `infra/README.md`.
+- Pasting raw PNG/JPEG/GIF/WebP bytes into the chat composer starts an upload. Pasting a single blank-composer image URL (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`) downloads and reuploads the image, then inserts the public uploaded URL into the composer.
+- If pasted-URL upload is unavailable, rate-limited, cancelled, or fails, the original pasted URL is restored into the target room composer so the user can still send it manually.
+- `/upload <url>` follows the same download/reupload path, but command failures do not restore fallback text because the command itself is not a paste.
+- Non-admin uploads use a per-session `ChatState` cooldown. This is intentionally lightweight, not a server-side quota.
+- URL downloads for upload and inline rendering must go through `files::image_upload::download_url_bytes`: validate `http(s)`, reject localhost/private/link-local/reserved resolved IPs, pin reqwest DNS to the validated addresses, disable redirects, and stream with a hard byte cap. Do not add new ad hoc `reqwest.get(url).bytes()` paths for chat images.
+- Inline image rendering detects likely image URLs in visible room messages, fetches them through the same secure downloader, rejects oversized decoded dimensions, and caches rendered terminal lines by message id. Inline previews are best-effort; failures are intentionally silent/noisy only at trace level.
 
 ---
 

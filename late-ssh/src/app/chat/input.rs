@@ -140,6 +140,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);
     }
+    if let Some(upload) = app.chat.take_requested_url_upload() {
+        crate::app::input::trigger_url_image_upload(app, upload.url, upload.room_id);
+    }
 }
 
 pub fn handle_compose_char(app: &mut App, ch: char) {

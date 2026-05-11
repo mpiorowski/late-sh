@@ -55,6 +55,7 @@ pub struct DashboardChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
 }
 
 /// Shared composer block rendering for both the dashboard card and the chat
@@ -338,6 +339,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 countries: view.countries,
                 bonsai_glyphs: view.bonsai_glyphs,
                 message_reactions: view.message_reactions,
+                inline_images: view.inline_images,
             },
         );
         lines = visible_chat_rows(
@@ -381,6 +383,7 @@ struct ChatRowsContext<'a> {
     countries: &'a HashMap<Uuid, String>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
 }
 
 #[derive(Default)]
@@ -413,6 +416,17 @@ fn chat_rows_fingerprint(
         ctx.countries.get(&msg.user_id).hash(&mut hasher);
         ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
         ctx.message_reactions.get(&msg.id).hash(&mut hasher);
+        if let Some(lines) = ctx.inline_images.get(&msg.id) {
+            true.hash(&mut hasher);
+            lines.len().hash(&mut hasher);
+            lines
+                .iter()
+                .map(|line| line.spans.len())
+                .sum::<usize>()
+                .hash(&mut hasher);
+        } else {
+            false.hash(&mut hasher);
+        }
     }
 
     hasher.finish()
@@ -501,6 +515,7 @@ fn ensure_chat_rows_cache(
             body_style,
             mentions_us,
             is_continuation,
+            ctx.inline_images.get(&msg.id).map(Vec::as_slice),
             reactions,
         );
         all_rows.extend(msg_lines);
@@ -753,6 +768,7 @@ pub struct ChatRenderInput<'a> {
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
@@ -834,6 +850,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
     pub highlighted_message_id: Option<Uuid>,
@@ -881,6 +898,7 @@ pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoom
             countries: view.countries,
             bonsai_glyphs: view.bonsai_glyphs,
             message_reactions: view.message_reactions,
+            inline_images: view.inline_images,
         },
     );
     let mut lines = visible_chat_rows(
@@ -1515,6 +1533,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                         countries,
                         bonsai_glyphs: view.bonsai_glyphs,
                         message_reactions: view.message_reactions,
+                        inline_images: view.inline_images,
                     },
                 );
                 let mut lines = visible_chat_rows(
@@ -1677,7 +1696,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use late_core::models::chat_room::ChatRoom;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::OnceLock};
 
     #[test]
     fn short_user_id_returns_first_eight_chars() {
@@ -1729,6 +1748,7 @@ mod tests {
         let countries = HashMap::new();
         let bonsai_glyphs = HashMap::new();
         let message_reactions = HashMap::new();
+        let inline_images = HashMap::new();
 
         let messages = vec![&message];
         let ctx = ChatRowsContext {
@@ -1737,6 +1757,7 @@ mod tests {
             countries: &countries,
             bonsai_glyphs: &bonsai_glyphs,
             message_reactions: &message_reactions,
+            inline_images: &inline_images,
         };
 
         theme::set_current_by_id("late");
@@ -1775,6 +1796,8 @@ mod tests {
         composer: &'a TextArea<'static>,
         news_composer: &'a TextArea<'static>,
     ) -> ChatRenderInput<'a> {
+        static INLINE_IMAGES: OnceLock<HashMap<Uuid, Vec<Line<'static>>>> = OnceLock::new();
+
         ChatRenderInput {
             feeds_selected: false,
             feeds_processing: false,
@@ -1805,6 +1828,7 @@ mod tests {
             usernames,
             countries,
             message_reactions,
+            inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
             unread_counts,
             selected_room_id,
             room_jump_active: false,

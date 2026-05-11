@@ -31,6 +31,36 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        // Poll image upload results.
+        if let Some(result) = self.chat.poll_image_upload() {
+            let target_room_id = self.chat.take_image_upload_target_room_id();
+            let fallback_text = self.chat.take_image_upload_fallback_text();
+            match result {
+                Ok(url) => {
+                    if let Some(room_id) = target_room_id.or(self.chat.selected_room_id) {
+                        self.chat.start_composing_in_room(room_id);
+                        self.chat.composer_push_str(&url);
+                    }
+                    self.banner = Some(crate::app::common::primitives::Banner::success(
+                        "Image uploaded - press Enter to send",
+                    ));
+                }
+                Err(msg) => {
+                    if let Some(text) = fallback_text {
+                        if let Some(room_id) = target_room_id.or(self.chat.selected_room_id) {
+                            self.chat.start_composing_in_room(room_id);
+                        }
+                        self.chat.composer_push_str(&text);
+                        self.banner = Some(crate::app::common::primitives::Banner::error(
+                            "Image upload was not completed - pasted URL",
+                        ));
+                    } else {
+                        self.banner = Some(crate::app::common::primitives::Banner::error(&msg));
+                    }
+                }
+            }
+        }
+        self.chat.poll_inline_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state
                 .append_result(output.success, output.lines);

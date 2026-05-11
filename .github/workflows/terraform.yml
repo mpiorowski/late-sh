@@ -45,6 +45,8 @@ jobs:
       TF_VAR_S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
       TF_VAR_S3_ENDPOINT: ${{ vars.S3_ENDPOINT }}
       TF_VAR_DB_BACKUPS_BUCKET: ${{ vars.DB_BACKUPS_BUCKET }}
+      TF_VAR_FILES_BUCKET: ${{ vars.FILES_BUCKET }}
+      TF_VAR_FILES_PUBLIC_BASE_URL: ${{ vars.FILES_PUBLIC_BASE_URL }}
       AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
     steps:

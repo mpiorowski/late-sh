@@ -962,6 +962,7 @@ mod tests {
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let inline_images: HashMap<Uuid, Vec<ratatui::text::Line<'static>>> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
 
@@ -1005,6 +1006,7 @@ mod tests {
                             reply_author: None,
                             is_editing: false,
                             bonsai_glyphs: &bonsai_glyphs,
+                            inline_images: &inline_images,
                         },
                     },
                 );
@@ -1043,6 +1045,7 @@ mod tests {
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let inline_images: HashMap<Uuid, Vec<ratatui::text::Line<'static>>> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
 
@@ -1085,6 +1088,7 @@ mod tests {
                             reply_author: None,
                             is_editing: false,
                             bonsai_glyphs: &bonsai_glyphs,
+                            inline_images: &inline_images,
                         },
                     },
                 );
@@ -1400,6 +1404,7 @@ mod tests {
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let inline_images: HashMap<Uuid, Vec<ratatui::text::Line<'static>>> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
 
@@ -1443,6 +1448,7 @@ mod tests {
                             reply_author: None,
                             is_editing: false,
                             bonsai_glyphs: &bonsai_glyphs,
+                            inline_images: &inline_images,
                         },
                     },
                 );
@@ -1479,6 +1485,7 @@ mod tests {
         let usernames: HashMap<Uuid, String> = HashMap::new();
         let countries: HashMap<Uuid, String> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let inline_images: HashMap<Uuid, Vec<ratatui::text::Line<'static>>> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
         let rust_room = Uuid::now_v7();
@@ -1527,6 +1534,7 @@ mod tests {
                             reply_author: None,
                             is_editing: false,
                             bonsai_glyphs: &bonsai_glyphs,
+                            inline_images: &inline_images,
                         },
                     },
                 );

@@ -65,13 +65,20 @@ This enables:
 - `https://late.sh` — Web landing + audio pairing
 - `https://api.late.sh` — SSH API / WebSocket
 - `https://audio.late.sh` — Icecast audio stream
+- `https://files.late.sh` — Public uploaded chat files (R2 custom domain)
 - `https://grafana.late.sh` — Monitoring
 
 ### 5. Set Up S3 Buckets
 
-Create two buckets in your S3-compatible provider:
+Create the required buckets in your S3-compatible provider:
 - `{context}-tf-state` — Terraform state
 - `{context}-db-backups` — Database backups
+
+Optionally create a files bucket for public chat uploads:
+- `{context}-files` — Public uploaded chat files
+
+For Cloudflare R2, attach a custom domain such as `files.<domain>` to the
+files bucket and set `FILES_PUBLIC_BASE_URL` to that exact public base URL.
 
 ### 6. Deploy
 
@@ -178,6 +185,9 @@ All parameters are set as Terraform variables (via GitHub secrets/variables for 
 | `S3_SECRET_ACCESS_KEY` | S3 secret key |
 | `S3_ENDPOINT` | S3 endpoint URL |
 | `DB_BACKUPS_BUCKET` | Bucket for CloudNativePG backups |
+| `FILES_BUCKET` | Bucket for public uploaded chat files |
+| `FILES_PUBLIC_BASE_URL` | Public base URL for uploaded files |
+| `FILES_S3_REGION` | S3 signing region for file uploads, defaults to `auto` for R2 |
 
 ## Production Considerations
 

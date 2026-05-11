@@ -38,6 +38,8 @@ pub(crate) const ROOM_JUMP_KEYS: &[u8] =
 const USER_CREATED_CHANNEL_NAME_MAX_CHARS: usize = 16;
 const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
 const REACTION_OWNER_COLUMNS: usize = 3;
+const INLINE_IMAGE_FETCHES_PER_TICK: usize = 8;
+const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionMatch {
@@ -68,6 +70,12 @@ pub(crate) struct ModCommandOutput {
     pub request_id: Uuid,
     pub lines: Vec<String>,
     pub success: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingUrlUpload {
+    pub url: String,
+    pub room_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +174,25 @@ pub struct ChatState {
     requested_mod_modal: bool,
     requested_quit: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
+
+    // image upload
+    pub(crate) image_upload_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
+    pub(crate) image_upload_pending: bool,
+    pub(crate) image_upload_target_room_id: Option<Uuid>,
+    pub(crate) image_upload_fallback_text: Option<String>,
+    pub(crate) requested_url_upload: Option<PendingUrlUpload>,
+
+    // inline image rendering
+    pub(crate) inline_image_rx: Option<
+        tokio::sync::mpsc::UnboundedReceiver<(uuid::Uuid, Vec<ratatui::text::Line<'static>>)>,
+    >,
+    pub(crate) inline_image_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<(uuid::Uuid, Vec<ratatui::text::Line<'static>>)>>,
+    pub(crate) inline_image_cache:
+        std::collections::HashMap<uuid::Uuid, Vec<ratatui::text::Line<'static>>>,
+    pub(crate) inline_image_requested: std::collections::HashSet<uuid::Uuid>,
+    inline_image_tracked_order: VecDeque<uuid::Uuid>,
+    pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
 pub(crate) struct PendingNotification {
@@ -211,6 +238,7 @@ impl ChatState {
         let (room_tx, room_rx) = watch::channel(None);
         let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
+        let (inline_image_tx, inline_image_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             service,
             user_id,
@@ -278,11 +306,29 @@ impl ChatState {
             requested_mod_modal: false,
             requested_quit: false,
             pending_mod_outputs: VecDeque::new(),
+            image_upload_rx: None,
+            image_upload_pending: false,
+            image_upload_target_room_id: None,
+            image_upload_fallback_text: None,
+            requested_url_upload: None,
+            inline_image_rx: Some(inline_image_rx),
+            inline_image_tx: Some(inline_image_tx),
+            inline_image_cache: HashMap::new(),
+            inline_image_requested: HashSet::new(),
+            inline_image_tracked_order: VecDeque::new(),
+            last_image_upload_at: None,
         }
     }
 
     pub(crate) fn composer(&self) -> &TextArea<'static> {
         &self.composer
+    }
+
+    pub(crate) fn composer_is_blank(&self) -> bool {
+        self.composer
+            .lines()
+            .iter()
+            .all(|line| line.trim().is_empty())
     }
 
     pub(crate) fn refresh_composer_theme(&mut self) {
@@ -1181,6 +1227,23 @@ impl ChatState {
             return None;
         }
 
+        if let Some(url) = body.trim().strip_prefix("/upload ") {
+            let url = url.trim().to_string();
+            if url.is_empty() {
+                return Some(Banner::error("Usage: /upload <url>"));
+            }
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Some(Banner::error("/upload: URL must start with http(s)://"));
+            }
+            if !crate::app::files::image_upload::is_file_upload_configured() {
+                return Some(Banner::error("File uploads are disabled"));
+            }
+            let room_id = self.upload_target_room_id();
+            self.clear_composer_after_submit();
+            self.requested_url_upload = Some(PendingUrlUpload { url, room_id });
+            return None;
+        }
+
         if body.trim() == "/active" {
             self.clear_composer_after_submit();
             self.open_active_users_overlay();
@@ -1379,6 +1442,10 @@ impl ChatState {
         self.composer.insert_char(ch);
     }
 
+    pub fn composer_push_str(&mut self, s: &str) {
+        self.composer.insert_str(s);
+    }
+
     pub fn composer_cursor_left(&mut self) {
         self.composer.move_cursor(CursorMove::Back);
     }
@@ -1422,6 +1489,208 @@ impl ChatState {
     /// its built-in emacs/readline keymap (^A/^E/^K/^F/^B/...).
     pub fn composer_input(&mut self, input: Input) {
         self.composer.input(input);
+    }
+
+    pub fn start_image_upload(&mut self, bytes: Vec<u8>) -> Option<Banner> {
+        let Some(mime) = crate::app::files::image_upload::detect_image_mime(&bytes) else {
+            return Some(Banner::error("Unsupported image type"));
+        };
+        if !crate::app::files::image_upload::is_file_upload_configured() {
+            return Some(Banner::error("File uploads are disabled"));
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Some(banner) = self.begin_image_upload(self.upload_target_room_id(), rx) {
+            return Some(banner);
+        }
+        let mime = mime.to_string();
+
+        tokio::spawn(async move {
+            let result = crate::app::files::image_upload::upload_image_bytes(bytes, &mime)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+
+        None
+    }
+
+    pub(crate) fn upload_target_room_id(&self) -> Option<Uuid> {
+        self.composer_room_id.or(self.selected_room_id)
+    }
+
+    pub(crate) fn begin_image_upload(
+        &mut self,
+        room_id: Option<Uuid>,
+        rx: tokio::sync::oneshot::Receiver<Result<String, String>>,
+    ) -> Option<Banner> {
+        self.begin_image_upload_with_fallback(room_id, rx, None)
+    }
+
+    pub(crate) fn begin_image_upload_with_fallback(
+        &mut self,
+        room_id: Option<Uuid>,
+        rx: tokio::sync::oneshot::Receiver<Result<String, String>>,
+        fallback_text: Option<String>,
+    ) -> Option<Banner> {
+        if self.image_upload_pending {
+            return Some(Banner::error("An image upload is already in progress"));
+        }
+
+        if !self.is_admin
+            && let Some(last) = self.last_image_upload_at
+            && last.elapsed() < std::time::Duration::from_secs(30)
+        {
+            let wait = 30 - last.elapsed().as_secs();
+            return Some(Banner::error(&format!(
+                "Please wait {}s before uploading another image",
+                wait
+            )));
+        }
+
+        self.image_upload_rx = Some(rx);
+        self.image_upload_pending = true;
+        self.image_upload_target_room_id = room_id;
+        self.image_upload_fallback_text = fallback_text;
+        self.last_image_upload_at = Some(std::time::Instant::now());
+        None
+    }
+
+    pub(crate) fn take_image_upload_target_room_id(&mut self) -> Option<Uuid> {
+        self.image_upload_target_room_id.take()
+    }
+
+    pub(crate) fn take_image_upload_fallback_text(&mut self) -> Option<String> {
+        self.image_upload_fallback_text.take()
+    }
+
+    pub(crate) fn take_requested_url_upload(&mut self) -> Option<PendingUrlUpload> {
+        self.requested_url_upload.take()
+    }
+
+    pub(crate) fn poll_image_upload(&mut self) -> Option<Result<String, String>> {
+        let rx = self.image_upload_rx.as_mut()?;
+        match rx.try_recv() {
+            Ok(result) => {
+                if result.is_err() && self.image_upload_fallback_text.is_some() {
+                    self.last_image_upload_at = None;
+                }
+                self.image_upload_rx = None;
+                self.image_upload_pending = false;
+                Some(result)
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                if self.image_upload_fallback_text.is_some() {
+                    self.last_image_upload_at = None;
+                }
+                self.image_upload_rx = None;
+                self.image_upload_pending = false;
+                Some(Err("Upload cancelled".to_string()))
+            }
+        }
+    }
+
+    pub(crate) fn poll_inline_images(&mut self) {
+        let Some(rx) = self.inline_image_rx.as_mut() else {
+            return;
+        };
+        let mut received_ids = Vec::new();
+        while let Ok((msg_id, lines)) = rx.try_recv() {
+            self.inline_image_cache.insert(msg_id, lines);
+            received_ids.push(msg_id);
+        }
+        for msg_id in received_ids {
+            self.track_inline_image_id(msg_id);
+        }
+
+        // Request missing images for currently visible room
+        let Some(room_id) = self.visible_room_id else {
+            return;
+        };
+        let Some(tx) = self.inline_image_tx.clone() else {
+            return;
+        };
+
+        let messages = self.messages_for_room(room_id);
+        if messages.is_empty() {
+            return;
+        }
+
+        let mut requests = Vec::new();
+        for msg in messages.iter().rev().take(100) {
+            if self.inline_image_requested.contains(&msg.id)
+                || self.inline_image_cache.contains_key(&msg.id)
+            {
+                continue;
+            }
+            if let Some(url_start) = msg.body.find("http") {
+                let url_str = &msg.body[url_start..];
+                let end_idx = url_str
+                    .find(|c: char| c.is_ascii_whitespace() || c == ')' || c == ']' || c == '}')
+                    .unwrap_or(url_str.len());
+                let mut url = &url_str[..end_idx];
+                while url.ends_with('.')
+                    || url.ends_with(',')
+                    || url.ends_with(';')
+                    || url.ends_with('!')
+                    || url.ends_with('?')
+                {
+                    url = &url[..url.len() - 1];
+                }
+
+                let lower_url = url.to_ascii_lowercase();
+                let is_image = lower_url.ends_with(".jpg")
+                    || lower_url.ends_with(".jpeg")
+                    || lower_url.ends_with(".png")
+                    || lower_url.ends_with(".gif")
+                    || lower_url.ends_with(".webp")
+                    || lower_url.contains("uguu.se")
+                    || lower_url.contains("0x0.st")
+                    || lower_url.contains("catbox.moe");
+
+                if is_image {
+                    tracing::trace!("found image url in chat: {}", url);
+                    requests.push((msg.id, url.to_string()));
+                    if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (msg_id, url) in requests {
+            self.inline_image_requested.insert(msg_id);
+            self.track_inline_image_id(msg_id);
+            if !url.is_empty() {
+                let tx_clone = tx.clone();
+                tokio::spawn(async move {
+                    // High-detail thumbnail: 96 wide, max 10 rows (20 pixels)
+                    if let Ok(lines) =
+                        crate::app::files::inline_image::fetch_and_render_image(url, 96, 10).await
+                    {
+                        let _ = tx_clone.send((msg_id, lines));
+                    }
+                });
+            }
+        }
+    }
+
+    fn track_inline_image_id(&mut self, msg_id: Uuid) {
+        if !self.inline_image_cache.contains_key(&msg_id)
+            && !self.inline_image_requested.contains(&msg_id)
+        {
+            return;
+        }
+        if !self.inline_image_tracked_order.contains(&msg_id) {
+            self.inline_image_tracked_order.push_back(msg_id);
+        }
+        while self.inline_image_tracked_order.len() > INLINE_IMAGE_TRACKED_LIMIT {
+            if let Some(old_id) = self.inline_image_tracked_order.pop_front() {
+                self.inline_image_requested.remove(&old_id);
+                self.inline_image_cache.remove(&old_id);
+            }
+        }
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
@@ -2520,7 +2789,7 @@ pub(crate) fn rank_mention_matches(
 }
 
 const CHAT_COMMANDS: &[(&str, &str)] = &[
-    ("active", "active users"),
+    ("active", "list active users"),
     ("binds", "chat guide"),
     ("dm", "open DM"),
     ("exit", "quit confirm"),
@@ -2534,6 +2803,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("public", "open public room for everyone"),
     ("settings", "open settings"),
     ("unignore", "unmute user"),
+    ("upload", "upload image from url"),
 ];
 
 fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {

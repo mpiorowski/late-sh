@@ -56,6 +56,15 @@ LATE_AI_ENABLED ?= 1                                        # Enable AI-powered 
 LATE_AI_API_KEY ?=                                              # Gemini API key for AI features
 LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to use
 
+# --- Files / uploads (optional; blank disables uploads) ---
+LATE_FILES_S3_ENDPOINT ?= https://8ecfba101ed3834cf19fd86e68fc325b.r2.cloudflarestorage.com # S3/R2 endpoint URL
+LATE_FILES_S3_BUCKET ?= late-sh-r-files                     								# S3/R2 bucket for uploaded files
+LATE_FILES_PUBLIC_BASE_URL ?= https://files.late.sh                               			# Public base URL, e.g. https://files.late.sh
+LATE_FILES_S3_REGION ?= auto                                								# Cloudflare R2 signing region
+LATE_FILES_MAX_UPLOAD_BYTES ?= 10485760                     								# Max image upload size
+LATE_FILES_S3_ACCESS_KEY_ID ?=  								                            # S3/R2 access key ID
+LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secret access key
+
 ####################################################
 # Targets
 ####################################################
@@ -102,6 +111,13 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env
 	@echo "LATE_AI_MODEL=$(LATE_AI_MODEL)" >> .env
+	@echo "LATE_FILES_S3_ENDPOINT=$(LATE_FILES_S3_ENDPOINT)" >> .env
+	@echo "LATE_FILES_S3_BUCKET=$(LATE_FILES_S3_BUCKET)" >> .env
+	@echo "LATE_FILES_PUBLIC_BASE_URL=$(LATE_FILES_PUBLIC_BASE_URL)" >> .env
+	@echo "LATE_FILES_S3_REGION=$(LATE_FILES_S3_REGION)" >> .env
+	@echo "LATE_FILES_S3_ACCESS_KEY_ID=$(LATE_FILES_S3_ACCESS_KEY_ID)" >> .env
+	@echo "LATE_FILES_S3_SECRET_ACCESS_KEY=$(LATE_FILES_S3_SECRET_ACCESS_KEY)" >> .env
+	@echo "LATE_FILES_MAX_UPLOAD_BYTES=$(LATE_FILES_MAX_UPLOAD_BYTES)" >> .env
 
 # Recipe for a parallel "instance 2" clone. Run from the second clone:
 #   make start-instance2          # bring up the stack (foreground)

@@ -61,6 +61,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     body_style: Style,
     mentions_us: bool,
     continuation: bool,
+    inline_image_lines: Option<&[Line<'static>]>,
     reactions: &[ChatMessageReactionSummary],
 ) -> Vec<Line<'static>> {
     let pad = if mentions_us {
@@ -84,6 +85,15 @@ pub(super) fn wrap_chat_entry_to_lines(
             continuation,
         )
     };
+
+    if let Some(img_lines) = inline_image_lines {
+        for img_line in img_lines {
+            let mut spans = vec![pad.clone(), Span::raw(" ")];
+            spans.extend(img_line.spans.iter().cloned());
+            lines.push(Line::from(spans));
+        }
+    }
+
     lines.extend(render_reaction_footer_lines(reactions, width, pad));
     lines
 }
@@ -706,6 +716,7 @@ mod tests {
             Style::default(),
             false,
             false,
+            None,
             &[
                 ChatMessageReactionSummary { kind: 2, count: 3 },
                 ChatMessageReactionSummary { kind: 5, count: 1 },

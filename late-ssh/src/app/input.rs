@@ -1174,6 +1174,17 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
     let ctx = InputContext::from_app(app);
     match paste_target(ctx) {
         PasteTarget::ChatComposer => {
+            if crate::app::files::image_upload::detect_image_mime(pasted).is_some() {
+                trigger_image_upload(app, pasted.to_vec());
+                return;
+            }
+            if app.chat.composer_is_blank()
+                && let Some(url) = single_pasted_image_url(pasted)
+            {
+                let room_id = app.chat.upload_target_room_id();
+                trigger_url_image_upload_with_fallback(app, url.clone(), room_id, url);
+                return;
+            }
             insert_pasted_text(pasted, |ch| app.chat.composer_push(ch));
             app.chat.update_autocomplete();
         }
@@ -1188,6 +1199,107 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
         }
         PasteTarget::None => {}
     }
+}
+
+fn trigger_image_upload(app: &mut App, data: Vec<u8>) {
+    if let Some(banner) = app.chat.start_image_upload(data) {
+        app.banner = Some(banner);
+        return;
+    }
+    app.banner = Some(crate::app::common::primitives::Banner::success(
+        "Image detected - uploading...",
+    ));
+}
+
+pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Option<uuid::Uuid>) {
+    trigger_url_image_upload_inner(app, url, room_id, None);
+}
+
+fn trigger_url_image_upload_with_fallback(
+    app: &mut App,
+    url: String,
+    room_id: Option<uuid::Uuid>,
+    fallback_text: String,
+) {
+    trigger_url_image_upload_inner(app, url, room_id, Some(fallback_text));
+}
+
+fn trigger_url_image_upload_inner(
+    app: &mut App,
+    url: String,
+    room_id: Option<uuid::Uuid>,
+    fallback_text: Option<String>,
+) {
+    use crate::app::files::image_upload::{download_and_reupload_url, is_file_upload_configured};
+    if !is_file_upload_configured() {
+        if let Some(text) = fallback_text {
+            restore_pasted_url(app, room_id, &text);
+            app.banner = Some(crate::app::common::primitives::Banner::error(
+                "File uploads are disabled - pasted URL",
+            ));
+        } else {
+            app.banner = Some(crate::app::common::primitives::Banner::error(
+                "File uploads are disabled",
+            ));
+        }
+        return;
+    }
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let begin_banner = if fallback_text.is_some() {
+        app.chat
+            .begin_image_upload_with_fallback(room_id, rx, fallback_text.clone())
+    } else {
+        app.chat.begin_image_upload(room_id, rx)
+    };
+    if let Some(banner) = begin_banner {
+        if let Some(text) = fallback_text {
+            restore_pasted_url(app, room_id, &text);
+        }
+        app.banner = Some(banner);
+        return;
+    }
+    tokio::spawn(async move {
+        let result = download_and_reupload_url(url)
+            .await
+            .map_err(|e| e.to_string());
+        let _ = tx.send(result);
+    });
+    app.banner = Some(crate::app::common::primitives::Banner::success(
+        "Downloading and uploading image...",
+    ));
+}
+
+fn restore_pasted_url(app: &mut App, room_id: Option<uuid::Uuid>, text: &str) {
+    if let Some(room_id) = room_id {
+        app.chat.start_composing_in_room(room_id);
+    }
+    app.chat.composer_push_str(text);
+    app.chat.update_autocomplete();
+}
+
+fn single_pasted_image_url(pasted: &[u8]) -> Option<String> {
+    let cleaned = strip_paste_markers(pasted);
+    let text = String::from_utf8_lossy(&cleaned);
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
+        return None;
+    }
+
+    let parsed = reqwest::Url::parse(trimmed).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return None;
+    }
+
+    let path = parsed.path().to_ascii_lowercase();
+    let has_image_extension = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+        .iter()
+        .any(|ext| path.ends_with(ext));
+    if !has_image_extension {
+        return None;
+    }
+
+    Some(trimmed.to_string())
 }
 
 fn paste_target(ctx: InputContext) -> PasteTarget {
@@ -2610,6 +2722,36 @@ mod tests {
         let mut out = String::new();
         insert_pasted_text(b"[200~https://example.com[201~", |ch| out.push(ch));
         assert_eq!(out, "https://example.com");
+    }
+
+    #[test]
+    fn single_pasted_image_url_accepts_trimmed_url_with_paste_markers() {
+        assert_eq!(
+            single_pasted_image_url(b"\x1b[200~ https://example.com/image.png\n\x1b[201~"),
+            Some("https://example.com/image.png".to_string())
+        );
+    }
+
+    #[test]
+    fn single_pasted_image_url_accepts_image_extension_before_query() {
+        assert_eq!(
+            single_pasted_image_url(b"https://example.com/image.webp?size=large"),
+            Some("https://example.com/image.webp?size=large".to_string())
+        );
+    }
+
+    #[test]
+    fn single_pasted_image_url_rejects_non_url_mixed_text_or_non_images() {
+        assert_eq!(single_pasted_image_url(b"hello https://example.com"), None);
+        assert_eq!(
+            single_pasted_image_url(b"https://example.com https://example.net"),
+            None
+        );
+        assert_eq!(single_pasted_image_url(b"file:///tmp/image.png"), None);
+        assert_eq!(
+            single_pasted_image_url(b"https://www.youtube.com/watch?v=JcdT1fQQuwY"),
+            None
+        );
     }
 
     #[test]

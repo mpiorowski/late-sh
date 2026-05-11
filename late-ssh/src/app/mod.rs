@@ -6,6 +6,7 @@ pub mod bonsai;
 pub mod chat;
 pub mod common;
 pub mod dashboard;
+pub mod files;
 pub(crate) mod help_modal;
 pub(crate) mod hub;
 pub(crate) mod icon_picker;

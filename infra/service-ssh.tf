@@ -172,6 +172,42 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # --- Files / uploads ---
+          env {
+            name  = "LATE_FILES_S3_ENDPOINT"
+            value = var.S3_ENDPOINT
+          }
+          env {
+            name  = "LATE_FILES_S3_BUCKET"
+            value = var.FILES_BUCKET
+          }
+          env {
+            name  = "LATE_FILES_PUBLIC_BASE_URL"
+            value = var.FILES_PUBLIC_BASE_URL
+          }
+          env {
+            name  = "LATE_FILES_S3_REGION"
+            value = var.FILES_S3_REGION
+          }
+          env {
+            name = "LATE_FILES_S3_ACCESS_KEY_ID"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.s3_credentials.metadata[0].name
+                key  = "ACCESS_KEY_ID"
+              }
+            }
+          }
+          env {
+            name = "LATE_FILES_S3_SECRET_ACCESS_KEY"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.s3_credentials.metadata[0].name
+                key  = "SECRET_ACCESS_KEY"
+              }
+            }
+          }
+
           # --- SSH ---
           env {
             name  = "LATE_SSH_KEY_PATH"
