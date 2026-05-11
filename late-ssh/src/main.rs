@@ -213,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
             .with_force_admin(config.force_admin)
             .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone()),
     );
-    let leaderboard_service = late_ssh::app::hub::svc::LeaderboardService::new(db.clone());
+    let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {
         Ok(library) => library,
         Err(err) => {

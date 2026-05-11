@@ -61,13 +61,7 @@ impl TwentyFortyEightService {
         let client = self.db.get().await?;
         HighScore::update_score_if_higher(&client, user_id, score).await?;
         if final_score {
-            client
-                .execute(
-                    "INSERT INTO game_score_events (user_id, game, score)
-                     VALUES ($1, '2048', $2)",
-                    &[&user_id, &score],
-                )
-                .await?;
+            HighScore::record_score_event(&client, user_id, score).await?;
         }
         Ok(())
     }

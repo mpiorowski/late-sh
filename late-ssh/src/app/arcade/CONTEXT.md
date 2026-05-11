@@ -3,12 +3,14 @@
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
 - Last updated: 2026-05-11
-- Purpose: local working context for The Arcade screen, single-player terminal games, shared card/chip helpers, and Arcade leaderboard surfaces.
+- Purpose: local working context for The Arcade screen, single-player terminal games, and shared card/chip helpers.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/arcade` owns the SSH Arcade domain: lobby navigation, single-player game state/input/rendering, persisted progress, daily puzzle completions, high scores, chip rewards, and leaderboard refresh support.
+`late-ssh/src/app/arcade` owns the SSH Arcade domain: lobby navigation, single-player game state/input/rendering, persisted progress, daily puzzle completions, high scores, and chip rewards.
+
+Hub/leaderboard surfaces are separate and live under `late-ssh/src/app/hub`. Arcade games submit score and daily-win data; Hub refreshes and renders cross-product leaderboard/economy views from that data.
 
 Rooms/table games are separate and live under `late-ssh/src/app/rooms`, but they intentionally reuse shared Arcade support modules:
 - `cards.rs` for card ranks/suits/rendering.
@@ -24,7 +26,6 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `ui.rs` renders the lobby and exposes shared frame/sidebar/status helpers.
 - `cards.rs` defines shared card primitives used by Solitaire and room card games.
 - `chips/svc.rs` owns the Late Chips economy service.
-- `leaderboard/svc.rs` owns the shared `watch<Arc<LeaderboardData>>` refresh service.
 - `twenty_forty_eight/`, `tetris/`, and `snake/` are high-score games.
 - `sudoku/`, `nonogram/`, `minesweeper/`, and `solitaire/` are daily/personal puzzle games.
 
@@ -36,7 +37,7 @@ Per-game directories generally follow:
 
 ## Lifecycle
 
-- `late-ssh/src/main.rs` creates the Arcade services: 2048, Tetris, Snake, Sudoku, Nonogram, Solitaire, Minesweeper, Chips, and Leaderboard.
+- `late-ssh/src/main.rs` creates the Arcade services: 2048, Tetris, Snake, Sudoku, Nonogram, Solitaire, Minesweeper, and Chips. Hub creates the shared leaderboard refresh service.
 - `late-ssh/src/session_bootstrap.rs` and `late-ssh/src/ssh.rs` load saved per-user game rows/high scores before `App::new`.
 - `App::new` in `late-ssh/src/app/state.rs` builds one per-session state object per Arcade game.
 - `App::tick` advances active real-time games only while `screen == Screen::Arcade && is_playing_game`.
@@ -57,21 +58,22 @@ Per-game directories generally follow:
 
 | Category | Games | Persistence | Leaderboard |
 | --- | --- | --- | --- |
-| High-score | 2048, Tetris, Snake | One current run plus best score | All-time high scores |
-| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | One daily and one personal slot per user/difficulty or pack | Today's champions and streaks |
-| Economy support | Chips | `user_chips` | Chip leaders |
+| High-score | 2048, Tetris, Snake | One current run plus best score plus final score events | Monthly and all-time high scores in Hub |
+| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | One daily and one personal slot per user/difficulty or pack | Daily streaks / arcade summaries in Hub |
+| Economy support | Chips | `user_chips` plus `chip_ledger` | Monthly chip earners in Hub |
 
 Blackjack, Poker, and Tic-Tac-Toe are Rooms games, not Arcade games, even though they share chips/cards/activity concepts.
 
 ## Persistence And Services
 
 - High-score services load and save a current run and submit best scores.
+- High-score services keep SQL inside `late-core` models. `late-ssh` services call model methods such as `HighScore::update_score_if_higher` and `HighScore::record_score_event`; do not insert score-event SQL directly from Arcade services.
 - Daily puzzle services store board progress by `(user_id, difficulty_key or size_key, mode)`.
 - Daily win tables record one completion fact per user/date/difficulty or pack, separate from board state.
 - `ChipService::ensure_chips(user_id)` grants the daily 500-chip stipend on login.
 - `ChipService::grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips for daily puzzle completions.
 - Daily services call `record_win_task()` on completion. That records the daily win, grants chips, and publishes a structured Activity event.
-- `LeaderboardService` refreshes from DB every 30s. Immediate win callouts come from Activity; leaderboard surfaces lag until the next refresh.
+- `hub::svc::LeaderboardService` refreshes from DB every 30s. Immediate win callouts come from Activity; Hub leaderboard surfaces lag until the next refresh.
 - Streak SQL uses gaps-and-islands across daily win rows. A streak remains current when its last day is today or yesterday.
 
 ## Nonogram Runtime
@@ -114,7 +116,7 @@ Current per-game basics:
 
 ## Known Gaps
 
-- Leaderboard refresh is polling-based, so Activity and leaderboard surfaces can briefly disagree.
+- Hub leaderboard refresh is polling-based, so Activity and leaderboard surfaces can briefly disagree.
 - Nonogram generation remains an offline maintainer task; runtime has no fallback generator.
 - Some high-score game state is still per-user single-slot rather than multi-run history.
 - Arcade and Rooms share chips/cards but have separate runtime ownership; keep those boundaries explicit when adding casino or multiplayer features.

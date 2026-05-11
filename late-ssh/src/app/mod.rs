@@ -23,3 +23,5 @@ pub(crate) mod terminal_help_modal;
 mod tick;
 pub mod visualizer;
 pub mod vote;
+
+pub use hub::svc::LeaderboardService;
