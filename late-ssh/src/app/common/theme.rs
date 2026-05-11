@@ -2835,8 +2835,17 @@ mod tests {
 
     #[test]
     fn cycle_theme_wraps() {
-        assert_eq!(cycle_id("cyberpunk2077", true), "contrast");
-        assert_eq!(cycle_id("contrast", false), "cyberpunk2077");
+        let first = OPTIONS
+            .first()
+            .expect("theme options should not be empty")
+            .id;
+        let last = OPTIONS
+            .last()
+            .expect("theme options should not be empty")
+            .id;
+
+        assert_eq!(cycle_id(last, true), first);
+        assert_eq!(cycle_id(first, false), last);
     }
 
     #[test]

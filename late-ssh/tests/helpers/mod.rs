@@ -6,11 +6,11 @@ use late_core::{
     rate_limit::IpRateLimiter,
     test_utils::{TestDb, test_db},
 };
+use late_ssh::app::LeaderboardService;
 use late_ssh::app::activity::event::ActivityEvent;
 use late_ssh::app::activity::publisher::ActivityPublisher;
 use late_ssh::app::ai::svc::AiService;
 use late_ssh::app::arcade::chips::svc::ChipService;
-use late_ssh::app::arcade::leaderboard::svc::LeaderboardService;
 use late_ssh::app::arcade::minesweeper::svc::MinesweeperService;
 use late_ssh::app::arcade::nonogram::state::Library as NonogramLibrary;
 use late_ssh::app::arcade::nonogram::svc::NonogramService;
