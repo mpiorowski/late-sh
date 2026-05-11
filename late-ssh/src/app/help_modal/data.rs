@@ -649,7 +649,7 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  stream/vote-header visibility and right-sidebar visibility".to_string(),
+        "  stream/vote-header visibility and right-sidebar mode (on/off/custom)".to_string(),
         "  favorite rooms (dashboard quick-switch strip)".to_string(),
         "  private RSS/Atom feed subscriptions".to_string(),
         "".to_string(),

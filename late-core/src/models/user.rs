@@ -24,6 +24,34 @@ crate::model! {
 
 pub const USERNAME_MAX_LEN: usize = 32;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RightSidebarMode {
+    On,
+    Off,
+    Custom,
+}
+
+impl RightSidebarMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::On, true) => Self::Off,
+            (Self::Off, true) => Self::Custom,
+            (Self::Custom, true) => Self::On,
+            (Self::On, false) => Self::Custom,
+            (Self::Off, false) => Self::On,
+            (Self::Custom, false) => Self::Off,
+        }
+    }
+}
+
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
@@ -33,6 +61,8 @@ const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
+const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
+const RIGHT_SIDEBAR_SCREENS_KEY: &str = "right_sidebar_screens";
 const SHOW_ARCADE_SIDEBAR_KEY: &str = "show_arcade_sidebar";
 const LEGACY_SHOW_GAMES_SIDEBAR_KEY: &str = "show_games_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
@@ -442,10 +472,55 @@ pub fn extract_show_dashboard_header(settings: &Value) -> bool {
 }
 
 pub fn extract_show_right_sidebar(settings: &Value) -> bool {
+    match settings
+        .get(RIGHT_SIDEBAR_MODE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some("on" | "custom") => return true,
+        Some("off") => return false,
+        _ => {}
+    }
+
     settings
         .get(SHOW_RIGHT_SIDEBAR_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+pub fn extract_right_sidebar_mode(settings: &Value) -> RightSidebarMode {
+    match settings
+        .get(RIGHT_SIDEBAR_MODE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some("on") => RightSidebarMode::On,
+        Some("off") => RightSidebarMode::Off,
+        Some("custom") => RightSidebarMode::Custom,
+        _ if extract_show_right_sidebar(settings) => RightSidebarMode::On,
+        _ => RightSidebarMode::Off,
+    }
+}
+
+pub fn extract_right_sidebar_screens(settings: &Value) -> Vec<u8> {
+    let Some(values) = settings
+        .get(RIGHT_SIDEBAR_SCREENS_KEY)
+        .and_then(Value::as_array)
+    else {
+        return (1..=5).collect();
+    };
+
+    let mut screens = BTreeSet::new();
+    for value in values {
+        let Some(raw) = value.as_u64() else {
+            continue;
+        };
+        if (1..=5).contains(&raw) {
+            screens.insert(raw as u8);
+        }
+    }
+
+    screens.into_iter().collect()
 }
 
 pub fn extract_show_arcade_sidebar(settings: &Value) -> bool {
@@ -677,6 +752,45 @@ mod tests {
     fn extract_show_right_sidebar_reads_explicit_false() {
         let settings = json!({ "show_right_sidebar": false });
         assert!(!extract_show_right_sidebar(&settings));
+    }
+
+    #[test]
+    fn extract_show_right_sidebar_prefers_new_mode() {
+        let settings = json!({
+            "show_right_sidebar": true,
+            "right_sidebar_mode": "off",
+        });
+        assert!(!extract_show_right_sidebar(&settings));
+    }
+
+    #[test]
+    fn extract_right_sidebar_mode_reads_custom() {
+        let settings = json!({ "right_sidebar_mode": "custom" });
+        assert_eq!(
+            extract_right_sidebar_mode(&settings),
+            RightSidebarMode::Custom
+        );
+    }
+
+    #[test]
+    fn extract_right_sidebar_mode_falls_back_to_legacy_bool() {
+        let settings = json!({ "show_right_sidebar": false });
+        assert_eq!(extract_right_sidebar_mode(&settings), RightSidebarMode::Off);
+    }
+
+    #[test]
+    fn extract_right_sidebar_screens_defaults_to_all_screens() {
+        let settings = json!({});
+        assert_eq!(
+            extract_right_sidebar_screens(&settings),
+            vec![1, 2, 3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn extract_right_sidebar_screens_dedupes_and_drops_invalid_values() {
+        let settings = json!({ "right_sidebar_screens": [3, 1, 3, 9, "2"] });
+        assert_eq!(extract_right_sidebar_screens(&settings), vec![1, 3]);
     }
 
     #[test]

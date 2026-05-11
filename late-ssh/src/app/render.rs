@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use late_core::MutexRecover;
 use late_core::api_types::NowPlaying;
+use late_core::models::{profile::Profile, user::RightSidebarMode};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -62,11 +63,19 @@ fn desktop_notification_bytes(
     }
 }
 
-fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
+fn sidebar_enabled(
+    show_settings: bool,
+    draft: &Profile,
+    profile: &Profile,
+    screen: Screen,
+) -> bool {
+    let active = if show_settings { draft } else { profile };
+    match active.right_sidebar_mode {
+        RightSidebarMode::On => true,
+        RightSidebarMode::Off => false,
+        RightSidebarMode::Custom => active
+            .right_sidebar_screens
+            .contains(&screen_number(screen)),
     }
 }
 
@@ -87,6 +96,16 @@ fn dashboard_header_enabled(
         draft_enabled
     } else {
         profile_enabled
+    }
+}
+
+fn screen_number(screen: Screen) -> u8 {
+    match screen {
+        Screen::Dashboard => 1,
+        Screen::Chat => 2,
+        Screen::Arcade => 3,
+        Screen::Rooms => 4,
+        Screen::Artboard => 5,
     }
 }
 
@@ -228,10 +247,12 @@ impl App {
         }
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
+        let screen = self.screen;
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
-            self.settings_modal_state.draft().show_right_sidebar,
-            self.profile_state.profile().show_right_sidebar,
+            self.settings_modal_state.draft(),
+            self.profile_state.profile(),
+            screen,
         );
         let show_dashboard_header = dashboard_header_enabled(
             self.show_settings,
@@ -243,7 +264,6 @@ impl App {
             self.settings_modal_state.draft().show_arcade_sidebar,
             self.profile_state.profile().show_arcade_sidebar,
         );
-        let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
             .as_mut()
@@ -1062,6 +1082,8 @@ mod tests {
         NotificationMode, arcade_sidebar_enabled, desktop_notification_bytes, mentions_hud_title,
         sidebar_enabled,
     };
+    use crate::app::common::primitives::Screen;
+    use late_core::models::{profile::Profile, user::RightSidebarMode};
 
     #[test]
     fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
@@ -1119,14 +1141,60 @@ mod tests {
 
     #[test]
     fn sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
-        assert!(!sidebar_enabled(true, false, true));
-        assert!(sidebar_enabled(true, true, false));
+        let draft = Profile {
+            right_sidebar_mode: RightSidebarMode::Off,
+            ..Profile::default()
+        };
+        let profile = Profile::default();
+        assert!(!sidebar_enabled(true, &draft, &profile, Screen::Dashboard));
+
+        let draft = Profile {
+            right_sidebar_mode: RightSidebarMode::On,
+            ..Profile::default()
+        };
+        let profile = Profile {
+            right_sidebar_mode: RightSidebarMode::Off,
+            ..Profile::default()
+        };
+        assert!(sidebar_enabled(true, &draft, &profile, Screen::Dashboard));
     }
 
     #[test]
     fn sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
-        assert!(sidebar_enabled(false, false, true));
-        assert!(!sidebar_enabled(false, true, false));
+        let draft = Profile {
+            right_sidebar_mode: RightSidebarMode::Off,
+            ..Profile::default()
+        };
+        let profile = Profile::default();
+        assert!(sidebar_enabled(false, &draft, &profile, Screen::Dashboard));
+
+        let draft = Profile::default();
+        let profile = Profile {
+            right_sidebar_mode: RightSidebarMode::Off,
+            ..Profile::default()
+        };
+        assert!(!sidebar_enabled(false, &draft, &profile, Screen::Dashboard));
+    }
+
+    #[test]
+    fn sidebar_enabled_honors_custom_screen_list() {
+        let profile = Profile {
+            right_sidebar_mode: RightSidebarMode::Custom,
+            right_sidebar_screens: vec![2, 5],
+            ..Profile::default()
+        };
+        assert!(sidebar_enabled(
+            false,
+            &Profile::default(),
+            &profile,
+            Screen::Chat
+        ));
+        assert!(!sidebar_enabled(
+            false,
+            &Profile::default(),
+            &profile,
+            Screen::Dashboard
+        ));
     }
 
     #[test]

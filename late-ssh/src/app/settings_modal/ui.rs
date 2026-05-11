@@ -6,6 +6,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+use late_core::models::user::RightSidebarMode;
+
 use crate::app::common::{markdown::render_body_to_lines, theme};
 
 use super::{
@@ -58,6 +60,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 
     if state.picker_open() {
         draw_picker(frame, popup, state);
+    }
+    if state.right_sidebar_custom_open() {
+        draw_right_sidebar_custom_dialog(frame, popup, state);
     }
     if state.delete_account_dialog().open() {
         draw_delete_account_dialog(frame, popup, state);
@@ -523,7 +528,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             Row::RightSidebar,
             width,
             "Right sidebar",
-            toggle_span(state.draft().show_right_sidebar),
+            right_sidebar_mode_span(state.draft().right_sidebar_mode),
         )),
         sections[11],
     );
@@ -1477,6 +1482,68 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(Paragraph::new(footer), layout[3]);
 }
 
+fn draw_right_sidebar_custom_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let popup = centered_rect(42, 12, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Right Sidebar ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    let width = inner.width as usize;
+    for screen_number in 1..=5 {
+        let selected = state.right_sidebar_custom_index() == screen_number - 1;
+        let checked = state.right_sidebar_screen_enabled(screen_number as u8);
+        let marker = if selected { ">" } else { " " };
+        let checkbox = if checked { "[x]" } else { "[ ]" };
+        let text = format!(" {marker} {checkbox} Screen {screen_number}");
+        let style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                pad_to_width(&text, width, selected),
+                style,
+            ))),
+            layout[screen_number - 1],
+        );
+    }
+
+    let footer = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(footer), layout[7]);
+}
+
 fn draw_delete_account_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let popup = centered_rect(64, 12, area);
     frame.render_widget(Clear, popup);
@@ -1661,6 +1728,27 @@ fn toggle_span(enabled: bool) -> ValueSpan {
             text: "○ off".to_string(),
             style: Style::default().fg(theme::TEXT_FAINT()),
         }
+    }
+}
+
+fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
+    match mode {
+        RightSidebarMode::On => ValueSpan {
+            text: "● on".to_string(),
+            style: Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        },
+        RightSidebarMode::Off => ValueSpan {
+            text: "○ off".to_string(),
+            style: Style::default().fg(theme::TEXT_FAINT()),
+        },
+        RightSidebarMode::Custom => ValueSpan {
+            text: "◐ custom ... ⏎".to_string(),
+            style: Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        },
     }
 }
 

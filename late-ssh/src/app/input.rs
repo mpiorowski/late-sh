@@ -4,6 +4,7 @@ use super::{
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
+use late_core::models::{profile::Profile, user::RightSidebarMode};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     widgets::{Block, Borders},
@@ -1495,10 +1496,30 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
 fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    if app.profile_state.profile().show_right_sidebar {
+    if profile_right_sidebar_enabled(app.profile_state.profile(), app.screen) {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
     } else {
         inner
+    }
+}
+
+fn profile_right_sidebar_enabled(profile: &Profile, screen: Screen) -> bool {
+    match profile.right_sidebar_mode {
+        RightSidebarMode::On => true,
+        RightSidebarMode::Off => false,
+        RightSidebarMode::Custom => profile
+            .right_sidebar_screens
+            .contains(&screen_number(screen)),
+    }
+}
+
+fn screen_number(screen: Screen) -> u8 {
+    match screen {
+        Screen::Dashboard => 1,
+        Screen::Chat => 2,
+        Screen::Arcade => 3,
+        Screen::Rooms => 4,
+        Screen::Artboard => 5,
     }
 }
 
