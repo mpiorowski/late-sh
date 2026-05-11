@@ -1158,6 +1158,11 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
     let ctx = InputContext::from_app(app);
     match paste_target(ctx) {
         PasteTarget::ChatComposer => {
+            // Si le contenu est une image → upload au lieu d'insérer du texte
+            if crate::app::chat::image_upload::detect_image_mime(pasted).is_some() {
+                trigger_image_upload(app, pasted.to_vec());
+                return;
+            }
             insert_pasted_text(pasted, |ch| app.chat.composer_push(ch));
             app.chat.update_autocomplete();
         }
@@ -1172,6 +1177,43 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
         }
         PasteTarget::None => {}
     }
+}
+
+fn trigger_image_upload(app: &mut App, data: Vec<u8>) {
+    use crate::app::chat::image_upload::{detect_image_mime, upload_image_bytes};
+    let mime = match detect_image_mime(&data) {
+        Some(m) => m,
+        None => return,
+    };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.chat.image_upload_rx = Some(rx);
+    app.chat.image_upload_pending = true;
+    let mime = mime.to_string();
+    tokio::spawn(async move {
+        let result = upload_image_bytes(data, &mime)
+            .await
+            .map_err(|e| e.to_string());
+        let _ = tx.send(result);
+    });
+    app.banner = Some(crate::app::common::primitives::Banner::success(
+        "⬆ Image détectée — upload en cours...",
+    ));
+}
+
+pub(crate) fn trigger_url_image_upload(app: &mut App, url: String) {
+    use crate::app::chat::image_upload::download_and_reupload_url;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.chat.image_upload_rx = Some(rx);
+    app.chat.image_upload_pending = true;
+    tokio::spawn(async move {
+        let result = download_and_reupload_url(url)
+            .await
+            .map_err(|e| e.to_string());
+        let _ = tx.send(result);
+    });
+    app.banner = Some(crate::app::common::primitives::Banner::success(
+        "⬆ Téléchargement et upload en cours...",
+    ));
 }
 
 fn paste_target(ctx: InputContext) -> PasteTarget {

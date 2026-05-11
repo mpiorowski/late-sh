@@ -65,6 +65,7 @@ pub struct DashboardChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
 }
 
 /// Shared composer block rendering for both the dashboard card and the chat
@@ -349,6 +350,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 badges: view.badges,
                 bonsai_glyphs: view.bonsai_glyphs,
                 message_reactions: view.message_reactions,
+                inline_images: view.inline_images,
             },
         );
         lines = visible_chat_rows(
@@ -393,6 +395,7 @@ struct ChatRowsContext<'a> {
     badges: &'a HashMap<Uuid, BadgeTier>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
 }
 
 #[derive(Default)]
@@ -525,6 +528,7 @@ fn ensure_chat_rows_cache(
             body_style,
             mentions_us,
             is_continuation,
+            ctx.inline_images.get(&msg.id).map(Vec::as_slice),
             reactions,
         );
         all_rows.extend(msg_lines);
@@ -778,6 +782,7 @@ pub struct ChatRenderInput<'a> {
     pub countries: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
@@ -860,6 +865,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub countries: &'a HashMap<Uuid, String>,
     pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
     pub highlighted_message_id: Option<Uuid>,
@@ -908,6 +914,7 @@ pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoom
             badges: view.badges,
             bonsai_glyphs: view.bonsai_glyphs,
             message_reactions: view.message_reactions,
+            inline_images: view.inline_images,
         },
     );
     let mut lines = visible_chat_rows(
@@ -1543,6 +1550,7 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                         badges: view.badges,
                         bonsai_glyphs: view.bonsai_glyphs,
                         message_reactions: view.message_reactions,
+                        inline_images: view.inline_images,
                     },
                 );
                 let mut lines = visible_chat_rows(

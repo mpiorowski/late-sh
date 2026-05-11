@@ -1,5 +1,7 @@
 pub mod discover;
 pub mod feeds;
+pub mod image_upload;
+pub mod inline_image;
 pub mod input;
 pub mod news;
 pub mod notifications;

@@ -1117,6 +1117,7 @@ mod tests {
         let countries: HashMap<Uuid, String> = HashMap::new();
         let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let inline_images: HashMap<Uuid, Vec<ratatui::text::Line<'static>>> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
         let rooms_snapshot = RoomsSnapshot::default();
@@ -1164,6 +1165,7 @@ mod tests {
                             reply_author: None,
                             is_editing: false,
                             bonsai_glyphs: &bonsai_glyphs,
+                            inline_images: &inline_images,
                         },
                     },
                 );
@@ -1203,6 +1205,7 @@ mod tests {
         let countries: HashMap<Uuid, String> = HashMap::new();
         let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let inline_images: HashMap<Uuid, Vec<ratatui::text::Line<'static>>> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
         let rooms_snapshot = RoomsSnapshot::default();
@@ -1249,6 +1252,7 @@ mod tests {
                             reply_author: None,
                             is_editing: false,
                             bonsai_glyphs: &bonsai_glyphs,
+                            inline_images: &inline_images,
                         },
                     },
                 );
@@ -1506,6 +1510,7 @@ mod tests {
         let countries: HashMap<Uuid, String> = HashMap::new();
         let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let inline_images: HashMap<Uuid, Vec<ratatui::text::Line<'static>>> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
         let rooms_snapshot = RoomsSnapshot::default();
@@ -1553,6 +1558,7 @@ mod tests {
                             reply_author: None,
                             is_editing: false,
                             bonsai_glyphs: &bonsai_glyphs,
+                            inline_images: &inline_images,
                         },
                     },
                 );
@@ -1590,6 +1596,7 @@ mod tests {
         let countries: HashMap<Uuid, String> = HashMap::new();
         let badges: HashMap<Uuid, BadgeTier> = HashMap::new();
         let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
+        let inline_images: HashMap<Uuid, Vec<ratatui::text::Line<'static>>> = HashMap::new();
         let message_reactions = HashMap::new();
         let composer = ratatui_textarea::TextArea::default();
         let rooms_snapshot = RoomsSnapshot::default();
@@ -1642,6 +1649,7 @@ mod tests {
                             reply_author: None,
                             is_editing: false,
                             bonsai_glyphs: &bonsai_glyphs,
+                            inline_images: &inline_images,
                         },
                     },
                 );

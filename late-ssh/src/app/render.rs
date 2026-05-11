@@ -333,6 +333,7 @@ impl App {
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
+                inline_images: &self.chat.inline_image_cache,
             },
         };
         let news_view = chat::news::ui::ArticleListView {
@@ -410,6 +411,7 @@ impl App {
             countries: chat_countries,
             badges: &chat_badges,
             message_reactions,
+            inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
@@ -458,6 +460,7 @@ impl App {
                     countries: chat_countries,
                     badges: &chat_badges,
                     message_reactions,
+                    inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
                     selected_message_id: self.chat.selected_message_id,
                     highlighted_message_id: self.chat.highlighted_message_id,

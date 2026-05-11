@@ -31,6 +31,25 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        // Poll résultat upload image
+        if let Some(result) = self.chat.poll_image_upload() {
+            match result {
+                Ok(url) => {
+                    if let Some(room_id) = self.chat.selected_room_id {
+                        self.chat.start_composing_in_room(room_id);
+                        self.chat.composer_push_str(&url);
+                    }
+                    self.banner = Some(crate::app::common::primitives::Banner::success(
+                        "✓ Image uploaded — press Enter to send",
+                    ));
+                }
+                Err(msg) => {
+                    self.banner =
+                        Some(crate::app::common::primitives::Banner::error(&msg));
+                }
+            }
+        }
+        self.chat.poll_inline_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state
                 .append_result(output.success, output.lines);
