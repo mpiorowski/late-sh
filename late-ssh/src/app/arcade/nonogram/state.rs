@@ -111,7 +111,7 @@ impl State {
                 .iter()
                 .find(|game| {
                     game.mode == "daily"
-                        && game.size_key == difficulty.key
+                        && game.difficulty_key == difficulty.key
                         && is_current_daily_game(game.puzzle_date, today)
                 })
                 .and_then(|game| snapshot_from_game(game, pack))
@@ -123,7 +123,7 @@ impl State {
 
             if let Some(snapshot) = saved_games
                 .iter()
-                .find(|game| game.mode == "personal" && game.size_key == difficulty.key)
+                .find(|game| game.mode == "personal" && game.difficulty_key == difficulty.key)
                 .and_then(|game| snapshot_from_game(game, pack))
             {
                 personal_snapshots.insert(difficulty.key.to_string(), snapshot);
@@ -442,7 +442,7 @@ impl State {
         self.svc.save_game_task(GameParams {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
-            size_key: self.difficulty_key().to_string(),
+            difficulty_key: self.difficulty_key().to_string(),
             puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
             puzzle_id: self.current_puzzle_id.clone(),
             player_grid: serde_json::to_value(&self.player_grid).unwrap_or_default(),

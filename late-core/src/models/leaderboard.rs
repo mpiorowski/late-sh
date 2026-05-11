@@ -152,7 +152,7 @@ async fn fetch_arcade_champions(client: &Client, limit: i64) -> Result<Vec<Ranke
                 FROM sudoku_daily_wins
                 WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
                 UNION ALL
-                SELECT user_id, size_key AS difficulty_key
+                SELECT user_id, difficulty_key
                 FROM nonogram_daily_wins
                 WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
                 UNION ALL

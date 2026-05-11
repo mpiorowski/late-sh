@@ -19,7 +19,7 @@ async fn saves_daily_and_personal_nonogram_slots_per_difficulty() {
         GameParams {
             user_id: user.id,
             mode: "daily".to_string(),
-            size_key: "easy".to_string(),
+            difficulty_key: "easy".to_string(),
             puzzle_date: Some(Utc::now().date_naive()),
             puzzle_id: "easy-000001".to_string(),
             player_grid: player_grid(1, 5, 5),
@@ -35,7 +35,7 @@ async fn saves_daily_and_personal_nonogram_slots_per_difficulty() {
         GameParams {
             user_id: user.id,
             mode: "personal".to_string(),
-            size_key: "easy".to_string(),
+            difficulty_key: "easy".to_string(),
             puzzle_date: None,
             puzzle_id: "easy-000002".to_string(),
             player_grid: player_grid(0, 5, 5),
@@ -51,7 +51,7 @@ async fn saves_daily_and_personal_nonogram_slots_per_difficulty() {
         GameParams {
             user_id: user.id,
             mode: "personal".to_string(),
-            size_key: "medium".to_string(),
+            difficulty_key: "medium".to_string(),
             puzzle_date: None,
             puzzle_id: "medium-000001".to_string(),
             player_grid: player_grid(1, 10, 10),
@@ -70,17 +70,17 @@ async fn saves_daily_and_personal_nonogram_slots_per_difficulty() {
     assert!(
         games
             .iter()
-            .any(|game| game.mode == "daily" && game.size_key == "easy")
+            .any(|game| game.mode == "daily" && game.difficulty_key == "easy")
     );
     assert!(
         games
             .iter()
-            .any(|game| game.mode == "personal" && game.size_key == "easy")
+            .any(|game| game.mode == "personal" && game.difficulty_key == "easy")
     );
     assert!(
         games
             .iter()
-            .any(|game| game.mode == "personal" && game.size_key == "medium")
+            .any(|game| game.mode == "personal" && game.difficulty_key == "medium")
     );
 }
 
@@ -96,7 +96,7 @@ async fn upserting_same_nonogram_slot_updates_existing_row() {
         GameParams {
             user_id: user.id,
             mode: "daily".to_string(),
-            size_key: "hard".to_string(),
+            difficulty_key: "hard".to_string(),
             puzzle_date: Some(today),
             puzzle_id: "hard-000001".to_string(),
             player_grid: player_grid(0, 8, 8),
@@ -112,7 +112,7 @@ async fn upserting_same_nonogram_slot_updates_existing_row() {
         GameParams {
             user_id: user.id,
             mode: "daily".to_string(),
-            size_key: "hard".to_string(),
+            difficulty_key: "hard".to_string(),
             puzzle_date: Some(today),
             puzzle_id: "hard-000003".to_string(),
             player_grid: player_grid(1, 8, 8),
