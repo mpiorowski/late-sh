@@ -1,5 +1,5 @@
 use super::{
-    chat, dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm,
+    chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
     room_search_modal, settings_modal, state::App, terminal_help_modal,
 };
 use crate::app::common::primitives::Screen;
@@ -641,6 +641,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // Ctrl+G (BEL, 0x07) is the global leaderboard chord. Artboard keeps
+    // Ctrl+G for swatch slot 5.
+    if matches!(event, ParsedInput::Byte(0x07)) && app.screen != Screen::Artboard {
+        open_hub_modal_globally(app);
+        return;
+    }
+
     // Ctrl+L (0x0C) is the global "why can't I copy/click links?" chord.
     // Toggles the terminal-help modal so users can dismiss with the same key.
     if matches!(event, ParsedInput::Byte(0x0C)) && !app.show_mod_modal {
@@ -665,6 +672,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     if app.show_mod_modal {
         mod_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_hub_modal {
+        hub::input::handle_input(app, event);
         return;
     }
 
@@ -708,9 +720,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     // Screen-specific rich event handlers get first crack at
     // Mouse/Home/modified-arrow events before the generic dispatch below.
-    if ctx.screen == Screen::Games
+    if ctx.screen == Screen::Arcade
         && app.is_playing_game
-        && crate::app::games::input::handle_event(app, &event)
+        && crate::app::arcade::input::handle_event(app, &event)
     {
         return;
     }
@@ -786,7 +798,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             {
                 return;
             }
-            if ctx.screen == Screen::Games && app.is_playing_game {
+            if ctx.screen == Screen::Arcade && app.is_playing_game {
                 return;
             }
             if artboard_blocks_global_page_switch(app, ctx.screen) {
@@ -950,7 +962,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         // keystroke as the glyph-picker open key — let it fall through
         // to the byte dispatch below.
         ParsedInput::Byte(0x1D)
-            if !((ctx.screen == Screen::Games && app.is_playing_game)
+            if !((ctx.screen == Screen::Arcade && app.is_playing_game)
                 || (ctx.screen == Screen::Artboard && app.artboard_interacting)) =>
         {
             try_open_icon_picker(app)
@@ -969,16 +981,16 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 }
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
-    if ctx.screen == Screen::Games && app.is_playing_game {
+    if ctx.screen == Screen::Arcade && app.is_playing_game {
         match event {
             ParsedInput::Byte(byte) => {
-                crate::app::games::input::handle_key(app, *byte);
+                crate::app::arcade::input::handle_key(app, *byte);
             }
             ParsedInput::Char(ch) if ch.is_ascii() => {
-                crate::app::games::input::handle_key(app, *ch as u8);
+                crate::app::arcade::input::handle_key(app, *ch as u8);
             }
             ParsedInput::Arrow(key) => {
-                crate::app::games::input::handle_arrow(app, *key);
+                crate::app::arcade::input::handle_arrow(app, *key);
             }
             _ => {}
         }
@@ -1061,6 +1073,10 @@ fn dispatch_escape(app: &mut App) {
         app.show_mod_modal = false;
         return;
     }
+    if app.show_hub_modal {
+        hub::input::handle_escape(app);
+        return;
+    }
     if app.show_settings {
         settings_modal::input::handle_escape(app);
         return;
@@ -1135,7 +1151,7 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
     }
-    if ctx.screen == Screen::Games && app.is_playing_game {
+    if ctx.screen == Screen::Arcade && app.is_playing_game {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
@@ -1257,7 +1273,7 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         // cells in " late.sh | 1 2 3 4 5 | ..." land on these columns.
         12 => Some(Screen::Dashboard),
         14 => Some(Screen::Chat),
-        16 => Some(Screen::Games),
+        16 => Some(Screen::Arcade),
         18 => Some(Screen::Rooms),
         20 => Some(Screen::Artboard),
         _ => None,
@@ -1510,7 +1526,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
             true
         }
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
-        Screen::Games => crate::app::games::input::handle_arrow(app, key),
+        Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
     }
@@ -1599,6 +1615,7 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 fn open_room_search_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
+    app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_settings = false;
@@ -1617,6 +1634,7 @@ fn open_room_search_modal_globally(app: &mut App) {
 fn open_settings_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
+    app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_terminal_help = false;
@@ -1635,9 +1653,30 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
+fn open_hub_modal_globally(app: &mut App) {
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_settings = false;
+    app.show_terminal_help = false;
+    app.show_web_chat_qr = false;
+    app.web_chat_qr_url = None;
+    app.show_cli_install_modal = false;
+    app.show_quit_confirm = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.hub_state
+        .open(crate::app::hub::state::HubTab::Leaderboard);
+    app.show_hub_modal = true;
+}
+
 fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
+    app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_settings = false;
@@ -1705,7 +1744,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    if ctx.screen == Screen::Games && app.is_playing_game {
+    if ctx.screen == Screen::Arcade && app.is_playing_game {
         return false;
     }
 
@@ -1811,6 +1850,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_settings = false;
+            app.show_hub_modal = false;
             app.show_quit_confirm = false;
             app.show_bonsai_modal = true;
             true
@@ -1827,7 +1867,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'3' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Games);
+            app.set_screen(Screen::Arcade);
             true
         }
         b'4' if !artboard_blocks_page_switch => {
@@ -1868,8 +1908,8 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Chat => {
             chat::input::handle_byte(app, byte);
         }
-        Screen::Games => {
-            crate::app::games::input::handle_key(app, byte);
+        Screen::Arcade => {
+            crate::app::arcade::input::handle_key(app, byte);
         }
         Screen::Rooms => {
             crate::app::rooms::input::handle_key(app, byte);
@@ -2096,14 +2136,14 @@ mod tests {
     fn compose_room_switch_only_allowed_on_chat_screen() {
         assert!(compose_room_switch_allowed(Screen::Chat));
         assert!(!compose_room_switch_allowed(Screen::Dashboard));
-        assert!(!compose_room_switch_allowed(Screen::Games));
+        assert!(!compose_room_switch_allowed(Screen::Arcade));
     }
 
     #[test]
     fn topbar_screen_hit_test_maps_screen_digits() {
         assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
         assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Chat));
-        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Games));
+        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Arcade));
         assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Rooms));
         assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
         assert_eq!(topbar_screen_hit_test(13, 0), None);

@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
-    games::{
+    arcade::{
         cards::{CardRank, CardSuit, PlayingCard},
         chips::svc::ChipService,
     },

@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::{common::theme, games::ui::info_label_value};
+use crate::app::{arcade::ui::info_label_value, common::theme};
 
 use super::data::lines_for;
 use super::state::{BrushMode, HelpTab, PAINT_PALETTE, PRIMARY_SWATCH_IDX, State};

@@ -11,9 +11,9 @@ pub const CHIP_FLOOR: i64 = 100;
 /// Map a difficulty/size key to its chip bonus.
 pub fn difficulty_bonus(key: &str) -> i64 {
     match key {
-        "easy" | "10x10" | "draw-1" => 50,
-        "medium" | "15x15" => 100,
-        "hard" | "20x20" | "draw-3" => 150,
+        "easy" | "draw-1" => 50,
+        "medium" => 100,
+        "hard" | "draw-3" => 150,
         _ => 50,
     }
 }
@@ -63,12 +63,22 @@ impl UserChips {
     pub async fn add_bonus(client: &Client, user_id: Uuid, amount: i64) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO user_chips (user_id, balance)
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO UPDATE SET
-                   balance = user_chips.balance + $2,
-                   updated = current_timestamp
-                 RETURNING *",
+                "WITH upserted AS (
+                    INSERT INTO user_chips (user_id, balance)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                      balance = user_chips.balance + $2,
+                      updated = current_timestamp
+                    RETURNING *
+                 ),
+                 ledger AS (
+                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
+                    SELECT user_id, $2, 'chip_credit', 'user_chips'
+                    FROM upserted
+                    WHERE $2 <> 0
+                    RETURNING 1
+                 )
+                 SELECT * FROM upserted",
                 &[&user_id, &amount],
             )
             .await?;
@@ -81,10 +91,20 @@ impl UserChips {
     pub async fn deduct(client: &Client, user_id: Uuid, amount: i64) -> Result<Option<Self>> {
         let row = client
             .query_opt(
-                "UPDATE user_chips
-                 SET balance = balance - $2, updated = current_timestamp
-                 WHERE user_id = $1 AND balance >= $2
-                 RETURNING *",
+                "WITH updated AS (
+                    UPDATE user_chips
+                    SET balance = balance - $2, updated = current_timestamp
+                    WHERE user_id = $1 AND balance >= $2
+                    RETURNING *
+                 ),
+                 ledger AS (
+                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
+                    SELECT user_id, -$2, 'chip_debit', 'user_chips'
+                    FROM updated
+                    WHERE $2 <> 0
+                    RETURNING 1
+                 )
+                 SELECT * FROM updated",
                 &[&user_id, &amount],
             )
             .await?;
@@ -94,12 +114,31 @@ impl UserChips {
     pub async fn restore_floor(client: &Client, user_id: Uuid) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO user_chips (user_id, balance)
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO UPDATE SET
-                   balance = GREATEST(user_chips.balance, $2),
-                   updated = current_timestamp
-                 RETURNING *",
+                "WITH prior AS (
+                    SELECT balance
+                    FROM user_chips
+                    WHERE user_id = $1
+                    FOR UPDATE
+                 ),
+                 upserted AS (
+                    INSERT INTO user_chips (user_id, balance)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                      balance = GREATEST(user_chips.balance, $2),
+                      updated = current_timestamp
+                    RETURNING *
+                 ),
+                 restored AS (
+                    SELECT GREATEST($2 - COALESCE((SELECT balance FROM prior), $2), 0)::bigint AS delta
+                 ),
+                 ledger AS (
+                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
+                    SELECT $1, delta, 'floor_restore', 'user_chips'
+                    FROM restored
+                    WHERE delta > 0
+                    RETURNING 1
+                 )
+                 SELECT * FROM upserted",
                 &[&user_id, &CHIP_FLOOR],
             )
             .await?;
@@ -157,9 +196,6 @@ mod tests {
         assert_eq!(difficulty_bonus("easy"), 50);
         assert_eq!(difficulty_bonus("medium"), 100);
         assert_eq!(difficulty_bonus("hard"), 150);
-        assert_eq!(difficulty_bonus("10x10"), 50);
-        assert_eq!(difficulty_bonus("15x15"), 100);
-        assert_eq!(difficulty_bonus("20x20"), 150);
         assert_eq!(difficulty_bonus("draw-1"), 50);
         assert_eq!(difficulty_bonus("draw-3"), 150);
         assert_eq!(difficulty_bonus("unknown"), 50);

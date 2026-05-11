@@ -1463,7 +1463,7 @@ impl SettingsModalState {
                 enable_background_color: self.draft.enable_background_color,
                 show_dashboard_header: self.draft.show_dashboard_header,
                 show_right_sidebar: self.draft.show_right_sidebar,
-                show_games_sidebar: self.draft.show_games_sidebar,
+                show_arcade_sidebar: self.draft.show_arcade_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
             },

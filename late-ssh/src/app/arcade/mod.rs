@@ -1,0 +1,11 @@
+pub mod cards;
+pub mod chips;
+pub mod input;
+pub mod minesweeper;
+pub mod nonogram;
+pub mod snake;
+pub mod solitaire;
+pub mod sudoku;
+pub mod tetris;
+pub mod twenty_forty_eight;
+pub mod ui;

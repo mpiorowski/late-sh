@@ -144,8 +144,8 @@ late-ssh/tests/
   bonsai/
     main.rs                   # mirrors app/bonsai/
     svc.rs
-  games/
-    main.rs                   # mirrors app/games/ — all game tests compile here
+  arcade/
+    main.rs                   # mirrors app/arcade/ — all game tests compile here
     minesweeper/
       mod.rs
       svc.rs

@@ -142,10 +142,10 @@ async fn main() -> anyhow::Result<()> {
     let showcase_service = ShowcaseService::new(db.clone());
     let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
-        late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
-    let tetris_service = late_ssh::app::games::tetris::svc::TetrisService::new(db.clone());
-    let snake_service = late_ssh::app::games::snake::svc::SnakeService::new(db.clone());
-    let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
+        late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
+    let tetris_service = late_ssh::app::arcade::tetris::svc::TetrisService::new(db.clone());
+    let snake_service = late_ssh::app::arcade::snake::svc::SnakeService::new(db.clone());
+    let chip_service = late_ssh::app::arcade::chips::svc::ChipService::new(db.clone());
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
     rooms_service.refresh_task();
     rooms_service.cleanup_inactive_tables_task();
@@ -169,22 +169,22 @@ async fn main() -> anyhow::Result<()> {
         tictactoe_table_manager,
     );
     room_game_registry.start_general_seat_announcer_task(chat_service.clone());
-    let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
+    let sudoku_service = late_ssh::app::arcade::sudoku::svc::SudokuService::new(
         db.clone(),
         activity_tx.clone(),
         chip_service.clone(),
     );
-    let nonogram_service = late_ssh::app::games::nonogram::svc::NonogramService::new(
+    let nonogram_service = late_ssh::app::arcade::nonogram::svc::NonogramService::new(
         db.clone(),
         activity_tx.clone(),
         chip_service.clone(),
     );
-    let solitaire_service = late_ssh::app::games::solitaire::svc::SolitaireService::new(
+    let solitaire_service = late_ssh::app::arcade::solitaire::svc::SolitaireService::new(
         db.clone(),
         activity_tx.clone(),
         chip_service.clone(),
     );
-    let minesweeper_service = late_ssh::app::games::minesweeper::svc::MinesweeperService::new(
+    let minesweeper_service = late_ssh::app::arcade::minesweeper::svc::MinesweeperService::new(
         db.clone(),
         activity_tx.clone(),
         chip_service.clone(),
@@ -213,13 +213,12 @@ async fn main() -> anyhow::Result<()> {
             .with_force_admin(config.force_admin)
             .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone()),
     );
-    let leaderboard_service =
-        late_ssh::app::games::leaderboard::svc::LeaderboardService::new(db.clone());
-    let nonogram_library = match late_ssh::app::games::nonogram::state::load_default_library() {
+    let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
+    let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {
         Ok(library) => library,
         Err(err) => {
             tracing::warn!(error = ?err, "failed to load nonogram asset packs; continuing with empty library");
-            late_ssh::app::games::nonogram::state::Library::default()
+            late_ssh::app::arcade::nonogram::state::Library::default()
         }
     };
     let ghost_service = GhostService::new(

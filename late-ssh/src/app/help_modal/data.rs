@@ -99,7 +99,7 @@ pub fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not an Arcade streak badge, country flag, or custom contributor icon.\n",
+        - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not a country flag or custom contributor icon.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -133,6 +133,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /settings          open your settings modal",
         "  /exit              open quit confirm",
         "  Ctrl+O             open your settings modal anywhere",
+        "  Ctrl+G             open Hub",
         "  Ctrl+/             search and jump to a room or DM",
         "",
         "Messages",
@@ -534,7 +535,7 @@ fn arcade_help_lines() -> Vec<String> {
     [
         "The Arcade and leaderboard",
         "",
-        "The Arcade mixes daily puzzle runs with endless score chases. Your progress feeds the shared leaderboard and streak system.",
+        "The Arcade mixes daily puzzle runs with endless score chases. Ctrl+G opens Hub with monthly leaderboards.",
         "",
         "Games in rotation",
         "  High score: 2048, Tetris",
@@ -551,10 +552,11 @@ fn arcade_help_lines() -> Vec<String> {
         "  Esc               return Artboard to view mode",
         "",
         "What matters",
-        "  daily puzzles build streaks",
+        "  top chips tracks positive chip earnings this month",
+        "  arcade champion weights daily puzzle wins by difficulty",
+        "  Tetris and 2048 boards track monthly score runs",
         "  wins can award Late Chips",
-        "  leaderboard tracks streak leaders, all-time highs, and chip balances",
-        "  Arcade streaks stay in Arcade/leaderboard surfaces; they are not chat username badges",
+        "  leaderboard tracks Arcade Wins, all-time highs, and chip balances",
         "",
         "Why it exists",
         "",

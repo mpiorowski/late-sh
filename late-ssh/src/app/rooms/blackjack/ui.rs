@@ -7,11 +7,11 @@ use ratatui::{
 };
 
 use crate::app::{
-    common::theme,
-    games::{
+    arcade::{
         cards::{AsciiCardTheme, PlayingCard},
         ui::{draw_game_frame_with_info_sidebar, info_label_value, info_tagline, key_hint},
     },
+    common::theme,
     rooms::blackjack::state::{
         BlackjackSeat, BlackjackSnapshot, Outcome, Phase, SeatAction, SeatPhase, State, is_bust,
     },
@@ -1363,7 +1363,7 @@ fn card_width(theme: AsciiCardTheme) -> usize {
 }
 
 fn card_color(card: PlayingCard) -> ratatui::style::Color {
-    use crate::app::games::cards::CardSuit;
+    use crate::app::arcade::cards::CardSuit;
     match card.suit {
         CardSuit::Hearts | CardSuit::Diamonds => theme::ERROR(),
         CardSuit::Clubs | CardSuit::Spades => theme::TEXT_BRIGHT(),

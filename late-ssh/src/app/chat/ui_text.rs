@@ -238,6 +238,10 @@ fn wrap_news_to_lines(
             Span::styled(pad_to_display_width(right, right_width), right_style),
         ]));
     }
+    lines.push(Line::from(vec![
+        pad,
+        Span::styled("─".repeat(inner_width), border_style),
+    ]));
     lines
 }
 
@@ -335,11 +339,6 @@ fn wrap_room_seat_to_lines(
     if right_rows.is_empty() {
         right_rows.push((payload.title.clone(), title_style));
     }
-
-    lines.push(Line::from(vec![
-        pad.clone(),
-        Span::styled("─".repeat(inner_width), border_style),
-    ]));
 
     let row_count = payload.ascii_lines.len().max(right_rows.len()).max(1);
     for idx in 0..row_count {
@@ -620,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn wrap_news_to_lines_renders_top_rule_with_ascii_left() {
+    fn wrap_news_to_lines_renders_rules_with_ascii_left() {
         let lines = wrap_news_to_lines(
             "[1m]",
             "mat: ",
@@ -656,6 +655,13 @@ mod tests {
         assert!(!rendered.contains("└"));
         assert!(!rendered.contains("┘"));
         assert!(rendered.contains("──"));
+        assert!(
+            rendered
+                .lines()
+                .filter(|line| line.trim().chars().all(|ch| ch == '─'))
+                .count()
+                >= 2
+        );
         assert!(rendered.contains(".:-"));
         assert!(rendered.contains(" │ "));
         assert!(rendered.contains("Title"));

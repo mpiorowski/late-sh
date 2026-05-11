@@ -2,20 +2,20 @@
 
 ## Metadata
 - Scope: full rewrite of the chip economy, leaderboard system, and a new marketplace.
-- Status: design / pre-implementation. Discussed and agreed at a high level; pending second-LLM review and final pricing tweaks.
-- Last updated: 2026-05-09.
+- Status: in progress. Ledger/event foundations and the Hub leaderboard surface are partially implemented; marketplace remains design-stage.
+- Last updated: 2026-05-11.
 
 ## Vision
 
-Right now chips exist but nobody cares about them. The 100-chip floor means everyone is always topped up; arcade games give nothing; the streak leaderboard rewards low-effort daily-easy clicks.
+Right now chips exist but still need a stronger loop. The 100-chip floor keeps multiplayer approachable, but the economy needs better earning history, better leaderboard surfaces, and eventually meaningful sinks.
 
 The rewrite has three big pieces:
 
-1. **Every game pays chips.** Arcade wins pay tiered amounts (easy / mid / hard). Score-based games (Tetris, 2048) pay at game-over scaled to score. Multiplayer wins already pay through pots. TTT pays a small flat amount.
-2. **Leaderboards are split, weighted, and monthly-reset.** Streaks are gone. Three categories: top monthly chip earners, weighted arcade champion, and Tetris/2048 monthly high score boards.
+1. **Every game creates useful economy history.** Arcade daily wins and score games feed chip/score events; multiplayer wins already pay through pots. Score games are now Tetris, 2048, and Snake.
+2. **Hub owns the cross-product leaderboard/economy surface.** The old dedicated leaderboard modal is becoming `late-ssh/src/app/hub/`: Leaderboard first, then Dailies, Shop, and Events. Hub may summarize Arcade, Rooms, and economy state but does not own those runtimes.
 3. **Marketplace gives chips a sink.** 80+ cosmetic and consumable items across chat, profile, bonsai garden, aquarium, artboard, games, music, themes, and seasonal drops. Years-long collection game, not a one-month checklist.
 
-End-of-month resets snapshot top-3 in each leaderboard category to a permanent profile-awards table. Lifetime balances and lifetime stats persist; only "this month earned" and leaderboard positions reset.
+End-of-month snapshots should eventually persist top-3 monthly winners to profile awards. Lifetime balances and lifetime stats persist; monthly boards re-window from ledger/event timestamps.
 
 ## Earn rates
 
@@ -28,13 +28,14 @@ All amounts are chips. "First daily" is a 2x multiplier on the first solve of th
 | Sudoku / nonogram / etc hard   | 1000          | 500           | natural        |
 | Tetris                         | score / 500   | score / 500   | 500/day        |
 | 2048                           | score / 500   | score / 500   | 500/day        |
+| Snake                          | score / 500   | score / 500   | 500/day        |
 | Tic-Tac-Toe win                | 10            | 10            | natural        |
 | Blackjack                      | pot only      | pot only      | none           |
 | Poker                          | pot only      | pot only      | none           |
 
 Notes:
 - Daily-puzzle games (Sudoku, Nonogram, Solitaire, Minesweeper) are naturally rate-limited because they only generate one puzzle per day. The "first daily" bonus is the only one realistically reachable.
-- Tetris/2048 are uncapped per attempt but capped per day so AFK or scripted runs cannot farm. `score / 500` is a starting point, tune from telemetry.
+- Tetris/2048/Snake are uncapped per attempt but should be capped per day if/when score-based chip payouts are enabled, so AFK or scripted runs cannot farm. `score / 500` is a starting point, tune from telemetry.
 - Blackjack and Poker do not get a separate chip credit on top of the pot. The pot is the reward.
 - TTT pays only the winner. Draws pay nothing.
 
@@ -42,16 +43,21 @@ A top arcade player clearing all daily-hards earns roughly 4000 chips on first r
 
 ## Leaderboards
 
-Three boards. All windowed to the current calendar month (UTC). All reset at month rollover.
+Hub's Leaderboard tab is the current surface. The readable layout is:
+
+- Left column: monthly chip earnings and daily streaks.
+- Right column: score games, one panel each for Tetris, 2048, and Snake.
+- Each score-game panel shows **monthly** and **all-time top 3** side by side.
+
+Current data model still carries some legacy fields while the rewrite is in progress. Monthly boards are windowed to the current calendar month (UTC); all-time boards are lifetime high-score tables.
 
 1. **Top chips** — sum of chips earned this month per user. Top 10 visible; full list paginated; "your rank" shown.
    - Tracks **earned**, not net balance and not lifetime balance. Hoarders do not dominate. Spending does not reduce leaderboard position.
-2. **Arcade champion** — weighted points sum across all daily-puzzle games this month. Easy = 1, mid = 3, hard = 5. Top 10 visible; full list paginated.
-3. **High scores** — Tetris and 2048, best score this month per user. Two boards, top 10 each.
+2. **Daily streaks** — currently still displayed. Do not treat username glyphs as streak badges; chat username glyphs belong to bonsai state.
+3. **Arcade champion** — weighted points sum across all daily-puzzle games this month. Easy = 1, mid = 3, hard = 5. Still useful data, but it is not currently the primary Hub panel.
+4. **High scores** — Tetris, 2048, and Snake. Monthly boards use `game_score_events` plus legacy table fallback; all-time boards use high-score tables.
 
-Streak leaderboard is removed entirely.
-
-Each leaderboard supports an "everyone + your rank" paginated view. UI is deferred (out of scope for this plan; just confirm the data exposes ranks).
+Future expanded views should support an "everyone + your rank" paginated/drill-down view. The compact Hub tab stays scannable.
 
 ## Marketplace
 
@@ -217,17 +223,17 @@ UI invariants:
 
 ## Foundation: chip ledger
 
-Before any of the visible pieces, build the unglamorous core:
+Status: partially implemented. `chip_ledger` and `game_score_events` exist, and current chip mutations write ledger rows.
 
-- New table `chip_ledger`: `(id, user_id, delta, reason, source_kind, source_ref, created_at)`.
-- Every chip credit and debit goes through it. Replaces ad-hoc balance updates.
+- Table `chip_ledger`: `(id, user_id, delta, reason, source_kind, source_ref, created_at)`.
+- Every chip credit and debit should go through it. Current implementation records generic `chip_credit`, `chip_debit`, and `floor_restore`; richer reason/source taxonomy remains future work.
 - `reason` is structured (enum): `arcade_win`, `tetris_score`, `2048_score`, `ttt_win`, `blackjack_pot`, `poker_pot`, `marketplace_purchase`, `gift_sent`, `gift_received`, `monthly_reset` (none, kept for parity), `admin_grant`, etc.
 - Monthly leaderboard "top chips" is `SUM(delta) WHERE delta > 0 AND created_at >= start_of_month` per user. Marketplace spends do not reduce leaderboard position because the filter excludes negative deltas.
 - Per-source daily caps enforced at write time: query sum of positive deltas for that source today, reject if over cap.
 - Daily-first-win bonus enforced at write time: query existence of any prior credit for that source today; if none, write at 2x rate.
 - All anti-cheat / refund / "spent this month" / monthly reset logic queryable from one place.
 
-This is the keystone. Without it, monthly leaderboards are guesswork and marketplace history is lost.
+This is the keystone. Without it, monthly leaderboards are guesswork and marketplace history is lost. If ledger volume grows, add monthly rollups instead of repeatedly summing raw rows.
 
 ## Chip floor decision
 
@@ -239,32 +245,32 @@ If we decide to remove it later, the right replacement is a **one-time signup gr
 
 ### Phase 1: Chip ledger + earn rates
 
-- Migration: `chip_ledger` table.
-- `ChipService::credit(user_id, delta, reason, source_kind, source_ref) -> Result<i64>`. Returns new balance. Enforces daily caps and first-daily 2x.
-- `ChipService::debit(...)` symmetric. Used for marketplace.
-- Backfill `user_chips.balance` is unchanged, but every mutation also writes a ledger row going forward.
+- DONE: migration creates `chip_ledger` and `game_score_events`.
+- DONE: `UserChips::add_bonus`, `deduct`, and `restore_floor` write ledger rows.
+- TODO: Replace generic ledger reasons with structured source-specific reasons.
+- TODO: `ChipService::credit(user_id, delta, reason, source_kind, source_ref) -> Result<i64>`. Returns new balance. Enforces daily caps and first-daily 2x.
+- TODO: `ChipService::debit(...)` symmetric. Used for marketplace.
 - Wire chip credits into every game-over / win path:
-  - `late-ssh/src/app/games/sudoku/`, `nonogram/`, `solitaire/`, `minesweeper/`: on daily-win publish.
-  - `late-ssh/src/app/games/tetris/`, `twenty_forty_eight/`: on game-over with score.
+  - `late-ssh/src/app/arcade/sudoku/`, `nonogram/`, `solitaire/`, `minesweeper/`: on daily-win publish.
+  - `late-ssh/src/app/arcade/tetris/`, `twenty_forty_eight/`, `snake/`: on game-over with score.
   - `late-ssh/src/app/rooms/tictactoe/svc.rs`: on win settlement.
   - Blackjack and Poker pot settlements already debit/credit; route them through the ledger but keep the same payout math.
 - Reuse the existing `ActivityPublisher::game_won` events for source_ref where applicable.
 
-Files touched: `late-core/src/models/chips.rs`, new `late-core/src/models/chip_ledger.rs`, every game's svc.rs, new migration in `late-core/migrations/`.
+Files touched/current: `late-core/src/models/chips.rs`, `late-core/src/models/leaderboard.rs`, `late-core/src/models/snake.rs`, migrations in `late-core/migrations/`, score-game services.
 
 ### Phase 2: Leaderboard rewrite
 
-- Rewrite `late-core/src/models/leaderboard.rs::fetch_leaderboard_data`:
-  - Drop `streak_leaders`, `user_streaks`, `today_champions`.
-  - Add `monthly_chip_earners: Vec<LeaderboardEntry>` (sum positive ledger deltas this month).
-  - Add `arcade_champions: Vec<LeaderboardEntry>` (weighted arcade points this month).
-  - Keep `high_scores: Vec<HighScoreEntry>` but window to current month.
-  - Return `your_rank: Option<UserRanks>` for the requesting user across each board.
-- `late-ssh/src/app/games/leaderboard/svc.rs` now needs to know which user is asking (refresh per session, or refresh global + compute per-session ranks at read time).
-- Update all UI render paths that consumed `today_champions` / `streak_leaders` / `user_streaks` / `BadgeTier` from streak.
-- BadgeTier logic moves: streak-based tiers are removed; new BadgeTier (or a new type) sources from `profile_awards` instead.
+- DONE: old `leaderboard_modal` is being refactored into `late-ssh/src/app/hub/`.
+- DONE: Hub has `Leaderboard`, `Dailies`, `Shop`, and `Events` tabs; only Leaderboard is functional right now.
+- DONE: `Ctrl+G` opens Hub globally, except Artboard keeps `Ctrl+G` for swatch slot 5.
+- DONE: `LeaderboardData` exposes monthly chip earners, arcade champions, monthly Tetris/2048/Snake score boards, and all-time high scores.
+- DONE: Hub leaderboard layout groups chips/streaks on the left and score games on the right. Score panels show monthly + all-time top 3.
+- TODO: Decide whether daily streaks remain as a first-class Hub board or move to Dailies.
+- TODO: Return/request "your rank" per board if the compact Hub view grows into paginated detail views.
+- TODO: BadgeTier logic should eventually move from streak-based tiers to profile awards; chat username glyphs must stay bonsai-only.
 
-Files touched: `late-core/src/models/leaderboard.rs`, `late-ssh/src/app/games/leaderboard/`, every consumer of `LeaderboardData::badges()` or `badge_for()` (chat ui_text.rs, profile ui, etc).
+Files touched/current: `late-core/src/models/leaderboard.rs`, `late-core/src/models/snake.rs`, `late-ssh/src/app/hub/`, `late-ssh/src/app/arcade/snake/`, app input/render/state glue.
 
 ### Phase 3: Marketplace MVP
 
