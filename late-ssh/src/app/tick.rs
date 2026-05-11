@@ -95,6 +95,26 @@ impl App {
                     self.push_browser_frame(viz);
                     updated = true;
                 }
+                SessionMessage::ClipboardImage { data } => {
+                    let Some(upload) = self.chat.take_pending_clipboard_image_upload() else {
+                        tracing::warn!("ignoring unsolicited paired clipboard image");
+                        continue;
+                    };
+                    if let Some(banner) = self.chat.start_image_upload_in_room(data, upload.room_id)
+                    {
+                        self.banner = Some(banner);
+                    } else {
+                        self.banner = Some(crate::app::common::primitives::Banner::success(
+                            "Clipboard image found - uploading...",
+                        ));
+                    }
+                    updated = true;
+                }
+                SessionMessage::ClipboardImageFailed { message } => {
+                    self.chat.clear_pending_clipboard_image_upload();
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&message));
+                    updated = true;
+                }
                 SessionMessage::Terminate { reason } => {
                     tracing::info!(reason, "session terminated by control message");
                     self.running = false;

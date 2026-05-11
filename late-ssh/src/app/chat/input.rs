@@ -143,6 +143,18 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if let Some(upload) = app.chat.take_requested_url_upload() {
         crate::app::input::trigger_url_image_upload(app, upload.url, upload.room_id);
     }
+    if let Some(upload) = app.chat.take_requested_clipboard_image_upload() {
+        if app.request_paired_clipboard_image_upload(upload.room_id) {
+            app.banner = Some(Banner::success(
+                "Reading image from paired CLI clipboard...",
+            ));
+        } else {
+            app.chat.clear_pending_clipboard_image_upload();
+            app.banner = Some(Banner::error(
+                "No paired CLI with clipboard image support. Update and run `late`.",
+            ));
+        }
+    }
 }
 
 pub fn handle_compose_char(app: &mut App, ch: char) {

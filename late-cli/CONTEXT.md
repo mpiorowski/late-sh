@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-05-01
+- Last updated: 2026-05-12
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -219,6 +219,7 @@ Client to server:
   "client_kind": "cli",
   "ssh_mode": "native",
   "platform": "linux",
+  "capabilities": ["clipboard_image"],
   "muted": false,
   "volume_percent": 30
 }
@@ -238,15 +239,32 @@ Server to client:
 { "event": "volume_down" }
 ```
 
+```json
+{ "event": "request_clipboard_image" }
+```
+
+Client to server, in response to `request_clipboard_image`:
+
+```json
+{ "event": "clipboard_image", "data_base64": "<base64 png bytes>" }
+```
+
+```json
+{ "event": "clipboard_image_failed", "message": "clipboard does not contain an image" }
+```
+
 Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
+- `capabilities`: optional list; current CLI advertises `clipboard_image` when it can service chat `/paste-image`.
 
 Pairing behavior:
 - The server stores one paired-client sender/state entry per token.
 - If multiple browser/CLI clients pair with the same token, latest registration owns control/state until it disconnects.
 - CLI WebSocket reconnects up to 10 consecutive failures with a 2s delay.
 - The first `client_state` is sent immediately after connect, then sent again after any applied control message.
+- `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client state, so older CLIs and browser pairs do not receive unsupported control events.
+- Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
 
 ---
 

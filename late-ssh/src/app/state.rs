@@ -1016,6 +1016,26 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
     }
 
+    pub fn request_paired_clipboard_image_upload(&mut self, room_id: Option<Uuid>) -> bool {
+        let Some(registry) = &self.paired_client_registry else {
+            return false;
+        };
+        if !registry
+            .snapshot(&self.session_token)
+            .is_some_and(|state| state.supports_clipboard_image())
+        {
+            return false;
+        }
+        if registry.send_control(
+            &self.session_token,
+            PairControlMessage::RequestClipboardImage,
+        ) {
+            self.chat.begin_pending_clipboard_image_upload(room_id);
+            return true;
+        }
+        false
+    }
+
     pub fn paired_client_state(&self) -> Option<ClientAudioState> {
         self.paired_client_registry
             .as_ref()

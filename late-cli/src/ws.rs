@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
+use image::{ExtendedColorType, ImageEncoder, codecs::png::PngEncoder};
 use serde::Deserialize;
 use serde_json::json;
 use std::{
+    io::Cursor,
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     time::Duration,
 };
@@ -30,7 +33,12 @@ enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
+    RequestClipboardImage,
 }
+
+const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image"];
+const CLIPBOARD_IMAGE_MAX_PIXELS: usize = 25_000_000;
+const CLIPBOARD_IMAGE_MAX_BYTES: usize = 10 * 1024 * 1024;
 
 pub(super) async fn run_viz_ws(
     api_base_url: &str,
@@ -79,10 +87,17 @@ pub(super) async fn run_viz_ws(
                     break;
                 };
                 match msg? {
-                    Message::Text(text)
-                        if apply_pair_control(&text, playback.muted, playback.volume_percent)? =>
-                    {
-                        send_client_state(&mut ws, client, playback).await?;
+                    Message::Text(text) => {
+                        if handle_pair_control(
+                            &text,
+                            &mut ws,
+                            playback.muted,
+                            playback.volume_percent,
+                        )
+                        .await?
+                        {
+                            send_client_state(&mut ws, client, playback).await?;
+                        }
                     }
                     Message::Close(_) => break,
                     _ => {}
@@ -106,6 +121,7 @@ async fn send_client_state(
         "client_kind": "cli",
         "ssh_mode": client.ssh_mode,
         "platform": client.platform,
+        "capabilities": CLIENT_CAPABILITIES,
         "muted": playback.muted.load(Ordering::Relaxed),
         "volume_percent": playback.volume_percent.load(Ordering::Relaxed),
     });
@@ -113,24 +129,114 @@ async fn send_client_state(
     Ok(())
 }
 
-fn apply_pair_control(text: &str, muted: &AtomicBool, volume_percent: &AtomicU8) -> Result<bool> {
-    match serde_json::from_str::<PairControlMessage>(text)? {
+async fn handle_pair_control(
+    text: &str,
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    muted: &AtomicBool,
+    volume_percent: &AtomicU8,
+) -> Result<bool> {
+    let control = serde_json::from_str::<PairControlMessage>(text)?;
+    match control {
+        audio_control @ (PairControlMessage::ToggleMute
+        | PairControlMessage::VolumeUp
+        | PairControlMessage::VolumeDown) => {
+            apply_audio_pair_control(audio_control, muted, volume_percent);
+            Ok(true)
+        }
+        PairControlMessage::RequestClipboardImage => {
+            send_clipboard_image(ws).await?;
+            Ok(false)
+        }
+    }
+}
+
+fn apply_audio_pair_control(
+    control: PairControlMessage,
+    muted: &AtomicBool,
+    volume_percent: &AtomicU8,
+) {
+    match control {
         PairControlMessage::ToggleMute => {
             let now_muted = muted.fetch_xor(true, Ordering::Relaxed) ^ true;
             info!(muted = now_muted, "applied paired mute toggle");
-            Ok(true)
         }
         PairControlMessage::VolumeUp => {
             let new_volume = bump_volume(volume_percent, 5);
             info!(volume_percent = new_volume, "applied paired volume up");
-            Ok(true)
         }
         PairControlMessage::VolumeDown => {
             let new_volume = bump_volume(volume_percent, -5);
             info!(volume_percent = new_volume, "applied paired volume down");
-            Ok(true)
         }
+        PairControlMessage::RequestClipboardImage => {}
     }
+}
+
+async fn send_clipboard_image(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> Result<()> {
+    let image_result = tokio::task::spawn_blocking(clipboard_image_png_bytes)
+        .await
+        .map_err(|err| anyhow::anyhow!("clipboard image task failed: {err}"))?;
+    let payload = match image_result {
+        Ok(bytes) => json!({
+            "event": "clipboard_image",
+            "data_base64": STANDARD.encode(bytes),
+        }),
+        Err(err) => json!({
+            "event": "clipboard_image_failed",
+            "message": err.to_string(),
+        }),
+    };
+    ws.send(Message::Text(payload.to_string().into())).await?;
+    Ok(())
+}
+
+fn clipboard_image_png_bytes() -> Result<Vec<u8>> {
+    let mut clipboard = arboard::Clipboard::new().context("failed to access system clipboard")?;
+    let image = clipboard
+        .get_image()
+        .context("clipboard does not contain an image; on Wayland, `wl-paste -l` should list an image MIME type like image/png")?;
+    let pixel_count = image
+        .width
+        .checked_mul(image.height)
+        .context("clipboard image dimensions overflowed")?;
+    if pixel_count == 0 {
+        anyhow::bail!("clipboard image has invalid dimensions");
+    }
+    if pixel_count > CLIPBOARD_IMAGE_MAX_PIXELS {
+        anyhow::bail!("clipboard image dimensions are too large");
+    }
+
+    let rgba = image.bytes.into_owned();
+    let expected_len = pixel_count
+        .checked_mul(4)
+        .context("clipboard image byte length overflowed")?;
+    if rgba.len() != expected_len {
+        anyhow::bail!("clipboard image data had unexpected length");
+    }
+
+    let mut png = Vec::new();
+    {
+        let cursor = Cursor::new(&mut png);
+        let encoder = PngEncoder::new(cursor);
+        encoder
+            .write_image(
+                &rgba,
+                image.width as u32,
+                image.height as u32,
+                ExtendedColorType::Rgba8,
+            )
+            .context("failed to encode clipboard image as PNG")?;
+    }
+    if png.len() > CLIPBOARD_IMAGE_MAX_BYTES {
+        anyhow::bail!("clipboard image is too large");
+    }
+    Ok(png)
 }
 
 fn bump_volume(volume_percent: &AtomicU8, delta: i16) -> u8 {
@@ -211,10 +317,10 @@ mod tests {
         let muted = AtomicBool::new(false);
         let volume_percent = AtomicU8::new(100);
 
-        apply_pair_control(r#"{"event":"toggle_mute"}"#, &muted, &volume_percent).unwrap();
+        apply_audio_pair_control(PairControlMessage::ToggleMute, &muted, &volume_percent);
         assert!(muted.load(Ordering::Relaxed));
 
-        apply_pair_control(r#"{"event":"toggle_mute"}"#, &muted, &volume_percent).unwrap();
+        apply_audio_pair_control(PairControlMessage::ToggleMute, &muted, &volume_percent);
         assert!(!muted.load(Ordering::Relaxed));
     }
 
@@ -223,10 +329,10 @@ mod tests {
         let muted = AtomicBool::new(false);
         let volume_percent = AtomicU8::new(50);
 
-        apply_pair_control(r#"{"event":"volume_up"}"#, &muted, &volume_percent).unwrap();
+        apply_audio_pair_control(PairControlMessage::VolumeUp, &muted, &volume_percent);
         assert_eq!(volume_percent.load(Ordering::Relaxed), 55);
 
-        apply_pair_control(r#"{"event":"volume_down"}"#, &muted, &volume_percent).unwrap();
+        apply_audio_pair_control(PairControlMessage::VolumeDown, &muted, &volume_percent);
         assert_eq!(volume_percent.load(Ordering::Relaxed), 50);
     }
 }

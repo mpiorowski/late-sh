@@ -40,6 +40,7 @@ opentelemetry-http = "0.31.0"
 tracing-opentelemetry = "0.32.1"
 opentelemetry-appender-tracing = "0.31.1"
 askama = "0.15.1"
+arboard = { version = "3", features = ["wayland-data-control"] }
 async-stream = "0.3"
 base64 = "0.22"
 bitflags = "2"
