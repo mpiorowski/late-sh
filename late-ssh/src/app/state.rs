@@ -26,7 +26,7 @@ use crate::{
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
         common::primitives::{Banner, Screen},
-        help_modal, mod_modal, profile,
+        help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal,
         visualizer::Visualizer,
@@ -120,22 +120,22 @@ pub struct SessionConfig {
     pub work_service: crate::app::chat::work::svc::WorkService,
     pub profile_service: ProfileService,
     pub twenty_forty_eight_service:
-        crate::app::games::twenty_forty_eight::svc::TwentyFortyEightService,
+        crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService,
     pub initial_2048_game: Option<late_core::models::twenty_forty_eight::Game>,
     pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
-    pub tetris_service: crate::app::games::tetris::svc::TetrisService,
-    pub snake_service: crate::app::games::snake::svc::SnakeService,
+    pub tetris_service: crate::app::arcade::tetris::svc::TetrisService,
+    pub snake_service: crate::app::arcade::snake::svc::SnakeService,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
     pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
-    pub sudoku_service: crate::app::games::sudoku::svc::SudokuService,
+    pub sudoku_service: crate::app::arcade::sudoku::svc::SudokuService,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
-    pub nonogram_service: crate::app::games::nonogram::svc::NonogramService,
+    pub nonogram_service: crate::app::arcade::nonogram::svc::NonogramService,
     pub initial_nonogram_games: Vec<late_core::models::nonogram::Game>,
-    pub solitaire_service: crate::app::games::solitaire::svc::SolitaireService,
+    pub solitaire_service: crate::app::arcade::solitaire::svc::SolitaireService,
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
-    pub minesweeper_service: crate::app::games::minesweeper::svc::MinesweeperService,
+    pub minesweeper_service: crate::app::arcade::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
     pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
@@ -149,7 +149,7 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
-    pub nonogram_library: crate::app::games::nonogram::state::Library,
+    pub nonogram_library: crate::app::arcade::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
     /// Session / connection
@@ -199,11 +199,12 @@ pub struct App {
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
     pub(crate) show_mod_modal: bool,
-    pub(crate) show_leaderboard_modal: bool,
+    pub(crate) show_hub_modal: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_terminal_help: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
+    pub(crate) hub_state: hub::state::HubState,
     pub(crate) terminal_help_modal_state:
         crate::app::terminal_help_modal::state::TerminalHelpModalState,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
@@ -280,7 +281,7 @@ pub struct App {
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
 
-    /// Games Hub
+    /// Arcade Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
     pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
@@ -297,13 +298,13 @@ pub struct App {
         tokio::sync::watch::Receiver<crate::app::rooms::svc::RoomsSnapshot>,
     pub(super) rooms_event_rx: tokio::sync::broadcast::Receiver<crate::app::rooms::svc::RoomsEvent>,
     pub(crate) rooms_snapshot: crate::app::rooms::svc::RoomsSnapshot,
-    pub(crate) twenty_forty_eight_state: crate::app::games::twenty_forty_eight::state::State,
-    pub(crate) tetris_state: crate::app::games::tetris::state::State,
-    pub(crate) snake_state: crate::app::games::snake::state::State,
-    pub(crate) sudoku_state: crate::app::games::sudoku::state::State,
-    pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
-    pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
-    pub(crate) minesweeper_state: crate::app::games::minesweeper::state::State,
+    pub(crate) twenty_forty_eight_state: crate::app::arcade::twenty_forty_eight::state::State,
+    pub(crate) tetris_state: crate::app::arcade::tetris::state::State,
+    pub(crate) snake_state: crate::app::arcade::snake::state::State,
+    pub(crate) sudoku_state: crate::app::arcade::sudoku::state::State,
+    pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
+    pub(crate) solitaire_state: crate::app::arcade::solitaire::state::State,
+    pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
     pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
@@ -354,7 +355,7 @@ impl App {
         self.show_splash = false;
         self.show_settings = false;
         self.show_quit_confirm = false;
-        self.show_leaderboard_modal = false;
+        self.show_hub_modal = false;
         self.show_bonsai_modal = false;
     }
 
@@ -541,7 +542,7 @@ impl App {
             .context("failed to create terminal backend")?;
 
         let twenty_forty_eight_state = if let Some(game) = config.initial_2048_game {
-            crate::app::games::twenty_forty_eight::state::State::restore(
+            crate::app::arcade::twenty_forty_eight::state::State::restore(
                 config.user_id,
                 config.twenty_forty_eight_service.clone(),
                 game.score,
@@ -554,7 +555,7 @@ impl App {
                 game.is_game_over,
             )
         } else {
-            crate::app::games::twenty_forty_eight::state::State::new(
+            crate::app::arcade::twenty_forty_eight::state::State::new(
                 config.user_id,
                 config.twenty_forty_eight_service.clone(),
                 config
@@ -566,7 +567,7 @@ impl App {
         };
 
         let tetris_state = if let Some(game) = config.initial_tetris_game {
-            crate::app::games::tetris::state::State::restore(
+            crate::app::arcade::tetris::state::State::restore(
                 config.user_id,
                 config.tetris_service.clone(),
                 config
@@ -577,7 +578,7 @@ impl App {
                 game,
             )
         } else {
-            crate::app::games::tetris::state::State::new(
+            crate::app::arcade::tetris::state::State::new(
                 config.user_id,
                 config.tetris_service.clone(),
                 config
@@ -593,7 +594,7 @@ impl App {
             .map(|score| score.score)
             .unwrap_or(0);
         let snake_state = if let Some(game) = config.initial_snake_game {
-            crate::app::games::snake::state::State::restore(
+            crate::app::arcade::snake::state::State::restore(
                 config.user_id,
                 config.snake_service.clone(),
                 snake_best_score,
@@ -602,7 +603,7 @@ impl App {
                 game,
             )
         } else {
-            crate::app::games::snake::state::State::new(
+            crate::app::arcade::snake::state::State::new(
                 config.user_id,
                 config.snake_service.clone(),
                 snake_best_score,
@@ -610,23 +611,23 @@ impl App {
                 60,
             )
         };
-        let sudoku_state = crate::app::games::sudoku::state::State::new(
+        let sudoku_state = crate::app::arcade::sudoku::state::State::new(
             config.user_id,
             config.sudoku_service.clone(),
             config.initial_sudoku_games,
         );
-        let nonogram_state = crate::app::games::nonogram::state::State::new(
+        let nonogram_state = crate::app::arcade::nonogram::state::State::new(
             config.user_id,
             config.nonogram_service.clone(),
             config.nonogram_library,
             config.initial_nonogram_games,
         );
-        let solitaire_state = crate::app::games::solitaire::state::State::new(
+        let solitaire_state = crate::app::arcade::solitaire::state::State::new(
             config.user_id,
             config.solitaire_service.clone(),
             config.initial_solitaire_games,
         );
-        let minesweeper_state = crate::app::games::minesweeper::state::State::new(
+        let minesweeper_state = crate::app::arcade::minesweeper::state::State::new(
             config.user_id,
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
@@ -709,11 +710,12 @@ impl App {
             show_quit_confirm: false,
             show_help: false,
             show_mod_modal: false,
-            show_leaderboard_modal: false,
+            show_hub_modal: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
             show_terminal_help: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
+            hub_state: hub::state::HubState::new(),
             terminal_help_modal_state:
                 crate::app::terminal_help_modal::state::TerminalHelpModalState::new(),
             mod_modal_state: mod_modal::state::ModModalState::new(),

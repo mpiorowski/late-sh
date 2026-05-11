@@ -244,8 +244,8 @@ If we decide to remove it later, the right replacement is a **one-time signup gr
 - `ChipService::debit(...)` symmetric. Used for marketplace.
 - Backfill `user_chips.balance` is unchanged, but every mutation also writes a ledger row going forward.
 - Wire chip credits into every game-over / win path:
-  - `late-ssh/src/app/games/sudoku/`, `nonogram/`, `solitaire/`, `minesweeper/`: on daily-win publish.
-  - `late-ssh/src/app/games/tetris/`, `twenty_forty_eight/`: on game-over with score.
+  - `late-ssh/src/app/arcade/sudoku/`, `nonogram/`, `solitaire/`, `minesweeper/`: on daily-win publish.
+  - `late-ssh/src/app/arcade/tetris/`, `twenty_forty_eight/`: on game-over with score.
   - `late-ssh/src/app/rooms/tictactoe/svc.rs`: on win settlement.
   - Blackjack and Poker pot settlements already debit/credit; route them through the ledger but keep the same payout math.
 - Reuse the existing `ActivityPublisher::game_won` events for source_ref where applicable.
@@ -260,11 +260,11 @@ Files touched: `late-core/src/models/chips.rs`, new `late-core/src/models/chip_l
   - Add `arcade_champions: Vec<LeaderboardEntry>` (weighted arcade points this month).
   - Keep `high_scores: Vec<HighScoreEntry>` but window to current month.
   - Return `your_rank: Option<UserRanks>` for the requesting user across each board.
-- `late-ssh/src/app/games/leaderboard/svc.rs` now needs to know which user is asking (refresh per session, or refresh global + compute per-session ranks at read time).
+- `late-ssh/src/app/arcade/leaderboard/svc.rs` now needs to know which user is asking (refresh per session, or refresh global + compute per-session ranks at read time).
 - Update all UI render paths that consumed `today_champions` / `streak_leaders` / `user_streaks` / `BadgeTier` from streak.
 - BadgeTier logic moves: streak-based tiers are removed; new BadgeTier (or a new type) sources from `profile_awards` instead.
 
-Files touched: `late-core/src/models/leaderboard.rs`, `late-ssh/src/app/games/leaderboard/`, every consumer of `LeaderboardData::badges()` or `badge_for()` (chat ui_text.rs, profile ui, etc).
+Files touched: `late-core/src/models/leaderboard.rs`, `late-ssh/src/app/arcade/leaderboard/`, every consumer of `LeaderboardData::badges()` or `badge_for()` (chat ui_text.rs, profile ui, etc).
 
 ### Phase 3: Marketplace MVP
 

@@ -1,15 +1,15 @@
 pub mod activity;
 pub mod ai;
+pub mod arcade;
 pub mod artboard;
 pub mod bonsai;
 pub mod chat;
 pub mod common;
 pub mod dashboard;
-pub mod games;
 pub(crate) mod help_modal;
+pub(crate) mod hub;
 pub(crate) mod icon_picker;
 pub mod input;
-pub(crate) mod leaderboard_modal;
 pub(crate) mod mod_modal;
 pub mod profile;
 pub(crate) mod profile_modal;

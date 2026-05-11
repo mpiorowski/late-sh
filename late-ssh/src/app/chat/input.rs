@@ -105,7 +105,7 @@ fn open_help_modal(app: &mut App, topic: HelpTopic) {
 }
 
 fn open_settings_modal(app: &mut App) {
-    app.show_leaderboard_modal = false;
+    app.show_hub_modal = false;
     app.settings_modal_state.open_from_profile(
         app.profile_state.profile(),
         app.chat.favorite_room_options(),
@@ -117,7 +117,7 @@ fn open_settings_modal(app: &mut App) {
 fn open_mod_modal(app: &mut App) {
     app.show_help = false;
     app.show_settings = false;
-    app.show_leaderboard_modal = false;
+    app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_web_chat_qr = false;

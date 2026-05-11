@@ -103,6 +103,7 @@ pub struct LeaderboardData {
     pub arcade_champions: Vec<RankedEntry>,
     pub monthly_tetris_high_scores: Vec<HighScoreEntry>,
     pub monthly_2048_high_scores: Vec<HighScoreEntry>,
+    pub monthly_snake_high_scores: Vec<HighScoreEntry>,
 }
 
 impl LeaderboardData {
@@ -132,6 +133,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         arcade_champions,
         monthly_tetris_high_scores,
         monthly_2048_high_scores,
+        monthly_snake_high_scores,
     ) = tokio::try_join!(
         fetch_today_champions(client, 10),
         fetch_all_streaks(client),
@@ -143,6 +145,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_arcade_champions(client, 500),
         fetch_monthly_tetris_high_scores(client, 500),
         fetch_monthly_2048_high_scores(client, 500),
+        fetch_monthly_snake_high_scores(client, 500),
     )?;
 
     let user_streaks: HashMap<Uuid, u32> = streaks.iter().map(|e| (e.user_id, e.count)).collect();
@@ -161,6 +164,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         arcade_champions,
         monthly_tetris_high_scores,
         monthly_2048_high_scores,
+        monthly_snake_high_scores,
     })
 }
 
@@ -328,6 +332,34 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
         });
     }
 
+    // Snake top scores
+    let rows = client
+        .query(
+            "WITH ranked AS (
+                SELECT u.username,
+                       h.user_id,
+                       h.score,
+                       RANK() OVER (ORDER BY h.score DESC) AS rank
+                FROM snake_high_scores h
+                JOIN users u ON u.id = h.user_id
+             )
+             SELECT username, user_id, score, rank
+             FROM ranked
+             ORDER BY rank ASC, username ASC
+             LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+    for row in rows {
+        entries.push(HighScoreEntry {
+            game: "Snake",
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            score: row.get("score"),
+        });
+    }
+
     Ok(entries)
 }
 
@@ -350,6 +382,13 @@ async fn fetch_monthly_2048_high_scores(
         limit,
     )
     .await
+}
+
+async fn fetch_monthly_snake_high_scores(
+    client: &Client,
+    limit: i64,
+) -> Result<Vec<HighScoreEntry>> {
+    fetch_monthly_score_board(client, "Snake", "snake", "snake_high_scores", limit).await
 }
 
 async fn fetch_monthly_score_board(

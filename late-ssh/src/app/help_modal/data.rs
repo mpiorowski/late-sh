@@ -133,7 +133,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /settings          open your settings modal",
         "  /exit              open quit confirm",
         "  Ctrl+O             open your settings modal anywhere",
-        "  Ctrl+G             open monthly leaderboards",
+        "  Ctrl+G             open Hub",
         "  Ctrl+/             search and jump to a room or DM",
         "",
         "Messages",
@@ -535,7 +535,7 @@ fn arcade_help_lines() -> Vec<String> {
     [
         "The Arcade and leaderboard",
         "",
-        "The Arcade mixes daily puzzle runs with endless score chases. Ctrl+G opens the monthly leaderboards.",
+        "The Arcade mixes daily puzzle runs with endless score chases. Ctrl+G opens Hub with monthly leaderboards.",
         "",
         "Games in rotation",
         "  High score: 2048, Tetris",

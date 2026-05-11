@@ -70,7 +70,7 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
     }
 }
 
-fn games_sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
+fn arcade_sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
     if show_settings {
         draft_enabled
     } else {
@@ -139,13 +139,13 @@ struct DrawContext<'a> {
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
-    twenty_forty_eight_state: &'a crate::app::games::twenty_forty_eight::state::State,
-    tetris_state: &'a crate::app::games::tetris::state::State,
-    snake_state: &'a crate::app::games::snake::state::State,
-    sudoku_state: &'a crate::app::games::sudoku::state::State,
-    nonogram_state: &'a crate::app::games::nonogram::state::State,
-    solitaire_state: &'a crate::app::games::solitaire::state::State,
-    minesweeper_state: &'a crate::app::games::minesweeper::state::State,
+    twenty_forty_eight_state: &'a crate::app::arcade::twenty_forty_eight::state::State,
+    tetris_state: &'a crate::app::arcade::tetris::state::State,
+    snake_state: &'a crate::app::arcade::snake::state::State,
+    sudoku_state: &'a crate::app::arcade::sudoku::state::State,
+    nonogram_state: &'a crate::app::arcade::nonogram::state::State,
+    solitaire_state: &'a crate::app::arcade::solitaire::state::State,
+    minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
@@ -160,12 +160,13 @@ struct DrawContext<'a> {
     is_admin: bool,
     is_moderator: bool,
     show_right_sidebar: bool,
-    show_games_sidebar: bool,
+    show_arcade_sidebar: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
     show_mod_modal: bool,
-    show_leaderboard_modal: bool,
+    show_hub_modal: bool,
+    hub_state: &'a crate::app::hub::state::HubState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
@@ -242,10 +243,10 @@ impl App {
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
         );
-        let show_games_sidebar = games_sidebar_enabled(
+        let show_arcade_sidebar = arcade_sidebar_enabled(
             self.show_settings,
-            self.settings_modal_state.draft().show_games_sidebar,
-            self.profile_state.profile().show_games_sidebar,
+            self.settings_modal_state.draft().show_arcade_sidebar,
+            self.profile_state.profile().show_arcade_sidebar,
         );
         let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
@@ -515,12 +516,13 @@ impl App {
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
                         show_right_sidebar,
-                        show_games_sidebar,
+                        show_arcade_sidebar,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
-                        show_leaderboard_modal: self.show_leaderboard_modal,
+                        show_hub_modal: self.show_hub_modal,
+                        hub_state: &self.hub_state,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
@@ -715,10 +717,10 @@ impl App {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
                 }
             }
-            Screen::Games => crate::app::games::ui::draw_games_hub(
+            Screen::Arcade => crate::app::arcade::ui::draw_arcade_hub(
                 frame,
                 content_area,
-                &crate::app::games::ui::GamesHubView {
+                &crate::app::arcade::ui::ArcadeHubView {
                     game_selection: ctx.game_selection,
                     is_playing_game: ctx.is_playing_game,
                     twenty_forty_eight_state: ctx.twenty_forty_eight_state,
@@ -728,7 +730,7 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
-                    show_sidebar: ctx.show_games_sidebar,
+                    show_sidebar: ctx.show_arcade_sidebar,
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
@@ -813,8 +815,8 @@ impl App {
             mod_modal::ui::draw(frame, inner, ctx.mod_modal_state);
         }
 
-        if ctx.show_leaderboard_modal {
-            crate::app::leaderboard_modal::ui::draw(frame, inner, ctx.leaderboard, ctx.user_id);
+        if ctx.show_hub_modal {
+            crate::app::hub::ui::draw(frame, inner, ctx.hub_state, ctx.leaderboard, ctx.user_id);
         }
 
         if ctx.show_profile_modal {
@@ -892,7 +894,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     let tabs = [
         (Screen::Dashboard, "1"),
         (Screen::Chat, "2"),
-        (Screen::Games, "3"),
+        (Screen::Arcade, "3"),
         (Screen::Rooms, "4"),
         (Screen::Artboard, "5"),
     ];
@@ -914,7 +916,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     let page_title = match screen {
         Screen::Dashboard => "Dashboard",
         Screen::Chat => "Chat",
-        Screen::Games => "The Arcade",
+        Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",
     };
@@ -1063,7 +1065,7 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, desktop_notification_bytes, games_sidebar_enabled, mentions_hud_title,
+        NotificationMode, arcade_sidebar_enabled, desktop_notification_bytes, mentions_hud_title,
         sidebar_enabled,
     };
 
@@ -1134,15 +1136,15 @@ mod tests {
     }
 
     #[test]
-    fn games_sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
-        assert!(!games_sidebar_enabled(true, false, true));
-        assert!(games_sidebar_enabled(true, true, false));
+    fn arcade_sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
+        assert!(!arcade_sidebar_enabled(true, false, true));
+        assert!(arcade_sidebar_enabled(true, true, false));
     }
 
     #[test]
-    fn games_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
-        assert!(games_sidebar_enabled(false, false, true));
-        assert!(!games_sidebar_enabled(false, true, false));
+    fn arcade_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
+        assert!(arcade_sidebar_enabled(false, false, true));
+        assert!(!arcade_sidebar_enabled(false, true, false));
     }
 
     #[test]

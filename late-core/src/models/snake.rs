@@ -70,4 +70,15 @@ impl HighScore {
             .await?;
         Ok(Self::from(row))
     }
+
+    pub async fn record_score_event(client: &Client, user_id: Uuid, score: i32) -> Result<()> {
+        client
+            .execute(
+                "INSERT INTO game_score_events (user_id, game, score)
+                 VALUES ($1, 'snake', $2)",
+                &[&user_id, &score],
+            )
+            .await?;
+        Ok(())
+    }
 }

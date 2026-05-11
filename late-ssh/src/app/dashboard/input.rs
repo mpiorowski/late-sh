@@ -164,7 +164,7 @@ fn enter_last_game_room(app: &mut App) -> bool {
     if app.dashboard_game_toggle_target == Some(DashboardGameToggleTarget::Arcade)
         && app.is_playing_game
     {
-        app.set_screen(Screen::Games);
+        app.set_screen(Screen::Arcade);
         return true;
     }
 
@@ -179,7 +179,7 @@ fn enter_last_game_room(app: &mut App) -> bool {
     let Some(room) = room else {
         if app.is_playing_game {
             app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
-            app.set_screen(Screen::Games);
+            app.set_screen(Screen::Arcade);
         } else {
             app.banner = Some(Banner::error("No game to return to."));
         }
@@ -204,7 +204,7 @@ fn launch_current_dashboard_daily(app: &mut App) -> bool {
     let Some(game) = current_dashboard_daily_game(app) else {
         app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
         app.is_playing_game = false;
-        app.set_screen(Screen::Games);
+        app.set_screen(Screen::Arcade);
         app.banner = Some(Banner::success("All dailies complete."));
         return true;
     };
@@ -234,7 +234,7 @@ fn launch_current_dashboard_daily(app: &mut App) -> bool {
 
     app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
     app.is_playing_game = true;
-    app.set_screen(Screen::Games);
+    app.set_screen(Screen::Arcade);
     true
 }
 
