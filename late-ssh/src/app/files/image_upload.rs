@@ -1,9 +1,13 @@
-use std::{env, net::IpAddr, time::Duration};
+use std::{
+    env,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use chrono::{Datelike, Utc};
 use hmac::{Hmac, Mac};
-use reqwest::Url;
+use reqwest::{Url, redirect::Policy};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -11,7 +15,13 @@ type HmacSha256 = Hmac<Sha256>;
 
 const DEFAULT_MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 const CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
-const USER_AGENT: &str = "late-sh/1.0";
+pub(crate) const USER_AGENT: &str = "late-sh/1.0";
+
+struct ValidatedDownloadUrl {
+    url: Url,
+    host: String,
+    addrs: Vec<SocketAddr>,
+}
 
 #[derive(Debug, Clone)]
 struct FileStorageConfig {
@@ -67,30 +77,41 @@ pub fn ext_for_mime(mime: &str) -> &'static str {
 }
 
 pub async fn download_and_reupload_url(url: String) -> Result<String> {
-    validate_download_url(&url)?;
-
     let max_bytes = max_upload_bytes();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent(USER_AGENT)
-        .build()?;
-
-    let resp = client.get(&url).send().await?;
-    if !resp.status().is_success() {
-        bail!("Download failed: HTTP {}", resp.status());
-    }
-    if let Some(len) = resp.content_length()
-        && len > max_bytes as u64
-    {
-        bail!("Image is too large (max {})", format_bytes(max_bytes));
-    }
-
-    let bytes = resp.bytes().await?.to_vec();
-    ensure_upload_size(bytes.len(), max_bytes)?;
+    let bytes = download_url_bytes(&url, Duration::from_secs(30), max_bytes).await?;
 
     let mime = detect_image_mime(&bytes)
-        .ok_or_else(|| anyhow::anyhow!("URL does not point to a supported image"))?;
+        .ok_or_else(|| anyhow::anyhow!("url does not point to a supported image"))?;
     upload_image_bytes(bytes, mime).await
+}
+
+pub(crate) async fn download_url_bytes(
+    raw_url: &str,
+    timeout: Duration,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    let validated = validate_download_url(raw_url).await?;
+    let mut builder = reqwest::Client::builder()
+        .timeout(timeout)
+        .user_agent(USER_AGENT)
+        .redirect(Policy::none());
+
+    // Pin hostname requests to the IPs we already checked so a second DNS
+    // lookup cannot return a private address after validation.
+    if validated.host.parse::<IpAddr>().is_err() {
+        builder = builder.resolve_to_addrs(&validated.host, &validated.addrs);
+    }
+
+    let client = builder.build()?;
+    let resp = client.get(validated.url).send().await?;
+    if resp.status().is_redirection() {
+        bail!("redirects are not allowed");
+    }
+    if !resp.status().is_success() {
+        bail!("download failed: http {}", resp.status());
+    }
+
+    read_response_limited(resp, max_bytes).await
 }
 
 pub async fn upload_image_bytes(data: Vec<u8>, mime: &str) -> Result<String> {
@@ -98,7 +119,7 @@ pub async fn upload_image_bytes(data: Vec<u8>, mime: &str) -> Result<String> {
     ensure_upload_size(data.len(), max_bytes)?;
 
     let detected_mime =
-        detect_image_mime(&data).ok_or_else(|| anyhow::anyhow!("Unsupported image type"))?;
+        detect_image_mime(&data).ok_or_else(|| anyhow::anyhow!("unsupported image type"))?;
     if detected_mime != mime {
         tracing::debug!(
             provided_mime = mime,
@@ -181,7 +202,7 @@ async fn put_object(
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
-    bail!("R2 upload failed: HTTP {} {}", status, body.trim());
+    bail!("r2 upload failed: http {} {}", status, body.trim());
 }
 
 fn env_required(key: &str) -> Result<String> {
@@ -196,7 +217,7 @@ fn env_required_any(primary: &str, fallback: &str) -> Result<String> {
     env_required(primary).or_else(|_| env_required(fallback))
 }
 
-fn max_upload_bytes() -> usize {
+pub(crate) fn max_upload_bytes() -> usize {
     env::var("LATE_FILES_MAX_UPLOAD_BYTES")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -206,7 +227,7 @@ fn max_upload_bytes() -> usize {
 
 fn ensure_upload_size(len: usize, max: usize) -> Result<()> {
     if len > max {
-        bail!("Image is too large (max {})", format_bytes(max));
+        bail!("image is too large (max {})", format_bytes(max));
     }
     Ok(())
 }
@@ -219,34 +240,58 @@ fn format_bytes(bytes: usize) -> String {
     }
 }
 
-fn validate_download_url(raw_url: &str) -> Result<()> {
-    let url = Url::parse(raw_url).context("invalid URL")?;
+async fn validate_download_url(raw_url: &str) -> Result<ValidatedDownloadUrl> {
+    let url = Url::parse(raw_url).context("invalid url")?;
     if !matches!(url.scheme(), "http" | "https") {
-        bail!("URL must start with http(s)://");
+        bail!("url must start with http(s)://");
     }
     let Some(host) = url.host_str() else {
-        bail!("URL must include a host");
+        bail!("url must include a host");
     };
+    let host = host.to_string();
     if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
-        bail!("localhost URLs are not allowed");
+        bail!("localhost urls are not allowed");
     }
     if let Ok(ip) = host.parse::<IpAddr>()
         && is_blocked_ip(ip)
     {
-        bail!("private network URLs are not allowed");
+        bail!("private network urls are not allowed");
     }
-    Ok(())
+    let port = url.port_or_known_default().context("url must include a port")?;
+    let addrs = if let Ok(ip) = host.parse::<IpAddr>() {
+        vec![SocketAddr::new(ip, port)]
+    } else {
+        tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .with_context(|| format!("failed to resolve {host}"))?
+            .collect::<Vec<_>>()
+    };
+    if addrs.is_empty() {
+        bail!("url host did not resolve");
+    }
+    if addrs.iter().any(|addr| is_blocked_ip(addr.ip())) {
+        bail!("private network urls are not allowed");
+    }
+
+    Ok(ValidatedDownloadUrl {
+        url,
+        host,
+        addrs,
+    })
 }
 
 fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
+            let octets = ip.octets();
             ip.is_private()
                 || ip.is_loopback()
                 || ip.is_link_local()
                 || ip.is_unspecified()
                 || ip.is_broadcast()
                 || ip.is_multicast()
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                || (octets[0] == 198 && (18..=19).contains(&octets[1]))
         }
         IpAddr::V6(ip) => {
             ip.is_loopback()
@@ -256,6 +301,23 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                 || ip.is_multicast()
         }
     }
+}
+
+async fn read_response_limited(mut resp: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>> {
+    if let Some(len) = resp.content_length()
+        && len > max_bytes as u64
+    {
+        bail!("image is too large (max {})", format_bytes(max_bytes));
+    }
+
+    let mut out = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if out.len().saturating_add(chunk.len()) > max_bytes {
+            bail!("image is too large (max {})", format_bytes(max_bytes));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
 }
 
 fn public_url(config: &FileStorageConfig, key: &str) -> String {

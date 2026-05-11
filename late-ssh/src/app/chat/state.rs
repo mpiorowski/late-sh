@@ -181,7 +181,6 @@ pub struct ChatState {
     pub(crate) requested_url_upload: Option<PendingUrlUpload>,
 
     // inline image rendering
-    pub(crate) http_client: reqwest::Client,
     pub(crate) inline_image_rx: Option<
         tokio::sync::mpsc::UnboundedReceiver<(uuid::Uuid, Vec<ratatui::text::Line<'static>>)>,
     >,
@@ -313,11 +312,6 @@ impl ChatState {
             inline_image_tx: Some(inline_image_tx),
             inline_image_cache: HashMap::new(),
             inline_image_requested: HashSet::new(),
-            http_client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .user_agent("late-sh/1.0")
-                .build()
-                .unwrap_or_default(),
             last_image_upload_at: None,
         }
     }
@@ -1541,9 +1535,9 @@ impl ChatState {
 
         if !self.is_admin
             && let Some(last) = self.last_image_upload_at
-            && last.elapsed() < std::time::Duration::from_secs(120)
+            && last.elapsed() < std::time::Duration::from_secs(30)
         {
-            let wait = 120 - last.elapsed().as_secs();
+            let wait = 30 - last.elapsed().as_secs();
             return Some(Banner::error(&format!(
                 "Please wait {}s before uploading another image",
                 wait
@@ -1647,7 +1641,7 @@ impl ChatState {
                     || lower_url.contains("catbox.moe");
 
                 if is_image {
-                    tracing::info!("Found image URL in chat: {}", url);
+                    tracing::trace!("found image url in chat: {}", url);
                     requests.push((msg.id, url.to_string()));
                 }
             }
@@ -1657,14 +1651,10 @@ impl ChatState {
             self.inline_image_requested.insert(msg_id);
             if !url.is_empty() {
                 let tx_clone = tx.clone();
-                let client = self.http_client.clone();
                 tokio::spawn(async move {
                     // High-detail thumbnail: 96 wide, max 10 rows (20 pixels)
                     if let Ok(lines) =
-                        crate::app::files::inline_image::fetch_and_render_image_with_client(
-                            client, url, 96, 10,
-                        )
-                        .await
+                        crate::app::files::inline_image::fetch_and_render_image(url, 96, 10).await
                     {
                         let _ = tx_clone.send((msg_id, lines));
                     }

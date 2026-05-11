@@ -5,46 +5,41 @@ use ratatui::{
     text::{Line, Span},
 };
 
+const MAX_DECODED_IMAGE_PIXELS: u64 = 25_000_000;
+
 pub async fn fetch_and_render_image(
     url: String,
     max_width: u32,
     max_height: u32,
 ) -> Result<Vec<Line<'static>>> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("late-sh/1.0")
-        .build()?;
-    fetch_and_render_image_with_client(client, url, max_width, max_height).await
-}
-
-pub async fn fetch_and_render_image_with_client(
-    client: reqwest::Client,
-    url: String,
-    max_width: u32,
-    max_height: u32,
-) -> Result<Vec<Line<'static>>> {
-    tracing::info!("Attempting to render inline image: {}", url);
-    let resp = client.get(&url).send().await?;
-    if !resp.status().is_success() {
-        tracing::error!("HTTP error fetching image ({}): {}", url, resp.status());
-        bail!("HTTP {}", resp.status());
-    }
-
-    let bytes = resp.bytes().await?;
-    tracing::info!("Image downloaded: {} bytes", bytes.len());
+    tracing::trace!("attempting to render inline image: {}", url);
+    let bytes = crate::app::files::image_upload::download_url_bytes(
+        &url,
+        std::time::Duration::from_secs(15),
+        crate::app::files::image_upload::max_upload_bytes(),
+    )
+    .await?;
+    tracing::trace!("image downloaded: {} bytes", bytes.len());
 
     tokio::task::spawn_blocking(move || {
-        tracing::info!("Decoding image...");
+        tracing::trace!("decoding image...");
         let img = match image::load_from_memory(&bytes) {
             Ok(img) => img,
             Err(e) => {
-                tracing::error!("Image decoding failed: {}", e);
+                tracing::trace!("image decoding failed: {}", e);
                 return Err(e.into());
             }
         };
-        tracing::info!("Image decoded: {}x{}", img.width(), img.height());
+        tracing::trace!("image decoded: {}x{}", img.width(), img.height());
 
         let (width, height) = img.dimensions();
+        if width == 0 || height == 0 {
+            bail!("image has invalid dimensions");
+        }
+        let pixel_count = u64::from(width) * u64::from(height);
+        if pixel_count > MAX_DECODED_IMAGE_PIXELS {
+            bail!("image dimensions are too large");
+        }
         let target_width = width.min(max_width);
         let target_height = height.min(max_height * 2);
 
