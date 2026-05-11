@@ -257,7 +257,9 @@ async fn validate_download_url(raw_url: &str) -> Result<ValidatedDownloadUrl> {
     {
         bail!("private network urls are not allowed");
     }
-    let port = url.port_or_known_default().context("url must include a port")?;
+    let port = url
+        .port_or_known_default()
+        .context("url must include a port")?;
     let addrs = if let Ok(ip) = host.parse::<IpAddr>() {
         vec![SocketAddr::new(ip, port)]
     } else {
@@ -273,11 +275,7 @@ async fn validate_download_url(raw_url: &str) -> Result<ValidatedDownloadUrl> {
         bail!("private network urls are not allowed");
     }
 
-    Ok(ValidatedDownloadUrl {
-        url,
-        host,
-        addrs,
-    })
+    Ok(ValidatedDownloadUrl { url, host, addrs })
 }
 
 fn is_blocked_ip(ip: IpAddr) -> bool {

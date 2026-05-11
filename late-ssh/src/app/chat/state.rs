@@ -38,6 +38,8 @@ pub(crate) const ROOM_JUMP_KEYS: &[u8] =
 const USER_CREATED_CHANNEL_NAME_MAX_CHARS: usize = 16;
 const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
 const REACTION_OWNER_COLUMNS: usize = 3;
+const INLINE_IMAGE_FETCHES_PER_TICK: usize = 8;
+const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionMatch {
@@ -189,6 +191,7 @@ pub struct ChatState {
     pub(crate) inline_image_cache:
         std::collections::HashMap<uuid::Uuid, Vec<ratatui::text::Line<'static>>>,
     pub(crate) inline_image_requested: std::collections::HashSet<uuid::Uuid>,
+    inline_image_tracked_order: VecDeque<uuid::Uuid>,
     pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
@@ -312,6 +315,7 @@ impl ChatState {
             inline_image_tx: Some(inline_image_tx),
             inline_image_cache: HashMap::new(),
             inline_image_requested: HashSet::new(),
+            inline_image_tracked_order: VecDeque::new(),
             last_image_upload_at: None,
         }
     }
@@ -1591,8 +1595,13 @@ impl ChatState {
         let Some(rx) = self.inline_image_rx.as_mut() else {
             return;
         };
+        let mut received_ids = Vec::new();
         while let Ok((msg_id, lines)) = rx.try_recv() {
             self.inline_image_cache.insert(msg_id, lines);
+            received_ids.push(msg_id);
+        }
+        for msg_id in received_ids {
+            self.track_inline_image_id(msg_id);
         }
 
         // Request missing images for currently visible room
@@ -1643,12 +1652,16 @@ impl ChatState {
                 if is_image {
                     tracing::trace!("found image url in chat: {}", url);
                     requests.push((msg.id, url.to_string()));
+                    if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
+                        break;
+                    }
                 }
             }
         }
 
         for (msg_id, url) in requests {
             self.inline_image_requested.insert(msg_id);
+            self.track_inline_image_id(msg_id);
             if !url.is_empty() {
                 let tx_clone = tx.clone();
                 tokio::spawn(async move {
@@ -1659,6 +1672,23 @@ impl ChatState {
                         let _ = tx_clone.send((msg_id, lines));
                     }
                 });
+            }
+        }
+    }
+
+    fn track_inline_image_id(&mut self, msg_id: Uuid) {
+        if !self.inline_image_cache.contains_key(&msg_id)
+            && !self.inline_image_requested.contains(&msg_id)
+        {
+            return;
+        }
+        if !self.inline_image_tracked_order.contains(&msg_id) {
+            self.inline_image_tracked_order.push_back(msg_id);
+        }
+        while self.inline_image_tracked_order.len() > INLINE_IMAGE_TRACKED_LIMIT {
+            if let Some(old_id) = self.inline_image_tracked_order.pop_front() {
+                self.inline_image_requested.remove(&old_id);
+                self.inline_image_cache.remove(&old_id);
             }
         }
     }
