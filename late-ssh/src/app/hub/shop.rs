@@ -1,40 +1,66 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 use crate::app::common::theme;
 
 pub fn draw(frame: &mut Frame, area: Rect) {
-    draw_placeholder(
-        frame,
-        area,
-        "Shop",
-        "Late Chips marketplace will live here.",
+    let sections = Layout::vertical([
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // hint
+        Constraint::Length(1), // breathing
+        Constraint::Min(0),    // body
+    ])
+    .split(area);
+
+    frame.render_widget(Paragraph::new(section_heading("Shop")), sections[0]);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "Spend Late Chips on cosmetics, boosters and prestige items. Coming in v2.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        sections[1],
     );
+
+    let categories = vec![
+        bullet("Chat presence", "username colors · titles · custom join lines"),
+        bullet("Profile", "frames · banners · portraits · bio styling"),
+        bullet("Bonsai & aquarium", "tree species · pots · weather · fish"),
+        bullet("Game cosmetics", "card backs · felt · piece themes · tile skins"),
+        bullet("Music boosters", "force-vote · skip-vote · queue-jump (consumable)"),
+        bullet("Themes & dashboard", "premium themes · MOTD lines · palette tweaks"),
+        bullet("Seasonal drops", "monthly limited cosmetics · holiday badges"),
+    ];
+    frame.render_widget(Paragraph::new(categories), sections[3]);
 }
 
-fn draw_placeholder(frame: &mut Frame, area: Rect, title: &str, message: &str) {
-    let block = Block::default()
-        .title(format!(" {title} "))
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            message.to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        )))
-        .alignment(Alignment::Center),
-        inner,
-    );
+fn bullet(label: &str, hint: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("   · ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(
+            format!("{label:<20}"),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ),
+        Span::styled(hint.to_string(), Style::default().fg(theme::TEXT_DIM())),
+    ])
+}
+
+fn section_heading(title: &str) -> Line<'static> {
+    let dim = Style::default().fg(theme::BORDER());
+    let accent = Style::default()
+        .fg(theme::AMBER())
+        .add_modifier(Modifier::BOLD);
+    Line::from(vec![
+        Span::styled("  ── ", dim),
+        Span::styled(title.to_string(), accent),
+        Span::styled(" ──", dim),
+    ])
 }

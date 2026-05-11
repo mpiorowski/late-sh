@@ -99,14 +99,6 @@ impl BonsaiService {
         }
         DailyCare::mark_watered(&client, user_id, today).await?;
 
-        // Grant chips for watering
-        late_core::models::chips::UserChips::add_bonus(
-            &client,
-            user_id,
-            late_core::models::chips::BONSAI_WATER_BONUS,
-        )
-        .await?;
-
         // Broadcast
         let username = late_core::models::profile::fetch_username(&client, user_id).await;
         let _ = self

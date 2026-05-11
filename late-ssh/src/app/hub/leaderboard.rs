@@ -1,167 +1,93 @@
 use late_core::models::leaderboard::{HighScoreEntry, LeaderboardData, RankedEntry};
 use ratatui::{
     Frame,
-    layout::{Constraint, Margin, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::Paragraph,
 };
 use uuid::Uuid;
 
 use crate::app::common::theme;
 
+const TOP_LIMIT_RANKED: usize = 10;
+const TOP_LIMIT_SCORE: usize = 5;
+
 pub fn draw(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
-    let layout = ratatui::layout::Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(12),
+    // The 124x40 modal gives us a body of ~33 rows. We split into two equal
+    // rows of boards: chips/arcade up top (top 10 each), score games at the
+    // bottom (monthly top 5 + all-time top 5 stacked vertically per game).
+    let rows = Layout::vertical([
+        Constraint::Percentage(50), // chips + arcade
+        Constraint::Length(1),      // breathing
+        Constraint::Min(15),        // score games
     ])
     .split(area);
 
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw("  "),
-            Span::styled("monthly UTC", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(
-                " boards refresh every 30s",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ])),
-        layout[1],
-    );
-
-    draw_boards(frame, layout[2], data, user_id);
+    draw_top_row(frame, rows[0], data, user_id);
+    draw_score_row(frame, rows[2], data, user_id);
 }
 
-fn draw_boards(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
-    if area.width >= 88 && area.height >= 20 {
-        let columns =
-            ratatui::layout::Layout::horizontal([Constraint::Percentage(44), Constraint::Min(48)])
-                .split(area);
-        let left = ratatui::layout::Layout::vertical([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .split(columns[0]);
-        let right = ratatui::layout::Layout::vertical([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-        ])
-        .split(columns[1]);
+fn draw_top_row(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
+    let columns =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
+    draw_ranked_panel(
+        frame,
+        columns[0],
+        user_id,
+        RankedBoardView {
+            title: "Top Chips",
+            unit: "chips",
+            entries: &data.monthly_chip_earners,
+            empty: "no chip earnings yet this month",
+            hint: "from daily puzzles · poker/blackjack pots",
+        },
+    );
+    draw_ranked_panel(
+        frame,
+        columns[1],
+        user_id,
+        RankedBoardView {
+            title: "Arcade Wins",
+            unit: "pts",
+            entries: &data.arcade_champions,
+            empty: "no daily puzzle wins yet this month",
+            hint: "daily puzzles · easy 1 · medium 3 · hard 5",
+        },
+    );
+}
 
-        draw_ranked_board(
-            frame,
-            left[0],
-            user_id,
-            RankedBoardView {
-                title: "Top Chips",
-                unit: "chips",
-                entries: &data.monthly_chip_earners,
-                empty: "No chip earnings yet this month",
-                hints: &["positive chip gains this UTC month"],
-            },
-        );
-        draw_ranked_board(
-            frame,
-            left[1],
-            user_id,
-            RankedBoardView {
-                title: "Arcade Wins",
-                unit: "pts",
-                entries: &data.arcade_champions,
-                empty: "No daily puzzle wins yet this month",
-                hints: &[
-                    "daily puzzle wins, weighted by difficulty",
-                    "1 easy/draw-1, 3 medium, 5 hard/draw-3",
-                ],
-            },
-        );
-        draw_score_board(
-            frame,
-            right[0],
-            "Tetris",
-            &data.monthly_tetris_high_scores,
-            high_scores_for(data, "Tetris"),
-            user_id,
-        );
-        draw_score_board(
-            frame,
-            right[1],
-            "2048",
-            &data.monthly_2048_high_scores,
-            high_scores_for(data, "2048"),
-            user_id,
-        );
-        draw_score_board(
-            frame,
-            right[2],
-            "Snake",
-            &data.monthly_snake_high_scores,
-            high_scores_for(data, "Snake"),
-            user_id,
-        );
-    } else {
-        let rows = ratatui::layout::Layout::vertical([
-            Constraint::Ratio(1, 5),
-            Constraint::Ratio(1, 5),
-            Constraint::Ratio(1, 5),
-            Constraint::Ratio(1, 5),
-            Constraint::Ratio(1, 5),
-        ])
-        .split(area);
-        draw_ranked_board(
-            frame,
-            rows[0],
-            user_id,
-            RankedBoardView {
-                title: "Top Chips",
-                unit: "chips",
-                entries: &data.monthly_chip_earners,
-                empty: "No chip earnings yet this month",
-                hints: &["positive chip gains this UTC month"],
-            },
-        );
-        draw_ranked_board(
-            frame,
-            rows[1],
-            user_id,
-            RankedBoardView {
-                title: "Arcade Wins",
-                unit: "pts",
-                entries: &data.arcade_champions,
-                empty: "No daily puzzle wins yet this month",
-                hints: &[
-                    "daily puzzle wins, weighted by difficulty",
-                    "1 easy/draw-1, 3 medium, 5 hard/draw-3",
-                ],
-            },
-        );
-        draw_score_board(
-            frame,
-            rows[2],
-            "Tetris",
-            &data.monthly_tetris_high_scores,
-            high_scores_for(data, "Tetris"),
-            user_id,
-        );
-        draw_score_board(
-            frame,
-            rows[3],
-            "2048",
-            &data.monthly_2048_high_scores,
-            high_scores_for(data, "2048"),
-            user_id,
-        );
-        draw_score_board(
-            frame,
-            rows[4],
-            "Snake",
-            &data.monthly_snake_high_scores,
-            high_scores_for(data, "Snake"),
-            user_id,
-        );
-    }
+fn draw_score_row(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
+    let columns = Layout::horizontal([
+        Constraint::Percentage(34),
+        Constraint::Percentage(33),
+        Constraint::Percentage(33),
+    ])
+    .split(area);
+    draw_score_panel(
+        frame,
+        columns[0],
+        "Tetris",
+        &data.monthly_tetris_high_scores,
+        high_scores_for(data, "Tetris"),
+        user_id,
+    );
+    draw_score_panel(
+        frame,
+        columns[1],
+        "2048",
+        &data.monthly_2048_high_scores,
+        high_scores_for(data, "2048"),
+        user_id,
+    );
+    draw_score_panel(
+        frame,
+        columns[2],
+        "Snake",
+        &data.monthly_snake_high_scores,
+        high_scores_for(data, "Snake"),
+        user_id,
+    );
 }
 
 fn high_scores_for<'a>(data: &'a LeaderboardData, game: &str) -> Vec<&'a HighScoreEntry> {
@@ -176,57 +102,73 @@ struct RankedBoardView<'a> {
     unit: &'a str,
     entries: &'a [RankedEntry],
     empty: &'a str,
-    hints: &'a [&'a str],
+    hint: &'a str,
 }
 
-fn draw_ranked_board(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedBoardView<'_>) {
-    let block = panel_block(view.title);
-    let inner = block.inner(area).inner(Margin {
-        vertical: 0,
-        horizontal: 1,
-    });
-    frame.render_widget(block, area);
+fn draw_ranked_panel(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedBoardView<'_>) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let sections = Layout::vertical([
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // hint
+        Constraint::Length(1), // breathing
+        Constraint::Min(1),    // entries
+    ])
+    .split(area);
 
-    let mut lines = Vec::new();
-    push_hint_lines(&mut lines, view.hints, inner.width);
+    frame.render_widget(Paragraph::new(section_heading(view.title)), sections[0]);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(view.hint.to_string(), Style::default().fg(theme::TEXT_DIM())),
+        ])),
+        sections[1],
+    );
+
+    let body = sections[3];
+    let width = body.width as usize;
     if view.entries.is_empty() {
-        lines.push(Line::from(Span::styled(
-            view.empty.to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    } else {
-        let current_index = view
-            .entries
-            .iter()
-            .position(|entry| entry.user_id == user_id);
-        for row in board_rows(
-            view.entries.len(),
-            current_index,
-            visible_entry_count(inner.height.saturating_sub(lines.len() as u16)),
-            10,
-            3,
-        ) {
-            match row {
-                BoardRow::Entry(index) => {
-                    let entry = &view.entries[index];
-                    lines.push(ranked_line(
-                        entry.rank,
-                        &entry.username,
-                        entry.value,
-                        view.unit,
-                        entry.user_id == user_id,
-                        inner.width,
-                    ));
-                }
-                BoardRow::AroundYou => lines.push(around_you_line(inner.width)),
-            }
-        }
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    view.empty.to_string(),
+                    Style::default().fg(theme::TEXT_FAINT()),
+                ),
+            ])),
+            body,
+        );
+        return;
     }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+    let user_rank = view
+        .entries
+        .iter()
+        .position(|entry| entry.user_id == user_id);
+    let rows: Vec<RankedRow> = view
+        .entries
+        .iter()
+        .map(|entry| RankedRow {
+            rank: entry.rank,
+            username: entry.username.clone(),
+            value: entry.value,
+            user_id: entry.user_id,
+        })
+        .collect();
+    let lines = ranked_lines_from_rows(
+        &rows,
+        view.unit,
+        user_id,
+        user_rank,
+        body.height as usize,
+        width,
+        TOP_LIMIT_RANKED,
+    );
+    frame.render_widget(Paragraph::new(lines), body);
 }
 
-fn draw_score_board(
+fn draw_score_panel(
     frame: &mut Frame,
     area: Rect,
     title: &str,
@@ -234,196 +176,195 @@ fn draw_score_board(
     all_time: Vec<&HighScoreEntry>,
     user_id: Uuid,
 ) {
-    let block = panel_block(title);
-    let inner = block.inner(area).inner(Margin {
-        vertical: 0,
-        horizontal: 1,
-    });
-    frame.render_widget(block, area);
-
-    let columns = ratatui::layout::Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let sections = Layout::vertical([
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // hint
+        Constraint::Length(1), // breathing
+        Constraint::Length(6), // monthly: subtitle + up to 5 rows
+        Constraint::Length(1), // breathing
+        Constraint::Min(6),    // all-time: subtitle + up to 5 rows
     ])
-    .split(inner);
+    .split(area);
+
+    frame.render_widget(Paragraph::new(section_heading(title)), sections[0]);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "monthly resets the 1st · all-time persists",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        sections[1],
+    );
+
     draw_score_list(
         frame,
-        columns[0],
+        sections[3],
         "monthly",
         monthly.iter().collect(),
         user_id,
-        "No monthly scores",
-        &["best score this UTC month"],
     );
-    draw_score_list(
-        frame,
-        columns[1],
-        "all-time",
-        all_time,
-        user_id,
-        "No all-time scores",
-        &["personal bests"],
-    );
+    draw_score_list(frame, sections[5], "all-time", all_time, user_id);
 }
 
 fn draw_score_list(
     frame: &mut Frame,
     area: Rect,
-    title: &str,
+    sub_title: &str,
     entries: Vec<&HighScoreEntry>,
     user_id: Uuid,
-    empty: &str,
-    hints: &[&str],
 ) {
     if area.height == 0 {
         return;
     }
+    let width = area.width as usize;
 
-    let mut lines = vec![Line::from(Span::styled(
-        title.to_string(),
-        Style::default()
-            .fg(theme::AMBER_DIM())
-            .add_modifier(Modifier::BOLD),
-    ))];
-    push_hint_lines(&mut lines, hints, area.width);
-    if entries.is_empty() {
-        lines.push(Line::from(Span::styled(
-            empty.to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    } else {
-        let current_index = entries.iter().position(|entry| entry.user_id == user_id);
-        for row in board_rows(
-            entries.len(),
-            current_index,
-            visible_entry_count(area.height.saturating_sub(lines.len() as u16)),
-            3,
-            3,
-        ) {
-            match row {
-                BoardRow::Entry(index) => {
-                    let entry = entries[index];
-                    lines.push(score_line(
-                        entry.rank,
-                        &entry.username,
-                        i64::from(entry.score),
-                        entry.user_id == user_id,
-                        area.width,
-                    ));
-                }
-                BoardRow::AroundYou => lines.push(around_you_line(area.width)),
-            }
-        }
-    }
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
-}
-
-fn visible_entry_count(height: u16) -> usize {
-    usize::from(height).clamp(1, 10)
-}
-
-fn push_hint_lines(lines: &mut Vec<Line<'static>>, hints: &[&str], width: u16) {
-    if width < 12 {
-        return;
-    }
-    for hint in hints {
-        lines.push(Line::from(Span::styled(
-            truncate(hint, width as usize),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BoardRow {
-    Entry(usize),
-    AroundYou,
-}
-
-fn board_rows(
-    entry_count: usize,
-    current_index: Option<usize>,
-    row_budget: usize,
-    top_limit: usize,
-    around_limit: usize,
-) -> Vec<BoardRow> {
-    if entry_count == 0 || row_budget == 0 {
-        return Vec::new();
-    }
-
-    let top_without_around = row_budget.min(top_limit).min(entry_count);
-    let Some(current_index) = current_index else {
-        return entry_rows(top_without_around);
-    };
-    if current_index < top_without_around {
-        return entry_rows(top_without_around);
-    }
-    if row_budget < 3 {
-        return vec![BoardRow::Entry(current_index)];
-    }
-
-    let around_count = row_budget
-        .saturating_sub(2)
-        .min(around_limit)
-        .min(entry_count)
-        .max(1);
-    let top_count = row_budget
-        .saturating_sub(around_count + 1)
-        .min(top_limit)
-        .min(entry_count);
-    let mut rows = entry_rows(top_count);
-    rows.push(BoardRow::AroundYou);
-
-    let (start, end) = centered_window(current_index, entry_count, around_count);
-    rows.extend(
-        (start..end)
-            .filter(|index| *index >= top_count)
-            .map(BoardRow::Entry),
-    );
-    rows.truncate(row_budget);
-    rows
-}
-
-fn entry_rows(count: usize) -> Vec<BoardRow> {
-    (0..count).map(BoardRow::Entry).collect()
-}
-
-fn centered_window(center: usize, len: usize, count: usize) -> (usize, usize) {
-    let count = count.min(len);
-    let half = count / 2;
-    let mut start = center.saturating_sub(half);
-    if start + count > len {
-        start = len.saturating_sub(count);
-    }
-    (start, start + count)
-}
-
-fn around_you_line(width: u16) -> Line<'static> {
-    let side = if width > 18 { "-- " } else { "" };
-    Line::from(vec![
-        Span::styled(side, Style::default().fg(theme::TEXT_DIM())),
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(area.height as usize);
+    lines.push(Line::from(vec![
+        Span::raw("  "),
         Span::styled(
-            "around you",
+            sub_title.to_string(),
             Style::default()
                 .fg(theme::AMBER_DIM())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(side, Style::default().fg(theme::TEXT_DIM())),
+    ]));
+
+    let body_room = (area.height as usize).saturating_sub(1);
+    if body_room == 0 {
+        frame.render_widget(Paragraph::new(lines), area);
+        return;
+    }
+
+    if entries.is_empty() {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "no scores yet".to_string(),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ),
+        ]));
+    } else {
+        let rows: Vec<RankedRow> = entries
+            .iter()
+            .map(|entry| RankedRow {
+                rank: entry.rank,
+                username: entry.username.clone(),
+                value: i64::from(entry.score),
+                user_id: entry.user_id,
+            })
+            .collect();
+        let user_rank = rows.iter().position(|row| row.user_id == user_id);
+        lines.extend(ranked_lines_from_rows(
+            &rows,
+            "",
+            user_id,
+            user_rank,
+            body_room,
+            width,
+            TOP_LIMIT_SCORE,
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+#[derive(Clone)]
+struct RankedRow {
+    rank: i64,
+    username: String,
+    value: i64,
+    user_id: Uuid,
+}
+
+/// Layout note: shows the first `top_limit` rows. If the current user is
+/// ranked below that, append a `…` divider plus their row so they always
+/// see where they stand without losing the top of the board. The function
+/// reduces `top_count` automatically when the height budget can't fit both
+/// the full top list and the user tail.
+fn ranked_lines_from_rows(
+    rows: &[RankedRow],
+    unit: &str,
+    user_id: Uuid,
+    user_index: Option<usize>,
+    height: usize,
+    width: usize,
+    top_limit: usize,
+) -> Vec<Line<'static>> {
+    if rows.is_empty() || height == 0 {
+        return Vec::new();
+    }
+
+    let needs_user_tail = match user_index {
+        Some(idx) => idx >= top_limit,
+        None => false,
+    };
+    let tail_cost = if needs_user_tail { 2 } else { 0 };
+    let top_count = top_limit.min(rows.len()).min(height.saturating_sub(tail_cost));
+
+    let mut lines = Vec::with_capacity(height);
+    for row in rows.iter().take(top_count) {
+        let is_user = row.user_id == user_id;
+        lines.push(ranked_line(row, unit, is_user, width));
+    }
+
+    if needs_user_tail && lines.len() + 2 <= height {
+        lines.push(divider_line(width));
+        if let Some(idx) = user_index {
+            let row = &rows[idx];
+            lines.push(ranked_line(row, unit, true, width));
+        }
+    }
+
+    lines
+}
+
+fn divider_line(width: usize) -> Line<'static> {
+    let dots = "  …";
+    let pad = width.saturating_sub(dots.chars().count());
+    Line::from(vec![
+        Span::styled(
+            dots.to_string(),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ),
+        Span::raw(" ".repeat(pad)),
     ])
 }
 
-fn ranked_line(
-    rank: i64,
-    username: &str,
-    value: i64,
-    unit: &str,
-    is_current_user: bool,
-    width: u16,
-) -> Line<'static> {
-    let rank_style = if is_current_user || rank == 1 {
+fn ranked_line(row: &RankedRow, unit: &str, is_current_user: bool, width: usize) -> Line<'static> {
+    let marker = if is_current_user { "›" } else { " " };
+    let rank_text = format!("#{:<3}", row.rank);
+    let value_text = if unit.is_empty() {
+        format_number(row.value)
+    } else {
+        format!("{} {}", format_number(row.value), unit)
+    };
+
+    let prefix = format!(" {marker} ");
+    let prefix_style = if is_current_user {
         Style::default()
             .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else if row.rank == 1 {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let rank_style = if is_current_user {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else if row.rank == 1 {
+        Style::default()
+            .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_DIM())
@@ -431,142 +372,186 @@ fn ranked_line(
     let name_style = if is_current_user {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_HIGHLIGHT())
+            .bg(theme::BG_SELECTION())
             .add_modifier(Modifier::BOLD)
-    } else if rank == 1 {
+    } else if row.rank == 1 {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT())
     };
-    let value_style = if is_current_user || rank == 1 {
+    let value_style = if is_current_user {
         Style::default()
             .fg(theme::SUCCESS())
+            .bg(theme::BG_SELECTION())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::SUCCESS())
     };
-    let reserved = 18 + unit.len();
-    let max_name = (width as usize).saturating_sub(reserved).max(4);
-    let name = truncate(username, max_name);
+    let trailing_style = if is_current_user {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    let prefix_w = prefix.chars().count();
+    let rank_w = rank_text.chars().count();
+    let value_w = value_text.chars().count();
+    let gutter = 1;
+    let used_fixed = prefix_w + rank_w + gutter + value_w + gutter;
+    let name_room = width.saturating_sub(used_fixed).max(3);
+    let truncated = truncate(&row.username, name_room);
+    let name_pad = name_room.saturating_sub(truncated.chars().count());
 
     Line::from(vec![
-        Span::styled(format!("#{rank:<3}"), rank_style),
-        Span::styled(name, name_style),
-        Span::raw(" "),
-        Span::styled(format!("{value} {unit}"), value_style),
+        Span::styled(prefix, prefix_style),
+        Span::styled(rank_text, rank_style),
+        Span::styled(" ", trailing_style),
+        Span::styled(truncated, name_style),
+        Span::styled(" ".repeat(name_pad + gutter), trailing_style),
+        Span::styled(value_text, value_style),
     ])
 }
 
-fn score_line(
-    rank: i64,
-    username: &str,
-    score: i64,
-    is_current_user: bool,
-    width: u16,
-) -> Line<'static> {
-    let rank_style = if is_current_user || rank == 1 {
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
-    let name_style = if is_current_user {
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_HIGHLIGHT())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT())
-    };
-    let reserved = 10usize;
-    let max_name = (width as usize).saturating_sub(reserved).max(3);
+fn section_heading(title: &str) -> Line<'static> {
+    let dim = Style::default().fg(theme::BORDER());
+    let accent = Style::default()
+        .fg(theme::AMBER())
+        .add_modifier(Modifier::BOLD);
     Line::from(vec![
-        Span::styled(format!("#{rank} "), rank_style),
-        Span::styled(truncate(username, max_name), name_style),
-        Span::raw(" "),
-        Span::styled(
-            score.to_string(),
-            if is_current_user {
-                Style::default()
-                    .fg(theme::SUCCESS())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::SUCCESS())
-            },
-        ),
+        Span::styled("  ── ", dim),
+        Span::styled(title.to_string(), accent),
+        Span::styled(" ──", dim),
     ])
-}
-
-fn panel_block(title: &str) -> Block<'static> {
-    Block::default()
-        .title(format!(" {title} "))
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()))
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
-    let mut out: String = value.chars().take(max_chars).collect();
-    if value.chars().count() > max_chars && max_chars > 1 {
-        out.pop();
-        out.push('~');
+    let count = value.chars().count();
+    if count <= max_chars {
+        return value.to_string();
     }
+    if max_chars <= 1 {
+        return value.chars().take(max_chars).collect();
+    }
+    let mut out: String = value.chars().take(max_chars - 1).collect();
+    out.push('…');
     out
+}
+
+fn format_number(value: i64) -> String {
+    let sign = if value < 0 { "-" } else { "" };
+    let abs = value.unsigned_abs();
+    let digits = abs.to_string();
+    let bytes = digits.as_bytes();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    format!("{sign}{out}")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BoardRow, board_rows};
+    use super::*;
 
-    #[test]
-    fn board_rows_uses_plain_top_rows_when_current_user_is_visible() {
-        assert_eq!(
-            board_rows(20, Some(2), 6, 10, 3),
-            vec![
-                BoardRow::Entry(0),
-                BoardRow::Entry(1),
-                BoardRow::Entry(2),
-                BoardRow::Entry(3),
-                BoardRow::Entry(4),
-                BoardRow::Entry(5),
-            ]
-        );
+    fn row(rank: i64, name: &str, value: i64) -> RankedRow {
+        RankedRow {
+            rank,
+            username: name.to_string(),
+            value,
+            user_id: Uuid::nil(),
+        }
+    }
+
+    fn user_row(rank: i64, name: &str, value: i64, id: Uuid) -> RankedRow {
+        RankedRow {
+            rank,
+            username: name.to_string(),
+            value,
+            user_id: id,
+        }
     }
 
     #[test]
-    fn board_rows_adds_around_you_window_for_deep_rank() {
-        assert_eq!(
-            board_rows(100, Some(49), 6, 10, 3),
-            vec![
-                BoardRow::Entry(0),
-                BoardRow::Entry(1),
-                BoardRow::AroundYou,
-                BoardRow::Entry(48),
-                BoardRow::Entry(49),
-                BoardRow::Entry(50),
-            ]
-        );
+    fn top_visible_users_render_top_only() {
+        let me = Uuid::now_v7();
+        let rows = vec![
+            user_row(1, "alice", 1000, me),
+            row(2, "bob", 800),
+            row(3, "carol", 600),
+        ];
+        let lines = ranked_lines_from_rows(&rows, "chips", me, Some(0), 12, 40, 10);
+        assert_eq!(lines.len(), 3);
     }
 
     #[test]
-    fn board_rows_keeps_current_user_visible_at_bottom_edge() {
-        assert_eq!(
-            board_rows(50, Some(49), 6, 10, 3),
-            vec![
-                BoardRow::Entry(0),
-                BoardRow::Entry(1),
-                BoardRow::AroundYou,
-                BoardRow::Entry(47),
-                BoardRow::Entry(48),
-                BoardRow::Entry(49),
-            ]
-        );
+    fn deep_rank_appends_divider_and_user() {
+        let me = Uuid::now_v7();
+        let mut rows: Vec<RankedRow> = (1..=50)
+            .map(|n| row(n, &format!("u{n}"), 1000 - n * 10))
+            .collect();
+        rows.push(user_row(51, "me", 100, me));
+        let lines = ranked_lines_from_rows(&rows, "chips", me, Some(50), 14, 40, 10);
+        // 10 top rows + divider + me
+        assert_eq!(lines.len(), 12);
+    }
+
+    #[test]
+    fn no_user_no_tail() {
+        let nobody = Uuid::now_v7();
+        let rows: Vec<RankedRow> = (1..=12).map(|n| row(n, &format!("u{n}"), 100)).collect();
+        let lines = ranked_lines_from_rows(&rows, "chips", nobody, None, 12, 40, 10);
+        assert_eq!(lines.len(), 10);
+    }
+
+    #[test]
+    fn tight_budget_keeps_tail_visible() {
+        // Even a 3-row budget reserves room for divider + you so a low-rank
+        // user always sees where they stand.
+        let me = Uuid::now_v7();
+        let mut rows: Vec<RankedRow> = (1..=50)
+            .map(|n| row(n, &format!("u{n}"), 100))
+            .collect();
+        rows.push(user_row(51, "me", 1, me));
+        let lines = ranked_lines_from_rows(&rows, "chips", me, Some(50), 3, 40, 10);
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn score_panel_top_five_fits_six_row_budget() {
+        let me = Uuid::now_v7();
+        let rows: Vec<RankedRow> = (1..=8)
+            .map(|n| {
+                if n == 7 {
+                    user_row(n, "me", 100, me)
+                } else {
+                    row(n, &format!("u{n}"), 1000 - n * 10)
+                }
+            })
+            .collect();
+        // Budget 5 entries; user at index 6 (rank 7) is outside top 5 → tail.
+        let lines = ranked_lines_from_rows(&rows, "", me, Some(6), 5, 30, 5);
+        // 3 top + divider + me = 5
+        assert_eq!(lines.len(), 5);
+    }
+
+    #[test]
+    fn format_number_thousands() {
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(999), "999");
+        assert_eq!(format_number(1_000), "1,000");
+        assert_eq!(format_number(12_345_678), "12,345,678");
+        assert_eq!(format_number(-1_234), "-1,234");
+    }
+
+    #[test]
+    fn truncate_uses_ellipsis() {
+        assert_eq!(truncate("abcdef", 4), "abc…");
+        assert_eq!(truncate("abc", 4), "abc");
+        assert_eq!(truncate("abc", 3), "abc");
     }
 }

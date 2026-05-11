@@ -5,7 +5,6 @@ use chrono::NaiveDate;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-pub const BONSAI_WATER_BONUS: i64 = 200;
 pub const CHIP_FLOOR: i64 = 100;
 
 /// Map a difficulty key to its chip bonus.
@@ -203,7 +202,6 @@ mod tests {
 
     #[test]
     fn constants() {
-        assert_eq!(BONSAI_WATER_BONUS, 200);
         assert_eq!(CHIP_FLOOR, 100);
     }
 }
