@@ -904,18 +904,16 @@ fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {
                         "",
                     )
                 }
+            } else if state.can_raise() {
+                key_hint(
+                    &format!(
+                        "C check · B bet {} · A all-in · {auto_hint} · F fold · [/] bet",
+                        state.selected_raise().max(state.min_raise())
+                    ),
+                    "",
+                )
             } else {
-                if state.can_raise() {
-                    key_hint(
-                        &format!(
-                            "C check · B bet {} · A all-in · {auto_hint} · F fold · [/] bet",
-                            state.selected_raise().max(state.min_raise())
-                        ),
-                        "",
-                    )
-                } else {
-                    key_hint(&format!("C check · {auto_hint} · F fold"), "")
-                }
+                key_hint(&format!("C check · {auto_hint} · F fold"), "")
             }
         }
         PokerPhase::PreFlop | PokerPhase::Flop | PokerPhase::Turn | PokerPhase::River => key_hint(
