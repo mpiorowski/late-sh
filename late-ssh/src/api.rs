@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::{
-        ConnectInfo, Query, State as AxumState, WebSocketUpgrade,
+        ConnectInfo, DefaultBodyLimit, Query, State as AxumState, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     http::StatusCode,
@@ -94,6 +94,7 @@ pub async fn run_api_server_with_listener(
         .merge(crate::native_api::router())
         .layer(cors)
         .layer(middleware::from_fn(http_telemetry_middleware))
+        .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state(state);
 
     let shutdown = shutdown.unwrap_or_default();
