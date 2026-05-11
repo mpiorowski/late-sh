@@ -144,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
     let twenty_forty_eight_service =
         late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
     let tetris_service = late_ssh::app::games::tetris::svc::TetrisService::new(db.clone());
+    let snake_service = late_ssh::app::games::snake::svc::SnakeService::new(db.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
     rooms_service.refresh_task();
@@ -167,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
         poker_table_manager,
         tictactoe_table_manager,
     );
+    room_game_registry.start_general_seat_announcer_task(chat_service.clone());
     let sudoku_service = late_ssh::app::games::sudoku::svc::SudokuService::new(
         db.clone(),
         activity_tx.clone(),
@@ -255,6 +257,7 @@ async fn main() -> anyhow::Result<()> {
         profile_service,
         twenty_forty_eight_service,
         tetris_service,
+        snake_service,
         sudoku_service,
         nonogram_service,
         solitaire_service,

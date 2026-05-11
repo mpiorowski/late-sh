@@ -273,12 +273,9 @@ fn inline_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
             continue;
         }
 
-        if let Some(after_open) = rest.strip_prefix('`')
-            && let Some(end_rel) = after_open.find('`')
-            && end_rel > 0
-        {
+        if let Some((marker_len, end_rel)) = inline_code_bounds(rest) {
             push_plain(&mut spans, &text[plain_start..idx], base_style);
-            let inner_start = idx + 1;
+            let inner_start = idx + marker_len;
             let inner_end = inner_start + end_rel;
             let code_style = base_style
                 .fg(theme::TEXT_BRIGHT())
@@ -289,7 +286,7 @@ fn inline_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
                 code_style,
             ));
             spans.push(Span::styled(" ", code_style));
-            idx = inner_end + 1;
+            idx = inner_end + marker_len;
             plain_start = idx;
             continue;
         }
@@ -364,6 +361,17 @@ fn inline_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
 
     push_plain(&mut spans, &text[plain_start..], base_style);
     spans
+}
+
+fn inline_code_bounds(text: &str) -> Option<(usize, usize)> {
+    let marker_len = text.chars().take_while(|ch| *ch == '`').count();
+    if marker_len == 0 {
+        return None;
+    }
+    let marker = &text[..marker_len];
+    let after_open = &text[marker_len..];
+    let end_rel = after_open.find(marker)?;
+    (end_rel > 0).then_some((marker_len, end_rel))
 }
 
 fn push_plain(spans: &mut Vec<Span<'static>>, text: &str, style: Style) {
@@ -642,6 +650,19 @@ mod tests {
             .expect("code span");
         assert!(!code_span.style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(code_span.style.bg, Some(theme::BG_HIGHLIGHT()));
+    }
+
+    #[test]
+    fn renders_inline_code_with_embedded_backtick() {
+        let lines = render_body_to_lines("``(╯`Д´)╯︵ ┻━┻``", 80, Span::raw(""), Style::default());
+        assert_eq!(lines_to_strings(&lines), vec![" (╯`Д´)╯︵ ┻━┻ "]);
+        assert!(
+            lines[0]
+                .spans
+                .iter()
+                .any(|span| span.content.contains("(╯`Д´)╯︵ ┻━┻")
+                    && span.style.bg == Some(theme::BG_HIGHLIGHT()))
+        );
     }
 
     #[test]

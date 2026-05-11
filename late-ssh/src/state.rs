@@ -13,6 +13,7 @@ use crate::app::games::leaderboard::svc::LeaderboardService;
 use crate::app::games::minesweeper::svc::MinesweeperService;
 use crate::app::games::nonogram::state::Library as NonogramLibrary;
 use crate::app::games::nonogram::svc::NonogramService;
+use crate::app::games::snake::svc::SnakeService;
 use crate::app::games::solitaire::svc::SolitaireService;
 use crate::app::games::sudoku::svc::SudokuService;
 use crate::app::games::tetris::svc::TetrisService;
@@ -69,6 +70,7 @@ pub struct State {
     pub profile_service: ProfileService,
     pub twenty_forty_eight_service: TwentyFortyEightService,
     pub tetris_service: TetrisService,
+    pub snake_service: SnakeService,
     pub sudoku_service: SudokuService,
     pub nonogram_service: NonogramService,
     pub solitaire_service: SolitaireService,

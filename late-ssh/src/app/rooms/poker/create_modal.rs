@@ -306,11 +306,11 @@ where
 fn footer_line() -> Line<'static> {
     Line::from(vec![
         Span::raw("  "),
-        Span::styled("Tab up/down", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("Tab ↑↓", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" field  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("left/right", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" cycle  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" create  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
@@ -328,14 +328,14 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 
 fn section_heading(title: &str) -> Line<'static> {
     Line::from(vec![
-        Span::styled("  -- ", Style::default().fg(theme::BORDER())),
+        Span::styled("  ── ", Style::default().fg(theme::BORDER())),
         Span::styled(
             title.to_string(),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" --", Style::default().fg(theme::BORDER())),
+        Span::styled(" ──", Style::default().fg(theme::BORDER())),
     ])
 }
 
@@ -345,7 +345,7 @@ struct ValueSpan {
 }
 
 fn field_row(focused: bool, label: &str, value: ValueSpan, width: usize) -> Line<'static> {
-    let marker = if focused { ">" } else { " " };
+    let marker = if focused { "›" } else { " " };
     let prefix = format!(" {marker} ");
     let label_text = format!("{label:<LABEL_WIDTH$}");
     let used = prefix.chars().count() + label_text.chars().count() + value.text.chars().count();

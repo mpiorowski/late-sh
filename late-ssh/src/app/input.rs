@@ -86,7 +86,6 @@ pub enum ParsedInput {
     // Alt+Enter inserts a newline. `ESC`-prefixed control chords that would
     // otherwise wedge vte are pre-scanned before the parser sees them.
     AltEnter,
-    CtrlM,
     // Alt+S submits without closing the composer. Picked over Ctrl+Enter
     // because tmux collapses Ctrl-modified Enter to bare `\r` unless the
     // kitty keyboard protocol is forwarded, which it isn't by default.
@@ -350,15 +349,6 @@ impl Perform for VtCollector {
             // Kitty keyboard protocol for Ctrl+/.
             'u' if p0 == Some(b'/' as u16) && p1 == Some(5) => {
                 self.events.push(ParsedInput::Byte(0x1F));
-            }
-            // Kitty/CSI-u modified-key forms for Ctrl+M. The legacy C0 byte
-            // is indistinguishable from Enter (CR), so only the explicit
-            // modified-key encoding can be routed globally without breaking
-            // normal Enter.
-            'u' if matches!(p0, Some(13) | Some(77) | Some(109))
-                && matches!(p1, Some(5) | Some(6)) =>
-            {
-                self.events.push(ParsedInput::CtrlM);
             }
             // Shift+Tab: xterm `CSI Z`.
             'Z' if intermediates.is_empty() => {
@@ -651,9 +641,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Ctrl+M's legacy byte is CR (Enter). Only route explicit modified-key
-    // encodings so normal Enter stays usable.
-    if matches!(event, ParsedInput::CtrlM) {
+    // Ctrl+G (BEL, 0x07) is the global leaderboard chord. Artboard keeps
+    // Ctrl+G for swatch slot 5.
+    if matches!(event, ParsedInput::Byte(0x07)) && app.screen != Screen::Artboard {
         open_leaderboard_modal_globally(app);
         return;
     }
@@ -769,7 +759,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::AltC => {}
-        ParsedInput::CtrlM => {}
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
@@ -1737,10 +1726,10 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 
     // When a dashboard two-key prefix is armed, slot digits belong to the
-    // prefix (`g3` favorite jump, `b3` blackjack room), not the global screen
+    // prefix (`g3` favorite jump, `b3` dashboard box), not the global screen
     // switcher. Let them fall through to dashboard::input::handle_key.
     if ctx.screen == Screen::Dashboard
-        && app.dashboard_blackjack_prefix_armed
+        && app.dashboard_box_prefix_armed
         && dashboard::input::dashboard_box_slot_for_key(byte).is_some()
     {
         return false;
@@ -2086,7 +2075,8 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
     }
 
     let ctx = InputContext::from_app(app);
-    if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Chat) && ctx.chat_composing {
+    if matches!(ctx.screen, Screen::Dashboard | Screen::Chat | Screen::Rooms) && ctx.chat_composing
+    {
         for ch in icon_str.chars() {
             app.chat.composer_push(ch);
         }

@@ -105,6 +105,10 @@ impl State {
         self.svc.fold_task(self.user_id);
     }
 
+    pub fn toggle_auto_check_fold(&self) {
+        self.svc.toggle_auto_check_fold_task(self.user_id);
+    }
+
     pub fn touch_activity(&self) {
         if self.is_seated() {
             self.svc.touch_activity_task(self.user_id);
@@ -146,6 +150,10 @@ impl State {
 
     pub fn can_all_in(&self) -> bool {
         self.can_raise() || (self.to_call() > 0 && self.balance <= self.to_call())
+    }
+
+    pub fn auto_check_fold(&self) -> bool {
+        self.private_snapshot.auto_check_fold
     }
 
     pub fn can_sync_external_chip_balance(&self) -> bool {

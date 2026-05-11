@@ -56,6 +56,7 @@ pub(crate) const GAME_SELECTION_SUDOKU: usize = 2;
 pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
+pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,8 +124,11 @@ pub struct SessionConfig {
     pub initial_2048_game: Option<late_core::models::twenty_forty_eight::Game>,
     pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
     pub tetris_service: crate::app::games::tetris::svc::TetrisService,
+    pub snake_service: crate::app::games::snake::svc::SnakeService,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
+    pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
+    pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
     pub sudoku_service: crate::app::games::sudoku::svc::SudokuService,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub nonogram_service: crate::app::games::nonogram::svc::NonogramService,
@@ -258,9 +262,10 @@ pub struct App {
     /// Any non-digit keystroke disarms and falls through to its normal
     /// handling.
     pub(crate) dashboard_g_prefix_armed: bool,
-    /// `true` after `b` on the dashboard, waiting for a blackjack room slot
-    /// key (`1..9`, `0`, `-`, `=`, `[`, `]`, `\`).
-    pub(crate) dashboard_blackjack_prefix_armed: bool,
+    /// `true` after `b` on the dashboard, waiting for a dashboard box slot
+    /// key (`1` for the featured room, `2` for dailies, `3` for wire,
+    /// `4` for announcements).
+    pub(crate) dashboard_box_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -294,6 +299,7 @@ pub struct App {
     pub(crate) rooms_snapshot: crate::app::rooms::svc::RoomsSnapshot,
     pub(crate) twenty_forty_eight_state: crate::app::games::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::games::tetris::state::State,
+    pub(crate) snake_state: crate::app::games::snake::state::State,
     pub(crate) sudoku_state: crate::app::games::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::games::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::games::solitaire::state::State,
@@ -581,7 +587,29 @@ impl App {
                     .unwrap_or(0),
             )
         };
-
+        let snake_best_score = config
+            .initial_snake_high_score
+            .as_ref()
+            .map(|score| score.score)
+            .unwrap_or(0);
+        let snake_state = if let Some(game) = config.initial_snake_game {
+            crate::app::games::snake::state::State::restore(
+                config.user_id,
+                config.snake_service.clone(),
+                snake_best_score,
+                25,
+                60,
+                game,
+            )
+        } else {
+            crate::app::games::snake::state::State::new(
+                config.user_id,
+                config.snake_service.clone(),
+                snake_best_score,
+                25,
+                60,
+            )
+        };
         let sudoku_state = crate::app::games::sudoku::state::State::new(
             config.user_id,
             config.sudoku_service.clone(),
@@ -738,7 +766,7 @@ impl App {
             dashboard_favorite_index: 0,
             dashboard_previous_favorite_index: None,
             dashboard_g_prefix_armed: false,
-            dashboard_blackjack_prefix_armed: false,
+            dashboard_box_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
@@ -770,6 +798,7 @@ impl App {
             rooms_snapshot,
             twenty_forty_eight_state,
             tetris_state,
+            snake_state,
             sudoku_state,
             nonogram_state,
             solitaire_state,

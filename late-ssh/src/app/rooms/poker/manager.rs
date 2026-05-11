@@ -4,6 +4,7 @@ use std::{
 };
 
 use late_core::MutexRecover;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::{
@@ -11,7 +12,8 @@ use crate::app::{
     games::chips::svc::ChipService,
     rooms::{
         backend::{
-            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager,
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
+            RoomGameManager,
         },
         poker::{
             create_modal::PokerCreateModal, settings::PokerTableSettings, state::State,
@@ -26,27 +28,34 @@ pub struct PokerTableManager {
     chip_svc: ChipService,
     activity: ActivityPublisher,
     tables: Arc<Mutex<HashMap<Uuid, PokerService>>>,
+    event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl PokerTableManager {
     pub fn new(chip_svc: ChipService, activity: ActivityPublisher) -> Self {
+        let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
             activity,
             tables: Arc::new(Mutex::new(HashMap::new())),
+            event_tx,
         }
     }
 
-    pub fn get_or_create(&self, room_id: Uuid, settings: PokerTableSettings) -> PokerService {
+    pub fn get_or_create(&self, room: &RoomListItem, settings: PokerTableSettings) -> PokerService {
         let mut tables = self.tables.lock_recover();
         tables
-            .entry(room_id)
+            .entry(room.id)
             .or_insert_with(|| {
-                PokerService::new_with_settings(
-                    room_id,
+                let meta = settings.meta_label();
+                PokerService::new_with_settings_and_events(
+                    room.id,
                     self.chip_svc.clone(),
                     self.activity.clone(),
                     settings,
+                    room.display_name.clone(),
+                    meta,
+                    self.event_tx.clone(),
                 )
             })
             .clone()
@@ -97,6 +106,14 @@ impl RoomGameManager for PokerTableManager {
         Some(DirectoryHints { occupied, total: 4 })
     }
 
+    fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
+        self.event_tx.subscribe()
+    }
+
+    fn seat_join_ascii(&self) -> &'static [&'static str] {
+        &["╭───╮╭───╮", "│A♠ ││K♥ │", "╰───╯╰───╯"]
+    }
+
     fn enter(
         &self,
         room: &RoomListItem,
@@ -105,7 +122,7 @@ impl RoomGameManager for PokerTableManager {
     ) -> Box<dyn ActiveRoomBackend> {
         let settings = PokerTableSettings::from_json(&room.settings);
         Box::new(State::new(
-            self.get_or_create(room.id, settings),
+            self.get_or_create(room, settings),
             user_id,
             chip_balance,
         ))

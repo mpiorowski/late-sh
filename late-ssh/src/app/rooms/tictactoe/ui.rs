@@ -185,7 +185,7 @@ fn draw_side(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<U
         ]);
     } else {
         lines.extend([
-            hint_line("s / Space / Enter", "sit"),
+            hint_line("s/Space/Enter", "sit"),
             Line::raw(""),
             hint_line("1-9", "place (after sitting)"),
             hint_line("w a s d", "move cursor"),
@@ -214,26 +214,22 @@ fn player_line(
             .get(&uid)
             .cloned()
             .unwrap_or_else(|| "player".to_string()),
-        None => "open seat".to_string(),
+        None => "open".to_string(),
     };
-    let mut spans = vec![
+    let display = if is_self { format!("▶ {name}") } else { name };
+    let name_style = if is_self {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else if user_id.is_some() {
+        Style::default().fg(theme::TEXT())
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    Line::from(vec![
         Span::styled(format!("{mark} "), mark_color(mark)),
-        Span::styled(
-            name,
-            Style::default().fg(if user_id.is_some() {
-                theme::TEXT()
-            } else {
-                theme::TEXT_DIM()
-            }),
-        ),
-    ];
-    if is_self {
-        spans.push(Span::styled(
-            "  (you)",
-            Style::default().fg(theme::AMBER_DIM()),
-        ));
-    }
-    Line::from(spans)
+        Span::styled(display, name_style),
+    ])
 }
 
 fn mark_color(mark: &str) -> Style {

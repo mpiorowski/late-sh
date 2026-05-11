@@ -1,11 +1,37 @@
 use crate::app::common::primitives::Screen;
 use crate::app::state::{
     App, DashboardGameToggleTarget, GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER,
-    GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
-    GAME_SELECTION_TETRIS,
+    GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE,
+    GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
 };
 
-const LOBBY_GAME_COUNT: usize = 6;
+const LOBBY_GAME_ORDER: [usize; 7] = [
+    GAME_SELECTION_2048,
+    GAME_SELECTION_TETRIS,
+    GAME_SELECTION_SNAKE,
+    GAME_SELECTION_SUDOKU,
+    GAME_SELECTION_NONOGRAMS,
+    GAME_SELECTION_MINESWEEPER,
+    GAME_SELECTION_SOLITAIRE,
+];
+
+fn lobby_order_position(selection: usize) -> usize {
+    LOBBY_GAME_ORDER
+        .iter()
+        .position(|game| *game == selection)
+        .unwrap_or(0)
+}
+
+fn next_lobby_selection(selection: usize) -> usize {
+    let next = (lobby_order_position(selection) + 1) % LOBBY_GAME_ORDER.len();
+    LOBBY_GAME_ORDER[next]
+}
+
+fn prev_lobby_selection(selection: usize) -> usize {
+    let pos = lobby_order_position(selection);
+    let prev = pos.saturating_add(LOBBY_GAME_ORDER.len() - 1) % LOBBY_GAME_ORDER.len();
+    LOBBY_GAME_ORDER[prev]
+}
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.is_playing_game {
@@ -31,6 +57,13 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return true;
             }
             return super::tetris::input::handle_key(&mut app.tetris_state, byte);
+        } else if app.game_selection == GAME_SELECTION_SNAKE {
+            if byte == 0x1B || byte == b'q' || byte == b'Q' {
+                app.snake_state.persist_progress();
+                app.is_playing_game = false;
+                return true;
+            }
+            return super::snake::input::handle_key(&mut app.snake_state, byte);
         } else if app.game_selection == GAME_SELECTION_SUDOKU {
             if byte == 0x1B || byte == b'q' || byte == b'Q' {
                 app.is_playing_game = false;
@@ -62,17 +95,17 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
     // Lobby mode
     match byte {
         b'j' | b'J' => {
-            app.game_selection = (app.game_selection + 1) % LOBBY_GAME_COUNT;
+            app.game_selection = next_lobby_selection(app.game_selection);
             true
         }
         b'k' | b'K' => {
-            app.game_selection =
-                app.game_selection.saturating_add(LOBBY_GAME_COUNT - 1) % LOBBY_GAME_COUNT;
+            app.game_selection = prev_lobby_selection(app.game_selection);
             true
         }
         b'\r' | b'\n' => {
             if app.game_selection == GAME_SELECTION_2048
                 || app.game_selection == GAME_SELECTION_TETRIS
+                || app.game_selection == GAME_SELECTION_SNAKE
                 || app.game_selection == GAME_SELECTION_SUDOKU
                 || (app.game_selection == GAME_SELECTION_NONOGRAMS
                     && app.nonogram_state.has_puzzles())
@@ -97,6 +130,8 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
             );
         } else if app.game_selection == GAME_SELECTION_TETRIS {
             return super::tetris::input::handle_arrow(&mut app.tetris_state, key);
+        } else if app.game_selection == GAME_SELECTION_SNAKE {
+            return super::snake::input::handle_arrow(&mut app.snake_state, key);
         } else if app.game_selection == GAME_SELECTION_SUDOKU {
             return super::sudoku::input::handle_arrow(&mut app.sudoku_state, key);
         } else if app.game_selection == GAME_SELECTION_NONOGRAMS {
@@ -113,13 +148,12 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     match key {
         b'A' => {
             // Up
-            app.game_selection =
-                app.game_selection.saturating_add(LOBBY_GAME_COUNT - 1) % LOBBY_GAME_COUNT;
+            app.game_selection = prev_lobby_selection(app.game_selection);
             true
         }
         b'B' => {
             // Down
-            app.game_selection = (app.game_selection + 1) % LOBBY_GAME_COUNT;
+            app.game_selection = next_lobby_selection(app.game_selection);
             true
         }
         _ => false,
@@ -129,4 +163,41 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 pub(crate) fn handle_event(_app: &mut App, event: &crate::app::input::ParsedInput) -> bool {
     let _ = event;
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lobby_navigation_follows_rendered_order() {
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_2048),
+            GAME_SELECTION_TETRIS
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_TETRIS),
+            GAME_SELECTION_SNAKE
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_SNAKE),
+            GAME_SELECTION_SUDOKU
+        );
+        assert_eq!(
+            prev_lobby_selection(GAME_SELECTION_SUDOKU),
+            GAME_SELECTION_SNAKE
+        );
+    }
+
+    #[test]
+    fn lobby_navigation_wraps_in_rendered_order() {
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_SOLITAIRE),
+            GAME_SELECTION_2048
+        );
+        assert_eq!(
+            prev_lobby_selection(GAME_SELECTION_2048),
+            GAME_SELECTION_SOLITAIRE
+        );
+    }
 }

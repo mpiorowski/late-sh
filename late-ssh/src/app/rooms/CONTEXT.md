@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-08
+- Last updated: 2026-05-10
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
 - `mod.rs` only declares modules. Keep it declaration-only; do not add `pub use` re-exports.
-- `backend.rs` defines the room-game traits: `RoomGameManager` for static/table-manager behavior and `ActiveRoomBackend` for per-session active-room behavior.
-- `registry.rs` owns the process-local `RoomGameRegistry` and dispatches `GameKind` to Blackjack/Poker/Tic-Tac-Toe managers.
+- `backend.rs` defines the room-game traits: `RoomGameManager` for static/table-manager behavior, `ActiveRoomBackend` for per-session active-room behavior, and `RoomGameEvent` for cross-game runtime events such as successful seat joins.
+- `registry.rs` owns the process-local `RoomGameRegistry`, dispatches `GameKind` to Blackjack/Poker/Tic-Tac-Toe managers, and starts the shared `#general` seat-join announcer.
 - `svc.rs` owns persistent room creation/listing/deletion over `game_rooms` plus associated `chat_rooms(kind='game')`. It stores opaque `settings: serde_json::Value`; games parse their own settings. Slug prefixes and human-readable labels are resolved from `RoomGameRegistry` at the call site and passed into room creation; `svc.rs` does not match on `GameKind` for either.
 - `state.rs` drains `RoomsService` snapshots/events into `App` fields, clamps list selection, and refreshes the active room copy.
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
@@ -55,10 +55,10 @@
 - Create/search input limits: room name max 48 chars, search query max 32 chars, default create names come from `RoomGameRegistry`, and pasted text is passed through paste-marker sanitization.
 
 ## Access Policy
-- Room creation is open to every user for Blackjack and Tic-Tac-Toe. Poker creation is admin/moderator-only through `input.rs::can_create_room`. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
+- Room creation is open to every user for Blackjack, Poker, and Tic-Tac-Toe. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
 - Room deletion is admin-only in `input.rs` (`can_delete_room`).
-- Room entry is open to every user for Blackjack and Tic-Tac-Toe. Poker entry is admin/moderator-only through `input.rs::can_enter_room`.
-- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Poker and Tic-Tac-Toe use empty JSON settings.
+- Room entry is open to every user for Blackjack, Poker, and Tic-Tac-Toe.
+- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Poker-specific pace/blind fields render only when Poker is selected; Tic-Tac-Toe uses empty JSON settings.
 
 ## Active Room and Chat
 - Entering a room calls:
@@ -75,11 +75,17 @@
 - The outer Rooms title appends active-room status from backend `title_details`: room name, seated count, role/seat label, and optional chip balance.
 - `App.active_room_game` is the single per-session active game backend. Do not add per-game `Option<State>` fields to `App`.
 
+## Room Game Events
+- `RoomGameManager::subscribe_room_events` is the cross-game event interface. Every concrete room-game manager must expose a `broadcast::Receiver<RoomGameEvent>`.
+- Successful first-time seating emits `RoomGameEvent::SeatJoined { room_id, user_id, game_kind, display_name, seat_index }`. Repeated sit presses by an already seated user must not emit another join event.
+- `RoomGameRegistry::start_general_seat_announcer_task` is started from `main.rs`. It listens to all manager event streams and posts a normal `#general` chat message from the seated user via `ChatService::send_general_message_task`.
+- The announcer sanitizes room display names for a single-line message and neutralizes `@` mentions. Individual games must not know about chat or post directly.
+
 ## Dashboard Integration
-- `dashboard/ui.rs` renders a Blackjack room strip above dashboard chat when the full dashboard/header layout is active, room showcases are enabled, the viewport meets the dashboard's width/height gates, and there is enough space above the chat section.
-- The strip takes the first three Blackjack rooms from `RoomsSnapshot`.
-- Slot keying is a two-key prefix: `b1`, `b2`, `b3`. The input path only arms `b` when room showcases are enabled and at least one Blackjack room exists.
-- `dashboard/input.rs::enter_blackjack_room_slot` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and Blackjack runtime setup are shared with the directory path.
+- `dashboard/ui.rs` renders a featured room-game box above dashboard chat when the full dashboard/header layout is active, room showcases are enabled, the viewport meets the dashboard's width/height gates, and there is enough space above the chat section.
+- The featured room is selected from all current `RoomsSnapshot` rows by highest occupied-seat count using `RoomGameRegistry::directory_summary`; ties prefer higher total seat count. This is game-kind agnostic, so Poker, Tic-Tac-Toe, and future room games participate by implementing `RoomGameManager::directory_meta` and `directory_hints`.
+- Slot keying is a two-key prefix: `b1` enters the featured room, `b2` launches the current daily, `b3` opens the current wire article, and `b4` opens `#announcements`.
+- `dashboard/input.rs::enter_dashboard_room_slot` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and runtime setup are shared with the directory path.
 - Backtick toggles Dashboard <-> the last active game target. Room-backed tables set the target to `DashboardGameToggleTarget::Room`; Arcade games under `late-ssh/src/app/games` set it to `DashboardGameToggleTarget::Arcade`. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves room targets against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
 - Direct global screen jump `4` opens the Rooms directory, not the active room. It clears `App.rooms_active_room` but keeps `rooms_last_active_room_id`, so backtick remains the way to return to the last game room.
 
@@ -93,7 +99,7 @@
 - There are four seats. Entering a room starts as a viewer. `s` or `Enter` sits in the first open seat.
 - `l` leaves a seat when safe. Locked/pending bets block leaving during active phases, but settled players may leave during `Phase::Settling`.
 - Seated players build a shared visible stake through service-owned `SeatState.stake_chips`.
-- Chip selection is client-local (`selected_chip_index`). Thrown stake chips are service-owned and appear in every subscriber's `BlackjackSeat.stake_chips`. Re-entering the same active Blackjack room from Dashboard reuses the existing client `blackjack::State` so selected chip, private notices, and subscription cursors do not reset; entering a different table still creates a fresh client wrapper.
+- Chip selection is client-local (`selected_chip_index`). Thrown stake chips are service-owned and appear in every subscriber's `BlackjackSeat.stake_chips`. Re-entering the same active Blackjack room from Dashboard/Rooms reuses the existing client `blackjack::State` so selected chip, private notices, and subscription cursors do not reset; entering a different table still creates a fresh client wrapper.
 - Betting keys: `[`/`a` selects previous chip, `]`/`d` selects next chip, Space throws the selected chip, Backspace pulls one chip, `c`/Ctrl+W clears, `Enter`/`s` submits.
 - Player action keys: `h`/Space hits, `s` stands, and `d`/`D` doubles down when eligible.
 - Table stake settings are `10`, `50`, `100`, or `500` chips. `min_bet` is the stake and `max_bet` is `stake * 10`.
@@ -128,9 +134,9 @@
 - `PokerTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `PokerService`.
 - Restarting the SSH process drops in-memory poker state. Existing open `game_rooms` survive, but re-entering creates a fresh table.
 - Poker is a configurable-blind Texas Hold'em-style table: four seats, one 52-card deck, private two-card hole hands, shared flop/turn/river, room-configured blinds, call/check, bet/raise, fold, all-in, side pots, showdown hand ranking, and chip settlement through `ChipService`.
-- The service uses one public `watch::Sender<PokerPublicSnapshot>` plus per-user `watch::Sender<PokerPrivateSnapshot>` channels keyed by `user_id`. Public snapshots include seat occupancy, visible stacks, committed chips, pot/current bet, card counts, folded/all-in/pending state, dealer button, board, phase, active seat, and winners. Private snapshots include the current user's hole cards, balance, call amount, and minimum raise.
+- The service uses one public `watch::Sender<PokerPublicSnapshot>` plus per-user `watch::Sender<PokerPrivateSnapshot>` channels keyed by `user_id`. Public snapshots include seat occupancy, visible stacks, committed chips, pot/current bet, card counts, folded/all-in/pending state, dealer button, board, phase, active seat, and winners. Private snapshots include the current user's hole cards, balance, call amount, minimum raise, and auto check/fold flag.
 - The deck and all hole cards live only in `SharedState`; clients never receive other users' hole cards. `publish` lazily prunes orphaned private senders where `receiver_count() == 0`.
-- Entering starts as a viewer. `s` or `Enter` sits in the first open seat. Seated players press `n` to deal when the table is waiting or at showdown, `c`/Space/Enter to check or call when active, `b`/`r` to bet or raise by the selected amount, `[`/`]` or `-`/`+` to adjust that amount, `a` to shove all-in, `f` to fold, and `l` to leave a seat.
+- Entering starts as a viewer. `s` or `Enter` sits in the first open seat even during an active hand; mid-hand joiners keep empty hole cards and wait for the next deal. Seated players press `n` to deal when the table is waiting or at showdown, `c`/Space/Enter to check or call when active, `b`/`r` to bet or raise by the selected amount, `[`/`]` or `-`/`+` to adjust that amount, `a` to shove all-in, `x` to toggle auto check/fold, `f` to fold, and `l` to leave a seat.
 - The dealer button advances to the next funded occupied seat each new hand. Heads-up uses the button as the small blind; larger tables post blinds left of the button. Pre-flop action starts left of the big blind, later streets start left of the button, and when no further betting is possible because all remaining players are all-in, the service runs out the board and settles showdown.
 - Short all-ins smaller than the current call are legal. Short all-in raises update the amount to call but do not reopen raising for players whose action was already closed; those players can only call or fold unless a full raise has reopened action.
 - Side pots are built from each distinct committed-chip level. Each pot is awarded only among eligible non-folded contenders for that level; tied winners split each pot, with odd chips assigned deterministically by seat order.
@@ -165,7 +171,7 @@
 
 ## Room Timeouts
 - Blackjack has three runtime timers. The first confirmed bet starts a fixed 30s betting/deal cap; the cap does not restart for later bets and deals immediately if all seated players lock. Player action starts a pace-specific action timer (`Quick` 2m, `Standard` 5m, `Chill` 10m) that auto-stands unresolved hands on expiry and removes those missed-action seats after settlement. Seated player inactivity is a separate 5m active-room idle timer; active-room input refreshes it, idle players leave immediately when safe or after settlement when a live bet blocks immediate removal.
-- Poker has two timer types plus a missed-action policy. The per-turn action timer starts whenever `active_seat` is assigned in an action phase and restarts when action moves; on expiry it auto-checks when nothing is owed, otherwise auto-folds. A player who misses 3 turn timers is marked to leave at the nearest safe hand boundary, so one seated player cannot repeatedly consume the full turn clock. The existing 5m seat idle timer remains broader AFK cleanup: idle players leave outside active hands, and during active hands they fold and leave after the hand.
+- Poker has two timer types plus a missed-action policy. The per-turn action timer starts whenever `active_seat` is assigned in an action phase and restarts when action moves; the service publishes the deadline and clients render the visible countdown locally instead of receiving per-second service snapshots. On expiry it auto-checks when nothing is owed, otherwise auto-folds. A player who misses 3 turn timers is marked to leave at the nearest safe hand boundary, so one seated player cannot repeatedly consume the full turn clock. The existing 5m seat idle timer remains broader AFK cleanup: idle players leave outside active hands, and during active hands they fold and leave after the hand.
 - Tic-Tac-Toe has no service-side turn clock or AFK seat timer. A seated player can keep a seat until they leave, the opponent leaves/resets, or the process restarts; future timeout work should be added explicitly instead of assuming Blackjack/Poker timers apply.
 
 ## Known Gaps
@@ -173,7 +179,6 @@
 - Poker table state is not durable across process restart.
 - Poker showdown reveal is simplified: all non-folded contenders auto-show, with no optional muck flow.
 - There is no AFK/disconnect cleanup path tied to SSH session lifecycle.
-- Dashboard showcases remain Blackjack-only.
 
 ## Test Guidance
 - Pure rules in `filter.rs`, `settings.rs`, `blackjack/state.rs`, and key-routing helpers can use inline unit tests.

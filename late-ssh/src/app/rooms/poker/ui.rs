@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use ratatui::{
     Frame,
@@ -128,7 +128,7 @@ fn draw_dealer_block(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsh
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "-- DEALER / BOARD --",
+            "── DEALER / BOARD ──",
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -139,9 +139,9 @@ fn draw_dealer_block(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsh
     draw_community_cards(frame, cards_area, snapshot, card_theme);
 
     let hand = if snapshot.hand_number == 0 {
-        "waiting".to_string()
+        "waiting…".to_string()
     } else {
-        format!("hand {} - {}", snapshot.hand_number, snapshot.phase.label())
+        format!("hand {} · {}", snapshot.hand_number, snapshot.phase.label())
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -212,15 +212,15 @@ fn draw_felt_divider(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsh
     };
     let chip_w = label.chars().count() + 6;
     let side_each = (area.width as usize).saturating_sub(chip_w) / 2;
-    let half_pattern = "- ".repeat(side_each / 2);
+    let half_pattern = "─ ".repeat(side_each / 2);
     let line = Line::from(vec![
         Span::styled(
             half_pattern.clone(),
             Style::default().fg(theme::AMBER_DIM()),
         ),
-        Span::styled("-[ ", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("─[ ", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(label, Style::default().fg(theme::AMBER())),
-        Span::styled(" ]-", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" ]─", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(half_pattern, Style::default().fg(theme::AMBER_DIM())),
     ]);
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
@@ -298,10 +298,17 @@ fn draw_seat_panel_outline(
     .split(inner);
 
     draw_seat_cards(frame, rows[0], state, seat, AsciiCardTheme::Outline);
-    frame.render_widget(
-        Paragraph::new(seat_status_line(state, snapshot, seat)).alignment(Alignment::Center),
-        rows[1],
-    );
+    let status = if seat.user_id.is_none() {
+        Line::from(Span::styled(
+            "press s to sit",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        seat_status_line(state, snapshot, seat)
+    };
+    frame.render_widget(Paragraph::new(status).alignment(Alignment::Center), rows[1]);
     frame.render_widget(
         Paragraph::new(seat_committed_line(seat)).alignment(Alignment::Center),
         rows[2],
@@ -400,7 +407,7 @@ fn seat_title_left(
     };
     let (display, style) = if is_you {
         (
-            format!(" > {truncated} "),
+            format!(" ▶ {truncated} "),
             Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
@@ -449,7 +456,7 @@ fn identity_span(
         .get(&user_id)
         .cloned()
         .unwrap_or_else(|| "player".to_string());
-    let display = if is_you { format!("> {name}") } else { name };
+    let display = if is_you { format!("▶ {name}") } else { name };
     let style = if is_you {
         Style::default()
             .fg(theme::SUCCESS())
@@ -605,7 +612,7 @@ fn seat_status_line(
         let label = if state.seat_index() == Some(seat.index) {
             "your turn"
         } else {
-            "acting..."
+            "acting…"
         };
         return Line::from(Span::styled(
             label,
@@ -692,7 +699,7 @@ fn draw_status_line(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsho
         theme::TEXT()
     };
     let line = Line::from(vec![
-        Span::styled("* ", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("· ", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(status_text(snapshot), Style::default().fg(tone)),
     ]);
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
@@ -766,11 +773,18 @@ fn draw_table_compact(
 }
 
 fn status_text(snapshot: &PokerPublicSnapshot) -> String {
-    match snapshot.action_countdown_secs {
+    match action_countdown_secs(snapshot) {
         Some(0) => format!("{} Action timer expired.", snapshot.status_message),
         Some(secs) => format!("{} {secs}s left.", snapshot.status_message),
         None => snapshot.status_message.clone(),
     }
+}
+
+fn action_countdown_secs(snapshot: &PokerPublicSnapshot) -> Option<u64> {
+    let deadline = snapshot.action_deadline?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let millis = remaining.as_millis() as u64;
+    Some(millis.div_ceil(1000))
 }
 
 fn compact_seat_line(
@@ -818,7 +832,7 @@ fn compact_seat_line(
 
 fn compact_seat_cards_text(state: &State, seat: &PokerSeat) -> String {
     if seat.card_count == 0 {
-        return ".".to_string();
+        return "·".to_string();
     }
     let is_you = state.seat_index() == Some(seat.index);
     let theme_card = AsciiCardTheme::Minimal;
@@ -851,13 +865,18 @@ fn revealed_or_private_card(
 
 fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {
     if !state.is_seated() {
-        return key_hint("s/Enter sit - Esc back", "");
+        return key_hint("s/Enter sit · Esc back", "");
     }
+    let auto_hint = auto_check_fold_hint(state);
     match snapshot.phase {
-        PokerPhase::PostingBlinds => key_hint("posting blinds - L leave - Esc back", ""),
-        PokerPhase::Waiting | PokerPhase::Showdown => {
-            key_hint("N deal next - L leave - Esc back", "")
-        }
+        PokerPhase::PostingBlinds => key_hint(
+            &format!("posting blinds · {auto_hint} · L leave · Esc back"),
+            "",
+        ),
+        PokerPhase::Waiting | PokerPhase::Showdown => key_hint(
+            &format!("N deal next · {auto_hint} · L leave · Esc back"),
+            "",
+        ),
         PokerPhase::PreFlop | PokerPhase::Flop | PokerPhase::Turn | PokerPhase::River
             if state.can_act() =>
         {
@@ -865,7 +884,7 @@ fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {
                 if state.can_raise() {
                     key_hint(
                         &format!(
-                            "C call {} - R raise +{} - A all-in - F fold - [/] raise",
+                            "C call {} · R raise +{} · A all-in · {auto_hint} · F fold · [/] raise",
                             state.to_call(),
                             state.selected_raise().max(state.min_raise())
                         ),
@@ -873,29 +892,44 @@ fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {
                     )
                 } else if state.can_all_in() {
                     key_hint(
-                        &format!("C call {} - A all-in - F fold", state.to_call()),
+                        &format!(
+                            "C call {} · A all-in · {auto_hint} · F fold",
+                            state.to_call()
+                        ),
                         "",
                     )
                 } else {
-                    key_hint(&format!("C call {} - F fold", state.to_call()), "")
+                    key_hint(
+                        &format!("C call {} · {auto_hint} · F fold", state.to_call()),
+                        "",
+                    )
                 }
             } else {
                 if state.can_raise() {
                     key_hint(
                         &format!(
-                            "C check - B bet {} - A all-in - F fold - [/] bet",
+                            "C check · B bet {} · A all-in · {auto_hint} · F fold · [/] bet",
                             state.selected_raise().max(state.min_raise())
                         ),
                         "",
                     )
                 } else {
-                    key_hint("C check - F fold", "")
+                    key_hint(&format!("C check · {auto_hint} · F fold"), "")
                 }
             }
         }
-        PokerPhase::PreFlop | PokerPhase::Flop | PokerPhase::Turn | PokerPhase::River => {
-            key_hint("waiting action - L leave - Esc back", "")
-        }
+        PokerPhase::PreFlop | PokerPhase::Flop | PokerPhase::Turn | PokerPhase::River => key_hint(
+            &format!("waiting action · {auto_hint} · L leave · Esc back"),
+            "",
+        ),
+    }
+}
+
+fn auto_check_fold_hint(state: &State) -> &'static str {
+    if state.auto_check_fold() {
+        "X auto on"
+    } else {
+        "X auto"
     }
 }
 
@@ -914,7 +948,7 @@ fn action_label(action: PokerAction) -> &'static str {
 
 fn render_cards_compact(cards: &[PlayingCard]) -> String {
     if cards.is_empty() {
-        return ". . . . .".to_string();
+        return "· · · · ·".to_string();
     }
     let theme_card = AsciiCardTheme::Minimal;
     cards

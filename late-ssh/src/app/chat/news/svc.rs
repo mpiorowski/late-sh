@@ -1,4 +1,7 @@
-use crate::app::{ai::svc::AiService, chat::svc::ChatService};
+use crate::app::{
+    ai::svc::AiService,
+    chat::svc::{ChatService, SendGeneralMessageTask},
+};
 use anyhow::{Context, Result};
 use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_MARKER};
 use late_core::{
@@ -7,7 +10,6 @@ use late_core::{
         article::{Article, ArticleParams},
         article_feed_read::ArticleFeedRead,
         chat_message::ChatMessage,
-        chat_room::ChatRoom,
         moderation_audit_log::ModerationAuditLog,
         user::User,
     },
@@ -355,22 +357,15 @@ impl ArticleService {
         }
 
         // Post the announcement into #general via the same send path as any
-        // other message. No special-case task needed — resolve the room id
-        // here and call send_message_task like a normal composer submit.
-        let general_room_id = {
-            let client = self.db.get().await?;
-            ChatRoom::find_general(&client).await?.map(|room| room.id)
-        };
-        if let Some(room_id) = general_room_id {
-            self.chat_service.send_message_task(
+        // other message, preserving the normal composer success/failure event.
+        self.chat_service
+            .send_general_message_task(SendGeneralMessageTask {
                 user_id,
-                room_id,
-                Some("general".to_string()),
-                announcement,
-                Uuid::now_v7(),
-                false,
-            );
-        }
+                body: announcement,
+                request_id: Some(Uuid::now_v7()),
+                join_if_needed: false,
+                failure_log: "failed to share news in general chat",
+            });
 
         // Refresh the shared feed snapshot immediately so clients see the new item
         // without waiting for the periodic poll tick.

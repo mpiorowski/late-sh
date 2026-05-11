@@ -29,7 +29,7 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
-    ui_text::{NewsPayload, parse_news_payload, reaction_label},
+    ui_text::{NewsPayload, parse_news_payload, parse_room_seat_payload, reaction_label},
     work,
 };
 
@@ -2696,6 +2696,9 @@ fn reply_preview_text(body: &str) -> String {
     if let Some(title) = news_reply_preview_text(body) {
         return title;
     }
+    if let Some(title) = room_seat_reply_preview_text(body) {
+        return title;
+    }
 
     let body_without_reply_quote = match body.split_once('\n') {
         Some((first_line, rest))
@@ -2719,12 +2722,7 @@ fn reply_preview_text(body: &str) -> String {
             .unwrap_or(first_content_line)
             .trim(),
     );
-    let preview: String = preview.chars().take(48).collect();
-    if preview.chars().count() == 48 {
-        format!("{}...", preview.trim_end())
-    } else {
-        preview
-    }
+    truncate_reply_preview(&preview)
 }
 
 pub(crate) fn new_chat_textarea() -> TextArea<'static> {
@@ -2745,12 +2743,23 @@ fn news_reply_preview_text(body: &str) -> Option<String> {
         .filter(|title| !title.is_empty())
         .unwrap_or("news update");
 
-    let preview: String = title.chars().take(48).collect();
-    Some(if preview.chars().count() == 48 {
+    Some(truncate_reply_preview(title))
+}
+
+fn room_seat_reply_preview_text(body: &str) -> Option<String> {
+    let payload = parse_room_seat_payload(body)?;
+    let title = payload.title.trim();
+    let preview = if title.is_empty() { "game room" } else { title };
+    Some(truncate_reply_preview(preview))
+}
+
+fn truncate_reply_preview(text: &str) -> String {
+    let preview: String = text.chars().take(48).collect();
+    if preview.chars().count() == 48 {
         format!("{}...", preview.trim_end())
     } else {
         preview
-    })
+    }
 }
 
 fn strip_markdown_preview_markers(text: &str) -> String {
@@ -2782,6 +2791,18 @@ fn strip_markdown_preview_markers(text: &str) -> String {
     while idx < text.len() {
         let rest = &text[idx..];
 
+        if let Some(marker_len) = leading_backtick_run_len(rest) {
+            let marker = &rest[..marker_len];
+            let after_open = &rest[marker_len..];
+            if let Some(end_rel) = after_open.find(marker)
+                && end_rel > 0
+            {
+                out.push_str(&after_open[..end_rel]);
+                idx += marker_len + end_rel + marker_len;
+                continue;
+            }
+        }
+
         if rest.starts_with('[')
             && let Some(bracket_pos) = rest[1..].find(']')
             && bracket_pos > 0
@@ -2795,7 +2816,7 @@ fn strip_markdown_preview_markers(text: &str) -> String {
         }
 
         let mut stripped_marker = false;
-        for marker in ["***", "**", "~~", "`", "*"] {
+        for marker in ["***", "**", "~~", "*"] {
             if rest.starts_with(marker) {
                 idx += marker.len();
                 stripped_marker = true;
@@ -2814,6 +2835,11 @@ fn strip_markdown_preview_markers(text: &str) -> String {
     }
 
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn leading_backtick_run_len(text: &str) -> Option<usize> {
+    let len = text.chars().take_while(|ch| *ch == '`').count();
+    (len > 0).then_some(len)
 }
 #[cfg(test)]
 mod tests {
@@ -2977,6 +3003,14 @@ mod tests {
     }
 
     #[test]
+    fn reply_preview_text_uses_room_seat_title_for_game_messages() {
+        let preview = reply_preview_text(
+            "---ROOM-SEAT--- Poker · Night Table || 50/100 blinds || ╭───╮\\n╰───╯",
+        );
+        assert_eq!(preview, "Poker · Night Table");
+    }
+
+    #[test]
     fn news_modal_source_uses_full_article_snapshot_payload() {
         use late_core::models::article::{Article, ArticleFeedItem};
 
@@ -3018,9 +3052,27 @@ mod tests {
     }
 
     #[test]
+    fn reply_preview_text_preserves_unmatched_backtick_in_kaomoji() {
+        let preview = reply_preview_text("(╯`Д´)╯︵ ┻━┻");
+        assert_eq!(preview, "(╯`Д´)╯︵ ┻━┻");
+    }
+
+    #[test]
+    fn reply_preview_text_strips_double_backtick_code_markers() {
+        let preview = reply_preview_text("``(╯`Д´)╯︵ ┻━┻``");
+        assert_eq!(preview, "(╯`Д´)╯︵ ┻━┻");
+    }
+
+    #[test]
     fn news_marker_detection_matches_announcement_messages() {
         assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
         assert!(news_reply_preview_text("regular chat message").is_none());
+    }
+
+    #[test]
+    fn room_seat_marker_detection_matches_game_messages() {
+        assert!(room_seat_reply_preview_text("---ROOM-SEAT--- table || meta || ascii").is_some());
+        assert!(room_seat_reply_preview_text("regular chat message").is_none());
     }
 
     #[test]
