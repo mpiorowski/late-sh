@@ -11,9 +11,9 @@ pub const CHIP_FLOOR: i64 = 100;
 /// Map a difficulty/size key to its chip bonus.
 pub fn difficulty_bonus(key: &str) -> i64 {
     match key {
-        "easy" | "10x10" | "draw-1" => 50,
-        "medium" | "15x15" => 100,
-        "hard" | "20x20" | "draw-3" => 150,
+        "easy" | "draw-1" => 50,
+        "medium" => 100,
+        "hard" | "draw-3" => 150,
         _ => 50,
     }
 }
@@ -196,9 +196,6 @@ mod tests {
         assert_eq!(difficulty_bonus("easy"), 50);
         assert_eq!(difficulty_bonus("medium"), 100);
         assert_eq!(difficulty_bonus("hard"), 150);
-        assert_eq!(difficulty_bonus("10x10"), 50);
-        assert_eq!(difficulty_bonus("15x15"), 100);
-        assert_eq!(difficulty_bonus("20x20"), 150);
         assert_eq!(difficulty_bonus("draw-1"), 50);
         assert_eq!(difficulty_bonus("draw-3"), 150);
         assert_eq!(difficulty_bonus("unknown"), 50);

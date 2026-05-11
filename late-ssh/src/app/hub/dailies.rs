@@ -13,7 +13,7 @@ pub fn draw(frame: &mut Frame, area: Rect) {
         frame,
         area,
         "Dailies",
-        "Daily runs and streak details will live here.",
+        "Daily puzzle progress and rewards will live here.",
     );
 }
 

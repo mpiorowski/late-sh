@@ -15,11 +15,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             return true;
         }
         b'[' => {
-            state.prev_pack();
+            state.prev_difficulty();
             return true;
         }
         b']' => {
-            state.next_pack();
+            state.next_difficulty();
             return true;
         }
         _ => {}

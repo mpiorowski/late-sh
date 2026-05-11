@@ -59,10 +59,50 @@ Per-game directories generally follow:
 | Category | Games | Persistence | Leaderboard |
 | --- | --- | --- | --- |
 | High-score | 2048, Tetris, Snake | One current run plus best score plus final score events | Monthly and all-time high scores in Hub |
-| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | One daily and one personal slot per user/difficulty or pack | Daily streaks / arcade summaries in Hub |
+| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | One daily and one personal slot per user/difficulty or pack | Daily completion status / Arcade Wins in Hub |
 | Economy support | Chips | `user_chips` plus `chip_ledger` | Monthly chip earners in Hub |
 
 Blackjack, Poker, and Tic-Tac-Toe are Rooms games, not Arcade games, even though they share chips/cards/activity concepts.
+
+## Adding A New Arcade Game
+
+Decide the category first. High-score games behave like `tetris/`, `twenty_forty_eight/`, and `snake/`: one saved run, one all-time high-score row, and final score events for monthly Hub boards. Daily/personal puzzle games behave like `sudoku/`, `nonogram/`, `minesweeper/`, and `solitaire/`: one daily puzzle plus optional personal runs, daily win records, chip bonus, and Activity event.
+
+Expected source shape:
+- `late-ssh/src/app/arcade/<game>/mod.rs` declares only local modules.
+- `state.rs` owns per-session state and pure rules.
+- `input.rs` owns key routing for that game.
+- `ui.rs` renders the game and its local help/status panel.
+- `svc.rs` owns async tasks and calls `late-core` model APIs. Keep SQL in `late-core`, not in `late-ssh`.
+
+Core model/persistence work:
+- Add `late-core/src/models/<game>.rs` for DB-backed state/high-score/win models.
+- Add a migration under `late-core/migrations/`.
+- Add the model module to `late-core/src/models/mod.rs`.
+- For high-score games, expose `HighScore::update_score_if_higher` and `HighScore::record_score_event`.
+- For daily games, follow the existing daily-win model pattern and keep one completion fact per user/date/difficulty or pack.
+
+Arcade wiring checklist:
+- Add `pub mod <game>;` to `arcade/mod.rs`.
+- Create the service in `late-ssh/src/main.rs` and store it in `late-ssh/src/state.rs`.
+- Load saved state/high score in `session_bootstrap.rs` and `ssh.rs` if the game has persisted per-user state.
+- Add per-session state to `App` in `app/state.rs`.
+- Advance realtime state in `app/tick.rs` only when needed.
+- Add lobby ordering/launch handling in `arcade/input.rs`.
+- Add lobby card/rendering and active-game dispatch in `arcade/ui.rs`.
+- Add help-modal copy in `app/help_modal/data.rs` when the game has user-facing controls.
+- Update `CONTEXT.md` and this file if the game changes Arcade categories, service ownership, or leaderboard semantics.
+
+Leaderboard/Hub checklist:
+- High-score games must write final score events through a `late-core` model method so monthly Hub boards do not depend only on legacy high-score table `updated` timestamps.
+- Add the monthly score board fetch in `late-core/src/models/leaderboard.rs`.
+- Add the all-time high-score fetch if the aggregate `high_scores` list should include the game.
+- Render the new board in `app/hub/leaderboard.rs` only if it belongs in the compact Hub view. Do not put Hub UI under `arcade/`.
+
+Testing guidance:
+- Pure rules and key-routing helpers get inline unit tests in `state.rs` or `input.rs`.
+- DB/service coverage belongs under `late-ssh/tests/arcade/` and must use the shared testcontainers helpers.
+- Do not run `cargo test`, `cargo nextest`, or `cargo clippy` as an agent; leave those gates for the human owner.
 
 ## Persistence And Services
 
@@ -74,7 +114,6 @@ Blackjack, Poker, and Tic-Tac-Toe are Rooms games, not Arcade games, even though
 - `ChipService::grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips for daily puzzle completions.
 - Daily services call `record_win_task()` on completion. That records the daily win, grants chips, and publishes a structured Activity event.
 - `hub::svc::LeaderboardService` refreshes from DB every 30s. Immediate win callouts come from Activity; Hub leaderboard surfaces lag until the next refresh.
-- Streak SQL uses gaps-and-islands across daily win rows. A streak remains current when its last day is today or yesterday.
 
 ## Nonogram Runtime
 

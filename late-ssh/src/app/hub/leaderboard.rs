@@ -1,6 +1,4 @@
-use late_core::models::leaderboard::{
-    HighScoreEntry, LeaderboardData, LeaderboardEntry, RankedEntry,
-};
+use late_core::models::leaderboard::{HighScoreEntry, LeaderboardData, RankedEntry};
 use ratatui::{
     Frame,
     layout::{Constraint, Margin, Rect},
@@ -60,14 +58,20 @@ fn draw_boards(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: U
             &data.monthly_chip_earners,
             user_id,
             "No chip earnings yet this month",
+            &["positive chip gains this UTC month"],
         );
-        draw_streak_board(
+        draw_ranked_board(
             frame,
             left[1],
-            "Daily Streaks",
-            &data.streak_leaders,
+            "Arcade Wins",
+            "pts",
+            &data.arcade_champions,
             user_id,
-            "No daily streaks yet",
+            "No daily puzzle wins yet this month",
+            &[
+                "daily puzzle wins, weighted by difficulty",
+                "1 easy/draw-1, 3 medium, 5 hard/draw-3",
+            ],
         );
         draw_score_board(
             frame,
@@ -95,11 +99,11 @@ fn draw_boards(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: U
         );
     } else {
         let rows = ratatui::layout::Layout::vertical([
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Length(8),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
         ])
         .split(area);
         draw_ranked_board(
@@ -110,14 +114,20 @@ fn draw_boards(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: U
             &data.monthly_chip_earners,
             user_id,
             "No chip earnings yet this month",
+            &["positive chip gains this UTC month"],
         );
-        draw_streak_board(
+        draw_ranked_board(
             frame,
             rows[1],
-            "Daily Streaks",
-            &data.streak_leaders,
+            "Arcade Wins",
+            "pts",
+            &data.arcade_champions,
             user_id,
-            "No daily streaks yet",
+            "No daily puzzle wins yet this month",
+            &[
+                "daily puzzle wins, weighted by difficulty",
+                "1 easy/draw-1, 3 medium, 5 hard/draw-3",
+            ],
         );
         draw_score_board(
             frame,
@@ -161,6 +171,7 @@ fn draw_ranked_board(
     entries: &[RankedEntry],
     user_id: Uuid,
     empty: &str,
+    hints: &[&str],
 ) {
     let block = panel_block(title);
     let inner = block.inner(area).inner(Margin {
@@ -170,92 +181,35 @@ fn draw_ranked_board(
     frame.render_widget(block, area);
 
     let mut lines = Vec::new();
+    push_hint_lines(&mut lines, hints, inner.width);
     if entries.is_empty() {
         lines.push(Line::from(Span::styled(
             empty.to_string(),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     } else {
-        let visible_entries = visible_entry_count(inner.height);
-        for entry in entries.iter().take(visible_entries) {
-            lines.push(ranked_line(
-                entry.rank,
-                &entry.username,
-                entry.value,
-                unit,
-                entry.user_id == user_id,
-                inner.width,
-            ));
-        }
-        if let Some(entry) = entries
-            .iter()
-            .find(|entry| entry.user_id == user_id && entry.rank > visible_entries as i64)
-            .filter(|_| lines.len() + 2 <= inner.height as usize)
-        {
-            lines.push(Line::from(""));
-            lines.push(ranked_line(
-                entry.rank,
-                &entry.username,
-                entry.value,
-                unit,
-                true,
-                inner.width,
-            ));
-        }
-    }
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
-}
-
-fn draw_streak_board(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    entries: &[LeaderboardEntry],
-    user_id: Uuid,
-    empty: &str,
-) {
-    let block = panel_block(title);
-    let inner = block.inner(area).inner(Margin {
-        vertical: 0,
-        horizontal: 1,
-    });
-    frame.render_widget(block, area);
-
-    let mut lines = Vec::new();
-    if entries.is_empty() {
-        lines.push(Line::from(Span::styled(
-            empty.to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    } else {
-        let visible_entries = visible_entry_count(inner.height);
-        for (index, entry) in entries.iter().take(visible_entries).enumerate() {
-            lines.push(ranked_line(
-                (index + 1) as i64,
-                &entry.username,
-                i64::from(entry.count),
-                "days",
-                entry.user_id == user_id,
-                inner.width,
-            ));
-        }
-        if let Some((index, entry)) = entries
-            .iter()
-            .enumerate()
-            .find(|(_, entry)| entry.user_id == user_id)
-            .filter(|(index, _)| *index >= visible_entries)
-            .filter(|_| lines.len() + 2 <= inner.height as usize)
-        {
-            lines.push(Line::from(""));
-            lines.push(ranked_line(
-                (index + 1) as i64,
-                &entry.username,
-                i64::from(entry.count),
-                "days",
-                true,
-                inner.width,
-            ));
+        let current_index = entries.iter().position(|entry| entry.user_id == user_id);
+        for row in board_rows(
+            entries.len(),
+            current_index,
+            visible_entry_count(inner.height.saturating_sub(lines.len() as u16)),
+            10,
+            3,
+        ) {
+            match row {
+                BoardRow::Entry(index) => {
+                    let entry = &entries[index];
+                    lines.push(ranked_line(
+                        entry.rank,
+                        &entry.username,
+                        entry.value,
+                        unit,
+                        entry.user_id == user_id,
+                        inner.width,
+                    ));
+                }
+                BoardRow::AroundYou => lines.push(around_you_line(inner.width)),
+            }
         }
     }
 
@@ -289,14 +243,16 @@ fn draw_score_board(
         monthly.iter().collect(),
         user_id,
         "No monthly scores",
+        &["best score this UTC month"],
     );
     draw_score_list(
         frame,
         columns[1],
         "all-time",
-        all_time.into_iter().take(3).collect(),
+        all_time,
         user_id,
         "No all-time scores",
+        &["personal bests"],
     );
 }
 
@@ -307,6 +263,7 @@ fn draw_score_list(
     entries: Vec<&HighScoreEntry>,
     user_id: Uuid,
     empty: &str,
+    hints: &[&str],
 ) {
     if area.height == 0 {
         return;
@@ -318,21 +275,34 @@ fn draw_score_list(
             .fg(theme::AMBER_DIM())
             .add_modifier(Modifier::BOLD),
     ))];
+    push_hint_lines(&mut lines, hints, area.width);
     if entries.is_empty() {
         lines.push(Line::from(Span::styled(
             empty.to_string(),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     } else {
-        let visible_entries = visible_entry_count(area.height.saturating_sub(1)).min(3);
-        for entry in entries.into_iter().take(visible_entries) {
-            lines.push(score_line(
-                entry.rank,
-                &entry.username,
-                i64::from(entry.score),
-                entry.user_id == user_id,
-                area.width,
-            ));
+        let current_index = entries.iter().position(|entry| entry.user_id == user_id);
+        for row in board_rows(
+            entries.len(),
+            current_index,
+            visible_entry_count(area.height.saturating_sub(lines.len() as u16)),
+            3,
+            3,
+        ) {
+            match row {
+                BoardRow::Entry(index) => {
+                    let entry = entries[index];
+                    lines.push(score_line(
+                        entry.rank,
+                        &entry.username,
+                        i64::from(entry.score),
+                        entry.user_id == user_id,
+                        area.width,
+                    ));
+                }
+                BoardRow::AroundYou => lines.push(around_you_line(area.width)),
+            }
         }
     }
 
@@ -343,6 +313,96 @@ fn visible_entry_count(height: u16) -> usize {
     usize::from(height).clamp(1, 10)
 }
 
+fn push_hint_lines(lines: &mut Vec<Line<'static>>, hints: &[&str], width: u16) {
+    if width < 12 {
+        return;
+    }
+    for hint in hints {
+        lines.push(Line::from(Span::styled(
+            truncate(hint, width as usize),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BoardRow {
+    Entry(usize),
+    AroundYou,
+}
+
+fn board_rows(
+    entry_count: usize,
+    current_index: Option<usize>,
+    row_budget: usize,
+    top_limit: usize,
+    around_limit: usize,
+) -> Vec<BoardRow> {
+    if entry_count == 0 || row_budget == 0 {
+        return Vec::new();
+    }
+
+    let top_without_around = row_budget.min(top_limit).min(entry_count);
+    let Some(current_index) = current_index else {
+        return entry_rows(top_without_around);
+    };
+    if current_index < top_without_around {
+        return entry_rows(top_without_around);
+    }
+    if row_budget < 3 {
+        return vec![BoardRow::Entry(current_index)];
+    }
+
+    let around_count = row_budget
+        .saturating_sub(2)
+        .min(around_limit)
+        .min(entry_count)
+        .max(1);
+    let top_count = row_budget
+        .saturating_sub(around_count + 1)
+        .min(top_limit)
+        .min(entry_count);
+    let mut rows = entry_rows(top_count);
+    rows.push(BoardRow::AroundYou);
+
+    let (start, end) = centered_window(current_index, entry_count, around_count);
+    rows.extend(
+        (start..end)
+            .filter(|index| *index >= top_count)
+            .map(BoardRow::Entry),
+    );
+    rows.truncate(row_budget);
+    rows
+}
+
+fn entry_rows(count: usize) -> Vec<BoardRow> {
+    (0..count).map(BoardRow::Entry).collect()
+}
+
+fn centered_window(center: usize, len: usize, count: usize) -> (usize, usize) {
+    let count = count.min(len);
+    let half = count / 2;
+    let mut start = center.saturating_sub(half);
+    if start + count > len {
+        start = len.saturating_sub(count);
+    }
+    (start, start + count)
+}
+
+fn around_you_line(width: u16) -> Line<'static> {
+    let side = if width > 18 { "-- " } else { "" };
+    Line::from(vec![
+        Span::styled(side, Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            "around you",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(side, Style::default().fg(theme::TEXT_DIM())),
+    ])
+}
+
 fn ranked_line(
     rank: i64,
     username: &str,
@@ -351,7 +411,7 @@ fn ranked_line(
     is_current_user: bool,
     width: u16,
 ) -> Line<'static> {
-    let rank_style = if rank == 1 {
+    let rank_style = if is_current_user || rank == 1 {
         Style::default()
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD)
@@ -370,7 +430,7 @@ fn ranked_line(
     } else {
         Style::default().fg(theme::TEXT())
     };
-    let value_style = if rank == 1 {
+    let value_style = if is_current_user || rank == 1 {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
@@ -396,7 +456,7 @@ fn score_line(
     is_current_user: bool,
     width: u16,
 ) -> Line<'static> {
-    let rank_style = if rank == 1 {
+    let rank_style = if is_current_user || rank == 1 {
         Style::default()
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD)
@@ -417,7 +477,16 @@ fn score_line(
         Span::styled(format!("#{rank} "), rank_style),
         Span::styled(truncate(username, max_name), name_style),
         Span::raw(" "),
-        Span::styled(score.to_string(), Style::default().fg(theme::SUCCESS())),
+        Span::styled(
+            score.to_string(),
+            if is_current_user {
+                Style::default()
+                    .fg(theme::SUCCESS())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::SUCCESS())
+            },
+        ),
     ])
 }
 
@@ -440,4 +509,54 @@ fn truncate(value: &str, max_chars: usize) -> String {
         out.push('~');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BoardRow, board_rows};
+
+    #[test]
+    fn board_rows_uses_plain_top_rows_when_current_user_is_visible() {
+        assert_eq!(
+            board_rows(20, Some(2), 6, 10, 3),
+            vec![
+                BoardRow::Entry(0),
+                BoardRow::Entry(1),
+                BoardRow::Entry(2),
+                BoardRow::Entry(3),
+                BoardRow::Entry(4),
+                BoardRow::Entry(5),
+            ]
+        );
+    }
+
+    #[test]
+    fn board_rows_adds_around_you_window_for_deep_rank() {
+        assert_eq!(
+            board_rows(100, Some(49), 6, 10, 3),
+            vec![
+                BoardRow::Entry(0),
+                BoardRow::Entry(1),
+                BoardRow::AroundYou,
+                BoardRow::Entry(48),
+                BoardRow::Entry(49),
+                BoardRow::Entry(50),
+            ]
+        );
+    }
+
+    #[test]
+    fn board_rows_keeps_current_user_visible_at_bottom_edge() {
+        assert_eq!(
+            board_rows(50, Some(49), 6, 10, 3),
+            vec![
+                BoardRow::Entry(0),
+                BoardRow::Entry(1),
+                BoardRow::AroundYou,
+                BoardRow::Entry(47),
+                BoardRow::Entry(48),
+                BoardRow::Entry(49),
+            ]
+        );
+    }
 }

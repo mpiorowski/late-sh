@@ -53,36 +53,36 @@ impl NonogramService {
         Ok(())
     }
 
-    pub async fn has_won_today(&self, user_id: Uuid, size_key: &str) -> Result<bool> {
+    pub async fn has_won_today(&self, user_id: Uuid, difficulty_key: &str) -> Result<bool> {
         let client = self.db.get().await?;
-        DailyWin::has_won_today(&client, user_id, size_key, self.today()).await
+        DailyWin::has_won_today(&client, user_id, difficulty_key, self.today()).await
     }
 
-    pub fn record_win_task(&self, user_id: Uuid, size_key: String) {
+    pub fn record_win_task(&self, user_id: Uuid, difficulty_key: String) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(error) = svc.record_win(user_id, size_key.clone()).await {
+            if let Err(error) = svc.record_win(user_id, difficulty_key.clone()).await {
                 tracing::error!(error = ?error, "failed to record nonogram daily win");
                 return;
             }
             svc.chip_service
-                .grant_daily_bonus_task(user_id, size_key.clone());
+                .grant_daily_bonus_task(user_id, difficulty_key.clone());
             if let Ok(client) = svc.db.get().await {
                 let username = fetch_username(&client, user_id).await;
                 let _ = svc.activity_feed.send(ActivityEvent::game_won(
                     user_id,
                     username,
                     ActivityGame::Nonogram,
-                    Some(size_key.clone()),
+                    Some(difficulty_key.clone()),
                     None,
                 ));
             }
         });
     }
 
-    async fn record_win(&self, user_id: Uuid, size_key: String) -> Result<()> {
+    async fn record_win(&self, user_id: Uuid, difficulty_key: String) -> Result<()> {
         let client = self.db.get().await?;
-        DailyWin::record_win(&client, user_id, size_key, self.today()).await?;
+        DailyWin::record_win(&client, user_id, difficulty_key, self.today()).await?;
         Ok(())
     }
 }

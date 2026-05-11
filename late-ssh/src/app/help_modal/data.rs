@@ -99,7 +99,7 @@ pub fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not an Arcade streak badge, country flag, or custom contributor icon.\n",
+        - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not a country flag or custom contributor icon.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -556,8 +556,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  arcade champion weights daily puzzle wins by difficulty",
         "  Tetris and 2048 boards track monthly score runs",
         "  wins can award Late Chips",
-        "  leaderboard tracks streak leaders, all-time highs, and chip balances",
-        "  Arcade streaks stay in Arcade/leaderboard surfaces; they are not chat username badges",
+        "  leaderboard tracks Arcade Wins, all-time highs, and chip balances",
         "",
         "Why it exists",
         "",

@@ -55,8 +55,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
     let bottom = GameBottomBar {
         status: status_line(vec![
             ("mode", mode_str.to_string(), theme::AMBER_GLOW()),
-            ("size", pack.size_key.clone(), theme::TEXT_BRIGHT()),
-            ("diff", puzzle.difficulty.clone(), theme::SUCCESS()),
+            ("diff", state.difficulty_key().to_string(), theme::SUCCESS()),
             (
                 "filled",
                 format!("{}/{}", state.filled_count(), state.target_count()),
@@ -69,7 +68,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
             ("x", "mark"),
             ("0", "clear"),
             ("d/p/n", "daily/pers/new"),
-            ("[ ]", "size"),
+            ("[ ]", "diff"),
             ("r", "reset"),
             ("`", "dashboard"),
             ("Esc", "exit"),

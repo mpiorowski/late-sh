@@ -60,7 +60,6 @@ pub struct DashboardDailyStatus {
     pub game: DailyGame,
     pub completed_today: bool,
     pub launch_key: char,
-    pub streak: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -410,7 +409,7 @@ fn draw_dailies_slot(
             Style::default().fg(theme::TEXT_FAINT()),
         );
         let line2 = Line::from(Span::styled(
-            "streak 0 · [3] arcade",
+            "daily puzzles · [3] arcade",
             Style::default().fg(theme::TEXT_DIM()),
         ));
         frame.render_widget(Paragraph::new(vec![line1, line2]), area);
@@ -427,13 +426,8 @@ fn draw_dailies_slot(
         .get(((cycle_secs / DASHBOARD_DAILY_CYCLE_SECONDS) as usize) % unfinished.len().max(1))
         .copied()
     else {
-        let streak = statuses
-            .iter()
-            .map(|status| status.streak)
-            .max()
-            .unwrap_or(0);
         let line1 = line_with_key(
-            &format!("All dailies ✓ · streak {streak}"),
+            "All dailies complete",
             key_tag,
             inner_width,
             Style::default()
@@ -458,7 +452,7 @@ fn draw_dailies_slot(
     );
     let line2 = Line::from(Span::styled(
         truncate(
-            &format!("streak {} · [{}] play", status.streak, status.launch_key),
+            &format!("daily puzzle · [{}] play", status.launch_key),
             inner_width,
         ),
         Style::default().fg(theme::TEXT_DIM()),
@@ -1144,25 +1138,21 @@ mod tests {
                 game: DailyGame::Sudoku,
                 completed_today: false,
                 launch_key: 's',
-                streak: 3,
             },
             DashboardDailyStatus {
                 game: DailyGame::Nonogram,
                 completed_today: false,
                 launch_key: 'n',
-                streak: 3,
             },
             DashboardDailyStatus {
                 game: DailyGame::Solitaire,
                 completed_today: false,
                 launch_key: 'o',
-                streak: 3,
             },
             DashboardDailyStatus {
                 game: DailyGame::Minesweeper,
                 completed_today: false,
                 launch_key: 'm',
-                streak: 3,
             },
         ]
     }

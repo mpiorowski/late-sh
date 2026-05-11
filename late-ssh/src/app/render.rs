@@ -92,32 +92,27 @@ fn dashboard_header_enabled(
 
 fn dashboard_daily_statuses(
     completion: &DailyCompletionStatus,
-    streak: u32,
 ) -> [dashboard::ui::DashboardDailyStatus; 4] {
     [
         dashboard::ui::DashboardDailyStatus {
             game: DailyGame::Sudoku,
             completed_today: completion.completed(DailyGame::Sudoku),
             launch_key: 's',
-            streak,
         },
         dashboard::ui::DashboardDailyStatus {
             game: DailyGame::Nonogram,
             completed_today: completion.completed(DailyGame::Nonogram),
             launch_key: 'n',
-            streak,
         },
         dashboard::ui::DashboardDailyStatus {
             game: DailyGame::Solitaire,
             completed_today: completion.completed(DailyGame::Solitaire),
             launch_key: 'o',
-            streak,
         },
         dashboard::ui::DashboardDailyStatus {
             game: DailyGame::Minesweeper,
             completed_today: completion.completed(DailyGame::Minesweeper),
             launch_key: 'm',
-            streak,
         },
     ]
 }
@@ -282,14 +277,7 @@ impl App {
             .get(&self.user_id)
             .cloned()
             .unwrap_or_default();
-        let dashboard_daily_streak = self
-            .leaderboard
-            .user_streaks
-            .get(&self.user_id)
-            .copied()
-            .unwrap_or(0);
-        let dashboard_daily_statuses =
-            dashboard_daily_statuses(&dashboard_daily_completion, dashboard_daily_streak);
+        let dashboard_daily_statuses = dashboard_daily_statuses(&dashboard_daily_completion);
         let dashboard_cycle_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())

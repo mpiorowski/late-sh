@@ -31,6 +31,27 @@ impl Library {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct NonogramDifficulty {
+    pub key: &'static str,
+    pub size_key: &'static str,
+}
+
+pub const DIFFICULTIES: [NonogramDifficulty; 3] = [
+    NonogramDifficulty {
+        key: "easy",
+        size_key: "10x10",
+    },
+    NonogramDifficulty {
+        key: "medium",
+        size_key: "15x15",
+    },
+    NonogramDifficulty {
+        key: "hard",
+        size_key: "20x20",
+    },
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Daily,
@@ -62,7 +83,7 @@ pub struct State {
     pub mode: Mode,
     pub cursor: (usize, usize),
     library: Library,
-    selected_pack: usize,
+    selected_difficulty: usize,
     current_puzzle_id: String,
     player_grid: Vec<Vec<u8>>,
     is_game_over: bool,
@@ -82,12 +103,15 @@ impl State {
         let mut daily_snapshots = HashMap::new();
         let mut personal_snapshots = HashMap::new();
 
-        for pack in library.packs() {
+        for difficulty in DIFFICULTIES {
+            let Some(pack) = library.pack_by_size_key(difficulty.size_key) else {
+                continue;
+            };
             let daily_snapshot = saved_games
                 .iter()
                 .find(|game| {
                     game.mode == "daily"
-                        && game.size_key == pack.size_key
+                        && game.size_key == difficulty.key
                         && is_current_daily_game(game.puzzle_date, today)
                 })
                 .and_then(|game| snapshot_from_game(game, pack))
@@ -95,23 +119,24 @@ impl State {
                     generate_snapshot(pack, Mode::Daily, &svc, today)
                         .expect("daily nonogram pack should always have a puzzle")
                 });
-            daily_snapshots.insert(pack.size_key.clone(), daily_snapshot);
+            daily_snapshots.insert(difficulty.key.to_string(), daily_snapshot);
 
             if let Some(snapshot) = saved_games
                 .iter()
-                .find(|game| game.mode == "personal" && game.size_key == pack.size_key)
+                .find(|game| game.mode == "personal" && game.size_key == difficulty.key)
                 .and_then(|game| snapshot_from_game(game, pack))
             {
-                personal_snapshots.insert(pack.size_key.clone(), snapshot);
+                personal_snapshots.insert(difficulty.key.to_string(), snapshot);
             }
         }
 
+        let selected_difficulty = default_selected_difficulty(&library);
         let mut state = Self {
             user_id,
             mode: Mode::Daily,
             cursor: (0, 0),
             library,
-            selected_pack: 1, // 15x15 — medium pack, matches Sudoku/Minesweeper default
+            selected_difficulty,
             current_puzzle_id: String::new(),
             player_grid: Vec::new(),
             is_game_over: false,
@@ -124,15 +149,22 @@ impl State {
     }
 
     pub fn has_puzzles(&self) -> bool {
-        !self.library.is_empty()
+        DIFFICULTIES
+            .iter()
+            .any(|difficulty| self.library.pack_by_size_key(difficulty.size_key).is_some())
     }
 
     pub fn pack_count(&self) -> usize {
-        self.library.packs().len()
+        DIFFICULTIES.len()
+    }
+
+    pub fn difficulty_key(&self) -> &'static str {
+        DIFFICULTIES[self.selected_difficulty].key
     }
 
     pub fn selected_pack(&self) -> Option<&NonogramPack> {
-        self.library.pack(self.selected_pack)
+        self.library
+            .pack_by_size_key(DIFFICULTIES[self.selected_difficulty].size_key)
     }
 
     pub fn puzzle(&self) -> Option<&NonogramPuzzle> {
@@ -199,7 +231,7 @@ impl State {
         };
 
         self.personal_snapshots
-            .insert(pack.size_key.clone(), snapshot.clone());
+            .insert(self.difficulty_key().to_string(), snapshot.clone());
         self.mode = Mode::Personal;
         self.apply_snapshot(snapshot);
         self.save_async();
@@ -291,22 +323,23 @@ impl State {
         self.after_edit();
     }
 
-    pub fn next_pack(&mut self) {
-        if self.library.is_empty() {
+    pub fn next_difficulty(&mut self) {
+        if !self.has_puzzles() {
             return;
         }
         self.store_active_snapshot();
-        self.selected_pack = (self.selected_pack + 1) % self.library.packs().len();
+        self.selected_difficulty = (self.selected_difficulty + 1) % DIFFICULTIES.len();
         self.load_mode_snapshot_for_selected_pack();
     }
 
-    pub fn prev_pack(&mut self) {
-        if self.library.is_empty() {
+    pub fn prev_difficulty(&mut self) {
+        if !self.has_puzzles() {
             return;
         }
         self.store_active_snapshot();
-        self.selected_pack = (self.selected_pack + self.library.packs().len().saturating_sub(1))
-            % self.library.packs().len();
+        self.selected_difficulty =
+            (self.selected_difficulty + DIFFICULTIES.len().saturating_sub(1))
+                % DIFFICULTIES.len();
         self.load_mode_snapshot_for_selected_pack();
     }
 
@@ -328,10 +361,9 @@ impl State {
 
         if solved {
             self.is_game_over = true;
-            if self.mode == Mode::Daily
-                && let Some(size_key) = self.selected_pack().map(|pack| pack.size_key.clone())
-            {
-                self.svc.record_win_task(self.user_id, size_key);
+            if self.mode == Mode::Daily {
+                self.svc
+                    .record_win_task(self.user_id, self.difficulty_key().to_string());
             }
         }
     }
@@ -347,17 +379,17 @@ impl State {
 
         let mut generated = false;
         let snapshot = match self.mode {
-            Mode::Daily => self.daily_snapshots.get(&pack.size_key).cloned(),
-            Mode::Personal => self.personal_snapshots.get(&pack.size_key).cloned(),
+            Mode::Daily => self.daily_snapshots.get(self.difficulty_key()).cloned(),
+            Mode::Personal => self.personal_snapshots.get(self.difficulty_key()).cloned(),
         }
         .or_else(|| {
             let snapshot = generate_snapshot(&pack, self.mode, &self.svc, self.svc.today())?;
             if self.mode == Mode::Daily {
                 self.daily_snapshots
-                    .insert(pack.size_key.clone(), snapshot.clone());
+                    .insert(self.difficulty_key().to_string(), snapshot.clone());
             } else {
                 self.personal_snapshots
-                    .insert(pack.size_key.clone(), snapshot.clone());
+                    .insert(self.difficulty_key().to_string(), snapshot.clone());
             }
             generated = true;
             Some(snapshot)
@@ -379,9 +411,7 @@ impl State {
     }
 
     fn store_active_snapshot(&mut self) {
-        let Some(size_key) = self.selected_pack().map(|pack| pack.size_key.clone()) else {
-            return;
-        };
+        let difficulty_key = self.difficulty_key().to_string();
         if self.current_puzzle_id.is_empty() {
             return;
         }
@@ -394,10 +424,10 @@ impl State {
 
         match self.mode {
             Mode::Daily => {
-                self.daily_snapshots.insert(size_key, snapshot);
+                self.daily_snapshots.insert(difficulty_key, snapshot);
             }
             Mode::Personal => {
-                self.personal_snapshots.insert(size_key, snapshot);
+                self.personal_snapshots.insert(difficulty_key, snapshot);
             }
         }
     }
@@ -413,7 +443,7 @@ impl State {
         self.svc.save_game_task(GameParams {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
-            size_key: pack.size_key.clone(),
+            size_key: self.difficulty_key().to_string(),
             puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
             puzzle_id: self.current_puzzle_id.clone(),
             player_grid: serde_json::to_value(&self.player_grid).unwrap_or_default(),
@@ -505,6 +535,21 @@ fn puzzle_date_for_mode(mode: Mode, today: NaiveDate) -> Option<NaiveDate> {
         Mode::Daily => Some(today),
         Mode::Personal => None,
     }
+}
+
+fn default_selected_difficulty(library: &Library) -> usize {
+    DIFFICULTIES
+        .iter()
+        .position(|difficulty| {
+            difficulty.key == "medium"
+                && library.pack_by_size_key(difficulty.size_key).is_some()
+        })
+        .or_else(|| {
+            DIFFICULTIES
+                .iter()
+                .position(|difficulty| library.pack_by_size_key(difficulty.size_key).is_some())
+        })
+        .unwrap_or(0)
 }
 
 // Nonogram packs embedded at compile time — no runtime file I/O needed.

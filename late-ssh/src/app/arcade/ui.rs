@@ -497,7 +497,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Daily runs, personal retries, streaks, and leaderboards.",
+            "Daily runs, personal retries, rewards, and leaderboards.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
@@ -523,15 +523,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Nonograms",
             "Pixel puzzles painted by logic, one clue at a time.",
             view.nonogram_state.has_puzzles(),
-            {
-                let size_key = view
-                    .nonogram_state
-                    .selected_pack()
-                    .map(|p| p.size_key.as_str())
-                    .unwrap_or("unknown");
-                match view.nonogram_state.mode {
-                    super::nonogram::state::Mode::Daily => format!("Daily {}", size_key),
-                    super::nonogram::state::Mode::Personal => format!("Personal {}", size_key),
+            match view.nonogram_state.mode {
+                super::nonogram::state::Mode::Daily => {
+                    format!("Daily {}", view.nonogram_state.difficulty_key())
+                }
+                super::nonogram::state::Mode::Personal => {
+                    format!("Personal {}", view.nonogram_state.difficulty_key())
                 }
             },
         ),
