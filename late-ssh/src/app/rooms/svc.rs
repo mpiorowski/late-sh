@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use late_core::{
     db::Db,
-    models::{chat_room_member::ChatRoomMember, game_room::GameRoom},
+    models::{
+        chat_room_member::ChatRoomMember,
+        game_room::{GameRoom, ROOM_SEAT_SEPARATOR},
+    },
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, watch};
@@ -217,6 +220,11 @@ impl RoomsService {
         display_name: &str,
         settings: Value,
     ) -> anyhow::Result<GameRoom> {
+        let display_name = sanitize_room_display_name(display_name);
+        if display_name.is_empty() {
+            anyhow::bail!("table name is required");
+        }
+
         let client = self.db.get().await?;
         let existing_count = count_open_rooms_created_by(&client, user_id, game_kind).await?;
         if existing_count >= MAX_TABLES_PER_USER {
@@ -232,7 +240,7 @@ impl RoomsService {
             &client,
             game_kind,
             &slug,
-            display_name,
+            &display_name,
             settings,
             Some(user_id),
         )
@@ -314,10 +322,32 @@ fn generate_room_slug(slug_prefix: &str) -> String {
     format!("{}-{}", slug_prefix, &id[..12])
 }
 
+pub(crate) fn sanitize_room_display_name(input: &str) -> String {
+    input
+        .replace(ROOM_SEAT_SEPARATOR, " | ")
+        .replace('@', "＠")
+        .replace(['\n', '\r'], " ")
+        .trim()
+        .to_string()
+}
+
 fn room_create_error_message(error: &anyhow::Error) -> String {
     room_error_message(error)
 }
 
 fn room_error_message(error: &anyhow::Error) -> String {
     error.root_cause().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_room_display_name_neutralizes_chat_reserved_text() {
+        assert_eq!(
+            sanitize_room_display_name(" @alice Casual || Fun\n "),
+            "＠alice Casual | Fun"
+        );
+    }
 }

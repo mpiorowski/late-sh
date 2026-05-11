@@ -60,6 +60,7 @@ rumenx-sudoku.workspace = true
 opentelemetry = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry-http = { workspace = true, optional = true }
+rand.workspace = true
 
 [dev-dependencies]
 late-core = { workspace = true, features = ["testing"] }

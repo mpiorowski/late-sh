@@ -6,15 +6,16 @@ use std::{
 
 use late_core::MutexRecover;
 use rand_core::{OsRng, RngCore};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
-    games::{
+    arcade::{
         cards::{CardRank, CardSuit, PlayingCard},
         chips::svc::ChipService,
     },
+    rooms::{backend::RoomGameEvent, svc::GameKind},
 };
 
 use super::settings::PokerTableSettings;
@@ -29,6 +30,9 @@ pub struct PokerService {
     room_id: Uuid,
     chip_svc: ChipService,
     activity: ActivityPublisher,
+    room_display_name: String,
+    room_meta_label: String,
+    room_event_tx: broadcast::Sender<RoomGameEvent>,
     public_tx: watch::Sender<PokerPublicSnapshot>,
     public_rx: watch::Receiver<PokerPublicSnapshot>,
     private_txs: Arc<StdMutex<HashMap<Uuid, watch::Sender<PokerPrivateSnapshot>>>>,
@@ -80,6 +84,7 @@ pub struct PokerPrivateSnapshot {
     pub to_call: i64,
     pub min_raise: i64,
     pub can_raise: bool,
+    pub auto_check_fold: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +154,28 @@ impl PokerService {
         activity: ActivityPublisher,
         settings: PokerTableSettings,
     ) -> Self {
+        let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
+        let meta = settings.meta_label();
+        Self::new_with_settings_and_events(
+            room_id,
+            chip_svc,
+            activity,
+            settings,
+            "Poker Table".to_string(),
+            meta,
+            room_event_tx,
+        )
+    }
+
+    pub fn new_with_settings_and_events(
+        room_id: Uuid,
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        settings: PokerTableSettings,
+        room_display_name: String,
+        room_meta_label: String,
+        room_event_tx: broadcast::Sender<RoomGameEvent>,
+    ) -> Self {
         let state = SharedState::new_with_settings(room_id, settings);
         let initial_snapshot = state.public_snapshot();
         let (public_tx, public_rx) = watch::channel(initial_snapshot);
@@ -156,6 +183,9 @@ impl PokerService {
             room_id,
             chip_svc,
             activity,
+            room_display_name,
+            room_meta_label,
+            room_event_tx,
             public_tx,
             public_rx,
             private_txs: Arc::new(StdMutex::new(HashMap::new())),
@@ -197,15 +227,25 @@ impl PokerService {
     pub fn sit_task(&self, user_id: Uuid, balance: i64) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let activity_generation = {
+            let (activity_generation, seat_joined) = {
                 let mut state = svc.state.lock().await;
-                state.sit(user_id, balance);
+                let seat_joined = state.sit(user_id, balance);
                 let activity_generation = state.record_activity(user_id);
                 svc.publish(&state);
-                activity_generation
+                (activity_generation, seat_joined)
             };
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
+            }
+            if let Some(seat_index) = seat_joined {
+                let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
+                    room_id: svc.room_id,
+                    user_id,
+                    game_kind: GameKind::Poker,
+                    display_name: svc.room_display_name.clone(),
+                    seat_index,
+                    meta: svc.room_meta_label.clone(),
+                });
             }
         });
     }
@@ -215,8 +255,10 @@ impl PokerService {
         tokio::spawn(async move {
             let (settlements, action_countdown_id) = {
                 let mut state = svc.state.lock().await;
-                let settlements = state.leave(user_id);
-                let action_countdown_id = state.start_action_countdown_if_needed();
+                let mut settlements = state.leave(user_id);
+                let (auto_settlements, action_countdown_id) =
+                    state.apply_auto_check_folds_and_start_countdown();
+                settlements.extend(auto_settlements);
                 svc.publish(&state);
                 (settlements, action_countdown_id)
             };
@@ -251,13 +293,19 @@ impl PokerService {
     pub fn call_or_check_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let (activity_generation, outcome, action_countdown_id) = {
+            let (activity_generation, outcome, auto_settlements, action_countdown_id) = {
                 let mut state = svc.state.lock().await;
                 let outcome = state.call_or_check(user_id);
                 let activity_generation = state.record_activity(user_id);
-                let action_countdown_id = state.start_action_countdown_if_needed();
+                let (auto_settlements, action_countdown_id) =
+                    state.apply_auto_check_folds_and_start_countdown();
                 svc.publish(&state);
-                (activity_generation, outcome, action_countdown_id)
+                (
+                    activity_generation,
+                    outcome,
+                    auto_settlements,
+                    action_countdown_id,
+                )
             };
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
@@ -266,19 +314,28 @@ impl PokerService {
                 svc.schedule_action_timeout(countdown_id);
             }
             svc.handle_action_outcome(outcome);
+            if !auto_settlements.is_empty() {
+                svc.persist_settlements_task(auto_settlements);
+            }
         });
     }
 
     pub fn bet_or_raise_task(&self, user_id: Uuid, raise_by: i64) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let (activity_generation, outcome, action_countdown_id) = {
+            let (activity_generation, outcome, auto_settlements, action_countdown_id) = {
                 let mut state = svc.state.lock().await;
                 let outcome = state.bet_or_raise(user_id, raise_by);
                 let activity_generation = state.record_activity(user_id);
-                let action_countdown_id = state.start_action_countdown_if_needed();
+                let (auto_settlements, action_countdown_id) =
+                    state.apply_auto_check_folds_and_start_countdown();
                 svc.publish(&state);
-                (activity_generation, outcome, action_countdown_id)
+                (
+                    activity_generation,
+                    outcome,
+                    auto_settlements,
+                    action_countdown_id,
+                )
             };
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
@@ -287,19 +344,28 @@ impl PokerService {
                 svc.schedule_action_timeout(countdown_id);
             }
             svc.handle_action_outcome(outcome);
+            if !auto_settlements.is_empty() {
+                svc.persist_settlements_task(auto_settlements);
+            }
         });
     }
 
     pub fn all_in_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let (activity_generation, outcome, action_countdown_id) = {
+            let (activity_generation, outcome, auto_settlements, action_countdown_id) = {
                 let mut state = svc.state.lock().await;
                 let outcome = state.all_in(user_id);
                 let activity_generation = state.record_activity(user_id);
-                let action_countdown_id = state.start_action_countdown_if_needed();
+                let (auto_settlements, action_countdown_id) =
+                    state.apply_auto_check_folds_and_start_countdown();
                 svc.publish(&state);
-                (activity_generation, outcome, action_countdown_id)
+                (
+                    activity_generation,
+                    outcome,
+                    auto_settlements,
+                    action_countdown_id,
+                )
             };
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
@@ -308,6 +374,9 @@ impl PokerService {
                 svc.schedule_action_timeout(countdown_id);
             }
             svc.handle_action_outcome(outcome);
+            if !auto_settlements.is_empty() {
+                svc.persist_settlements_task(auto_settlements);
+            }
         });
     }
 
@@ -316,9 +385,35 @@ impl PokerService {
         tokio::spawn(async move {
             let (activity_generation, settlements, action_countdown_id) = {
                 let mut state = svc.state.lock().await;
-                let settlements = state.fold(user_id);
+                let mut settlements = state.fold(user_id);
                 let activity_generation = state.record_activity(user_id);
-                let action_countdown_id = state.start_action_countdown_if_needed();
+                let (auto_settlements, action_countdown_id) =
+                    state.apply_auto_check_folds_and_start_countdown();
+                settlements.extend(auto_settlements);
+                svc.publish(&state);
+                (activity_generation, settlements, action_countdown_id)
+            };
+            if let Some(activity_generation) = activity_generation {
+                svc.schedule_inactivity_kick(user_id, activity_generation);
+            }
+            if let Some(countdown_id) = action_countdown_id {
+                svc.schedule_action_timeout(countdown_id);
+            }
+            if !settlements.is_empty() {
+                svc.persist_settlements_task(settlements);
+            }
+        });
+    }
+
+    pub fn toggle_auto_check_fold_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let (activity_generation, settlements, action_countdown_id) = {
+                let mut state = svc.state.lock().await;
+                state.toggle_auto_check_fold(user_id);
+                let activity_generation = state.record_activity(user_id);
+                let (settlements, action_countdown_id) =
+                    state.apply_auto_check_folds_and_start_countdown();
                 svc.publish(&state);
                 (activity_generation, settlements, action_countdown_id)
             };
@@ -379,7 +474,7 @@ impl PokerService {
                 .await;
             let (settlements, action_countdown_id) = {
                 let mut state = svc.state.lock().await;
-                let settlements = match result {
+                let mut settlements = match result {
                     Ok(Some(new_balance)) => state.apply_commit_success(request, new_balance),
                     Ok(None) => state.apply_commit_failure(
                         request,
@@ -398,7 +493,9 @@ impl PokerService {
                         )
                     }
                 };
-                let action_countdown_id = state.start_action_countdown_if_needed();
+                let (auto_settlements, action_countdown_id) =
+                    state.apply_auto_check_folds_and_start_countdown();
+                settlements.extend(auto_settlements);
                 svc.publish(&state);
                 (settlements, action_countdown_id)
             };
@@ -467,10 +564,14 @@ impl PokerService {
             let (changed, settlements, action_countdown_id) = {
                 let mut state = svc.state.lock().await;
                 let (changed, settlements) = state.kick_inactive_user(user_id, activity_generation);
-                let action_countdown_id = if changed {
-                    state.start_action_countdown_if_needed()
+                let (settlements, action_countdown_id) = if changed {
+                    let mut settlements = settlements;
+                    let (auto_settlements, action_countdown_id) =
+                        state.apply_auto_check_folds_and_start_countdown();
+                    settlements.extend(auto_settlements);
+                    (settlements, action_countdown_id)
                 } else {
-                    None
+                    (settlements, None)
                 };
                 if changed {
                     svc.publish(&state);
@@ -513,10 +614,12 @@ impl PokerService {
                         continue;
                     }
 
-                    let settlements = state
+                    let mut settlements = state
                         .timeout_active_action(countdown_id)
                         .unwrap_or_default();
-                    let next_countdown_id = state.start_action_countdown_if_needed();
+                    let (auto_settlements, next_countdown_id) =
+                        state.apply_auto_check_folds_and_start_countdown();
+                    settlements.extend(auto_settlements);
                     svc.publish(&state);
                     (settlements, next_countdown_id)
                 };
@@ -563,6 +666,7 @@ struct SharedState {
     acted_this_street: [bool; MAX_SEATS],
     last_action: [Option<PokerAction>; MAX_SEATS],
     leave_after_hand: [bool; MAX_SEATS],
+    auto_check_fold: [bool; MAX_SEATS],
     committed: [i64; MAX_SEATS],
     street_bet: [i64; MAX_SEATS],
     pending_commit: [Option<PendingCommit>; MAX_SEATS],
@@ -613,6 +717,7 @@ impl SharedState {
             acted_this_street: [false; MAX_SEATS],
             last_action: [None; MAX_SEATS],
             leave_after_hand: [false; MAX_SEATS],
+            auto_check_fold: [false; MAX_SEATS],
             committed: [0; MAX_SEATS],
             street_bet: [0; MAX_SEATS],
             pending_commit: [None; MAX_SEATS],
@@ -696,6 +801,9 @@ impl SharedState {
             to_call,
             min_raise: self.min_raise,
             can_raise,
+            auto_check_fold: seat_index
+                .map(|index| self.auto_check_fold[index])
+                .unwrap_or_default(),
         }
     }
 
@@ -749,6 +857,59 @@ impl SharedState {
         self.clear_action_countdown();
     }
 
+    fn apply_auto_check_folds_and_start_countdown(
+        &mut self,
+    ) -> (Vec<PokerSettlement>, Option<u64>) {
+        let settlements = self.apply_auto_check_folds();
+        let action_countdown_id = self.start_action_countdown_if_needed();
+        (settlements, action_countdown_id)
+    }
+
+    fn apply_auto_check_folds(&mut self) -> Vec<PokerSettlement> {
+        let mut settlements = Vec::new();
+        let mut messages = Vec::new();
+
+        for _ in 0..(MAX_SEATS * 4) {
+            if self.settlement_pending || !self.phase.is_action_phase() {
+                break;
+            }
+            let Some(index) = self.active_seat else {
+                break;
+            };
+            if !self.auto_check_fold[index]
+                || self.pending_commit[index].is_some()
+                || self.hole_cards[index].len() != 2
+                || self.folded[index]
+                || self.all_in[index]
+            {
+                break;
+            }
+
+            self.clear_action_countdown();
+            if self.to_call(index) == 0 {
+                self.acted_this_street[index] = true;
+                self.last_action[index] = Some(PokerAction::Check);
+                messages.push(format!("Seat {} auto-checked.", index + 1));
+            } else {
+                self.folded[index] = true;
+                self.acted_this_street[index] = true;
+                self.last_action[index] = Some(PokerAction::Fold);
+                messages.push(format!("Seat {} auto-folded.", index + 1));
+            }
+
+            settlements.extend(self.advance_after_action(index));
+            if !settlements.is_empty() {
+                break;
+            }
+        }
+
+        if !messages.is_empty() {
+            self.status_message = format!("{} {}", messages.join(" "), self.status_message);
+        }
+
+        settlements
+    }
+
     fn seat_snapshot(&self, index: usize) -> PokerSeat {
         let card_count = self.hole_cards[index].len();
         let revealed_cards = self.revealed_cards_for(index);
@@ -780,26 +941,27 @@ impl SharedState {
         Some(self.hole_cards[index].clone())
     }
 
-    fn sit(&mut self, user_id: Uuid, balance: i64) {
+    fn sit(&mut self, user_id: Uuid, balance: i64) -> Option<usize> {
         if let Some(index) = self.seat_index(user_id) {
             self.sync_balance_at(index, user_id, balance);
-            return;
+            return None;
         }
-        if self.phase.is_action_phase() || self.phase == PokerPhase::PostingBlinds {
-            self.status_message = "Wait for the hand to finish before sitting.".to_string();
-            return;
-        }
+        let waits_for_next_hand =
+            self.phase.is_action_phase() || self.phase == PokerPhase::PostingBlinds;
         let Some(index) = self.seats.iter().position(Option::is_none) else {
             self.status_message = "Poker table is full.".to_string();
-            return;
+            return None;
         };
         self.seats[index] = Some(user_id);
         self.sync_balance_at(index, user_id, balance);
-        self.status_message = if self.playable_indices().len() >= 2 {
+        self.status_message = if waits_for_next_hand {
+            format!("Seat {} joined and will play next hand.", index + 1)
+        } else if self.playable_indices().len() >= 2 {
             "Press n to deal a hand.".to_string()
         } else {
             "Waiting for a second funded player.".to_string()
         };
+        Some(index)
     }
 
     fn sync_balance(&mut self, user_id: Uuid, balance: i64) -> bool {
@@ -1086,6 +1248,19 @@ impl SharedState {
         self.acted_this_street[index] = true;
         self.last_action[index] = Some(PokerAction::Fold);
         self.advance_after_action(index)
+    }
+
+    fn toggle_auto_check_fold(&mut self, user_id: Uuid) {
+        let Some(index) = self.seat_index(user_id) else {
+            self.status_message = "Sit before toggling auto check/fold.".to_string();
+            return;
+        };
+        self.auto_check_fold[index] = !self.auto_check_fold[index];
+        self.status_message = if self.auto_check_fold[index] {
+            format!("Seat {} will auto check/fold.", index + 1)
+        } else {
+            format!("Seat {} auto check/fold is off.", index + 1)
+        };
     }
 
     fn timeout_active_action(&mut self, countdown_id: u64) -> Option<Vec<PokerSettlement>> {
@@ -1705,6 +1880,7 @@ impl SharedState {
         self.acted_this_street[index] = false;
         self.last_action[index] = None;
         self.leave_after_hand[index] = false;
+        self.auto_check_fold[index] = false;
         self.committed[index] = 0;
         self.street_bet[index] = 0;
         self.pending_commit[index] = None;
@@ -2390,6 +2566,118 @@ mod tests {
         assert_eq!(state.public_snapshot().small_blind, 50);
         assert_eq!(state.public_snapshot().big_blind, 100);
         assert_eq!(state.min_raise, 100);
+    }
+
+    #[test]
+    fn player_can_sit_during_active_hand_and_waits_for_next_deal() {
+        let mut state = SharedState::new(uid(100));
+        seat_player(
+            &mut state,
+            0,
+            uid(1),
+            vec![
+                c(CardRank::Ace, CardSuit::Spades),
+                c(CardRank::King, CardSuit::Spades),
+            ],
+        );
+        seat_player(
+            &mut state,
+            1,
+            uid(2),
+            vec![
+                c(CardRank::Queen, CardSuit::Hearts),
+                c(CardRank::Jack, CardSuit::Hearts),
+            ],
+        );
+        state.phase = PokerPhase::Flop;
+        state.active_seat = Some(0);
+
+        let seat = state.sit(uid(3), 500);
+
+        assert_eq!(seat, Some(2));
+        assert_eq!(state.seats[2], Some(uid(3)));
+        assert_eq!(state.balances[2], 500);
+        assert!(state.hole_cards[2].is_empty());
+        assert!(!state.seat_snapshot(2).in_hand);
+        assert_eq!(state.active_player_indices(), vec![0, 1]);
+        assert_eq!(state.active_seat, Some(0));
+        assert!(state.status_message.contains("next hand"));
+    }
+
+    #[test]
+    fn auto_check_fold_checks_for_free_and_starts_next_countdown() {
+        let mut state = SharedState::new(uid(100));
+        seat_player(
+            &mut state,
+            0,
+            uid(1),
+            vec![
+                c(CardRank::Ace, CardSuit::Spades),
+                c(CardRank::King, CardSuit::Spades),
+            ],
+        );
+        seat_player(
+            &mut state,
+            1,
+            uid(2),
+            vec![
+                c(CardRank::Queen, CardSuit::Hearts),
+                c(CardRank::Jack, CardSuit::Hearts),
+            ],
+        );
+        state.phase = PokerPhase::Flop;
+        state.active_seat = Some(0);
+        state.auto_check_fold[0] = true;
+
+        let (settlements, countdown_id) = state.apply_auto_check_folds_and_start_countdown();
+
+        assert!(settlements.is_empty());
+        assert_eq!(state.last_action[0], Some(PokerAction::Check));
+        assert!(!state.folded[0]);
+        assert_eq!(state.active_seat, Some(1));
+        assert_eq!(state.action_countdown_seat, Some(1));
+        assert!(countdown_id.is_some());
+        assert!(state.status_message.contains("auto-checked"));
+    }
+
+    #[test]
+    fn auto_check_fold_folds_when_call_is_owed() {
+        let mut state = SharedState::new(uid(100));
+        seat_player(
+            &mut state,
+            0,
+            uid(1),
+            vec![
+                c(CardRank::Ace, CardSuit::Spades),
+                c(CardRank::King, CardSuit::Spades),
+            ],
+        );
+        seat_player(
+            &mut state,
+            1,
+            uid(2),
+            vec![
+                c(CardRank::Queen, CardSuit::Hearts),
+                c(CardRank::Jack, CardSuit::Hearts),
+            ],
+        );
+        state.phase = PokerPhase::Flop;
+        state.active_seat = Some(0);
+        state.current_bet = 20;
+        state.street_bet = [0, 20, 0, 0];
+        state.committed = [0, 20, 0, 0];
+        state.auto_check_fold[0] = true;
+
+        let (settlements, countdown_id) = state.apply_auto_check_folds_and_start_countdown();
+        let credits = credits_by_user(settlements);
+
+        assert!(countdown_id.is_none());
+        assert_eq!(state.last_action[0], Some(PokerAction::Fold));
+        assert!(state.folded[0]);
+        assert_eq!(state.phase, PokerPhase::Showdown);
+        assert_eq!(state.winners, vec![1]);
+        assert_eq!(credits.get(&uid(2)), Some(&20));
+        assert!(state.status_message.contains("auto-folded"));
     }
 
     #[test]

@@ -66,6 +66,8 @@ pub enum ThemeKind {
     Winter = 60,
     Cyberpunk2077 = 61,
     Monokai = 62,
+    SolarizedLight = 63,
+    SolarizedDark = 64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -559,6 +561,18 @@ pub const OPTIONS: &[ThemeOption] = &[
         group: ThemeGroup::Games,
         id: "cyberpunk2077",
         label: "Cyberpunk 2077",
+    },
+    ThemeOption {
+        kind: ThemeKind::SolarizedLight,
+        group: ThemeGroup::Ports,
+        id: "solarized_light",
+        label: "Solarized Light",
+    },
+    ThemeOption {
+        kind: ThemeKind::SolarizedDark,
+        group: ThemeGroup::Ports,
+        id: "solarized_dark",
+        label: "Solarized Dark",
     },
 ];
 
@@ -2454,6 +2468,66 @@ const PALETTE_MONOKAI: Palette = Palette {
     badge_gold: Color::Rgb(255, 216, 102),
 };
 
+const PALETTE_SOLARIZED_LIGHT: Palette = Palette {
+    bg_canvas: Color::Rgb(253, 246, 227),
+    bg_selection: Color::Rgb(238, 232, 213),
+    bg_highlight: Color::Rgb(238, 232, 213),
+    border_dim: Color::Rgb(147, 161, 161),
+    border: Color::Rgb(131, 148, 150),
+    border_active: Color::Rgb(38, 139, 210),
+    text_faint: Color::Rgb(147, 161, 161),
+    text_dim: Color::Rgb(131, 148, 150),
+    text_muted: Color::Rgb(101, 123, 131),
+    text: Color::Rgb(101, 123, 131),
+    text_bright: Color::Rgb(88, 110, 117),
+    amber: Color::Rgb(203, 75, 22),
+    amber_dim: Color::Rgb(160, 54, 12),
+    amber_glow: Color::Rgb(224, 90, 32),
+    chat_body: Color::Rgb(101, 123, 131),
+    chat_author: Color::Rgb(38, 139, 210),
+    mention: Color::Rgb(181, 137, 0),
+    success: Color::Rgb(133, 153, 0),
+    error: Color::Rgb(220, 50, 47),
+    bot: Color::Rgb(108, 113, 196),
+    bonsai_sprout: Color::Rgb(133, 153, 0),
+    bonsai_leaf: Color::Rgb(42, 161, 152),
+    bonsai_canopy: Color::Rgb(42, 161, 152),
+    bonsai_bloom: Color::Rgb(211, 54, 130),
+    badge_bronze: Color::Rgb(203, 75, 22),
+    badge_silver: Color::Rgb(131, 148, 150),
+    badge_gold: Color::Rgb(181, 137, 0),
+};
+
+const PALETTE_SOLARIZED_DARK: Palette = Palette {
+    bg_canvas: Color::Rgb(0, 43, 54),
+    bg_selection: Color::Rgb(7, 54, 66),
+    bg_highlight: Color::Rgb(7, 54, 66),
+    border_dim: Color::Rgb(7, 54, 66),
+    border: Color::Rgb(88, 110, 117),
+    border_active: Color::Rgb(38, 139, 210),
+    text_faint: Color::Rgb(7, 54, 66),
+    text_dim: Color::Rgb(88, 110, 117),
+    text_muted: Color::Rgb(101, 123, 131),
+    text: Color::Rgb(131, 148, 150),
+    text_bright: Color::Rgb(147, 161, 161),
+    amber: Color::Rgb(203, 75, 22),
+    amber_dim: Color::Rgb(160, 54, 12),
+    amber_glow: Color::Rgb(224, 90, 32),
+    chat_body: Color::Rgb(131, 148, 150),
+    chat_author: Color::Rgb(38, 139, 210),
+    mention: Color::Rgb(181, 137, 0),
+    success: Color::Rgb(133, 153, 0),
+    error: Color::Rgb(220, 50, 47),
+    bot: Color::Rgb(108, 113, 196),
+    bonsai_sprout: Color::Rgb(133, 153, 0),
+    bonsai_leaf: Color::Rgb(42, 161, 152),
+    bonsai_canopy: Color::Rgb(42, 161, 152),
+    bonsai_bloom: Color::Rgb(211, 54, 130),
+    badge_bronze: Color::Rgb(203, 75, 22),
+    badge_silver: Color::Rgb(131, 148, 150),
+    badge_gold: Color::Rgb(181, 137, 0),
+};
+
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Contrast) };
 }
@@ -2579,6 +2653,8 @@ fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
         ThemeKind::Winter => &PALETTE_WINTER,
         ThemeKind::Cyberpunk2077 => &PALETTE_CYBERPUNK2077,
         ThemeKind::Late => &PALETTE_LATE,
+        ThemeKind::SolarizedLight => &PALETTE_SOLARIZED_LIGHT,
+        ThemeKind::SolarizedDark => &PALETTE_SOLARIZED_DARK,
     }
 }
 
@@ -2759,8 +2835,17 @@ mod tests {
 
     #[test]
     fn cycle_theme_wraps() {
-        assert_eq!(cycle_id("cyberpunk2077", true), "contrast");
-        assert_eq!(cycle_id("contrast", false), "cyberpunk2077");
+        let first = OPTIONS
+            .first()
+            .expect("theme options should not be empty")
+            .id;
+        let last = OPTIONS
+            .last()
+            .expect("theme options should not be empty")
+            .id;
+
+        assert_eq!(cycle_id(last, true), first);
+        assert_eq!(cycle_id(first, false), last);
     }
 
     #[test]

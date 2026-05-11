@@ -9,10 +9,11 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::publisher::ActivityPublisher,
-    games::chips::svc::ChipService,
+    arcade::chips::svc::ChipService,
     rooms::{
         backend::{
-            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameManager,
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
+            RoomGameManager,
         },
         blackjack::{
             create_modal::BlackjackCreateModal,
@@ -32,6 +33,7 @@ pub struct BlackjackTableManager {
     activity: ActivityPublisher,
     tables: Arc<Mutex<HashMap<Uuid, BlackjackService>>>,
     event_tx: broadcast::Sender<BlackjackEvent>,
+    room_event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl BlackjackTableManager {
@@ -41,12 +43,14 @@ impl BlackjackTableManager {
         activity: ActivityPublisher,
     ) -> Self {
         let (event_tx, _) = broadcast::channel::<BlackjackEvent>(256);
+        let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
             player_directory,
             activity,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
+            room_event_tx,
         }
     }
 
@@ -57,6 +61,7 @@ impl BlackjackTableManager {
     pub fn get_or_create(
         &self,
         room_id: Uuid,
+        display_name: String,
         settings: BlackjackTableSettings,
     ) -> BlackjackService {
         let mut tables = self.tables.lock_recover();
@@ -64,7 +69,13 @@ impl BlackjackTableManager {
             .entry(room_id)
             .or_insert_with(|| {
                 let (event_tx, _) = broadcast::channel::<BlackjackEvent>(64);
-                self.forward_table_events(room_id, event_tx.subscribe());
+                let meta = settings.meta_label();
+                self.forward_table_events(
+                    room_id,
+                    display_name.clone(),
+                    meta,
+                    event_tx.subscribe(),
+                );
                 BlackjackService::new_with_settings(
                     room_id,
                     self.chip_svc.clone(),
@@ -77,12 +88,33 @@ impl BlackjackTableManager {
             .clone()
     }
 
-    fn forward_table_events(&self, room_id: Uuid, mut rx: broadcast::Receiver<BlackjackEvent>) {
+    fn forward_table_events(
+        &self,
+        room_id: Uuid,
+        display_name: String,
+        meta: String,
+        mut rx: broadcast::Receiver<BlackjackEvent>,
+    ) {
         let event_tx = self.event_tx.clone();
+        let room_event_tx = self.room_event_tx.clone();
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
+                        if let BlackjackEvent::SeatJoined {
+                            user_id,
+                            seat_index,
+                        } = &event
+                        {
+                            let _ = room_event_tx.send(RoomGameEvent::SeatJoined {
+                                room_id,
+                                user_id: *user_id,
+                                game_kind: GameKind::Blackjack,
+                                display_name: display_name.clone(),
+                                seat_index: *seat_index,
+                                meta: meta.clone(),
+                            });
+                        }
                         let _ = event_tx.send(event);
                     }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
@@ -150,6 +182,14 @@ impl RoomGameManager for BlackjackTableManager {
         })
     }
 
+    fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
+        self.room_event_tx.subscribe()
+    }
+
+    fn seat_join_ascii(&self) -> &'static [&'static str] {
+        &["╭───╮╭───╮", "│░░░││10♣│", "╰───╯╰───╯"]
+    }
+
     fn enter(
         &self,
         room: &RoomListItem,
@@ -157,7 +197,7 @@ impl RoomGameManager for BlackjackTableManager {
         chip_balance: i64,
     ) -> Box<dyn ActiveRoomBackend> {
         let settings = BlackjackTableSettings::from_json(&room.settings);
-        let svc = self.get_or_create(room.id, settings);
+        let svc = self.get_or_create(room.id, room.display_name.clone(), settings);
         Box::new(State::new(svc, user_id, chip_balance))
     }
 }

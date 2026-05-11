@@ -1,12 +1,13 @@
 pub mod activity;
 pub mod ai;
+pub mod arcade;
 pub mod artboard;
 pub mod bonsai;
 pub mod chat;
 pub mod common;
 pub mod dashboard;
-pub mod games;
 pub(crate) mod help_modal;
+pub(crate) mod hub;
 pub(crate) mod icon_picker;
 pub mod input;
 pub(crate) mod mod_modal;
@@ -22,3 +23,5 @@ pub(crate) mod terminal_help_modal;
 mod tick;
 pub mod visualizer;
 pub mod vote;
+
+pub use hub::svc::LeaderboardService;

@@ -98,11 +98,17 @@ pub fn selected_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Opti
 pub fn selected_chat_icon(state: &IconPickerState, catalog: &IconCatalogData) -> Option<String> {
     selected_icon(state, catalog).map(|icon| {
         if state.tab == IconPickerTab::Kaomoji {
-            format!("`{icon}`")
+            wrap_inline_code(&icon)
         } else {
             icon
         }
     })
+}
+
+fn wrap_inline_code(text: &str) -> String {
+    let max_backtick_run = text.split(|ch| ch != '`').map(str::len).max().unwrap_or(0);
+    let marker = "`".repeat(max_backtick_run + 1);
+    format!("{marker}{text}{marker}")
 }
 
 pub fn click_list(state: &mut IconPickerState, catalog: &IconCatalogData, x: u16, y: u16) -> bool {
@@ -544,6 +550,25 @@ mod tests {
         assert_eq!(
             selected_chat_icon(&state, &catalog).as_deref(),
             Some("`(* ^ ω ^)`")
+        );
+    }
+
+    #[test]
+    fn selected_chat_icon_uses_longer_code_fence_for_backtick_kaomoji() {
+        let catalog = IconCatalogData::load();
+        let mut state = IconPickerState::default();
+        state.set_tab(IconPickerTab::Kaomoji);
+        for ch in "table flip".chars() {
+            state.search_insert_char(ch);
+        }
+
+        assert_eq!(
+            selected_icon(&state, &catalog).as_deref(),
+            Some("(╯`Д´)╯︵ ┻━┻")
+        );
+        assert_eq!(
+            selected_chat_icon(&state, &catalog).as_deref(),
+            Some("``(╯`Д´)╯︵ ┻━┻``")
         );
     }
 

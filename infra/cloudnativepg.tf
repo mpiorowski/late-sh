@@ -81,7 +81,7 @@ resource "kubernetes_manifest" "postgres_object_store" {
           }
           limits = {
             cpu    = "500m"
-            memory = "384Mi"
+            memory = "512Mi"
           }
         }
       }

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-08 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
+- Last updated: 2026-05-11 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, interactive terminal games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub modal for leaderboard/dailies/shop/events surfaces, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Arcade behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the Arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -93,7 +93,7 @@ For `late-ssh`:
 - `app/*/{mod,state,input,ui,svc,model}.rs`: keep the domain module flat and predictable; add pure unit tests inline in the relevant file instead of under `src/app/*/tests/`.
 - `app/render.rs` / `app/tick.rs`: integration tests for orchestration (needs services/DB → goes in `tests/`).
 - `app/*/svc.rs`: integration tests in `tests/<domain>/svc.rs` (needs real DB).
-- Integration test directories mirror the source domain structure: `tests/<domain>/main.rs` with split files like `svc.rs`, `state.rs` as needed. Game tests live under `tests/games/<game>.rs`.
+- Integration test directories mirror the source domain structure: `tests/<domain>/main.rs` with split files like `svc.rs`, `state.rs` as needed. Arcade game tests live under `tests/arcade/<game>.rs`.
 - `ssh.rs` / `api.rs`: smoke tests in `tests/ssh_smoke.rs` / `tests/ws_smoke.rs`.
 
 For `late-web`:
@@ -243,8 +243,9 @@ flowchart LR
 
 - `VoteService` (in `app/vote/svc.rs`), `ChatService` (in `app/chat/svc.rs`), `ArticleService` (in `app/chat/news/svc.rs`), and `NotificationService` (in `app/chat/notification_svc.rs`) expose shared `watch` snapshots (`subscribe_state()` / `subscribe_snapshot()`).
 - `ProfileService` (in `app/profile/svc.rs`) exposes per-user `watch` snapshots backed by service-owned maps (`subscribe_snapshot(user_id)`).
-- `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, streak leaders, per-user streak map (used for chat badges and profile achievements), all-time high scores (Tetris + 2048), and chip leaders (top balances).
-- `ChipService` (in `app/games/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` grants the daily 500-chip stipend on login, `grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips on daily puzzle completion. All 4 daily game services hold a `ChipService` clone and call it in `record_win_task()`.
+- `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, daily completion statuses, extended all-time/monthly high scores (Tetris, 2048, Snake), monthly chip earners, monthly Arcade champion points, and chip leaders (top balances). Compact Hub leaderboard panels render top rows plus calculation hints and an "around you" slice when the current user is outside the visible top list; Arcade Wins uses daily puzzle weighting (easy/draw-1 = 1, medium = 3, hard/draw-3 = 5). Chat username glyphs come from bonsai state.
+- `Hub` (in `app/hub`) is the global modal opened by Ctrl+G. It owns cross-product surfaces such as Leaderboard, Dailies, Shop, and Events. It may summarize data from Arcade, Rooms, and economy services, but those domains keep their own runtime/service ownership.
+- `ChipService` (in `app/arcade/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` grants the daily 500-chip stipend on login, `grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips on daily puzzle completion. Daily Arcade services hold a `ChipService` clone and call it in `record_win_task()`.
 - `Activity` (in `app/activity`) owns the structured global user-action event type, channel helpers, and `ActivityPublisher` username lookup helper. `ActivityEvent` carries `user_id`, `username`, display `action`, structured `ActivityKind`, category, and timestamp. Dashboard/sidebar display drains the same global broadcast stream through `ActivityFilter::dashboard()`. Future daily-challenge systems should subscribe to this channel and consume every event in order rather than adding per-feature challenge hooks.
 - `RoomsService` (in `app/rooms/svc.rs`) owns persistent game-room creation/listing/deletion over `game_rooms` + associated `chat_rooms`, publishes `RoomsSnapshot` via `watch`, and emits `RoomsEvent` success/failure banners.
 - `BlackjackTableManager` / `BlackjackService` own process-local per-room Blackjack runtime state. Detailed Rooms/Blackjack contracts live in `late-ssh/src/app/rooms/CONTEXT.md`.
@@ -401,27 +402,9 @@ Music binaries live in Cloudflare R2, synced to the Liquidsoap PVC during infra 
 
 Local playlist files retain full annotated metadata including duration (when present in ID3 tags). The `rewrite_np_metadata` function in `radio.liq` formats "now playing" as `Artist - Title | Duration` for the sidebar. Internet streams provided ICY metadata with no duration; local files may or may not have duration depending on the source.
 
-### 2.8 Nonogram Generation and Runtime Split
+### 2.8 Arcade Runtime Notes
 
-Nonograms intentionally use an offline generation pipeline instead of generating puzzles during SSH sessions.
-
-1. **Offline generation (`late-core`)**
-   `late-core/src/bin/gen_nonograms.rs` generates puzzle banks by size (`10x10`, `15x15`, `20x20`), applies per-size difficulty profiles (`10x10` easy, `15x15` medium, `20x20` hard), validates every accepted candidate with `number-loom`, regenerates until each pack reaches the requested count, and writes only the final JSON assets (validation scratch files are cleaned up automatically).
-2. **Shared schema (`late-core`)**
-   `late-core/src/nonogram.rs` owns the portable JSON contract (`NonogramPuzzle`, `NonogramPack`, `NonogramPackIndex`), clue derivation, pack validation, and deterministic daily puzzle selection by date.
-3. **Static assets (`late-ssh/assets/nonograms/`)**
-   Generated packs live under `late-ssh/assets/nonograms/` with one `index.json` plus one pack file per size (`10x10.json`, `15x15.json`, `20x20.json`).
-4. **Runtime loading (`late-ssh`)**
-   `late-ssh/src/app/games/nonogram/state.rs` loads packs at server startup. SSH sessions only read the already-generated bank; they do not invoke `number-loom` or generate puzzles on demand.
-5. **Daily selection**
-   The runtime picks one puzzle per size deterministically from the prebuilt bank using the UTC date and the pack `size_key`. This keeps the "daily" experience stable without storing generator state in Postgres.
-6. **Runtime persistence**
-   `late-ssh` now persists one `daily` and one `personal` slot per user and `size_key` in `nonogram_games`. `d` restores the date-based daily puzzle for the selected size, `p` restores that size's saved personal board, and `n` regenerates a fresh personal puzzle from the current pack.
-7. **Daily completion tracking**
-   `late-ssh` also records a binary daily completion fact per user, size, and UTC date in `nonogram_daily_wins`. This is intentionally separate from board state and does not track score or time.
-
-Current invariant:
-- `late-ssh` is runtime-only for nonograms: read JSON assets, select a puzzle, render/play it, and persist per-user progress. Generation belongs in `late-core/src/bin/gen_nonograms.rs`, not in the SSH hot path.
+The Arcade source domain is `late-ssh/src/app/arcade`. It owns single-player terminal games, daily puzzle state, high scores, the Arcade lobby, shared card/chip helpers, and leaderboard surfaces. Detailed file maps, per-game controls, persistence rules, nonogram asset generation, and test guidance live in `late-ssh/src/app/arcade/CONTEXT.md`.
 
 ### 2.9 Local CLI
 
@@ -482,7 +465,7 @@ late-sh/
 │   │       ├── bonsai/         # Persistent bonsai tree state, service, and UI
 │   │       ├── chat/           # Chat implementation; see app/chat/CONTEXT.md
 │   │       ├── dashboard/      # Landing screen layout + shortcuts
-│   │       ├── games/          # Arcade hub, leaderboards, and game subdomains
+│   │       ├── arcade/         # Arcade hub, leaderboards, shared card/chip helpers, and game subdomains
 │   │       ├── icon_picker/    # Ctrl+] emoji + nerd font overlay (chat composer only)
 │   │       ├── profile/        # Username/profile settings and stats
 │   │       ├── rooms/          # Persistent game-room directory; see app/rooms/CONTEXT.md
@@ -546,7 +529,7 @@ late-sh/
 - Chat service/news/notifications/showcase/work stream contracts live in `late-ssh/src/app/chat/CONTEXT.md`.
 - `ProfileService::subscribe_snapshot(user_id)` → per-user `watch::Receiver<...Snapshot>` (durable latest state)
 - `ProfileService::prune_user_snapshot_channel(user_id)` → explicit cleanup hook called from UI state `Drop`; removes idle per-user snapshot senders
-- `LeaderboardService::subscribe()` → `watch::Receiver<Arc<LeaderboardData>>` (shared, refreshed every 30s from DB; contains today's champions, streak leaders, per-user streak map for badge computation)
+- `LeaderboardService::subscribe()` → `watch::Receiver<Arc<LeaderboardData>>` (shared, refreshed every 30s from DB; contains today's champions, daily completion statuses, monthly Arcade champion points, high scores, and chip boards)
 - `subscribe_events() → broadcast::Receiver<...Event>` - transient events/notices
 
 ### 4.2 Auth and scope model
@@ -564,7 +547,7 @@ late-sh/
 
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_games_sidebar` (bool, default-on when absent), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
+| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_arcade_sidebar` (bool, default-on when absent; legacy `show_games_sidebar` is still read), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
@@ -573,7 +556,7 @@ late-sh/
 | ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
 | SudokuDailyWin | `sudoku_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, score tracked |
-| NonogramDailyWin | `nonogram_daily_wins` | `UNIQUE(user_id, size_key, puzzle_date)`, binary completion |
+| NonogramDailyWin | `nonogram_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, binary completion |
 | MinesweeperGame | `minesweeper_games` | `UNIQUE(user_id, difficulty_key, mode)`, stores seeded mine_map + player_grid + lives (3-life system) |
 | MinesweeperDailyWin | `minesweeper_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, best score (lives remaining) retained |
 | SolitaireGame | `solitaire_games` | `UNIQUE(user_id, difficulty_key, mode)`, stores seeded stock/waste/foundations/tableau |
@@ -591,7 +574,7 @@ late-sh/
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Chat`, `Games`, `Rooms`, `Artboard` (cycle: `Dashboard -> Chat -> Games -> Rooms -> Artboard -> Dashboard`; News, Mentions, Discover, Showcase, and Work are synthetic room-like entries within Chat, not separate screens. News, Mentions, Showcase, and Work each carry persisted unread state; Showcase is backed by `showcases`, and Work is one public work profile per user backed by `work_profiles`.)
+- `Screen`: `Dashboard`, `Chat`, `Arcade`, `Rooms`, `Artboard` (cycle: `Dashboard -> Chat -> Arcade -> Rooms -> Artboard -> Dashboard`; News, Mentions, Discover, Showcase, and Work are synthetic room-like entries within Chat, not separate screens. News, Mentions, Showcase, and Work each carry persisted unread state; Showcase is backed by `showcases`, and Work is one public work profile per user backed by `work_profiles`.)
 - `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 - `GameKind`: Rust enum in `late-core::models::game_room`; currently `Blackjack`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
@@ -650,62 +633,18 @@ Known gaps/risks:
 Roadmap ideas:
 1. Nail one addictive loop: join -> listen -> chat -> vote -> return tomorrow.
 2. Pick a clear ICP first: solo devs at night vs remote teams during work hours.
-3. ~~Add one "reason to come back" mechanic~~ ✓ Daily streaks + badge tiers + leaderboard. Next: daily room rituals, timed events.
+3. ~~Add one "reason to come back" mechanic~~ ✓ Daily puzzle wins, chips, and leaderboard. Next: daily room rituals, timed events.
 4. Keep friction near zero: ssh late.sh + optional browser pairing only when wanted.
 5. Measure retention early: D1/D7 return, session length, messages/user, votes/session.
 
-### The Arcade Pipeline [VOLATILE]
+### Arcade And Game Roadmap [VOLATILE]
 
-**Shipped:**
-- ~~Tetris (Ascii Drop)~~ ✓ Endless falling-block arcade, 15fps gravity, persisted runs, per-user high scores.
-- ~~Minesweeper~~ ✓ Classic logic puzzle with daily seeded boards and personal infinite play.
-- ~~2048~~ ✓ ~~Sudoku~~ ✓ ~~Nonograms~~ ✓ ~~Solitaire~~ ✓
+Arcade runtime, shipped game categories, detailed controls, chips, leaderboards, daily puzzle wins, and nonogram generation notes live in `late-ssh/src/app/arcade/CONTEXT.md`. Persistent multiplayer room-game details live in `late-ssh/src/app/rooms/CONTEXT.md`.
 
-**Table Games (active buildout):**
-- **Blackjack:** Persistent rooms, per-room runtime services, embedded room chat, and chip settlement are live in the Rooms screen. Detailed runtime behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`. Still missing AFK/disconnect handling.
-- **Texas Hold'em Poker (PvP):** The ultimate late-night clubhouse game. Table-scoped chat, robust turn state.
-
-**Async 1v1:**
-- **Chess:** Correspondence style — make moves at your own pace over hours/days.
-- **Battleship:** Fire a shot and check back tomorrow.
-
-**Real-time Multiplayer:**
-- **Tron (Lightbikes):** 15fps grid-based survival arena.
-
-**Card Games:**
-- **Cribbage / Bridge / Thousand (Tysiąc):** Cozy trick-taking games, deep strategy.
-
-### Monthly chip leaderboard resets
-- Archive monthly chip leaders (top 3 get a permanent badge?)
-- Reset balances to baseline at month end
-- "Hall of Fame" display somewhere
-
-### Strategy multiplayer (Chess, Battleship)
-- No chips needed — W/L record + rating
-- Async: make a move, come back later
-- Game completion counts toward daily streaks
-- `/challenge @user chess` in chat for matchmaking
-
-### More casino games (Poker)
-- Texas Hold'em: PvP, uses chip betting
-- Needs turn management, pot logic, hand evaluation
-- Higher complexity — build after Blackjack validates the chip system
-
-### Chat-based matchmaking
-- Activity feed broadcast when someone sits at an empty table
-- `/play <game>` and `/challenge @user <game>` commands
-- Accept/decline prompts
-
----
-
-## Game category model (unified view)
-
-| Category | Games | Win condition | Leaderboard section | Streaks | Chips |
-|----------|-------|--------------|-------------------|---------|-------|
-| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | Solve the daily | Today's Champions | Yes | +50 bonus per completion |
-| High-score | Tetris, 2048 | Personal best | All-Time High Scores | No | No |
-| Casino | Blackjack, Poker (future) | Grow your chip balance | Chip Leaders | Optional | Bet and win/lose |
-| Strategy | Chess, Battleship (future) | Beat opponent | W/L + Rating | Yes (game completed) | No |
+Product-level roadmap ideas that cross domains:
+- Monthly chip leaderboard resets and hall-of-fame surfaces.
+- Strategy multiplayer such as Chess or Battleship with W/L or rating.
+- Chat-based matchmaking through `/play <game>` or `/challenge @user <game>`.
 
 ### Persistent Multiplayer World (Big Bet) [VOLATILE]
 
@@ -807,7 +746,7 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, dashboard favorite
 
 ### 8.4 Easy-to-break gotchas
 
-- **Rooms/Blackjack invariants live locally:** directory filters/placeholders, Blackjack render tiers, service-owned stake chips, seat player hydration, dashboard Blackjack slots, and active-room chat routing are documented in `late-ssh/src/app/rooms/CONTEXT.md`.
+- **Rooms/Blackjack invariants live locally:** directory filters/placeholders, Blackjack render tiers, service-owned stake chips, seat player hydration, room-game seat events, dashboard featured-room box, and active-room chat routing are documented in `late-ssh/src/app/rooms/CONTEXT.md`.
 - **Chat invariants live locally:** room ordering, composer targets, replies, reactions, pins, ignores, snapshots/tails, row caches, synthetic entries, and chat keybindings are documented in `late-ssh/src/app/chat/CONTEXT.md`.
 - **Artboard invariants live locally:** dartboard lifecycle, persistence/archives, provenance, active-vs-view input routing, swatches, glyph picker, and gallery lag caveats are documented in `late-ssh/src/app/artboard/CONTEXT.md`.
 - **Render loop missed ticks:** 66ms interval with `MissedTickBehavior::Skip` - if a frame takes too long, next ticks are skipped rather than queued (prevents snowball lag)
@@ -821,13 +760,12 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, dashboard favorite
 - **Browser and CLI viz payloads share schema, not implementation:** Both paired clients send `{ event: "viz", position_ms, bands, rms }`, but the browser uses Web Audio `AnalyserNode` while the CLI uses an in-process Rust FFT over playback samples. Expect similar behavior, not identical numbers.
 - **CLI invariants live locally:** SSH modes, token handshakes, identity generation, local audio pipeline, terminal resize forwarding, and pre-token input gating are documented in `late-cli/CONTEXT.md`.
 - **Activity feed broadcast timing:** `broadcast::Receiver` only sees messages sent AFTER subscription. The receiver must be created in `auth_publickey` (before login event is sent), stored on `ClientHandler`, then `.take()`'d into `SessionConfig` in `pty_request`. Creating the receiver later misses the user's own login event.
-- **Leaderboard refresh is async, badges are eventually consistent:** `LeaderboardService` refreshes every 30s. A new daily win won't appear in the leaderboard or chat badges until the next refresh cycle. Activity feed callouts are immediate (fire-and-forget from `record_win_task`).
-- **Streak SQL uses gaps-and-islands:** A streak is "current" if its last day is today or yesterday. This means a user who hasn't played today still keeps their streak visible until midnight UTC tomorrow. The `UNION` across `sudoku_daily_wins` and `nonogram_daily_wins` deduplicates dates so playing both games on the same day counts as one streak day.
-- **Game services publish Activity wins:** Daily puzzle services hold a clone of the global `broadcast::Sender<ActivityEvent>` and publish structured `ActivityEvent::game_won(...)` callouts from their `record_win_task()` paths. Room-backed Blackjack, Poker, and Tic-Tac-Toe services receive `ActivityPublisher` from their table managers and publish `GameWon` events when hands/rounds are won. The username is looked up from `users` inside the fire-and-forget task (via `late_core::models::profile::fetch_username`), not passed from the caller.
+- **Leaderboard refresh is async:** `LeaderboardService` refreshes every 30s. Activity feed callouts are immediate, but leaderboard surfaces can lag until the next refresh. Arcade-specific daily-win details live in `late-ssh/src/app/arcade/CONTEXT.md`.
+- **Game services publish Activity wins:** Arcade daily services and room-backed games publish structured `ActivityEvent::game_won(...)` callouts. Room-game details live in `late-ssh/src/app/rooms/CONTEXT.md`; Arcade details live in `late-ssh/src/app/arcade/CONTEXT.md`.
 - **Bonsai death check runs on login:** `BonsaiService::ensure_tree()` checks `last_watered` against UTC today on every SSH session start. If 7+ days have passed, the tree is killed and a graveyard record is created. This means death is only detected when the user reconnects, not while offline.
 - **Bonsai daily care is UTC-based:** session startup ensures today's `bonsai_daily_care` row and applies unapplied penalties from prior care rows once. Missing water does not directly reduce growth, but 7+ dry days kills the tree. Missing the generated daily wrong-branch cuts costs 10 growth. The global `w` opens the care modal; watering now happens inside that modal.
 - **Bonsai passive growth is per-session:** The tick counter in `BonsaiState` grants 1 growth point every ~9000 ticks (~10 min at 15fps). If a user has multiple sessions, each grants growth independently. This is acceptable — it rewards being connected, not gaming the system.
-- **Bonsai chat glyph is current-user only:** The bonsai stage glyph is only shown next to the current user's own messages: Seed `·`, Sprout `⚘`, Sapling `🌱`, Young `🌲`, Mature `🌳`, Ancient `🌸`, Blossom `🌼`; Dead renders no glyph. Other users' bonsai stages are not queried or displayed in chat (would require a new cross-user lookup).
+- **Bonsai chat glyphs are the chat username badge:** Chat author metadata loads each visible author's bonsai state and renders that stage glyph next to their username: Seed `·`, Sprout `⚘`, Sapling `🌱`, Young `🌲`, Mature `🌳`, Ancient `🌸`, Blossom `🌼`; Dead renders no glyph. This is the only chat username badge; country flags and custom contributor icons are not shown there.
 - **Bonsai growth stages:** living stages use a simple 100-point ladder capped at 700 growth points: Seed 0-99, Sprout 100-199, Sapling 200-299, Young 300-399, Mature 400-499, Ancient 500-599, Blossom 600-700.
 - **Bonsai care modal owns pruning:** global `w` opens the care modal (`w care` is rendered on the Bonsai sidebar border). Inside the modal, `w` waters/replants, `p` hard-prunes the whole tree (-100 growth, rerolls seed, resets today's wrong-branch cuts), `hjkl`/arrows move a spatial pruning cursor, `x` cuts only when the cursor is on a generated wrong branch, `s` copies the ASCII snippet, and `?` opens the Bonsai help section. A wrong cut costs -10 growth immediately. Completing all daily wrong-branch cuts preserves the current shape; it no longer rerolls seed.
 - **Bonsai seed math is stable, order-sensitive:** `seed % style_count` picks the Japanese style, `(seed / style_count) % shape_count` picks the hand-tuned silhouette within that style, `(seed / (style_count * shape_count)) % 3` picks the texture form (default / airy / dense). Reordering match arms in `tree_ascii` or inserting a new style mid-list silently remaps every existing user's tree to a different silhouette. Append new styles at the end and bump the stage's `high_stage_style_count` / `high_stage_shape_count`.
@@ -879,8 +817,7 @@ User::set_theme_id(&client, user_id, "purple").await?;
 
 // === Leaderboard ===
 let lb_rx = leaderboard_service.subscribe();        // watch::Receiver<Arc<LeaderboardData>>
-let data = lb_rx.borrow();                          // today_champions, streak_leaders, user_streaks
-let badge = BadgeTier::from_streak(streak);          // None | Bronze(3+) | Silver(7+) | Gold(14+)
+let data = lb_rx.borrow();                          // today_champions, arcade_champions, high_scores
 
 // === Icecast ===
 let track = late_core::icecast::fetch_track(&icecast_url)?;  // blocking
@@ -984,8 +921,8 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 |--------|-----|--------|-------------|
 | **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
 | **Chat** | 2 | Active | Full room-list chat screen with DMs, public/private rooms, mentions, News, Showcase, Work, and Discover synthetic entries. Detailed commands, keybindings, service flow, and gotchas live in `late-ssh/src/app/chat/CONTEXT.md`. |
-| **Games** | 3 | Active | The Arcade Lobby + leaderboard sidebar (champions, streaks, all-time high scores, chip leaders, info): persisted high-score games (`2048`, `Tetris`) and daily games (`Sudoku`, `Nonograms`, `Minesweeper`, `Solitaire`). Blackjack lives in Rooms. Game list auto-scrolls (top-third anchor); ASCII header hides on small screens |
-| **Rooms** | 4 | Active | Persistent game-room directory plus active Blackjack table/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
+| **Arcade** | 3 | Active | The Arcade lobby, high-score games, daily puzzle games, chips, and leaderboard/sidebar surfaces. Detailed behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; Blackjack/Poker/Tic-Tac-Toe live in Rooms. |
+| **Rooms** | 4 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
 | **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 
 ### Layout
@@ -1047,13 +984,13 @@ Content invariants worth preserving when editing `data.rs`:
 | `Tab` | Global | Cycle screens |
 | `1` | Global | Jump to Dashboard |
 | `2` | Global | Jump to Chat |
-| `3` | Global | Jump to Games |
+| `3` | Global | Jump to Arcade |
 | `4` | Global | Jump to Rooms |
 | `5` | Global | Jump to Artboard |
 | `m` | Global | Toggle mute on paired client |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
-| `w` | Global (not composing, active games override) | Open the Bonsai care modal |
+| `w` | Global (not composing, active Arcade games override) | Open the Bonsai care modal |
 | `w` | Bonsai modal | Water bonsai / replant dead tree, with a short watering animation |
 | `p` | Bonsai modal | Hard-prune: -100 growth, reroll shape, reset today's wrong-branch cuts |
 | `h` / `j` / `k` / `l` / arrows | Bonsai modal prune mode | Move spatial branch cursor |
@@ -1061,44 +998,20 @@ Content invariants worth preserving when editing `data.rs`:
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
-| `b` then `1` / `2` / `3` / `4` | Dashboard | Activate a dashboard chord: Blackjack room, current daily game, current News wire article, or `#announcements` |
+| `b` then `1` / `2` / `3` / `4` | Dashboard | Activate a dashboard chord: featured room game, current daily game, current News wire article, or `#announcements` |
 | `P` | Dashboard / Chat | Show browser-pairing QR (copies pairing URL) |
 | `B` | Dashboard / Chat | Open CLI install/build-source modal |
 | Dashboard chat keys | Dashboard | See `late-ssh/src/app/chat/CONTEXT.md`. |
-| `Enter` | Games lobby | Launch selected game |
-| `Esc` | Active game | Exit back to Arcade lobby |
-| `h` / `j` / `k` / `l` / arrows | 2048 | Move tiles |
-| `r` | 2048 game over | Start a fresh 2048 board |
-| `h` / `l` / arrows | Tetris | Move active piece left / right |
-| `j` / down arrow | Tetris | Soft drop |
-| `k` / up arrow | Tetris | Rotate clockwise |
-| `Space` | Tetris | Hard drop |
-| `p` | Tetris | Pause / resume |
-| `r` | Tetris | Start a fresh run |
-| `r` | Sudoku (unsolved) | Reset board (clears non-fixed cells) |
-| `r` | Nonograms (unsolved) | Reset board (clears all cells) |
-| `h` / `j` / `k` / `l` / arrows | Sudoku | Move cursor |
-| `1`-`9` | Sudoku | Fill selected cell |
-| `0` / `Backspace` | Sudoku | Clear selected cell |
-| `d` | Sudoku | Restore today's daily board |
-| `p` | Sudoku | Open saved personal board |
-| `n` | Sudoku | Generate a fresh personal board |
-| `[` / `]` | Sudoku | Switch difficulty (easy / medium / hard) |
-| `h` / `j` / `k` / `l` / arrows | Nonograms | Move cursor |
-| `Space` / `x` | Nonograms | Toggle selected cell |
-| `0` / `Backspace` / `c` | Nonograms | Clear selected cell |
-| `d` | Nonograms | Restore today's daily puzzle for the current size |
-| `p` | Nonograms | Open saved personal puzzle for the current size |
-| `n` | Nonograms | Generate a fresh personal puzzle for the current size |
-| `[` / `]` | Nonograms | Switch puzzle size pack |
-| `Esc` | Nonograms | Exit back to Arcade lobby |
+| `Enter` | Arcade lobby | Launch selected game |
+| `Esc` | Active Arcade game | Exit back to Arcade lobby |
+| Arcade game keys | Arcade | See `late-ssh/src/app/arcade/CONTEXT.md` and each game's info panel. |
 | Chat keys | Chat / Dashboard chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, and icon picker behavior. |
-| `Ctrl+O` | Global | Open the settings modal from anywhere, including active games |
+| `Ctrl+O` | Global | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+L` | Global (no modal owns input) | Toggle the terminal-help modal ("Why I cannot copy/open/click links?"). Also closes other top-level modals before opening. |
 | `Tab` / `Shift+Tab` | Terminal-help modal | Switch between Copy / Links / Selection / Notifications tabs |
 | `j` / `k` / `↑` / `↓` | Terminal-help modal | Scroll the current tab |
 | `Esc` / `q` / `Ctrl+L` | Terminal-help modal | Close |
-| `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Games sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
+| `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Arcade sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
 | `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/system fields/bio, cycle a setting, or open the country/timezone picker |
 | `Alt+Enter` / `Ctrl+J` | Settings modal (bio editing) | Insert newline |

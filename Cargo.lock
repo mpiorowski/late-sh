@@ -2720,6 +2720,7 @@ dependencies = [
  "opentelemetry-http",
  "pkcs5",
  "qrcodegen",
+ "rand 0.8.6",
  "rand_core 0.6.4",
  "ratatui",
  "ratatui-textarea",

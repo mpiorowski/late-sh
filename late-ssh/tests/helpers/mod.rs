@@ -6,23 +6,24 @@ use late_core::{
     rate_limit::IpRateLimiter,
     test_utils::{TestDb, test_db},
 };
+use late_ssh::app::LeaderboardService;
 use late_ssh::app::activity::event::ActivityEvent;
 use late_ssh::app::activity::publisher::ActivityPublisher;
 use late_ssh::app::ai::svc::AiService;
+use late_ssh::app::arcade::chips::svc::ChipService;
+use late_ssh::app::arcade::minesweeper::svc::MinesweeperService;
+use late_ssh::app::arcade::nonogram::state::Library as NonogramLibrary;
+use late_ssh::app::arcade::nonogram::svc::NonogramService;
+use late_ssh::app::arcade::snake::svc::SnakeService;
+use late_ssh::app::arcade::solitaire::svc::SolitaireService;
+use late_ssh::app::arcade::sudoku::svc::SudokuService;
+use late_ssh::app::arcade::tetris::svc::TetrisService;
+use late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
-use late_ssh::app::games::chips::svc::ChipService;
-use late_ssh::app::games::leaderboard::svc::LeaderboardService;
-use late_ssh::app::games::minesweeper::svc::MinesweeperService;
-use late_ssh::app::games::nonogram::state::Library as NonogramLibrary;
-use late_ssh::app::games::nonogram::svc::NonogramService;
-use late_ssh::app::games::solitaire::svc::SolitaireService;
-use late_ssh::app::games::sudoku::svc::SudokuService;
-use late_ssh::app::games::tetris::svc::TetrisService;
-use late_ssh::app::games::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
@@ -143,6 +144,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         .with_session_registry(session_registry.clone());
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = TetrisService::new(db.clone());
+    let snake_service = SnakeService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
     let rooms_service = RoomsService::new(db.clone());
     let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
@@ -179,6 +181,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         profile_service,
         twenty_forty_eight_service,
         tetris_service,
+        snake_service,
         sudoku_service,
         nonogram_service,
         solitaire_service,
@@ -242,8 +245,11 @@ pub fn make_app_with_chat_service(
         initial_2048_game: None,
         initial_2048_high_score: None,
         tetris_service: TetrisService::new(db.clone()),
+        snake_service: SnakeService::new(db.clone()),
         initial_tetris_game: None,
+        initial_snake_game: None,
         initial_tetris_high_score: None,
+        initial_snake_high_score: None,
         sudoku_service: SudokuService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
@@ -342,8 +348,11 @@ pub fn make_app_with_paired_client(
         initial_2048_game: None,
         initial_2048_high_score: None,
         tetris_service: TetrisService::new(db.clone()),
+        snake_service: SnakeService::new(db.clone()),
         initial_tetris_game: None,
+        initial_snake_game: None,
         initial_tetris_high_score: None,
+        initial_snake_high_score: None,
         sudoku_service: SudokuService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,

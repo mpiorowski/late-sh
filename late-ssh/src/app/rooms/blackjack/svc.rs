@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
-    games::{cards::PlayingCard, chips::svc::ChipService},
+    arcade::{cards::PlayingCard, chips::svc::ChipService},
     rooms::blackjack::{
         player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
         settings::BlackjackTableSettings,
@@ -2008,7 +2008,7 @@ impl SharedTableState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::games::cards::{CardRank, CardSuit, PlayingCard};
+    use crate::app::arcade::cards::{CardRank, CardSuit, PlayingCard};
     use crate::app::rooms::blackjack::state::MIN_BET;
 
     fn user_id() -> Uuid {

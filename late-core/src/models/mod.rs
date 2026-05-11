@@ -24,6 +24,7 @@ pub mod rss_feed_read;
 pub mod server_ban;
 pub mod showcase;
 pub mod showcase_feed_read;
+pub mod snake;
 pub mod solitaire;
 pub mod sudoku;
 pub mod tetris;

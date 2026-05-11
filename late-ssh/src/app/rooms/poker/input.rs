@@ -42,6 +42,10 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.all_in();
             InputAction::Handled
         }
+        b'x' | b'X' => {
+            state.toggle_auto_check_fold();
+            InputAction::Handled
+        }
         b'c' | b'C' | b' ' | b'\r' | b'\n' => {
             state.call_or_check();
             InputAction::Handled

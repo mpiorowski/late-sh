@@ -20,20 +20,11 @@ use crate::app::common::{
     overlay::{Overlay, draw_overlay},
     theme,
 };
-use late_core::models::leaderboard::BadgeTier;
 
 use super::state::{MentionMatch, ROOM_JUMP_KEYS, RoomSlot, is_chat_list_room};
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
-
-fn custom_badge_for_username(username: &str) -> Option<&'static str> {
-    match username.trim().to_ascii_lowercase().as_str() {
-        "mevanlc" | "yawner" => Some(" 🔧"),
-        "kirii.md" | "kirii.exe" | "kirii.tar" => Some(" 🎨"),
-        _ => None,
-    }
-}
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -50,7 +41,6 @@ pub struct DashboardChatView<'a> {
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
-    pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
@@ -347,7 +337,6 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
                 current_user_id: view.current_user_id,
                 usernames: view.usernames,
                 countries: view.countries,
-                badges: view.badges,
                 bonsai_glyphs: view.bonsai_glyphs,
                 message_reactions: view.message_reactions,
                 inline_images: view.inline_images,
@@ -392,7 +381,6 @@ struct ChatRowsContext<'a> {
     current_user_id: Uuid,
     usernames: &'a HashMap<Uuid, String>,
     countries: &'a HashMap<Uuid, String>,
-    badges: &'a HashMap<Uuid, BadgeTier>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
@@ -426,10 +414,6 @@ fn chat_rows_fingerprint(
         msg.body.hash(&mut hasher);
         ctx.usernames.get(&msg.user_id).hash(&mut hasher);
         ctx.countries.get(&msg.user_id).hash(&mut hasher);
-        ctx.badges
-            .get(&msg.user_id)
-            .map(|badge| badge.label())
-            .hash(&mut hasher);
         ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
         ctx.message_reactions.get(&msg.id).hash(&mut hasher);
     }
@@ -478,13 +462,7 @@ fn ensure_chat_rows_cache(
         } else {
             format_username_with_country(msg.user_id, raw_author, ctx.countries)
         };
-        let contributor_badge = custom_badge_for_username(raw_author).unwrap_or_default();
         let is_bot = is_bot_author(raw_author);
-        let badge = if !is_bot {
-            ctx.badges.get(&msg.user_id).copied()
-        } else {
-            None
-        };
         let author_style = if is_own {
             Style::default()
                 .fg(theme::AMBER())
@@ -495,14 +473,12 @@ fn ensure_chat_rows_cache(
             Style::default().fg(theme::CHAT_AUTHOR())
         };
         let body_style = Style::default().fg(theme::CHAT_BODY());
-        let contributor_badge = if is_bot { "" } else { contributor_badge };
-        let streak_badge = badge.map(|b| format!(" {}", b.label())).unwrap_or_default();
         let bonsai_badge = ctx
             .bonsai_glyphs
             .get(&msg.user_id)
             .map(|g| format!(" {}", g))
             .unwrap_or_default();
-        let prefix = format!("{author}{contributor_badge}{streak_badge}{bonsai_badge}");
+        let prefix = format!("{author}{bonsai_badge}");
         let reactions = ctx
             .message_reactions
             .get(&msg.id)
@@ -780,7 +756,6 @@ pub struct ChatRenderInput<'a> {
     pub overlay: Option<&'a Overlay>,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
-    pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
@@ -863,7 +838,6 @@ pub struct EmbeddedRoomChatView<'a> {
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
-    pub badges: &'a HashMap<Uuid, BadgeTier>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
     pub current_user_id: Uuid,
@@ -911,7 +885,6 @@ pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoom
             current_user_id: view.current_user_id,
             usernames: view.usernames,
             countries: view.countries,
-            badges: view.badges,
             bonsai_glyphs: view.bonsai_glyphs,
             message_reactions: view.message_reactions,
             inline_images: view.inline_images,
@@ -1547,7 +1520,6 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                         current_user_id,
                         usernames,
                         countries,
-                        badges: view.badges,
                         bonsai_glyphs: view.bonsai_glyphs,
                         message_reactions: view.message_reactions,
                         inline_images: view.inline_images,
@@ -1763,7 +1735,6 @@ mod tests {
         };
         let usernames = HashMap::from([(user_id, "alice".to_string())]);
         let countries = HashMap::new();
-        let badges = HashMap::new();
         let bonsai_glyphs = HashMap::new();
         let message_reactions = HashMap::new();
 
@@ -1772,7 +1743,6 @@ mod tests {
             current_user_id: user_id,
             usernames: &usernames,
             countries: &countries,
-            badges: &badges,
             bonsai_glyphs: &bonsai_glyphs,
             message_reactions: &message_reactions,
         };
@@ -1807,7 +1777,6 @@ mod tests {
         selected_room_id: Option<Uuid>,
         usernames: &'a HashMap<Uuid, String>,
         countries: &'a HashMap<Uuid, String>,
-        badges: &'a HashMap<Uuid, BadgeTier>,
         message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
         unread_counts: &'a HashMap<Uuid, i64>,
         bonsai_glyphs: &'a HashMap<Uuid, String>,
@@ -1843,7 +1812,6 @@ mod tests {
             overlay: None,
             usernames,
             countries,
-            badges,
             message_reactions,
             unread_counts,
             selected_room_id,
@@ -2177,7 +2145,6 @@ mod tests {
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
         let countries = HashMap::new();
-        let badges = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
         let bonsai_glyphs = HashMap::new();
@@ -2189,7 +2156,6 @@ mod tests {
             None,
             &usernames,
             &countries,
-            &badges,
             &message_reactions,
             &unread_counts,
             &bonsai_glyphs,
@@ -2245,7 +2211,6 @@ mod tests {
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
         let countries = HashMap::new();
-        let badges = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
         let bonsai_glyphs = HashMap::new();
@@ -2257,7 +2222,6 @@ mod tests {
             Some(general.id),
             &usernames,
             &countries,
-            &badges,
             &message_reactions,
             &unread_counts,
             &bonsai_glyphs,
@@ -2303,7 +2267,6 @@ mod tests {
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
         let countries = HashMap::new();
-        let badges = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
         let bonsai_glyphs = HashMap::new();
@@ -2315,7 +2278,6 @@ mod tests {
             Some(general.id),
             &usernames,
             &countries,
-            &badges,
             &message_reactions,
             &unread_counts,
             &bonsai_glyphs,
