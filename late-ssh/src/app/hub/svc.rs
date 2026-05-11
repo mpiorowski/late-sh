@@ -2,10 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use late_core::db::Db;
-use late_core::models::leaderboard::fetch_leaderboard_data;
+use late_core::models::leaderboard::{LeaderboardData, fetch_leaderboard_data};
 use tokio::sync::watch;
-
-use late_core::models::leaderboard::LeaderboardData;
 
 #[derive(Clone)]
 pub struct LeaderboardService {
@@ -35,12 +33,11 @@ impl LeaderboardService {
 
     pub fn start_refresh_loop(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            // Initial load
             if let Err(e) = self.refresh().await {
                 tracing::error!(error = ?e, "initial leaderboard refresh failed");
             }
             let mut interval = tokio::time::interval(Duration::from_secs(30));
-            interval.tick().await; // first tick fires immediately, skip it
+            interval.tick().await;
             loop {
                 interval.tick().await;
                 if let Err(e) = self.refresh().await {

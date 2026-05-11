@@ -4,4 +4,5 @@ pub mod input;
 pub mod leaderboard;
 pub mod shop;
 pub mod state;
+pub mod svc;
 pub mod ui;

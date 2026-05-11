@@ -340,7 +340,7 @@ fn draw_score_list(
 }
 
 fn visible_entry_count(height: u16) -> usize {
-    usize::from(height).min(10).max(1)
+    usize::from(height).clamp(1, 10)
 }
 
 fn ranked_line(

@@ -1,7 +1,6 @@
 pub mod cards;
 pub mod chips;
 pub mod input;
-pub mod leaderboard;
 pub mod minesweeper;
 pub mod nonogram;
 pub mod snake;

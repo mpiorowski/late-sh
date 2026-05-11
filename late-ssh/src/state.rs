@@ -1,7 +1,6 @@
 use crate::app::activity::event::ActivityEvent;
 use crate::app::ai::svc::AiService;
 use crate::app::arcade::chips::svc::ChipService;
-use crate::app::arcade::leaderboard::svc::LeaderboardService;
 use crate::app::arcade::minesweeper::svc::MinesweeperService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
@@ -18,6 +17,7 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
+use crate::app::hub::svc::LeaderboardService;
 use crate::app::profile::svc::ProfileService;
 use crate::app::rooms::blackjack::manager::BlackjackTableManager;
 use crate::app::rooms::registry::RoomGameRegistry;
