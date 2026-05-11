@@ -33,9 +33,6 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         return;
     }
 
-    let Some(pack) = state.selected_pack() else {
-        return;
-    };
     let Some(puzzle) = state.puzzle() else {
         let board_area =
             draw_game_frame(frame, area, "Nonograms", empty_bottom_bar(), show_sidebar);

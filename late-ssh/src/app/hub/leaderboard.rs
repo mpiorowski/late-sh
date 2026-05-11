@@ -53,25 +53,29 @@ fn draw_boards(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: U
         draw_ranked_board(
             frame,
             left[0],
-            "Top Chips",
-            "chips",
-            &data.monthly_chip_earners,
             user_id,
-            "No chip earnings yet this month",
-            &["positive chip gains this UTC month"],
+            RankedBoardView {
+                title: "Top Chips",
+                unit: "chips",
+                entries: &data.monthly_chip_earners,
+                empty: "No chip earnings yet this month",
+                hints: &["positive chip gains this UTC month"],
+            },
         );
         draw_ranked_board(
             frame,
             left[1],
-            "Arcade Wins",
-            "pts",
-            &data.arcade_champions,
             user_id,
-            "No daily puzzle wins yet this month",
-            &[
-                "daily puzzle wins, weighted by difficulty",
-                "1 easy/draw-1, 3 medium, 5 hard/draw-3",
-            ],
+            RankedBoardView {
+                title: "Arcade Wins",
+                unit: "pts",
+                entries: &data.arcade_champions,
+                empty: "No daily puzzle wins yet this month",
+                hints: &[
+                    "daily puzzle wins, weighted by difficulty",
+                    "1 easy/draw-1, 3 medium, 5 hard/draw-3",
+                ],
+            },
         );
         draw_score_board(
             frame,
@@ -109,25 +113,29 @@ fn draw_boards(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: U
         draw_ranked_board(
             frame,
             rows[0],
-            "Top Chips",
-            "chips",
-            &data.monthly_chip_earners,
             user_id,
-            "No chip earnings yet this month",
-            &["positive chip gains this UTC month"],
+            RankedBoardView {
+                title: "Top Chips",
+                unit: "chips",
+                entries: &data.monthly_chip_earners,
+                empty: "No chip earnings yet this month",
+                hints: &["positive chip gains this UTC month"],
+            },
         );
         draw_ranked_board(
             frame,
             rows[1],
-            "Arcade Wins",
-            "pts",
-            &data.arcade_champions,
             user_id,
-            "No daily puzzle wins yet this month",
-            &[
-                "daily puzzle wins, weighted by difficulty",
-                "1 easy/draw-1, 3 medium, 5 hard/draw-3",
-            ],
+            RankedBoardView {
+                title: "Arcade Wins",
+                unit: "pts",
+                entries: &data.arcade_champions,
+                empty: "No daily puzzle wins yet this month",
+                hints: &[
+                    "daily puzzle wins, weighted by difficulty",
+                    "1 easy/draw-1, 3 medium, 5 hard/draw-3",
+                ],
+            },
         );
         draw_score_board(
             frame,
@@ -163,17 +171,16 @@ fn high_scores_for<'a>(data: &'a LeaderboardData, game: &str) -> Vec<&'a HighSco
         .collect()
 }
 
-fn draw_ranked_board(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    unit: &str,
-    entries: &[RankedEntry],
-    user_id: Uuid,
-    empty: &str,
-    hints: &[&str],
-) {
-    let block = panel_block(title);
+struct RankedBoardView<'a> {
+    title: &'a str,
+    unit: &'a str,
+    entries: &'a [RankedEntry],
+    empty: &'a str,
+    hints: &'a [&'a str],
+}
+
+fn draw_ranked_board(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedBoardView<'_>) {
+    let block = panel_block(view.title);
     let inner = block.inner(area).inner(Margin {
         vertical: 0,
         horizontal: 1,
@@ -181,16 +188,19 @@ fn draw_ranked_board(
     frame.render_widget(block, area);
 
     let mut lines = Vec::new();
-    push_hint_lines(&mut lines, hints, inner.width);
-    if entries.is_empty() {
+    push_hint_lines(&mut lines, view.hints, inner.width);
+    if view.entries.is_empty() {
         lines.push(Line::from(Span::styled(
-            empty.to_string(),
+            view.empty.to_string(),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     } else {
-        let current_index = entries.iter().position(|entry| entry.user_id == user_id);
+        let current_index = view
+            .entries
+            .iter()
+            .position(|entry| entry.user_id == user_id);
         for row in board_rows(
-            entries.len(),
+            view.entries.len(),
             current_index,
             visible_entry_count(inner.height.saturating_sub(lines.len() as u16)),
             10,
@@ -198,12 +208,12 @@ fn draw_ranked_board(
         ) {
             match row {
                 BoardRow::Entry(index) => {
-                    let entry = &entries[index];
+                    let entry = &view.entries[index];
                     lines.push(ranked_line(
                         entry.rank,
                         &entry.username,
                         entry.value,
-                        unit,
+                        view.unit,
                         entry.user_id == user_id,
                         inner.width,
                     ));

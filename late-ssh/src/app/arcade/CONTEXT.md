@@ -108,8 +108,8 @@ Testing guidance:
 
 - High-score services load and save a current run and submit best scores.
 - High-score services keep SQL inside `late-core` models. `late-ssh` services call model methods such as `HighScore::update_score_if_higher` and `HighScore::record_score_event`; do not insert score-event SQL directly from Arcade services.
-- Daily puzzle services store board progress by `(user_id, difficulty_key or size_key, mode)`.
-- Daily win tables record one completion fact per user/date/difficulty or pack, separate from board state.
+- Daily puzzle services store board progress by `(user_id, difficulty_key, mode)`.
+- Daily win tables record one completion fact per user/date/difficulty, separate from board state.
 - `ChipService::ensure_chips(user_id)` grants the daily 500-chip stipend on login.
 - `ChipService::grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips for daily puzzle completions.
 - Daily services call `record_win_task()` on completion. That records the daily win, grants chips, and publishes a structured Activity event.
@@ -124,7 +124,7 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 - Assets live in `late-ssh/assets/nonograms/` as `index.json` plus one pack file per size.
 - `arcade/nonogram/state.rs` loads assets at server startup through `include_bytes!`.
 - SSH sessions never generate nonograms on demand.
-- Runtime stores one `daily` and one `personal` slot per user and `size_key`.
+- Runtime stores one `daily` and one `personal` slot per user and difficulty key (`easy`, `medium`, `hard`). Embedded packs still use size keys for asset lookup.
 
 ## Rendering
 
@@ -142,7 +142,7 @@ Current per-game basics:
 - Tetris: left/right move, down soft-drops, up rotates, `Space` hard-drops, `p` pauses, `r` restarts.
 - Snake: arrows or `h/j/k/l` steer, `p` pauses, `r` restarts.
 - Sudoku: arrows or `h/j/k/l` move, `1-9` fill, `0`/Backspace clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.
-- Nonograms: arrows or `h/j/k/l` move, `Space`/`x` toggle, `0`/Backspace/`c` clear, `d/p/n` daily/personal/new, `[`/`]` size pack.
+- Nonograms: arrows or `h/j/k/l` move, `Space`/`x` toggle, `0`/Backspace/`c` clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.
 - Minesweeper: arrows or `h/j/k/l` move, reveal/flag/chord controls live in the game info panel.
 - Solitaire: card/tableau/foundation controls live in the game info panel.
 

@@ -338,8 +338,7 @@ impl State {
         }
         self.store_active_snapshot();
         self.selected_difficulty =
-            (self.selected_difficulty + DIFFICULTIES.len().saturating_sub(1))
-                % DIFFICULTIES.len();
+            (self.selected_difficulty + DIFFICULTIES.len().saturating_sub(1)) % DIFFICULTIES.len();
         self.load_mode_snapshot_for_selected_pack();
     }
 
@@ -433,9 +432,9 @@ impl State {
     }
 
     fn save_async(&self) {
-        let Some(pack) = self.selected_pack() else {
+        if self.selected_pack().is_none() {
             return;
-        };
+        }
         if self.current_puzzle_id.is_empty() {
             return;
         }
@@ -541,8 +540,7 @@ fn default_selected_difficulty(library: &Library) -> usize {
     DIFFICULTIES
         .iter()
         .position(|difficulty| {
-            difficulty.key == "medium"
-                && library.pack_by_size_key(difficulty.size_key).is_some()
+            difficulty.key == "medium" && library.pack_by_size_key(difficulty.size_key).is_some()
         })
         .or_else(|| {
             DIFFICULTIES

@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub const BONSAI_WATER_BONUS: i64 = 200;
 pub const CHIP_FLOOR: i64 = 100;
 
-/// Map a difficulty/size key to its chip bonus.
+/// Map a difficulty key to its chip bonus.
 pub fn difficulty_bonus(key: &str) -> i64 {
     match key {
         "easy" | "draw-1" => 50,
