@@ -1026,17 +1026,23 @@ fn app_frame_sponsor_title() -> Line<'static> {
 }
 
 fn app_frame_help_hint_title() -> Line<'static> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let key = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let sep = Style::default().fg(theme::TEXT_FAINT());
     Line::from(vec![
-        Span::styled(
-            " Why I cannot copy/select/open/click links? ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-        Span::styled(
-            "Ctrl+L ",
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(" Settings ", dim),
+        Span::styled("Ctrl+O", key),
+        Span::styled(" · ", sep),
+        Span::styled("Hub ", dim),
+        Span::styled("Ctrl+G", key),
+        Span::styled(" · ", sep),
+        Span::styled("FAQ ", dim),
+        Span::styled("Ctrl+L", key),
+        Span::styled(" · ", sep),
+        Span::styled("Guide ", dim),
+        Span::styled("? ", key),
     ])
 }
 
