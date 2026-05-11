@@ -45,6 +45,7 @@ const INLINE_IMAGE_MAX_WIDTH: u32 = 96;
 const INLINE_IMAGE_MAX_ROWS: u32 = 12;
 const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
 const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
+const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) type InlineImageLines = Vec<ratatui::text::Line<'static>>;
 pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImageLines, String>);
@@ -95,6 +96,20 @@ pub(crate) struct PendingUrlUpload {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingClipboardImageUpload {
     pub room_id: Option<Uuid>,
+    requested_at: Instant,
+}
+
+impl PendingClipboardImageUpload {
+    fn new(room_id: Option<Uuid>) -> Self {
+        Self {
+            room_id,
+            requested_at: Instant::now(),
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.requested_at.elapsed() >= CLIPBOARD_IMAGE_REQUEST_TIMEOUT
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1261,6 +1276,7 @@ impl ChatState {
             if !crate::app::files::image_upload::is_file_upload_configured() {
                 return Some(Banner::error("File uploads are disabled"));
             }
+            self.clear_expired_pending_clipboard_image_upload();
             if self.pending_clipboard_image_upload.is_some()
                 || self.requested_clipboard_image_upload.is_some()
             {
@@ -1270,7 +1286,7 @@ impl ChatState {
             }
             let room_id = self.upload_target_room_id();
             self.clear_composer_after_submit();
-            self.requested_clipboard_image_upload = Some(PendingClipboardImageUpload { room_id });
+            self.requested_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
             return None;
         }
 
@@ -1601,7 +1617,7 @@ impl ChatState {
     }
 
     pub(crate) fn begin_pending_clipboard_image_upload(&mut self, room_id: Option<Uuid>) {
-        self.pending_clipboard_image_upload = Some(PendingClipboardImageUpload { room_id });
+        self.pending_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
     }
 
     pub(crate) fn take_pending_clipboard_image_upload(
@@ -1612,6 +1628,25 @@ impl ChatState {
 
     pub(crate) fn clear_pending_clipboard_image_upload(&mut self) {
         self.pending_clipboard_image_upload = None;
+    }
+
+    fn clear_expired_pending_clipboard_image_upload(&mut self) -> bool {
+        if self
+            .pending_clipboard_image_upload
+            .as_ref()
+            .is_some_and(PendingClipboardImageUpload::is_expired)
+        {
+            self.pending_clipboard_image_upload = None;
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn expire_pending_clipboard_image_upload(&mut self) -> Option<Banner> {
+        if self.clear_expired_pending_clipboard_image_upload() {
+            return Some(Banner::error("Clipboard image request timed out"));
+        }
+        None
     }
 
     pub(crate) fn poll_image_upload(&mut self) -> Option<Result<String, String>> {
@@ -1742,6 +1777,7 @@ impl ChatState {
         self.drain_username_directory();
         self.drain_snapshot();
         self.drain_pinned_messages();
+        let clipboard_banner = self.expire_pending_clipboard_image_upload();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_banner = self.feeds.tick();
@@ -1749,7 +1785,8 @@ impl ChatState {
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
         let work_banner = self.work.tick();
-        moderation_banner
+        clipboard_banner
+            .or(moderation_banner)
             .or(banner)
             .or(feeds_banner)
             .or(news_banner)

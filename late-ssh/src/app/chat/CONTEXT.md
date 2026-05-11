@@ -243,7 +243,7 @@ User commands:
 - `/members` lists selected-room members.
 - `/mod` opens the moderation command modal; `/mod ...` in chat is rejected because commands run only in the modal.
 - `/music` opens music help.
-- `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer.
+- `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
 - `/private #room` creates a private topic room and joins the caller.
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
 - `/settings` opens settings.

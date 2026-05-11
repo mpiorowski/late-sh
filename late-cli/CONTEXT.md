@@ -265,6 +265,7 @@ Pairing behavior:
 - The first `client_state` is sent immediately after connect, then sent again after any applied control message.
 - `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client state, so older CLIs and browser pairs do not receive unsupported control events.
 - Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
+- Clipboard images are converted to PNG in the CLI before upload. The CLI rejects zero-size images, very large decoded RGBA buffers, and PNG payloads above the upload cap before sending them over the pair socket.
 
 ---
 

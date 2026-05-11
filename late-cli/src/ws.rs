@@ -38,6 +38,7 @@ enum PairControlMessage {
 
 const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image"];
 const CLIPBOARD_IMAGE_MAX_PIXELS: usize = 25_000_000;
+const CLIPBOARD_IMAGE_MAX_RGBA_BYTES: usize = 64 * 1024 * 1024;
 const CLIPBOARD_IMAGE_MAX_BYTES: usize = 10 * 1024 * 1024;
 
 pub(super) async fn run_viz_ws(
@@ -212,14 +213,18 @@ fn clipboard_image_png_bytes() -> Result<Vec<u8>> {
         anyhow::bail!("clipboard image dimensions are too large");
     }
 
-    let rgba = image.bytes.into_owned();
     let expected_len = pixel_count
         .checked_mul(4)
         .context("clipboard image byte length overflowed")?;
-    if rgba.len() != expected_len {
+    let rgba_len = image.bytes.len();
+    if rgba_len != expected_len {
         anyhow::bail!("clipboard image data had unexpected length");
     }
+    if rgba_len > CLIPBOARD_IMAGE_MAX_RGBA_BYTES {
+        anyhow::bail!("clipboard image dimensions are too large");
+    }
 
+    let rgba = image.bytes.into_owned();
     let mut png = Vec::new();
     {
         let cursor = Cursor::new(&mut png);

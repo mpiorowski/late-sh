@@ -347,6 +347,13 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
 
 fn decode_clipboard_image_message(data_base64: String) -> SessionMessage {
     let max_bytes = crate::app::files::image_upload::max_upload_bytes();
+    decode_clipboard_image_message_with_max(data_base64, max_bytes)
+}
+
+fn decode_clipboard_image_message_with_max(
+    data_base64: String,
+    max_bytes: usize,
+) -> SessionMessage {
     let max_base64_len = max_bytes.saturating_mul(4).div_ceil(3).saturating_add(8);
     if data_base64.len() > max_base64_len {
         return SessionMessage::ClipboardImageFailed {
@@ -568,6 +575,58 @@ mod tests {
             "rms": 0.5
         }"#;
         assert!(serde_json::from_str::<WsPayload>(json).is_err());
+    }
+
+    #[test]
+    fn decode_clipboard_image_accepts_supported_image() {
+        let png_header = b"\x89PNG\r\n\x1a\n";
+        match decode_clipboard_image_message_with_max(STANDARD.encode(png_header), 1024) {
+            SessionMessage::ClipboardImage { data } => assert_eq!(data, png_header),
+            other => panic!("expected ClipboardImage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_clipboard_image_rejects_oversize_payload_before_decode() {
+        match decode_clipboard_image_message_with_max("A".repeat(11), 1) {
+            SessionMessage::ClipboardImageFailed { message } => {
+                assert_eq!(message, "Clipboard image is too large");
+            }
+            other => panic!("expected ClipboardImageFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_clipboard_image_rejects_invalid_base64() {
+        match decode_clipboard_image_message_with_max("not base64!!!".to_string(), 1024) {
+            SessionMessage::ClipboardImageFailed { message } => {
+                assert_eq!(message, "Clipboard image payload was invalid");
+            }
+            other => panic!("expected ClipboardImageFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_clipboard_image_rejects_non_image_bytes() {
+        match decode_clipboard_image_message_with_max(STANDARD.encode(b"hello"), 1024) {
+            SessionMessage::ClipboardImageFailed { message } => {
+                assert_eq!(
+                    message,
+                    "Clipboard image is not a supported PNG/JPEG/GIF/WebP image"
+                );
+            }
+            other => panic!("expected ClipboardImageFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_ws_error_message_defaults_and_limits_length() {
+        assert_eq!(
+            truncate_ws_error_message("  "),
+            "Clipboard image upload failed"
+        );
+        assert_eq!(truncate_ws_error_message("  no image  "), "no image");
+        assert_eq!(truncate_ws_error_message(&"x".repeat(200)).len(), 160);
     }
 
     #[test]
