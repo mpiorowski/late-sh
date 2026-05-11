@@ -1,10 +1,16 @@
 use ratatui_textarea::{Input, Key};
 
 use crate::app::common::readline::ctrl_byte_to_input;
-use crate::app::input::ParsedInput;
-use crate::app::state::App;
+use crate::app::input::{ParsedInput, insert_pasted_text};
+use crate::app::{mod_modal::state::ModModalState, state::App};
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
+    if let ParsedInput::Paste(pasted) = event {
+        paste_into_command_input(&mut app.mod_modal_state, &pasted);
+        update_autocomplete(app);
+        return;
+    }
+
     if app.mod_modal_state.is_autocomplete_active() {
         match event {
             ParsedInput::Byte(0x1B) => {
@@ -139,6 +145,13 @@ fn update_autocomplete(app: &mut App) {
         .update_autocomplete_matches(trigger_offset, query, matches);
 }
 
+fn paste_into_command_input(state: &mut ModModalState, pasted: &[u8]) {
+    insert_pasted_text(pasted, |ch| {
+        let ch = if ch == '\n' { ' ' } else { ch };
+        state.input(key_input(Key::Char(ch)));
+    });
+}
+
 fn key_input(key: Key) -> Input {
     Input {
         key,
@@ -172,5 +185,22 @@ fn alt_key_input(key: Key) -> Input {
         ctrl: false,
         alt: true,
         shift: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paste_into_command_input_strips_markers_and_normalizes_newlines_to_spaces() {
+        let mut state = ModModalState::new();
+
+        paste_into_command_input(
+            &mut state,
+            b"\x1b[200~server ban @alice\r\npolicy\x00\x7f\x1b[201~",
+        );
+
+        assert_eq!(state.command_text(), "server ban @alice policy");
     }
 }
