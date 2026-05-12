@@ -681,7 +681,7 @@ fn dm_label(
 
 // ── Mention autocomplete popup ──────────────────────────────
 
-fn draw_mention_autocomplete(
+pub(crate) fn draw_mention_autocomplete(
     frame: &mut Frame,
     anchor: Rect,
     matches: &[MentionMatch],
@@ -693,7 +693,8 @@ fn draw_mention_autocomplete(
 
     let visible_count = matches.len().min(8);
     let visible = visible_count as u16;
-    let is_commands = matches.first().is_some_and(|m| m.prefix == "/");
+    let first_prefix = matches.first().map(|m| m.prefix).unwrap_or("@");
+    let is_commands = first_prefix == "/";
     let width = if is_commands { 52 } else { 26 }.min(anchor.width);
     let height = visible + 2; // borders
     let x = anchor.x + 1;
@@ -702,10 +703,10 @@ fn draw_mention_autocomplete(
 
     frame.render_widget(Clear, popup);
 
-    let title = if is_commands {
-        " /commands "
-    } else {
-        " @mentions "
+    let title = match first_prefix {
+        "/" => " /commands ",
+        "#" => " #rooms ",
+        _ => " @mentions ",
     };
     let block = Block::default()
         .title(title)

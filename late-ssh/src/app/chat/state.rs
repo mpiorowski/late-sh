@@ -1803,6 +1803,17 @@ impl ChatState {
         self.mention_ac.active
     }
 
+    pub(crate) fn username_mention_matches(&self, query_lower: &str) -> Vec<MentionMatch> {
+        let active_users = self.active_users.as_ref();
+        rank_mention_matches(self.all_usernames.as_ref(), query_lower, || {
+            online_username_set(active_users)
+        })
+    }
+
+    pub(crate) fn room_name_matches(&self, query_lower: &str) -> Vec<MentionMatch> {
+        rank_room_name_matches(self.rooms.iter().map(|(room, _)| room), query_lower)
+    }
+
     pub fn update_autocomplete(&mut self) {
         // Scan backward from end of composer to find a trigger in the current token.
         let text = self.composer.lines().join("\n");
@@ -1830,10 +1841,7 @@ impl ChatState {
         let query = &text[offset + 1..];
         let query_lower = query.to_ascii_lowercase();
         let matches = if trigger_byte == b'@' {
-            let active_users = self.active_users.as_ref();
-            rank_mention_matches(self.all_usernames.as_ref(), &query_lower, || {
-                online_username_set(active_users)
-            })
+            self.username_mention_matches(&query_lower)
         } else {
             rank_command_matches(&query_lower)
         };
@@ -2852,6 +2860,39 @@ pub(crate) fn rank_mention_matches(
     matches.into_iter().map(|(_, m)| m).collect()
 }
 
+pub(crate) fn rank_room_name_matches<'a>(
+    rooms: impl IntoIterator<Item = &'a ChatRoom>,
+    query_lower: &str,
+) -> Vec<MentionMatch> {
+    let mut rooms: Vec<(String, String)> = rooms
+        .into_iter()
+        .filter_map(|room| {
+            if room.kind == "dm" {
+                return None;
+            }
+            let name = room.slug.as_deref()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let lower = name.to_ascii_lowercase();
+            lower
+                .starts_with(query_lower)
+                .then(|| (lower, name.to_string()))
+        })
+        .collect();
+    rooms.sort_by(|(a, _), (b, _)| a.cmp(b));
+    rooms.dedup_by(|(a, _), (b, _)| a == b);
+    rooms
+        .into_iter()
+        .map(|(_, name)| MentionMatch {
+            name,
+            online: true,
+            prefix: "#",
+            description: None,
+        })
+        .collect()
+}
+
 const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("active", "list active users"),
     ("binds", "chat guide"),
@@ -3249,6 +3290,25 @@ mod tests {
             panic!("online_set should not be built when prefix filter is empty")
         });
         assert!(ranked.is_empty());
+    }
+
+    #[test]
+    fn rank_room_name_matches_filters_and_prefixes_non_dm_rooms() {
+        let rust = make_room(Uuid::from_u128(1), "topic", "public", false, Some("rust"));
+        let recipes = make_room(
+            Uuid::from_u128(2),
+            "topic",
+            "public",
+            false,
+            Some("recipes"),
+        );
+        let dm = make_room(Uuid::from_u128(3), "dm", "dm", false, None);
+
+        let rooms = [&rust.0, &recipes.0, &dm.0];
+        let ranked = rank_room_name_matches(rooms, "r");
+
+        assert_eq!(names(&ranked), vec!["recipes", "rust"]);
+        assert!(ranked.iter().all(|m| m.prefix == "#"));
     }
 
     #[test]

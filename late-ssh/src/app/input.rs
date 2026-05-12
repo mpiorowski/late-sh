@@ -1243,7 +1243,7 @@ fn paste_target(ctx: InputContext) -> PasteTarget {
     }
 }
 
-fn insert_pasted_text(pasted: &[u8], mut push: impl FnMut(char)) {
+pub(crate) fn insert_pasted_text(pasted: &[u8], mut push: impl FnMut(char)) {
     // Strip any residual bracketed-paste markers. If a paste arrives split
     // across reads, the outer parser may miss the ESC[200~ / ESC[201~ envelope
     // and we end up seeing the markers inline. ESC itself gets filtered as a
