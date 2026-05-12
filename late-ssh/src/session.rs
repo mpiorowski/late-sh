@@ -34,6 +34,12 @@ pub struct BrowserVizFrame {
 pub enum SessionMessage {
     Heartbeat,
     Viz(BrowserVizFrame),
+    ClipboardImage {
+        data: Vec<u8>,
+    },
+    ClipboardImageFailed {
+        message: String,
+    },
     Terminate {
         reason: String,
     },
@@ -122,6 +128,8 @@ pub struct ClientAudioState {
     pub ssh_mode: ClientSshMode,
     #[serde(default)]
     pub platform: ClientPlatform,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     pub muted: bool,
     pub volume_percent: u8,
 }
@@ -132,6 +140,7 @@ impl Default for ClientAudioState {
             client_kind: ClientKind::Unknown,
             ssh_mode: ClientSshMode::Unknown,
             platform: ClientPlatform::Unknown,
+            capabilities: Vec::new(),
             muted: false,
             volume_percent: 30,
         }
@@ -139,6 +148,14 @@ impl Default for ClientAudioState {
 }
 
 impl ClientAudioState {
+    pub fn supports_clipboard_image(&self) -> bool {
+        self.client_kind == ClientKind::Cli
+            && self
+                .capabilities
+                .iter()
+                .any(|capability| capability == "clipboard_image")
+    }
+
     fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {
         if self.client_kind != ClientKind::Cli {
             return None;
@@ -154,6 +171,7 @@ pub enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
+    RequestClipboardImage,
 }
 
 #[derive(Clone, Default)]
@@ -530,6 +548,7 @@ mod tests {
                 client_kind: ClientKind::Cli,
                 ssh_mode: ClientSshMode::Native,
                 platform: ClientPlatform::Macos,
+                capabilities: vec!["clipboard_image".to_string()],
                 muted: true,
                 volume_percent: 35,
             },
@@ -539,6 +558,7 @@ mod tests {
         assert_eq!(snapshot.client_kind, ClientKind::Cli);
         assert_eq!(snapshot.ssh_mode, ClientSshMode::Native);
         assert_eq!(snapshot.platform, ClientPlatform::Macos);
+        assert!(snapshot.supports_clipboard_image());
         assert!(snapshot.muted);
         assert_eq!(snapshot.volume_percent, 35);
     }

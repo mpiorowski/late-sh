@@ -11,6 +11,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::MutexRecover;
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
 use late_core::telemetry::http_telemetry_middleware;
@@ -49,9 +50,15 @@ enum WsPayload {
         ssh_mode: crate::session::ClientSshMode,
         #[serde(default)]
         platform: crate::session::ClientPlatform,
+        #[serde(default)]
+        capabilities: Vec<String>,
         muted: bool,
         volume_percent: u8,
     },
+    #[serde(rename = "clipboard_image")]
+    ClipboardImage { data_base64: String },
+    #[serde(rename = "clipboard_image_failed")]
+    ClipboardImageFailed { message: String },
 }
 
 pub async fn run_api_server(
@@ -268,6 +275,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 client_kind,
                                 ssh_mode,
                                 platform,
+                                capabilities,
                                 muted,
                                 volume_percent,
                             } => {
@@ -278,11 +286,20 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         client_kind,
                                         ssh_mode,
                                         platform,
+                                        capabilities,
                                         muted,
                                         volume_percent,
                                     },
                                 );
                                 continue;
+                            }
+                            WsPayload::ClipboardImage { data_base64 } => {
+                                decode_clipboard_image_message(data_base64)
+                            }
+                            WsPayload::ClipboardImageFailed { message } => {
+                                SessionMessage::ClipboardImageFailed {
+                                    message: truncate_ws_error_message(&message),
+                                }
                             }
                         };
 
@@ -326,6 +343,43 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         .paired_client_registry
         .unregister_if_match(&token, registration_id);
     tracing::info!(token_hint = %token_hint, "websocket connection closed");
+}
+
+fn decode_clipboard_image_message(data_base64: String) -> SessionMessage {
+    let max_bytes = crate::app::files::image_upload::max_upload_bytes();
+    decode_clipboard_image_message_with_max(data_base64, max_bytes)
+}
+
+fn decode_clipboard_image_message_with_max(
+    data_base64: String,
+    max_bytes: usize,
+) -> SessionMessage {
+    let max_base64_len = max_bytes.saturating_mul(4).div_ceil(3).saturating_add(8);
+    if data_base64.len() > max_base64_len {
+        return SessionMessage::ClipboardImageFailed {
+            message: "Clipboard image is too large".to_string(),
+        };
+    }
+
+    match STANDARD.decode(data_base64.as_bytes()) {
+        Ok(data) if crate::app::files::image_upload::detect_image_mime(&data).is_some() => {
+            SessionMessage::ClipboardImage { data }
+        }
+        Ok(_) => SessionMessage::ClipboardImageFailed {
+            message: "Clipboard image is not a supported PNG/JPEG/GIF/WebP image".to_string(),
+        },
+        Err(_) => SessionMessage::ClipboardImageFailed {
+            message: "Clipboard image payload was invalid".to_string(),
+        },
+    }
+}
+
+fn truncate_ws_error_message(message: &str) -> String {
+    let message = message.trim();
+    if message.is_empty() {
+        return "Clipboard image upload failed".to_string();
+    }
+    message.chars().take(160).collect()
 }
 
 fn token_hint(token: &str) -> String {
@@ -423,12 +477,14 @@ mod tests {
                 client_kind,
                 ssh_mode,
                 platform,
+                capabilities,
                 muted,
                 volume_percent,
             } => {
                 assert_eq!(client_kind, crate::session::ClientKind::Cli);
                 assert_eq!(ssh_mode, crate::session::ClientSshMode::Native);
                 assert_eq!(platform, crate::session::ClientPlatform::Macos);
+                assert!(capabilities.is_empty());
                 assert!(muted);
                 assert_eq!(volume_percent, 35);
             }
@@ -452,12 +508,14 @@ mod tests {
                 client_kind,
                 ssh_mode,
                 platform,
+                capabilities,
                 muted,
                 volume_percent,
             } => {
                 assert_eq!(client_kind, crate::session::ClientKind::Cli);
                 assert_eq!(ssh_mode, crate::session::ClientSshMode::Native);
                 assert_eq!(platform, crate::session::ClientPlatform::Android);
+                assert!(capabilities.is_empty());
                 assert!(!muted);
                 assert_eq!(volume_percent, 30);
             }
@@ -481,12 +539,14 @@ mod tests {
                 client_kind,
                 ssh_mode,
                 platform,
+                capabilities,
                 muted,
                 volume_percent,
             } => {
                 assert_eq!(client_kind, crate::session::ClientKind::Cli);
                 assert_eq!(ssh_mode, crate::session::ClientSshMode::OpenSsh);
                 assert_eq!(platform, crate::session::ClientPlatform::Linux);
+                assert!(capabilities.is_empty());
                 assert!(!muted);
                 assert_eq!(volume_percent, 30);
             }
@@ -515,6 +575,58 @@ mod tests {
             "rms": 0.5
         }"#;
         assert!(serde_json::from_str::<WsPayload>(json).is_err());
+    }
+
+    #[test]
+    fn decode_clipboard_image_accepts_supported_image() {
+        let png_header = b"\x89PNG\r\n\x1a\n";
+        match decode_clipboard_image_message_with_max(STANDARD.encode(png_header), 1024) {
+            SessionMessage::ClipboardImage { data } => assert_eq!(data, png_header),
+            other => panic!("expected ClipboardImage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_clipboard_image_rejects_oversize_payload_before_decode() {
+        match decode_clipboard_image_message_with_max("A".repeat(11), 1) {
+            SessionMessage::ClipboardImageFailed { message } => {
+                assert_eq!(message, "Clipboard image is too large");
+            }
+            other => panic!("expected ClipboardImageFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_clipboard_image_rejects_invalid_base64() {
+        match decode_clipboard_image_message_with_max("not base64!!!".to_string(), 1024) {
+            SessionMessage::ClipboardImageFailed { message } => {
+                assert_eq!(message, "Clipboard image payload was invalid");
+            }
+            other => panic!("expected ClipboardImageFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_clipboard_image_rejects_non_image_bytes() {
+        match decode_clipboard_image_message_with_max(STANDARD.encode(b"hello"), 1024) {
+            SessionMessage::ClipboardImageFailed { message } => {
+                assert_eq!(
+                    message,
+                    "Clipboard image is not a supported PNG/JPEG/GIF/WebP image"
+                );
+            }
+            other => panic!("expected ClipboardImageFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_ws_error_message_defaults_and_limits_length() {
+        assert_eq!(
+            truncate_ws_error_message("  "),
+            "Clipboard image upload failed"
+        );
+        assert_eq!(truncate_ws_error_message("  no image  "), "no image");
+        assert_eq!(truncate_ws_error_message(&"x".repeat(200)).len(), 160);
     }
 
     #[test]

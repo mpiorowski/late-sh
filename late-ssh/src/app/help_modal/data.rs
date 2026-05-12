@@ -127,6 +127,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /active            list active users",
         "  /members           list users in this room",
         "  /list              list public rooms",
+        "  /paste-image       upload image from paired CLI clipboard",
         "  /ignore [@user]    ignore a user, or list ignored users",
         "  /unignore [@user]  remove a user from your ignore list",
         "  /music             explain how music works",

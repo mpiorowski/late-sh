@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+arboard.workspace = true
+base64.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -22,6 +24,7 @@ cpal.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
+image.workspace = true
 rand_core.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 ringbuf.workspace = true

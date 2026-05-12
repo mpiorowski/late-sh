@@ -41,8 +41,11 @@ const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
 const REACTION_OWNER_COLUMNS: usize = 3;
 const INLINE_IMAGE_FETCHES_PER_TICK: usize = 8;
 const INLINE_IMAGE_SCAN_LIMIT: usize = 100;
+const INLINE_IMAGE_MAX_WIDTH: u32 = 96;
+const INLINE_IMAGE_MAX_ROWS: u32 = 12;
 const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
 const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
+const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) type InlineImageLines = Vec<ratatui::text::Line<'static>>;
 pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImageLines, String>);
@@ -88,6 +91,25 @@ pub(crate) struct ModCommandOutput {
 pub(crate) struct PendingUrlUpload {
     pub url: String,
     pub room_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingClipboardImageUpload {
+    pub room_id: Option<Uuid>,
+    requested_at: Instant,
+}
+
+impl PendingClipboardImageUpload {
+    fn new(room_id: Option<Uuid>) -> Self {
+        Self {
+            room_id,
+            requested_at: Instant::now(),
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.requested_at.elapsed() >= CLIPBOARD_IMAGE_REQUEST_TIMEOUT
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,6 +214,8 @@ pub struct ChatState {
     pub(crate) image_upload_pending: bool,
     pub(crate) image_upload_target_room_id: Option<Uuid>,
     pub(crate) requested_url_upload: Option<PendingUrlUpload>,
+    requested_clipboard_image_upload: Option<PendingClipboardImageUpload>,
+    pending_clipboard_image_upload: Option<PendingClipboardImageUpload>,
 
     // inline image rendering
     pub(crate) inline_image_rx:
@@ -319,6 +343,8 @@ impl ChatState {
             image_upload_pending: false,
             image_upload_target_room_id: None,
             requested_url_upload: None,
+            requested_clipboard_image_upload: None,
+            pending_clipboard_image_upload: None,
             inline_image_rx: Some(inline_image_rx),
             inline_image_tx: Some(inline_image_tx),
             inline_image_cache: HashMap::new(),
@@ -1246,6 +1272,24 @@ impl ChatState {
             return None;
         }
 
+        if body.trim() == "/paste-image" {
+            if !crate::app::files::image_upload::is_file_upload_configured() {
+                return Some(Banner::error("File uploads are disabled"));
+            }
+            self.clear_expired_pending_clipboard_image_upload();
+            if self.pending_clipboard_image_upload.is_some()
+                || self.requested_clipboard_image_upload.is_some()
+            {
+                return Some(Banner::error(
+                    "A clipboard image request is already in progress",
+                ));
+            }
+            let room_id = self.upload_target_room_id();
+            self.clear_composer_after_submit();
+            self.requested_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+            return None;
+        }
+
         if body.trim() == "/active" {
             self.clear_composer_after_submit();
             self.open_active_users_overlay();
@@ -1494,6 +1538,14 @@ impl ChatState {
     }
 
     pub fn start_image_upload(&mut self, bytes: Vec<u8>) -> Option<Banner> {
+        self.start_image_upload_in_room(bytes, self.upload_target_room_id())
+    }
+
+    pub(crate) fn start_image_upload_in_room(
+        &mut self,
+        bytes: Vec<u8>,
+        room_id: Option<Uuid>,
+    ) -> Option<Banner> {
         let Some(mime) = crate::app::files::image_upload::detect_image_mime(&bytes) else {
             return Some(Banner::error("Unsupported image type"));
         };
@@ -1502,7 +1554,7 @@ impl ChatState {
         }
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if let Some(banner) = self.begin_image_upload(self.upload_target_room_id(), rx) {
+        if let Some(banner) = self.begin_image_upload(room_id, rx) {
             return Some(banner);
         }
         let mime = mime.to_string();
@@ -1556,6 +1608,45 @@ impl ChatState {
 
     pub(crate) fn take_requested_url_upload(&mut self) -> Option<PendingUrlUpload> {
         self.requested_url_upload.take()
+    }
+
+    pub(crate) fn take_requested_clipboard_image_upload(
+        &mut self,
+    ) -> Option<PendingClipboardImageUpload> {
+        self.requested_clipboard_image_upload.take()
+    }
+
+    pub(crate) fn begin_pending_clipboard_image_upload(&mut self, room_id: Option<Uuid>) {
+        self.pending_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+    }
+
+    pub(crate) fn take_pending_clipboard_image_upload(
+        &mut self,
+    ) -> Option<PendingClipboardImageUpload> {
+        self.pending_clipboard_image_upload.take()
+    }
+
+    pub(crate) fn clear_pending_clipboard_image_upload(&mut self) {
+        self.pending_clipboard_image_upload = None;
+    }
+
+    fn clear_expired_pending_clipboard_image_upload(&mut self) -> bool {
+        if self
+            .pending_clipboard_image_upload
+            .as_ref()
+            .is_some_and(PendingClipboardImageUpload::is_expired)
+        {
+            self.pending_clipboard_image_upload = None;
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn expire_pending_clipboard_image_upload(&mut self) -> Option<Banner> {
+        if self.clear_expired_pending_clipboard_image_upload() {
+            return Some(Banner::error("Clipboard image request timed out"));
+        }
+        None
     }
 
     pub(crate) fn poll_image_upload(&mut self) -> Option<Result<String, String>> {
@@ -1649,11 +1740,13 @@ impl ChatState {
             if !url.is_empty() {
                 let tx_clone = tx.clone();
                 tokio::spawn(async move {
-                    // High-detail thumbnail: 96 wide, max 10 rows (20 pixels)
-                    let result =
-                        crate::app::files::inline_image::fetch_and_render_image(url, 96, 10)
-                            .await
-                            .map_err(|e| e.to_string());
+                    let result = crate::app::files::inline_image::fetch_and_render_image(
+                        url,
+                        INLINE_IMAGE_MAX_WIDTH,
+                        INLINE_IMAGE_MAX_ROWS,
+                    )
+                    .await
+                    .map_err(|e| e.to_string());
                     let _ = tx_clone.send((msg_id, result));
                 });
             }
@@ -1684,6 +1777,7 @@ impl ChatState {
         self.drain_username_directory();
         self.drain_snapshot();
         self.drain_pinned_messages();
+        let clipboard_banner = self.expire_pending_clipboard_image_upload();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_banner = self.feeds.tick();
@@ -1691,7 +1785,8 @@ impl ChatState {
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
         let work_banner = self.work.tick();
-        moderation_banner
+        clipboard_banner
+            .or(moderation_banner)
             .or(banner)
             .or(feeds_banner)
             .or(news_banner)
@@ -2904,6 +2999,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("list", "public rooms"),
     ("members", "room members"),
     ("music", "music help"),
+    ("paste-image", "upload image from CLI clipboard"),
     ("private", "new private room"),
     ("public", "open public room for everyone"),
     ("settings", "open settings"),
