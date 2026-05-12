@@ -79,6 +79,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 ## 3. Entry Points and Files [STABLE]
 
 - `src/main.rs` - top-level orchestration, mode split, audio/WS lifecycle
+- `src/clipboard.rs` - paired `/paste-image` clipboard read, Wayland/X clipboard backend use, PNG encoding, and local size guards
 - `src/config.rs` - flags, env vars, defaults, logging
 - `src/identity.rs` - dedicated key discovery/generation
 - `src/ssh.rs` - native SSH, OpenSSH ControlMaster mode, legacy PTY subprocess mode, token parsing, resize forwarding

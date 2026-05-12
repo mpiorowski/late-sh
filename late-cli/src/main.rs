@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
 mod audio;
+mod clipboard;
 
 mod config;
 mod identity;
