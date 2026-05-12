@@ -2778,7 +2778,6 @@ pub(crate) fn visual_order_for_rooms(
     order.push(RoomSlot::News);
     order.push(RoomSlot::Showcase);
     order.push(RoomSlot::Work);
-    order.push(RoomSlot::Discover);
 
     // DMs (sorted by display name to match nav rendering)
     let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
@@ -2788,6 +2787,7 @@ pub(crate) fn visual_order_for_rooms(
         name_a.cmp(&name_b)
     });
     order.extend(dms.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+    order.push(RoomSlot::Discover);
 
     order
 }
@@ -3786,9 +3786,9 @@ mod tests {
                 RoomSlot::News,
                 RoomSlot::Showcase,
                 RoomSlot::Work,
-                RoomSlot::Discover,
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
+                RoomSlot::Discover,
             ]
         );
     }

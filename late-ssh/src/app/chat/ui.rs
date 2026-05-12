@@ -1270,28 +1270,6 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         view.notifications_selected,
     );
 
-    let discover_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.discover_selected,
-        );
-        let style = if view.discover_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = format!("{prefix}discover");
-        Line::from(Span::styled(label, style))
-    };
-    push_row(
-        discover_line,
-        Some(RoomSlot::Discover),
-        view.discover_selected,
-    );
-
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
         .filter(|(r, _)| {
@@ -1375,6 +1353,28 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             );
         }
     }
+
+    let browse_rooms_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.discover_selected,
+        );
+        let style = if view.discover_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        let label = format!("{prefix}+ browse rooms");
+        Line::from(Span::styled(label, style))
+    };
+    push_row(
+        browse_rooms_line,
+        Some(RoomSlot::Discover),
+        view.discover_selected,
+    );
 
     push_row(Line::from(""), None, false);
     push_row(section_divider("Mobile"), None, false);
@@ -1725,13 +1725,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> Vec<Lin
         cozy_slot_selected(view, work_slot),
         jump_targets.get(&work_slot).copied(),
     ));
-    let discover_slot = RoomSlot::Discover;
-    lines.push(item_row(
-        "discover".to_string(),
-        0,
-        cozy_slot_selected(view, discover_slot),
-        jump_targets.get(&discover_slot).copied(),
-    ));
 
     // === DMs ===
     let mut dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
@@ -1760,13 +1753,14 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> Vec<Lin
         }
     }
 
+    let discover_slot = RoomSlot::Discover;
     lines.push(blank());
-    lines.push(Line::from(Span::styled(
-        "+ browse rooms",
-        Style::default()
-            .fg(theme::TEXT_FAINT())
-            .add_modifier(Modifier::ITALIC),
-    )));
+    lines.push(item_row(
+        "+ browse rooms".to_string(),
+        0,
+        cozy_slot_selected(view, discover_slot),
+        jump_targets.get(&discover_slot).copied(),
+    ));
 
     lines
 }
