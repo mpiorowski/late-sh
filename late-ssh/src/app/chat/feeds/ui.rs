@@ -22,18 +22,7 @@ const ITEM_HEIGHT: u16 = 7;
 const SUMMARY_MAX_CHARS: usize = 240;
 
 pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
-    let selected = if view.entries.is_empty() {
-        0
-    } else {
-        view.selected_index.min(view.entries.len() - 1) + 1
-    };
-    let title = format!(" Feeds ({selected}/{}) ", view.entries.len());
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = area;
 
     if view.entries.is_empty() {
         let text = if view.has_feeds {

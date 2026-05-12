@@ -29,23 +29,7 @@ const ITEM_HEIGHT: u16 = 9;
 const SUMMARY_LINES: usize = 2;
 
 pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
-    let selected = if view.items.is_empty() {
-        0
-    } else {
-        view.selected_index.min(view.items.len() - 1) + 1
-    };
-    let title = if view.mine_only {
-        format!(" Work · mine ({selected}/{}) ", view.items.len())
-    } else {
-        format!(" Work ({selected}/{}) ", view.items.len())
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(Style::default().fg(theme::BORDER()));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = area;
 
     if view.items.is_empty() {
         let text = Text::from(vec![

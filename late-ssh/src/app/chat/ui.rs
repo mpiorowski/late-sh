@@ -1452,6 +1452,7 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
     let lines = build_cozy_room_rail_rows(&room_list_view, area.width.saturating_sub(2));
 
     // Content lives inside: 2 cols left padding, 2 cols right (separator + 1).
+    // Bottom slice is reserved for the pinned nav-hint footer.
     let inner = Rect {
         x: area.x + 2,
         y: area.y + 1,
@@ -1459,11 +1460,23 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
         height: area.height.saturating_sub(1),
     };
 
-    // Repaint any active-row accent bar in the inner's leftmost gutter column.
+    let hint_lines = build_rail_nav_hint_lines();
+    let hint_rows = hint_lines.len() as u16;
+    // Reserve: 1 blank + hint rows. If the rail is too short, skip hints.
+    let footer_reserve = hint_rows + 1;
+    let (list_area, hint_area) = if inner.height > footer_reserve + 2 {
+        let split = Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)])
+            .split(inner);
+        (split[0], Some(split[1]))
+    } else {
+        (inner, None)
+    };
+
+    // Repaint any active-row accent bar in the list area's leftmost gutter.
     let buf = frame.buffer_mut();
     for (i, line) in lines.iter().enumerate() {
-        let y = inner.y + i as u16;
-        if y >= area.bottom() {
+        let y = list_area.y + i as u16;
+        if y >= list_area.bottom() {
             break;
         }
         if line
@@ -1477,8 +1490,7 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
         }
     }
 
-    // Strip the sentinel marker span before rendering text so it doesn't
-    // double-paint adjacent to the accent bar.
+    // Strip the sentinel marker span before rendering text.
     let display_lines: Vec<Line<'static>> = lines
         .into_iter()
         .map(|line| {
@@ -1494,7 +1506,19 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(display_lines), inner);
+    frame.render_widget(Paragraph::new(display_lines), list_area);
+
+    if let Some(hint_area) = hint_area {
+        // Skip the first row of the reserved footer as a breathing gap, then
+        // render the hint lines pinned to the very bottom.
+        let hint_render_area = Rect {
+            x: hint_area.x,
+            y: hint_area.y + 1,
+            width: hint_area.width,
+            height: hint_area.height.saturating_sub(1),
+        };
+        frame.render_widget(Paragraph::new(hint_lines), hint_render_area);
+    }
 }
 
 /// Builds the cozy rail rows. Active rows are tagged with a sentinel `▌` span
@@ -1859,76 +1883,48 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
             .filter(|(room, _)| is_chat_list_room(room))
             .or_else(|| chat_rooms.iter().find(|(room, _)| is_chat_list_room(room)));
 
-        let (message_title, message_lines): (String, Vec<Line>) =
-            if let Some((room, messages)) = selected_room {
-                let title = if room.kind == "dm" {
-                    let other_id = if room.dm_user_a == Some(current_user_id) {
-                        room.dm_user_b
-                    } else {
-                        room.dm_user_a
-                    };
-                    other_id
-                        .and_then(|id| {
-                            usernames
-                                .get(&id)
-                                .map(|name| format_username_with_country(id, name, countries))
-                        })
-                        .unwrap_or_else(|| "DM".to_string())
-                } else {
-                    room.slug
-                        .as_deref()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| room.kind.clone())
-                };
-                let height = messages_area.height.saturating_sub(2).max(1) as usize;
-                let width = messages_area.width.saturating_sub(2).max(1) as usize;
+        let message_lines: Vec<Line> = if let Some((_room, messages)) = selected_room {
+            let height = messages_area.height.max(1) as usize;
+            let width = messages_area.width.max(1) as usize;
 
-                ensure_chat_rows_cache(
-                    view.rows_cache,
-                    messages.iter().collect(),
-                    width,
-                    ChatRowsContext {
-                        current_user_id,
-                        usernames,
-                        countries,
-                        bonsai_glyphs: view.bonsai_glyphs,
-                        message_reactions: view.message_reactions,
-                        inline_images: view.inline_images,
-                    },
-                );
-                let mut lines = visible_chat_rows(
-                    view.rows_cache,
-                    view.selected_message_id,
-                    view.highlighted_message_id,
-                    height,
-                );
+            ensure_chat_rows_cache(
+                view.rows_cache,
+                messages.iter().collect(),
+                width,
+                ChatRowsContext {
+                    current_user_id,
+                    usernames,
+                    countries,
+                    bonsai_glyphs: view.bonsai_glyphs,
+                    message_reactions: view.message_reactions,
+                    inline_images: view.inline_images,
+                },
+            );
+            let mut lines = visible_chat_rows(
+                view.rows_cache,
+                view.selected_message_id,
+                view.highlighted_message_id,
+                height,
+            );
 
-                if lines.is_empty() {
-                    lines = vec![Line::from(Span::styled(
-                        "No messages yet",
-                        Style::default().fg(theme::TEXT_DIM()),
-                    ))];
-                }
-                (format!(" #{} ", title), lines)
-            } else {
-                (
-                    " Messages ".to_string(),
-                    vec![Line::from(Span::styled(
-                        "Select a room.",
-                        Style::default().fg(theme::TEXT_DIM()),
-                    ))],
-                )
-            };
+            if lines.is_empty() {
+                lines = vec![Line::from(Span::styled(
+                    "No messages yet",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ))];
+            }
+            lines
+        } else {
+            vec![Line::from(Span::styled(
+                "Select a room.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))]
+        };
 
-        let messages_block = Block::default()
-            .title(message_title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-        let inner_area = messages_block.inner(messages_area);
-        let messages_paragraph = Paragraph::new(message_lines).block(messages_block);
+        let messages_paragraph = Paragraph::new(message_lines);
         frame.render_widget(messages_paragraph, messages_area);
         if let Some(overlay) = view.overlay {
-            draw_overlay(frame, inner_area, overlay);
+            draw_overlay(frame, messages_area, overlay);
         }
     }
 
@@ -2110,76 +2106,48 @@ fn draw_selected_content(
                     .find(|(room, _)| is_chat_list_room(room))
             });
 
-        let (message_title, message_lines): (String, Vec<Line>) =
-            if let Some((room, messages)) = selected_room {
-                let title = if room.kind == "dm" {
-                    let other_id = if room.dm_user_a == Some(current_user_id) {
-                        room.dm_user_b
-                    } else {
-                        room.dm_user_a
-                    };
-                    other_id
-                        .and_then(|id| {
-                            view.usernames
-                                .get(&id)
-                                .map(|name| format_username_with_country(id, name, view.countries))
-                        })
-                        .unwrap_or_else(|| "DM".to_string())
-                } else {
-                    room.slug
-                        .as_deref()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| room.kind.clone())
-                };
-                let height = messages_area.height.saturating_sub(2).max(1) as usize;
-                let width = messages_area.width.saturating_sub(2).max(1) as usize;
+        let message_lines: Vec<Line> = if let Some((_room, messages)) = selected_room {
+            let height = messages_area.height.max(1) as usize;
+            let width = messages_area.width.max(1) as usize;
 
-                ensure_chat_rows_cache(
-                    view.rows_cache,
-                    messages.iter().collect(),
-                    width,
-                    ChatRowsContext {
-                        current_user_id,
-                        usernames: view.usernames,
-                        countries: view.countries,
-                        bonsai_glyphs: view.bonsai_glyphs,
-                        message_reactions: view.message_reactions,
-                        inline_images: view.inline_images,
-                    },
-                );
-                let mut lines = visible_chat_rows(
-                    view.rows_cache,
-                    view.selected_message_id,
-                    view.highlighted_message_id,
-                    height,
-                );
+            ensure_chat_rows_cache(
+                view.rows_cache,
+                messages.iter().collect(),
+                width,
+                ChatRowsContext {
+                    current_user_id,
+                    usernames: view.usernames,
+                    countries: view.countries,
+                    bonsai_glyphs: view.bonsai_glyphs,
+                    message_reactions: view.message_reactions,
+                    inline_images: view.inline_images,
+                },
+            );
+            let mut lines = visible_chat_rows(
+                view.rows_cache,
+                view.selected_message_id,
+                view.highlighted_message_id,
+                height,
+            );
 
-                if lines.is_empty() {
-                    lines = vec![Line::from(Span::styled(
-                        "No messages yet",
-                        Style::default().fg(theme::TEXT_DIM()),
-                    ))];
-                }
-                (format!(" #{} ", title), lines)
-            } else {
-                (
-                    " Messages ".to_string(),
-                    vec![Line::from(Span::styled(
-                        "Select a room.",
-                        Style::default().fg(theme::TEXT_DIM()),
-                    ))],
-                )
-            };
+            if lines.is_empty() {
+                lines = vec![Line::from(Span::styled(
+                    "No messages yet",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ))];
+            }
+            lines
+        } else {
+            vec![Line::from(Span::styled(
+                "Select a room.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))]
+        };
 
-        let messages_block = Block::default()
-            .title(message_title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-        let inner_area = messages_block.inner(messages_area);
-        let messages_paragraph = Paragraph::new(message_lines).block(messages_block);
+        let messages_paragraph = Paragraph::new(message_lines);
         frame.render_widget(messages_paragraph, messages_area);
         if let Some(overlay) = view.overlay {
-            draw_overlay(frame, inner_area, overlay);
+            draw_overlay(frame, messages_area, overlay);
         }
     }
 

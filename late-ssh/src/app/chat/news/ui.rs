@@ -35,25 +35,7 @@ const MODAL_MAX_WIDTH: u16 = 160;
 const MODAL_MIN_WIDTH: u16 = 24;
 
 pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'_>) {
-    let selected = if view.articles.is_empty() {
-        0
-    } else {
-        view.selected_index.min(view.articles.len() - 1) + 1
-    };
-    let title = if view.mine_only {
-        format!(" News Feed · mine ({selected}/{}) ", view.articles.len())
-    } else {
-        format!(" News Feed ({selected}/{}) ", view.articles.len())
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(Style::default().fg(theme::BORDER()));
-
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let list_area = inner_area;
+    let list_area = area;
 
     if view.articles.is_empty() {
         let text = Text::from("No news yet. Press 'i' to share a link.");
