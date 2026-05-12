@@ -24,6 +24,69 @@ pub(crate) struct TreeOverlay<'a> {
     pub show_selection: bool,
 }
 
+/// Borderless bonsai render for the merged shell. Drops the outer block and
+/// "Bonsai (Xd)" title; the rail's whitespace separates it from neighbors.
+/// A single dim line at the bottom shows age + care hint.
+pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32) {
+    if area.height < 3 || area.width < 10 {
+        return;
+    }
+
+    let stage = state.stage();
+    let wilting = state.is_wilting();
+    let tree_art = tree_ascii(stage, state.seed, wilting);
+    let tree_height = tree_art.len();
+
+    // Reserve last 1 row for a dim "5d · w care" footer.
+    let footer_height: usize = 1;
+    let tree_space = (area.height as usize).saturating_sub(footer_height);
+    let padding_top = tree_space.saturating_sub(tree_height);
+
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    for _ in 0..padding_top {
+        lines.push(Line::from(""));
+    }
+    lines.extend(render_tree_art_lines(
+        stage,
+        state.seed,
+        wilting,
+        area.width as usize,
+        beat,
+        None,
+    ));
+    while lines.len() < tree_space {
+        lines.push(Line::from(""));
+    }
+
+    // Footer
+    let age_color = if state.is_alive {
+        theme::TEXT_DIM()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    let age_text = if state.is_alive {
+        format!("{}d", state.age_days)
+    } else {
+        "rip".to_string()
+    };
+    let mut footer = vec![Span::styled(age_text, Style::default().fg(age_color))];
+    if state.can_water() && state.is_alive {
+        footer.push(Span::raw("  "));
+        footer.push(Span::styled(
+            "w water",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+    lines.push(Line::from(footer));
+
+    frame.render_widget(
+        ratatui::widgets::Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center),
+        area,
+    );
+}
+
 /// Render the bonsai widget for the sidebar. Takes a fixed area.
 pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32) {
     let title = if state.is_alive {

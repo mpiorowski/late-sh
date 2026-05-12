@@ -91,6 +91,134 @@ pub fn draw_vote_options(
     }
 }
 
+/// Borderless, label-less vote rows for the merged-shell stream block.
+/// Renders 3 short lines: `L lofi    ████   12`. The active vote is sage,
+/// everything else stays dim. No section header — caller owns that.
+pub fn draw_vote_inline(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) {
+    let options = [
+        ("L", "lofi", &view.vote_counts.lofi, view.my_vote == Some(Genre::Lofi)),
+        (
+            "A",
+            "ambient",
+            &view.vote_counts.ambient,
+            view.my_vote == Some(Genre::Ambient),
+        ),
+        (
+            "C",
+            "classic",
+            &view.vote_counts.classic,
+            view.my_vote == Some(Genre::Classic),
+        ),
+    ];
+    let total = view.vote_counts.total().max(1) as usize;
+    // 13 = key(2) + name(8) + count(3)
+    let max_bar = (area.width as usize).saturating_sub(13).max(1);
+
+    let layout = Layout::vertical(vec![Constraint::Length(1); options.len()]).split(area);
+    for (i, (key, name, votes, mine)) in options.iter().enumerate() {
+        let filled = (**votes as usize * max_bar) / total;
+        let empty = max_bar.saturating_sub(filled);
+
+        let name_color = if *mine { theme::SUCCESS() } else { theme::TEXT() };
+        let bar_color = if *mine {
+            theme::SUCCESS()
+        } else {
+            theme::AMBER_DIM()
+        };
+
+        let spans = vec![
+            Span::styled(
+                format!("{} ", key),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("{:<8}", name), Style::default().fg(name_color)),
+            Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
+            Span::styled("·".repeat(empty), Style::default().fg(theme::BORDER_DIM())),
+            Span::styled(
+                format!(" {:>2}", votes),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ),
+        ];
+        frame.render_widget(Paragraph::new(Line::from(spans)), layout[i]);
+    }
+}
+
+/// Sidebar-flavored vote card sized for the 24-col right rail.
+/// Keeps the same `VoteCardView` data; renders 3 active genres + a header rule.
+pub fn draw_vote_sidebar(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) {
+    let block = Block::default()
+        .title(" Vote ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    draw_vote_sidebar_options(frame, inner, view.vote_counts, view.my_vote);
+}
+
+fn draw_vote_sidebar_options(
+    frame: &mut Frame,
+    area: Rect,
+    vote_counts: &VoteCount,
+    my_vote: Option<Genre>,
+) {
+    let options = [
+        ("L", "Lofi", &vote_counts.lofi, my_vote == Some(Genre::Lofi)),
+        (
+            "A",
+            "Ambient",
+            &vote_counts.ambient,
+            my_vote == Some(Genre::Ambient),
+        ),
+        (
+            "C",
+            "Classic",
+            &vote_counts.classic,
+            my_vote == Some(Genre::Classic),
+        ),
+    ];
+    let total_votes = vote_counts.total();
+    // 14 = key(3) + name(7) + count(4)
+    let max_bar_width = (area.width as usize).saturating_sub(14);
+
+    let layout = Layout::vertical(vec![Constraint::Length(1); options.len()]).split(area);
+
+    for (i, (key, name, votes, is_voted)) in options.iter().enumerate() {
+        let bar_filled = if total_votes > 0 && max_bar_width > 0 {
+            (**votes as usize * max_bar_width) / total_votes as usize
+        } else {
+            0
+        };
+        let bar_empty = max_bar_width.saturating_sub(bar_filled);
+
+        let spans = vec![
+            Span::styled(
+                format!(" {} ", key),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("{:<7}", name), Style::default().fg(theme::TEXT())),
+            Span::styled(
+                "█".repeat(bar_filled),
+                Style::default().fg(if *is_voted {
+                    theme::SUCCESS()
+                } else {
+                    theme::AMBER_DIM()
+                }),
+            ),
+            Span::styled("░".repeat(bar_empty), Style::default().fg(theme::BORDER())),
+            Span::styled(
+                format!(" {:>3}", votes),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ];
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), layout[i]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

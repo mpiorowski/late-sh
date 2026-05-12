@@ -1437,6 +1437,281 @@ pub(crate) fn room_list_panel_contains(
     x >= rooms_area.x && x < rooms_area.right() && y >= rooms_area.y && y < rooms_area.bottom()
 }
 
+/// Cozy room rail for the merged shell. Anchored by a single thin vertical
+/// separator on its RIGHT edge; the rest is borderless. Quiet section labels,
+/// left-bar accent on the active row, dim trailing unread numbers.
+pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput<'_>) {
+    // Right-edge vertical separator anchors the rail visually.
+    let sep_x = area.right().saturating_sub(1);
+    crate::app::common::sidebar::paint_vertical_separator(frame, sep_x, area.y, area.height);
+
+    let room_list_view = room_list_view_from_render_input(view);
+    let lines = build_cozy_room_rail_rows(&room_list_view, area.width.saturating_sub(2));
+
+    // Content lives inside: 2 cols left padding, 2 cols right (separator + 1).
+    let inner = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(1),
+    };
+
+    // Repaint any active-row accent bar in the inner's leftmost gutter column.
+    let buf = frame.buffer_mut();
+    for (i, line) in lines.iter().enumerate() {
+        let y = inner.y + i as u16;
+        if y >= area.bottom() {
+            break;
+        }
+        if line
+            .spans
+            .first()
+            .is_some_and(|s| s.content.as_ref() == "▌")
+        {
+            if let Some(cell) = buf.cell_mut((area.x + 1, y)) {
+                cell.set_symbol("▌").set_fg(theme::AMBER());
+            }
+        }
+    }
+
+    // Strip the sentinel marker span before rendering text so it doesn't
+    // double-paint adjacent to the accent bar.
+    let display_lines: Vec<Line<'static>> = lines
+        .into_iter()
+        .map(|line| {
+            if line
+                .spans
+                .first()
+                .is_some_and(|s| s.content.as_ref() == "▌")
+            {
+                Line::from(line.spans.into_iter().skip(1).collect::<Vec<_>>())
+            } else {
+                line
+            }
+        })
+        .collect();
+
+    frame.render_widget(Paragraph::new(display_lines), inner);
+}
+
+/// Builds the cozy rail rows. Active rows are tagged with a sentinel `▌` span
+/// at index 0 so the renderer can paint a one-column accent bar in the gutter.
+/// That sentinel is stripped before final paint.
+fn build_cozy_room_rail_rows(
+    view: &ChatRoomListView<'_>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let inner_width = width.saturating_sub(3) as usize; // 2 left gutter + 1 right margin
+
+    let room_selected = |room_id| {
+        !view.feeds_selected
+            && !view.news_selected
+            && !view.notifications_selected
+            && !view.discover_selected
+            && !view.showcase_selected
+            && !view.work_selected
+            && view.selected_room_id == Some(room_id)
+    };
+
+    // Helpers
+    let blank = || Line::raw("");
+    let section_label = |s: &str| -> Line<'static> {
+        Line::from(Span::styled(
+            s.to_string(),
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        ))
+    };
+    let item_row = |label: String, unread: i64, active: bool| -> Line<'static> {
+        let label_max = inner_width.saturating_sub(4);
+        let display = if UnicodeWidthStr::width(label.as_str()) > label_max && label_max > 1 {
+            let mut s = String::new();
+            let mut w = 0usize;
+            for c in label.chars() {
+                let cw = UnicodeWidthStr::width(c.to_string().as_str());
+                if w + cw > label_max.saturating_sub(1) {
+                    break;
+                }
+                s.push(c);
+                w += cw;
+            }
+            s.push('…');
+            s
+        } else {
+            label
+        };
+        // Use display width (cells) instead of char count so wide glyphs
+        // like the lock emoji `🔒` don't misalign the unread counts on the right.
+        let used = UnicodeWidthStr::width(display.as_str());
+        let unread_str = if unread > 0 {
+            format!("{unread}")
+        } else {
+            String::new()
+        };
+        let pad = inner_width
+            .saturating_sub(used + UnicodeWidthStr::width(unread_str.as_str()));
+        let mut spans = Vec::new();
+        if active {
+            // Sentinel: stripped before paint, signals the gutter accent.
+            spans.push(Span::raw("▌"));
+        }
+        // Three-tier dimness: active = bright amber, has unread = full text,
+        // idle = dim. The visual cue carries "anything new here?" without
+        // any extra glyph noise.
+        let name_color = if active {
+            theme::AMBER()
+        } else if unread > 0 {
+            theme::TEXT()
+        } else {
+            theme::TEXT_DIM()
+        };
+        let name_modifier = if active {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
+        spans.push(Span::styled(
+            display,
+            Style::default().fg(name_color).add_modifier(name_modifier),
+        ));
+        if !unread_str.is_empty() {
+            spans.push(Span::raw(" ".repeat(pad)));
+            spans.push(Span::styled(
+                unread_str,
+                Style::default().fg(theme::AMBER_DIM()),
+            ));
+        }
+        Line::from(spans)
+    };
+
+    // === Core (no label) — permanent rooms + mentions ===
+    // Mentions sits inside Core because it's personal-attention, not a feed.
+    let core_order = ["general", "announcements", "suggestions", "bugs"];
+    for slug in &core_order {
+        if let Some((room, _)) = view
+            .chat_rooms
+            .iter()
+            .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
+        {
+            let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
+            lines.push(item_row(slug.to_string(), unread, room_selected(room.id)));
+        }
+    }
+    lines.push(item_row(
+        "mentions".to_string(),
+        view.notifications_unread_count,
+        view.notifications_selected,
+    ));
+
+    // === Channels (all non-DM rooms outside Core, public + private merged) ===
+    // Private rooms get a leading `·` prefix as a quiet "this is closed" cue.
+    // Native unicode lock glyphs are all bad in mono (either tiny like `⊟` or
+    // colorful emoji like `🔒`); a dim middle-dot reads as "lower-key" without
+    // breaking the warm palette.
+    let channels: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
+        .chat_rooms
+        .iter()
+        .filter(|(r, _)| {
+            is_chat_list_room(r)
+                && r.kind != "dm"
+                && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
+        })
+        .collect();
+    if !channels.is_empty() {
+        lines.push(blank());
+        lines.push(section_label("channels"));
+        for (room, _) in channels {
+            let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
+            let base_label = room
+                .slug
+                .as_deref()
+                .map(str::to_string)
+                .unwrap_or_else(|| room.kind.clone());
+            let label = if room.visibility == "private" {
+                format!("🔒 {}", base_label)
+            } else {
+                base_label
+            };
+            lines.push(item_row(label, unread, room_selected(room.id)));
+        }
+    }
+
+    // === Feeds (synthetic entries) — mentions moved out to Core ===
+    lines.push(blank());
+    lines.push(section_label("feeds"));
+    lines.push(item_row(
+        "news".to_string(),
+        view.news_unread_count,
+        view.news_selected,
+    ));
+    if view.feeds_available {
+        lines.push(item_row(
+            "rss".to_string(),
+            view.feeds_unread_count,
+            view.feeds_selected,
+        ));
+    }
+    lines.push(item_row(
+        "showcase".to_string(),
+        view.showcase_unread_count,
+        view.showcase_selected,
+    ));
+    lines.push(item_row(
+        "work".to_string(),
+        view.work_unread_count,
+        view.work_selected,
+    ));
+    lines.push(item_row(
+        "discover".to_string(),
+        0,
+        view.discover_selected,
+    ));
+
+    // === DMs ===
+    let dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
+        .chat_rooms
+        .iter()
+        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
+        .collect();
+    if !dms.is_empty() {
+        lines.push(blank());
+        lines.push(section_label("dms"));
+        for (room, _) in dms {
+            let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
+            let label = dm_display_label(room, view.usernames, view.current_user_id);
+            lines.push(item_row(label, unread, room_selected(room.id)));
+        }
+    }
+
+    lines.push(blank());
+    lines.push(Line::from(Span::styled(
+        "+ browse rooms",
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    )));
+
+    lines
+}
+
+fn dm_display_label(
+    room: &ChatRoom,
+    usernames: &HashMap<Uuid, String>,
+    current_user_id: Uuid,
+) -> String {
+    let other = if room.dm_user_a == Some(current_user_id) {
+        room.dm_user_b
+    } else {
+        room.dm_user_a
+    };
+    let name = other
+        .and_then(|id| usernames.get(&id).cloned())
+        .unwrap_or_else(|| "?".to_string());
+    format!("@ {}", name)
+}
+
 pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
     let chat_rooms = view.chat_rooms;
     let usernames = view.usernames;

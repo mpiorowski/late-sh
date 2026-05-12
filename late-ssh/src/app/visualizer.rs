@@ -3,7 +3,7 @@ use late_core::audio::VizFrame;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -65,6 +65,37 @@ impl Visualizer {
         }
         self.rms = (self.rms * 0.96).max(0.0);
         self.beat = (self.beat * 0.9).max(0.0);
+    }
+
+    /// Borderless visualizer for the merged shell. Renders bars only when
+    /// audio is paired; otherwise shows a one-line "no audio" hint. No block,
+    /// no title — the rail's whitespace owns the separation.
+    pub fn render_inline(&self, frame: &mut Frame, area: Rect) {
+        if area.height == 0 || area.width == 0 {
+            return;
+        }
+        if !self.has_viz {
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "no audio paired",
+                    Style::default().fg(theme::TEXT_FAINT()),
+                )),
+                Line::from(vec![
+                    Span::styled(
+                        "/music",
+                        Style::default()
+                            .fg(theme::AMBER_DIM())
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                    Span::styled(" in chat", Style::default().fg(theme::TEXT_FAINT())),
+                ]),
+            ];
+            frame.render_widget(Paragraph::new(lines), area);
+            return;
+        }
+        let lines = self.build_lines(area);
+        frame.render_widget(Paragraph::new(lines), area);
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, show_audio_shortcuts: bool) {

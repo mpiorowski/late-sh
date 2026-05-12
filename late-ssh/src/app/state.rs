@@ -212,6 +212,12 @@ pub struct App {
     pub(crate) pending_escape_started_at: Option<Instant>,
     pub(crate) vt_input: crate::app::input::VtInputParser,
 
+    /// New-shell beta flag, sourced from `LATE_UI_NEW_SHELL` at startup.
+    /// When true, the right sidebar swaps activity for vote, and Home/Chat
+    /// render the merged shell layout. Persistent across the session; toggled
+    /// per-deploy via env, not per-user (yet).
+    pub(crate) new_shell: bool,
+
     /// Terminal / rendering
     pub(super) terminal: Terminal<CrosstermBackend<SharedBuffer>>,
     pub(super) shared: SharedBuffer,
@@ -722,6 +728,9 @@ impl App {
             pending_escape: false,
             pending_escape_started_at: None,
             vt_input: crate::app::input::VtInputParser::default(),
+            new_shell: std::env::var("LATE_UI_NEW_SHELL")
+                .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "yes"))
+                .unwrap_or(false),
             terminal,
             shared,
             visualizer: Visualizer::new(),

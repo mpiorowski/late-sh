@@ -98,6 +98,23 @@ pub(crate) fn featured_dashboard_room(
     rooms.into_iter().next()
 }
 
+/// Top N rooms by occupancy/game priority, used by the new-shell Home grid.
+/// Returns up to `max` cards, sorted the same way as `featured_dashboard_room`.
+pub fn top_dashboard_rooms(
+    snapshot: &RoomsSnapshot,
+    registry: &RoomGameRegistry,
+    max: usize,
+) -> Vec<DashboardRoomCard> {
+    let mut rooms: Vec<DashboardRoomCard> = snapshot
+        .rooms
+        .iter()
+        .map(|room| DashboardRoomCard::new(room, registry.directory_summary(room)))
+        .collect();
+    sort_dashboard_room_cards(&mut rooms);
+    rooms.truncate(max);
+    rooms
+}
+
 fn sort_dashboard_room_cards(rooms: &mut [DashboardRoomCard]) {
     rooms.sort_by_key(|room| {
         (

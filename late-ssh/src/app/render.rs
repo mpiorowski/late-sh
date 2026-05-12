@@ -187,6 +187,9 @@ struct DrawContext<'a> {
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
+    new_shell: bool,
+    vote_view: crate::app::vote::ui::VoteCardView<'a>,
+    top_rooms: &'a [dashboard::ui::DashboardRoomCard],
 }
 
 impl App {
@@ -266,6 +269,15 @@ impl App {
         let dashboard_strip_pins = self.dashboard_strip_pins();
         let dashboard_featured_room =
             dashboard::ui::featured_dashboard_room(&self.rooms_snapshot, &self.room_game_registry);
+        let new_shell_top_rooms = if self.new_shell {
+            dashboard::ui::top_dashboard_rooms(
+                &self.rooms_snapshot,
+                &self.room_game_registry,
+                3,
+            )
+        } else {
+            Vec::new()
+        };
         let online_count = self
             .active_users
             .as_ref()
@@ -539,6 +551,12 @@ impl App {
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
+                        new_shell: self.new_shell,
+                        vote_view: crate::app::vote::ui::VoteCardView {
+                            vote_counts: &vote_snapshot.counts,
+                            my_vote: vote_my_vote,
+                        },
+                        top_rooms: &new_shell_top_rooms,
                     },
                 )
             })
@@ -700,7 +718,40 @@ impl App {
 
         match screen {
             Screen::Dashboard => {
-                dashboard::ui::draw_dashboard(frame, content_area, ctx.dashboard_view)
+                if ctx.new_shell {
+                    // Persistent left rail (rooms list) + Home center pane.
+                    // Width 24 mirrors the right sidebar for visual symmetry; can
+                    // be tightened later if room names fit.
+                    const HOME_RAIL_WIDTH: u16 = 24;
+                    let (rail_area, center_area) = if content_area.width
+                        > HOME_RAIL_WIDTH + 20
+                    {
+                        let split = Layout::horizontal([
+                            Constraint::Length(HOME_RAIL_WIDTH),
+                            Constraint::Fill(1),
+                        ])
+                        .split(content_area);
+                        (Some(split[0]), split[1])
+                    } else {
+                        (None, content_area)
+                    };
+
+                    if let Some(rail_area) = rail_area {
+                        chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
+                    }
+                    dashboard::home_new::draw_home_new_shell(
+                        frame,
+                        center_area,
+                        dashboard::home_new::HomeNewRenderInput {
+                            top_rooms: ctx.top_rooms,
+                            activity: ctx.activity,
+                            online_count: ctx.online_count,
+                            chat_view: ctx.dashboard_view.chat_view,
+                        },
+                    );
+                } else {
+                    dashboard::ui::draw_dashboard(frame, content_area, ctx.dashboard_view);
+                }
             }
             Screen::Chat => chat::ui::draw_chat(frame, content_area, ctx.chat_view),
             Screen::Artboard => {
@@ -762,6 +813,16 @@ impl App {
                     connect_url,
                     activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
+                    new_shell: ctx.new_shell,
+                    vote: if ctx.new_shell {
+                        Some(crate::app::vote::ui::VoteCardView {
+                            vote_counts: ctx.vote_view.vote_counts,
+                            my_vote: ctx.vote_view.my_vote,
+                        })
+                    } else {
+                        None
+                    },
+                    top_rooms: ctx.top_rooms,
                 },
             );
         }
