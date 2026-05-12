@@ -187,9 +187,9 @@ struct DrawContext<'a> {
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
-    new_shell: bool,
     vote_view: crate::app::vote::ui::VoteCardView<'a>,
     top_rooms: &'a [dashboard::ui::DashboardRoomCard],
+    home_selected: bool,
 }
 
 impl App {
@@ -265,19 +265,21 @@ impl App {
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let message_reactions = self.chat.message_reactions();
-        let dashboard_active_room = self.dashboard_active_room_id();
-        let dashboard_strip_pins = self.dashboard_strip_pins();
+        let shell_active_room = self.chat.selected_room_id;
+        let home_selected = self
+            .chat
+            .general_room_id()
+            .is_some_and(|general| shell_active_room == Some(general))
+            && !self.chat.feeds_selected
+            && !self.chat.news_selected
+            && !self.chat.notifications_selected
+            && !self.chat.discover_selected
+            && !self.chat.showcase_selected
+            && !self.chat.work_selected;
         let dashboard_featured_room =
             dashboard::ui::featured_dashboard_room(&self.rooms_snapshot, &self.room_game_registry);
-        let new_shell_top_rooms = if self.new_shell {
-            dashboard::ui::top_dashboard_rooms(
-                &self.rooms_snapshot,
-                &self.room_game_registry,
-                3,
-            )
-        } else {
-            Vec::new()
-        };
+        let top_rooms =
+            dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 3);
         let online_count = self
             .active_users
             .as_ref()
@@ -295,10 +297,10 @@ impl App {
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
         let dashboard_wire_articles = self.chat.news.all_articles();
-        let dashboard_messages = dashboard_active_room
+        let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
-        let dashboard_selected_news_message = dashboard_active_room
+        let dashboard_selected_news_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             now_playing: now_playing_text.as_deref(),
@@ -307,7 +309,6 @@ impl App {
             next_switch_in: vote_next_switch_in,
             my_vote: vote_my_vote,
             show_header: show_dashboard_header,
-            favorites_strip: dashboard_strip_pins.as_deref(),
             pinned_messages: self.chat.pinned_messages(),
             featured_room: dashboard_featured_room.as_ref(),
             box_prefix_armed: self.dashboard_box_prefix_armed,
@@ -551,12 +552,12 @@ impl App {
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
-                        new_shell: self.new_shell,
                         vote_view: crate::app::vote::ui::VoteCardView {
                             vote_counts: &vote_snapshot.counts,
                             my_vote: vote_my_vote,
                         },
-                        top_rooms: &new_shell_top_rooms,
+                        top_rooms: &top_rooms,
+                        home_selected,
                     },
                 )
             })
@@ -718,27 +719,23 @@ impl App {
 
         match screen {
             Screen::Dashboard => {
-                if ctx.new_shell {
-                    // Persistent left rail (rooms list) + Home center pane.
-                    // Width 24 mirrors the right sidebar for visual symmetry; can
-                    // be tightened later if room names fit.
-                    const HOME_RAIL_WIDTH: u16 = 24;
-                    let (rail_area, center_area) = if content_area.width
-                        > HOME_RAIL_WIDTH + 20
-                    {
-                        let split = Layout::horizontal([
-                            Constraint::Length(HOME_RAIL_WIDTH),
-                            Constraint::Fill(1),
-                        ])
-                        .split(content_area);
-                        (Some(split[0]), split[1])
-                    } else {
-                        (None, content_area)
-                    };
+                const HOME_RAIL_WIDTH: u16 = 24;
+                let (rail_area, center_area) = if content_area.width > HOME_RAIL_WIDTH + 20 {
+                    let split = Layout::horizontal([
+                        Constraint::Length(HOME_RAIL_WIDTH),
+                        Constraint::Fill(1),
+                    ])
+                    .split(content_area);
+                    (Some(split[0]), split[1])
+                } else {
+                    (None, content_area)
+                };
 
-                    if let Some(rail_area) = rail_area {
-                        chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
-                    }
+                if let Some(rail_area) = rail_area {
+                    chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
+                }
+
+                if ctx.home_selected {
                     dashboard::home_new::draw_home_new_shell(
                         frame,
                         center_area,
@@ -750,7 +747,7 @@ impl App {
                         },
                     );
                 } else {
-                    dashboard::ui::draw_dashboard(frame, content_area, ctx.dashboard_view);
+                    chat::ui::draw_chat_center(frame, center_area, ctx.chat_view);
                 }
             }
             Screen::Chat => chat::ui::draw_chat(frame, content_area, ctx.chat_view),
@@ -813,15 +810,10 @@ impl App {
                     connect_url,
                     activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
-                    new_shell: ctx.new_shell,
-                    vote: if ctx.new_shell {
-                        Some(crate::app::vote::ui::VoteCardView {
-                            vote_counts: ctx.vote_view.vote_counts,
-                            my_vote: ctx.vote_view.my_vote,
-                        })
-                    } else {
-                        None
-                    },
+                    vote: Some(crate::app::vote::ui::VoteCardView {
+                        vote_counts: ctx.vote_view.vote_counts,
+                        my_vote: ctx.vote_view.my_vote,
+                    }),
                     top_rooms: ctx.top_rooms,
                 },
             );
@@ -945,10 +937,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
     let tabs = [
         (Screen::Dashboard, "1"),
-        (Screen::Chat, "2"),
-        (Screen::Arcade, "3"),
-        (Screen::Rooms, "4"),
-        (Screen::Artboard, "5"),
+        (Screen::Arcade, "2"),
+        (Screen::Rooms, "3"),
+        (Screen::Artboard, "4"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -966,8 +957,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     let page_title = match screen {
-        Screen::Dashboard => "Dashboard",
-        Screen::Chat => "Chat",
+        Screen::Dashboard | Screen::Chat => "Home",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",

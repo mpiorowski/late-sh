@@ -16,7 +16,7 @@ pub struct VoteCardView<'a> {
 
 pub fn draw_vote_card(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) {
     let block = Block::default()
-        .title(" Vote Next (L/A/C) ")
+        .title(" Vote Next (v+l/a/c) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
@@ -32,15 +32,20 @@ pub fn draw_vote_options(
     my_vote: Option<Genre>,
 ) {
     let options = [
-        ("L", "Lofi", &vote_counts.lofi, my_vote == Some(Genre::Lofi)),
         (
-            "A",
+            "vL",
+            "Lofi",
+            &vote_counts.lofi,
+            my_vote == Some(Genre::Lofi),
+        ),
+        (
+            "vA",
             "Ambient",
             &vote_counts.ambient,
             my_vote == Some(Genre::Ambient),
         ),
         (
-            "C",
+            "vC",
             "Classic",
             &vote_counts.classic,
             my_vote == Some(Genre::Classic),
@@ -92,19 +97,24 @@ pub fn draw_vote_options(
 }
 
 /// Borderless, label-less vote rows for the merged-shell stream block.
-/// Renders 3 short lines: `L lofi    ████   12`. The active vote is sage,
+/// Renders 3 short lines: `vL lofi    ████   12`. The active vote is sage,
 /// everything else stays dim. No section header — caller owns that.
 pub fn draw_vote_inline(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) {
     let options = [
-        ("L", "lofi", &view.vote_counts.lofi, view.my_vote == Some(Genre::Lofi)),
         (
-            "A",
+            "vL",
+            "lofi",
+            &view.vote_counts.lofi,
+            view.my_vote == Some(Genre::Lofi),
+        ),
+        (
+            "vA",
             "ambient",
             &view.vote_counts.ambient,
             view.my_vote == Some(Genre::Ambient),
         ),
         (
-            "C",
+            "vC",
             "classic",
             &view.vote_counts.classic,
             view.my_vote == Some(Genre::Classic),
@@ -119,7 +129,11 @@ pub fn draw_vote_inline(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) 
         let filled = (**votes as usize * max_bar) / total;
         let empty = max_bar.saturating_sub(filled);
 
-        let name_color = if *mine { theme::SUCCESS() } else { theme::TEXT() };
+        let name_color = if *mine {
+            theme::SUCCESS()
+        } else {
+            theme::TEXT()
+        };
         let bar_color = if *mine {
             theme::SUCCESS()
         } else {
@@ -164,15 +178,20 @@ fn draw_vote_sidebar_options(
     my_vote: Option<Genre>,
 ) {
     let options = [
-        ("L", "Lofi", &vote_counts.lofi, my_vote == Some(Genre::Lofi)),
         (
-            "A",
+            "vL",
+            "Lofi",
+            &vote_counts.lofi,
+            my_vote == Some(Genre::Lofi),
+        ),
+        (
+            "vA",
             "Ambient",
             &vote_counts.ambient,
             my_vote == Some(Genre::Ambient),
         ),
         (
-            "C",
+            "vC",
             "Classic",
             &vote_counts.classic,
             my_vote == Some(Genre::Classic),

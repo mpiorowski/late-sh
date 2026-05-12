@@ -7,8 +7,7 @@
 //! tables" panel — this center pane is now about *your* rituals (quests, shop,
 //! reading) rather than what other people are doing.
 //!
-//! Gated by `App::new_shell` (`LATE_UI_NEW_SHELL=1`). The old `draw_dashboard`
-//! still handles the flag-off path until we flip the default.
+//! This is the default page-1 home surface.
 
 use std::collections::VecDeque;
 

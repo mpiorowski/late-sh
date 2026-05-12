@@ -119,7 +119,7 @@ pub(crate) struct NewsModalState {
     pub article_id: Option<Uuid>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
     Feeds,
@@ -128,6 +128,35 @@ pub(crate) enum RoomSlot {
     Discover,
     Showcase,
     Work,
+}
+
+pub(crate) fn is_selected_slot(
+    slot: RoomSlot,
+    selected_room_id: Option<Uuid>,
+    feeds_selected: bool,
+    news_selected: bool,
+    notifications_selected: bool,
+    discover_selected: bool,
+    showcase_selected: bool,
+    work_selected: bool,
+) -> bool {
+    match slot {
+        RoomSlot::Room(room_id) => {
+            !feeds_selected
+                && !news_selected
+                && !notifications_selected
+                && !discover_selected
+                && !showcase_selected
+                && !work_selected
+                && selected_room_id == Some(room_id)
+        }
+        RoomSlot::Feeds => feeds_selected,
+        RoomSlot::News => news_selected,
+        RoomSlot::Notifications => notifications_selected,
+        RoomSlot::Discover => discover_selected,
+        RoomSlot::Showcase => showcase_selected,
+        RoomSlot::Work => work_selected,
+    }
 }
 
 pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
@@ -906,14 +935,14 @@ impl ChatState {
     }
 
     /// Build the flat visual navigation order.
-    /// Order: core (general, announcements) → news → showcases → work
-    /// → mentions → discover → public rooms (alpha) → private rooms (alpha) → DMs
+    /// Order matches the cozy rail: core rooms, mentions, channels, feeds, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
         let mut order = visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames);
         if self.feeds.has_feeds() {
             let insert_at = order
                 .iter()
                 .position(|slot| *slot == RoomSlot::News)
+                .map(|idx| idx + 1)
                 .unwrap_or(order.len());
             order.insert(insert_at, RoomSlot::Feeds);
         }
@@ -2717,7 +2746,7 @@ fn inline_image_retry_delay(attempts: u8) -> Duration {
     Duration::from_secs((1_u64 << exp).min(30))
 }
 
-fn visual_order_for_rooms(
+pub(crate) fn visual_order_for_rooms(
     rooms: &[(ChatRoom, Vec<ChatMessage>)],
     user_id: Uuid,
     usernames: &HashMap<Uuid, String>,
@@ -2734,11 +2763,12 @@ fn visual_order_for_rooms(
             order.push(RoomSlot::Room(room.id));
         }
     }
-    // Any other permanent rooms not in the hardcoded list
+    order.push(RoomSlot::Notifications);
+
+    // Channels: all non-DM rooms outside Core, public + private merged.
     for (room, _) in rooms {
         if is_chat_list_room(room)
             && room.kind != "dm"
-            && room.permanent
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
         {
             order.push(RoomSlot::Room(room.id));
@@ -2748,28 +2778,7 @@ fn visual_order_for_rooms(
     order.push(RoomSlot::News);
     order.push(RoomSlot::Showcase);
     order.push(RoomSlot::Work);
-    order.push(RoomSlot::Notifications);
     order.push(RoomSlot::Discover);
-
-    // Public rooms (non-DM, non-permanent, alpha by slug)
-    let mut public: Vec<_> = rooms
-        .iter()
-        .filter(|(r, _)| {
-            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "public"
-        })
-        .collect();
-    public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-    order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-    // Private rooms (visibility=private, alpha by slug)
-    let mut private: Vec<_> = rooms
-        .iter()
-        .filter(|(r, _)| {
-            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "private"
-        })
-        .collect();
-    private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-    order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
 
     // DMs (sorted by display name to match nav rendering)
     let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
@@ -3731,7 +3740,7 @@ mod tests {
     }
 
     #[test]
-    fn visual_order_places_work_after_showcases() {
+    fn visual_order_matches_cozy_rail_grouping() {
         let me = Uuid::from_u128(1);
         let alice = Uuid::from_u128(2);
         let bob = Uuid::from_u128(3);
@@ -3770,14 +3779,14 @@ mod tests {
             vec![
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
+                RoomSlot::Notifications,
+                RoomSlot::Room(public_zeta),
+                RoomSlot::Room(private_beta),
+                RoomSlot::Room(public_alpha),
                 RoomSlot::News,
                 RoomSlot::Showcase,
                 RoomSlot::Work,
-                RoomSlot::Notifications,
                 RoomSlot::Discover,
-                RoomSlot::Room(public_alpha),
-                RoomSlot::Room(public_zeta),
-                RoomSlot::Room(private_beta),
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
             ]

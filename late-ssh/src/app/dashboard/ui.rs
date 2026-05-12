@@ -140,10 +140,6 @@ pub struct DashboardRenderInput<'a> {
     pub next_switch_in: Duration,
     pub my_vote: Option<Genre>,
     pub show_header: bool,
-    /// When `Some`, the user has 2+ favorites pinned and we render a
-    /// quick-switch strip directly above the chat card. Each entry is
-    /// `(room_id, label, is_active, unread_count)`. `None` hides the strip.
-    pub favorites_strip: Option<&'a [(uuid::Uuid, String, bool, i64)]>,
     /// Pinned chat messages visible to this user; the newest pin renders as a
     /// plain text row directly above the box grid when the grid is visible.
     pub pinned_messages: &'a [ChatMessage],
@@ -198,7 +194,7 @@ fn draw_dashboard_boxes_and_chat_section(
     view: DashboardRenderInput<'_>,
 ) {
     let Some(grid_height) = dashboard_box_grid_height(area) else {
-        draw_chat_section(frame, area, view.favorites_strip, view.chat_view);
+        draw_chat_section(frame, area, view.chat_view);
         return;
     };
 
@@ -225,14 +221,14 @@ fn draw_dashboard_boxes_and_chat_section(
             draw_pin_box(frame, split[0], msg, view.box_prefix_armed);
         }
         draw_dashboard_box_grid(frame, split[1], grid_view);
-        draw_chat_section(frame, split[2], view.favorites_strip, view.chat_view);
+        draw_chat_section(frame, split[2], view.chat_view);
         return;
     }
 
     let split =
         Layout::vertical([Constraint::Length(grid_height), Constraint::Fill(1)]).split(area);
     draw_dashboard_box_grid(frame, split[0], grid_view);
-    draw_chat_section(frame, split[1], view.favorites_strip, view.chat_view);
+    draw_chat_section(frame, split[1], view.chat_view);
 }
 
 fn dashboard_box_grid_height(area: Rect) -> Option<u16> {
@@ -693,142 +689,10 @@ fn truncate(s: &str, max: usize) -> String {
     out
 }
 
-pub(crate) fn favorites_strip_hit_test(
-    area: Rect,
-    show_header: bool,
-    pins: &[(uuid::Uuid, String, bool, i64)],
-    x: u16,
-    y: u16,
-) -> Option<uuid::Uuid> {
-    let strip_area = favorites_strip_area(area, show_header, pins)?;
-    if y != strip_area.y || x < strip_area.x || x >= strip_area.right() {
-        return None;
-    }
-
-    let mut cursor_x = strip_area.x + 1;
-    for (idx, (room_id, label, _, unread)) in pins.iter().enumerate() {
-        if idx > 0 {
-            cursor_x = cursor_x.saturating_add(1);
-        }
-        let slot = if idx < 9 {
-            format!("{}:", idx + 1)
-        } else {
-            String::new()
-        };
-        let unread_suffix = if *unread > 0 {
-            format!(" ({unread})")
-        } else {
-            String::new()
-        };
-        let pill = format!(" {slot}{label}{unread_suffix} ");
-        let width = UnicodeWidthStr::width(pill.as_str()) as u16;
-        let end_x = cursor_x.saturating_add(width);
-        if x >= cursor_x && x < end_x {
-            return Some(*room_id);
-        }
-        cursor_x = end_x;
-    }
-    None
-}
-
-pub(crate) fn cli_install_button_hit_test(area: Rect, show_header: bool, x: u16, y: u16) -> bool {
-    let Some(button_area) = cli_install_button_area(area, show_header) else {
-        return false;
-    };
-    y == button_area.y && x >= button_area.x && x < button_area.right()
-}
-
-pub(crate) fn browser_pair_button_hit_test(area: Rect, show_header: bool, x: u16, y: u16) -> bool {
-    let Some(button_area) = browser_pair_button_area(area, show_header) else {
-        return false;
-    };
-    y == button_area.y && x >= button_area.x && x < button_area.right()
-}
-
 /// Draws the chat card with the optional favorites pill strip above it when
 /// there is room for a useful chat card below.
-fn draw_chat_section(
-    frame: &mut Frame,
-    area: Rect,
-    favorites_strip: Option<&[(uuid::Uuid, String, bool, i64)]>,
-    chat_view: DashboardChatView<'_>,
-) {
-    let mut remaining = area;
-
-    if let Some(pins) = favorites_strip
-        && pins.len() >= 2
-        && remaining.height >= 6
-    {
-        let split = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(remaining);
-        draw_favorites_strip(frame, split[0], pins);
-        remaining = split[1];
-    }
-
-    draw_dashboard_chat_card(frame, remaining, chat_view);
-}
-
-fn favorites_strip_area(
-    area: Rect,
-    show_header: bool,
-    pins: &[(uuid::Uuid, String, bool, i64)],
-) -> Option<Rect> {
-    if pins.len() < 2 {
-        return None;
-    }
-
-    let chat_area = if show_header {
-        if area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH || area.height < DASHBOARD_MIN_FULL_HEIGHT {
-            area
-        } else {
-            Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(area)[1]
-        }
-    } else {
-        area
-    };
-
-    if chat_area.height < 6 {
-        return None;
-    }
-
-    Some(Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(chat_area)[0])
-}
-
-fn draw_favorites_strip(frame: &mut Frame, area: Rect, pins: &[(uuid::Uuid, String, bool, i64)]) {
-    let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-    for (idx, (_, label, active, unread)) in pins.iter().enumerate() {
-        if idx > 0 {
-            spans.push(Span::raw(" "));
-        }
-        // Slot hint doubles as the `g<digit>` target; only 1..9 are reachable
-        // via the prefix, so pins beyond nine render without a number.
-        let slot = if idx < 9 {
-            format!("{}:", idx + 1)
-        } else {
-            String::new()
-        };
-        let style = if *active {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .bg(theme::BG_HIGHLIGHT())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_DIM())
-        };
-        let unread_suffix = if *unread > 0 {
-            format!(" ({unread})")
-        } else {
-            String::new()
-        };
-        spans.push(Span::styled(
-            format!(" {slot}{label}{unread_suffix} "),
-            style,
-        ));
-    }
-    spans.push(Span::styled(
-        "   [] cycle · , last · g_ jump · ` game",
-        Style::default().fg(theme::TEXT_FAINT()),
-    ));
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+fn draw_chat_section(frame: &mut Frame, area: Rect, chat_view: DashboardChatView<'_>) {
+    draw_dashboard_chat_card(frame, area, chat_view);
 }
 
 pub struct StreamCardProps<'a> {
@@ -898,61 +762,6 @@ fn draw_stream_card(frame: &mut Frame, area: Rect, props: &StreamCardProps<'_>) 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
-fn cli_install_button_area(area: Rect, show_header: bool) -> Option<Rect> {
-    audio_button_area(area, show_header, 0)
-}
-
-fn browser_pair_button_area(area: Rect, show_header: bool) -> Option<Rect> {
-    audio_button_area(area, show_header, 1)
-}
-
-fn audio_button_area(area: Rect, show_header: bool, button_index: usize) -> Option<Rect> {
-    let inner = stream_text_area(area, show_header)?;
-    let prefix_width = UnicodeWidthStr::width(AUDIO_BUTTON_PREFIX) as u16;
-    let cli_width = UnicodeWidthStr::width(CLI_BUTTON_TEXT) as u16;
-    let gap_width = 2u16;
-    let pair_width = UnicodeWidthStr::width(PAIR_BUTTON_TEXT) as u16;
-    let (offset, width) = match button_index {
-        0 => (prefix_width, cli_width),
-        1 => (
-            prefix_width
-                .saturating_add(cli_width)
-                .saturating_add(gap_width),
-            pair_width,
-        ),
-        _ => return None,
-    };
-    Some(Rect::new(
-        inner.x.saturating_add(offset),
-        inner.y.saturating_add(2),
-        width,
-        1,
-    ))
-}
-
-fn stream_text_area(area: Rect, show_header: bool) -> Option<Rect> {
-    if !show_header
-        || area.width <= DASHBOARD_HIDE_STREAM_AT_WIDTH
-        || area.height < DASHBOARD_MIN_FULL_HEIGHT
-    {
-        return None;
-    }
-
-    let sections = Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(area);
-    let stream_area = if area.width <= DASHBOARD_HIDE_VOTE_AT_WIDTH {
-        sections[0]
-    } else {
-        Layout::horizontal([Constraint::Fill(2), Constraint::Fill(1)]).split(sections[0])[0]
-    };
-    let inner = Block::default().borders(Borders::ALL).inner(stream_area);
-    let inner = Rect {
-        x: inner.x + 1,
-        width: inner.width.saturating_sub(1),
-        ..inner
-    };
-    Some(inner)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -996,7 +805,6 @@ mod tests {
                         next_switch_in: Duration::from_secs(95),
                         my_vote: Some(Genre::Ambient),
                         show_header: true,
-                        favorites_strip: None,
                         pinned_messages: &[],
                         featured_room: None,
                         box_prefix_armed: false,
@@ -1078,7 +886,6 @@ mod tests {
                         next_switch_in: Duration::from_secs(95),
                         my_vote: Some(Genre::Ambient),
                         show_header: true,
-                        favorites_strip: None,
                         pinned_messages,
                         featured_room: None,
                         box_prefix_armed: false,
@@ -1438,7 +1245,6 @@ mod tests {
                         next_switch_in: Duration::from_secs(95),
                         my_vote: Some(Genre::Ambient),
                         show_header: false,
-                        favorites_strip: None,
                         pinned_messages: &[],
                         featured_room: None,
                         box_prefix_armed: false,
@@ -1486,145 +1292,5 @@ mod tests {
         assert!(!rendered.contains("Stream"));
         assert!(!rendered.contains("Vote Next"));
         assert!(rendered.contains("No messages yet."));
-    }
-
-    #[test]
-    fn dashboard_favorites_strip_renders_unread_counts() {
-        let backend = TestBackend::new(100, 20);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        let vote_counts = VoteCount {
-            lofi: 3,
-            ambient: 2,
-            classic: 1,
-            jazz: 0,
-        };
-        let mut rows_cache = ChatRowsCache::default();
-        let usernames: HashMap<Uuid, String> = HashMap::new();
-        let countries: HashMap<Uuid, String> = HashMap::new();
-        let bonsai_glyphs: HashMap<Uuid, String> = HashMap::new();
-        let inline_images: HashMap<Uuid, Vec<ratatui::text::Line<'static>>> = HashMap::new();
-        let message_reactions = HashMap::new();
-        let composer = ratatui_textarea::TextArea::default();
-        let rust_room = Uuid::now_v7();
-        let go_room = Uuid::now_v7();
-
-        terminal
-            .draw(|frame| {
-                let area = Rect::new(0, 0, 100, 20);
-                draw_dashboard(
-                    frame,
-                    area,
-                    DashboardRenderInput {
-                        now_playing: Some("Boards of Canada"),
-                        vote_counts: &vote_counts,
-                        current_genre: Genre::Lofi,
-                        next_switch_in: Duration::from_secs(95),
-                        my_vote: Some(Genre::Ambient),
-                        show_header: true,
-                        favorites_strip: Some(&[
-                            (rust_room, "#rust".to_string(), true, 3),
-                            (go_room, "#go".to_string(), false, 0),
-                        ]),
-                        pinned_messages: &[],
-                        featured_room: None,
-                        box_prefix_armed: false,
-                        daily_statuses: &[],
-                        wire_news_articles: &[],
-                        dashboard_cycle_secs: 0,
-                        chat_view: DashboardChatView {
-                            messages: &[],
-                            overlay: None,
-                            rows_cache: &mut rows_cache,
-                            usernames: &usernames,
-                            countries: &countries,
-                            message_reactions: &message_reactions,
-                            current_user_id: Uuid::nil(),
-                            selected_message_id: None,
-                            selected_news_message: false,
-                            highlighted_message_id: None,
-                            reaction_picker_active: false,
-                            composer: &composer,
-                            composing: false,
-                            mention_matches: &[],
-                            mention_selected: 0,
-                            mention_active: false,
-                            reply_author: None,
-                            is_editing: false,
-                            bonsai_glyphs: &bonsai_glyphs,
-                            inline_images: &inline_images,
-                        },
-                    },
-                );
-            })
-            .expect("draw");
-
-        let rendered = (0..20)
-            .map(|y| {
-                let mut out = String::new();
-                for x in 0..100 {
-                    out.push_str(terminal.backend().buffer()[(x, y)].symbol());
-                }
-                out
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(rendered.contains("#rust (3)"));
-        assert!(rendered.contains("#go"));
-    }
-
-    #[test]
-    fn favorites_strip_hit_test_returns_clicked_room() {
-        let rust_room = Uuid::now_v7();
-        let go_room = Uuid::now_v7();
-        let pins = vec![
-            (rust_room, "#rust".to_string(), true, 3),
-            (go_room, "#go".to_string(), false, 0),
-        ];
-        let area = Rect::new(1, 1, 74, 30);
-
-        assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, 10, 6),
-            Some(rust_room)
-        );
-        assert_eq!(
-            favorites_strip_hit_test(area, true, &pins, 18, 6),
-            Some(go_room)
-        );
-        assert_eq!(favorites_strip_hit_test(area, true, &pins, 40, 6), None);
-    }
-
-    #[test]
-    fn favorites_strip_hit_test_returns_none_when_strip_hidden() {
-        let room = Uuid::now_v7();
-        let pins = vec![(room, "#rust".to_string(), true, 0)];
-
-        assert_eq!(
-            favorites_strip_hit_test(Rect::new(1, 1, 74, 30), true, &pins, 5, 7),
-            None
-        );
-        assert_eq!(
-            favorites_strip_hit_test(
-                Rect::new(1, 1, 74, 5),
-                false,
-                &[
-                    (room, "#rust".to_string(), true, 0),
-                    (Uuid::now_v7(), "#go".to_string(), false, 0)
-                ],
-                5,
-                1
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn dashboard_audio_buttons_hit_test_separately() {
-        let area = Rect::new(0, 0, 100, 20);
-
-        assert!(cli_install_button_hit_test(area, true, 12, 3));
-        assert!(!cli_install_button_hit_test(area, true, 21, 3));
-        assert!(browser_pair_button_hit_test(area, true, 21, 3));
-        assert!(!browser_pair_button_hit_test(area, true, 12, 3));
     }
 }

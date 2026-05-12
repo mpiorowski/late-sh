@@ -57,7 +57,7 @@ impl App {
         self.sync_visible_chat_room();
         if self.chat.pending_chat_screen_switch {
             self.chat.pending_chat_screen_switch = false;
-            self.set_screen(Screen::Chat);
+            self.set_screen(Screen::Dashboard);
         }
         if let Some(b) = self.vote.tick() {
             self.banner = Some(b);

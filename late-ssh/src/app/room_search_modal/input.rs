@@ -46,6 +46,6 @@ fn submit(app: &mut App) {
     app.chat.close_news_modal();
     app.chat.select_room_slot(item.slot);
     app.room_search_modal_state.close();
-    app.set_screen(Screen::Chat);
+    app.set_screen(Screen::Dashboard);
     app.sync_visible_chat_room();
 }

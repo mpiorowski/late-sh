@@ -21,7 +21,10 @@ use crate::app::common::{
     theme,
 };
 
-use super::state::{MentionMatch, ROOM_JUMP_KEYS, RoomSlot, is_chat_list_room};
+use super::state::{
+    MentionMatch, ROOM_JUMP_KEYS, RoomSlot, is_chat_list_room, is_selected_slot,
+    visual_order_for_rooms,
+};
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -1497,22 +1500,23 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
 /// Builds the cozy rail rows. Active rows are tagged with a sentinel `▌` span
 /// at index 0 so the renderer can paint a one-column accent bar in the gutter.
 /// That sentinel is stripped before final paint.
-fn build_cozy_room_rail_rows(
-    view: &ChatRoomListView<'_>,
-    width: u16,
-) -> Vec<Line<'static>> {
+fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let inner_width = width.saturating_sub(3) as usize; // 2 left gutter + 1 right margin
-
-    let room_selected = |room_id| {
-        !view.feeds_selected
-            && !view.news_selected
-            && !view.notifications_selected
-            && !view.discover_selected
-            && !view.showcase_selected
-            && !view.work_selected
-            && view.selected_room_id == Some(room_id)
-    };
+    let mut jump_order =
+        visual_order_for_rooms(view.chat_rooms, view.current_user_id, view.usernames);
+    if view.feeds_available {
+        let insert_at = jump_order
+            .iter()
+            .position(|slot| *slot == RoomSlot::News)
+            .map(|idx| idx + 1)
+            .unwrap_or(jump_order.len());
+        jump_order.insert(insert_at, RoomSlot::Feeds);
+    }
+    let jump_targets: HashMap<RoomSlot, u8> = jump_order
+        .into_iter()
+        .zip(ROOM_JUMP_KEYS.iter().copied())
+        .collect();
 
     // Helpers
     let blank = || Line::raw("");
@@ -1524,67 +1528,78 @@ fn build_cozy_room_rail_rows(
                 .add_modifier(Modifier::ITALIC),
         ))
     };
-    let item_row = |label: String, unread: i64, active: bool| -> Line<'static> {
-        let label_max = inner_width.saturating_sub(4);
-        let display = if UnicodeWidthStr::width(label.as_str()) > label_max && label_max > 1 {
-            let mut s = String::new();
-            let mut w = 0usize;
-            for c in label.chars() {
-                let cw = UnicodeWidthStr::width(c.to_string().as_str());
-                if w + cw > label_max.saturating_sub(1) {
-                    break;
-                }
-                s.push(c);
-                w += cw;
+    let item_row =
+        |label: String, unread: i64, active: bool, jump_key: Option<u8>| -> Line<'static> {
+            let key_prefix = if view.room_jump_active {
+                jump_key
+                    .map(|key| format!("{} ", key as char))
+                    .unwrap_or_else(|| "  ".to_string())
+            } else {
+                String::new()
+            };
+            let key_width = UnicodeWidthStr::width(key_prefix.as_str());
+            let label_max = inner_width.saturating_sub(key_width + 4);
+            let display_label =
+                if UnicodeWidthStr::width(label.as_str()) > label_max && label_max > 1 {
+                    let mut s = String::new();
+                    let mut w = 0usize;
+                    for c in label.chars() {
+                        let cw = UnicodeWidthStr::width(c.to_string().as_str());
+                        if w + cw > label_max.saturating_sub(1) {
+                            break;
+                        }
+                        s.push(c);
+                        w += cw;
+                    }
+                    s.push('…');
+                    s
+                } else {
+                    label
+                };
+            let display = format!("{key_prefix}{display_label}");
+            // Use display width (cells) instead of char count so wide glyphs
+            // like the lock emoji `🔒` don't misalign the unread counts on the right.
+            let used = UnicodeWidthStr::width(display.as_str());
+            let unread_str = if unread > 0 {
+                format!("{unread}")
+            } else {
+                String::new()
+            };
+            let pad =
+                inner_width.saturating_sub(used + UnicodeWidthStr::width(unread_str.as_str()));
+            let mut spans = Vec::new();
+            if active {
+                // Sentinel: stripped before paint, signals the gutter accent.
+                spans.push(Span::raw("▌"));
             }
-            s.push('…');
-            s
-        } else {
-            label
-        };
-        // Use display width (cells) instead of char count so wide glyphs
-        // like the lock emoji `🔒` don't misalign the unread counts on the right.
-        let used = UnicodeWidthStr::width(display.as_str());
-        let unread_str = if unread > 0 {
-            format!("{unread}")
-        } else {
-            String::new()
-        };
-        let pad = inner_width
-            .saturating_sub(used + UnicodeWidthStr::width(unread_str.as_str()));
-        let mut spans = Vec::new();
-        if active {
-            // Sentinel: stripped before paint, signals the gutter accent.
-            spans.push(Span::raw("▌"));
-        }
-        // Three-tier dimness: active = bright amber, has unread = full text,
-        // idle = dim. The visual cue carries "anything new here?" without
-        // any extra glyph noise.
-        let name_color = if active {
-            theme::AMBER()
-        } else if unread > 0 {
-            theme::TEXT()
-        } else {
-            theme::TEXT_DIM()
-        };
-        let name_modifier = if active {
-            Modifier::BOLD
-        } else {
-            Modifier::empty()
-        };
-        spans.push(Span::styled(
-            display,
-            Style::default().fg(name_color).add_modifier(name_modifier),
-        ));
-        if !unread_str.is_empty() {
-            spans.push(Span::raw(" ".repeat(pad)));
+            // Three-tier dimness: active = bright amber, has unread = full text,
+            // idle = dim. The visual cue carries "anything new here?" without
+            // any extra glyph noise.
+            let name_color = if active {
+                theme::AMBER()
+            } else if unread > 0 {
+                theme::TEXT()
+            } else {
+                theme::TEXT_DIM()
+            };
+            let name_modifier = if active {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            };
             spans.push(Span::styled(
-                unread_str,
-                Style::default().fg(theme::AMBER_DIM()),
+                display,
+                Style::default().fg(name_color).add_modifier(name_modifier),
             ));
-        }
-        Line::from(spans)
-    };
+            if !unread_str.is_empty() {
+                spans.push(Span::raw(" ".repeat(pad)));
+                spans.push(Span::styled(
+                    unread_str,
+                    Style::default().fg(theme::AMBER_DIM()),
+                ));
+            }
+            Line::from(spans)
+        };
 
     // === Core (no label) — permanent rooms + mentions ===
     // Mentions sits inside Core because it's personal-attention, not a feed.
@@ -1596,13 +1611,22 @@ fn build_cozy_room_rail_rows(
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
         {
             let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
-            lines.push(item_row(slug.to_string(), unread, room_selected(room.id)));
+            let slot = RoomSlot::Room(room.id);
+            let active = cozy_slot_selected(view, slot);
+            lines.push(item_row(
+                slug.to_string(),
+                unread,
+                active,
+                jump_targets.get(&slot).copied(),
+            ));
         }
     }
+    let mentions_slot = RoomSlot::Notifications;
     lines.push(item_row(
         "mentions".to_string(),
         view.notifications_unread_count,
-        view.notifications_selected,
+        cozy_slot_selected(view, mentions_slot),
+        jump_targets.get(&mentions_slot).copied(),
     ));
 
     // === Channels (all non-DM rooms outside Core, public + private merged) ===
@@ -1634,54 +1658,81 @@ fn build_cozy_room_rail_rows(
             } else {
                 base_label
             };
-            lines.push(item_row(label, unread, room_selected(room.id)));
+            let slot = RoomSlot::Room(room.id);
+            lines.push(item_row(
+                label,
+                unread,
+                cozy_slot_selected(view, slot),
+                jump_targets.get(&slot).copied(),
+            ));
         }
     }
 
     // === Feeds (synthetic entries) — mentions moved out to Core ===
     lines.push(blank());
     lines.push(section_label("feeds"));
+    let news_slot = RoomSlot::News;
     lines.push(item_row(
         "news".to_string(),
         view.news_unread_count,
-        view.news_selected,
+        cozy_slot_selected(view, news_slot),
+        jump_targets.get(&news_slot).copied(),
     ));
     if view.feeds_available {
+        let feeds_slot = RoomSlot::Feeds;
         lines.push(item_row(
             "rss".to_string(),
             view.feeds_unread_count,
-            view.feeds_selected,
+            cozy_slot_selected(view, feeds_slot),
+            jump_targets.get(&feeds_slot).copied(),
         ));
     }
+    let showcase_slot = RoomSlot::Showcase;
     lines.push(item_row(
         "showcase".to_string(),
         view.showcase_unread_count,
-        view.showcase_selected,
+        cozy_slot_selected(view, showcase_slot),
+        jump_targets.get(&showcase_slot).copied(),
     ));
+    let work_slot = RoomSlot::Work;
     lines.push(item_row(
         "work".to_string(),
         view.work_unread_count,
-        view.work_selected,
+        cozy_slot_selected(view, work_slot),
+        jump_targets.get(&work_slot).copied(),
     ));
+    let discover_slot = RoomSlot::Discover;
     lines.push(item_row(
         "discover".to_string(),
         0,
-        view.discover_selected,
+        cozy_slot_selected(view, discover_slot),
+        jump_targets.get(&discover_slot).copied(),
     ));
 
     // === DMs ===
-    let dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
+    let mut dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
         .chat_rooms
         .iter()
         .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
         .collect();
+    dms.sort_by(|(a, _), (b, _)| {
+        let a = dm_display_label(a, view.usernames, view.current_user_id);
+        let b = dm_display_label(b, view.usernames, view.current_user_id);
+        a.cmp(&b)
+    });
     if !dms.is_empty() {
         lines.push(blank());
         lines.push(section_label("dms"));
         for (room, _) in dms {
             let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
             let label = dm_display_label(room, view.usernames, view.current_user_id);
-            lines.push(item_row(label, unread, room_selected(room.id)));
+            let slot = RoomSlot::Room(room.id);
+            lines.push(item_row(
+                label,
+                unread,
+                cozy_slot_selected(view, slot),
+                jump_targets.get(&slot).copied(),
+            ));
         }
     }
 
@@ -1694,6 +1745,39 @@ fn build_cozy_room_rail_rows(
     )));
 
     lines
+}
+
+/// Two-row nav-hint footer. Caller pins this to the bottom of the rail so the
+/// hints stay anchored regardless of how long the room list is.
+fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
+    let key = |k: &str| -> Span<'static> {
+        Span::styled(
+            k.to_string(),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    let hint = |s: &str| -> Span<'static> {
+        Span::styled(s.to_string(), Style::default().fg(theme::TEXT_FAINT()))
+    };
+    vec![
+        Line::from(vec![key("h l space"), hint(" jump room")]),
+        Line::from(vec![key("ctrl+/"), hint("    find room")]),
+    ]
+}
+
+fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
+    is_selected_slot(
+        slot,
+        view.selected_room_id,
+        view.feeds_selected,
+        view.news_selected,
+        view.notifications_selected,
+        view.discover_selected,
+        view.showcase_selected,
+        view.work_selected,
+    )
 }
 
 fn dm_display_label(
@@ -1807,6 +1891,257 @@ pub fn draw_chat(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
                         current_user_id,
                         usernames,
                         countries,
+                        bonsai_glyphs: view.bonsai_glyphs,
+                        message_reactions: view.message_reactions,
+                        inline_images: view.inline_images,
+                    },
+                );
+                let mut lines = visible_chat_rows(
+                    view.rows_cache,
+                    view.selected_message_id,
+                    view.highlighted_message_id,
+                    height,
+                );
+
+                if lines.is_empty() {
+                    lines = vec![Line::from(Span::styled(
+                        "No messages yet",
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ))];
+                }
+                (format!(" #{} ", title), lines)
+            } else {
+                (
+                    " Messages ".to_string(),
+                    vec![Line::from(Span::styled(
+                        "Select a room.",
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ))],
+                )
+            };
+
+        let messages_block = Block::default()
+            .title(message_title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+        let inner_area = messages_block.inner(messages_area);
+        let messages_paragraph = Paragraph::new(message_lines).block(messages_block);
+        frame.render_widget(messages_paragraph, messages_area);
+        if let Some(overlay) = view.overlay {
+            draw_overlay(frame, inner_area, overlay);
+        }
+    }
+
+    if feeds_selected {
+        if view.feeds_processing {
+            let hint_block = Block::default()
+                .title(" Processing URL... ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::AMBER()));
+            let hint_text = Paragraph::new(Line::from(Span::styled(
+                " Sharing feed entry to news · Esc cancel",
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .block(hint_block);
+            frame.render_widget(hint_text, composer_area);
+        } else {
+            let hint_block = Block::default()
+                .title(" Feeds ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER()));
+            let hint_text = Paragraph::new(Line::from(Span::styled(
+                " j/k navigate · s share · Enter copy link · d dismiss · r refresh",
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .block(hint_block);
+            frame.render_widget(hint_text, composer_area);
+        }
+    } else if view.notifications_selected {
+        let hint_block = Block::default()
+            .title(" Mentions ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER()));
+        let hint_text = Paragraph::new(Line::from(Span::styled(
+            " j/k navigate · Enter jump to room",
+            Style::default().fg(theme::TEXT_DIM()),
+        )))
+        .block(hint_block);
+        frame.render_widget(hint_text, composer_area);
+    } else if view.showcase_selected {
+        if let Some(showcase_state) = view.showcase_state {
+            super::showcase::ui::draw_showcase_composer(
+                frame,
+                composer_area,
+                &super::showcase::ui::ShowcaseComposerView {
+                    state: showcase_state,
+                },
+            );
+        }
+    } else if view.work_selected {
+        if let Some(work_state) = view.work_state {
+            super::work::ui::draw_work_composer(
+                frame,
+                composer_area,
+                &super::work::ui::WorkComposerView { state: work_state },
+            );
+        }
+    } else if view.discover_selected {
+        let hint_block = Block::default()
+            .title(" Discover ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER()));
+        let hint_text = Paragraph::new(Line::from(Span::styled(
+            " j/k navigate · Enter join room",
+            Style::default().fg(theme::TEXT_DIM()),
+        )))
+        .block(hint_block);
+        frame.render_widget(hint_text, composer_area);
+    } else if news_selected {
+        if view.news_processing || view.news_composing {
+            let (title, border_style) = if view.news_processing {
+                (
+                    " Processing URL... ".to_string(),
+                    Style::default().fg(theme::AMBER()),
+                )
+            } else {
+                (
+                    " Paste URL (Enter submit, Esc cancel) ".to_string(),
+                    Style::default().fg(theme::BORDER_ACTIVE()),
+                )
+            };
+            let news_block = Block::default()
+                .title(title.as_str())
+                .borders(Borders::ALL)
+                .border_style(border_style);
+            let news_inner = news_block.inner(composer_area);
+            frame.render_widget(news_block, composer_area);
+            let text_area = horizontal_inset(news_inner, 1);
+            frame.render_widget(view.news_composer, text_area);
+        } else {
+            let hint_block = Block::default()
+                .title(" Share URL ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER()));
+            let hint_text = Paragraph::new(Line::from(Span::styled(
+                " j/k navigate · Enter copy link · i paste URL · / filter mine",
+                Style::default().fg(theme::TEXT_DIM()),
+            )))
+            .block(hint_block);
+            frame.render_widget(hint_text, composer_area);
+        }
+    } else {
+        draw_composer_block(
+            frame,
+            composer_area,
+            &ComposerBlockView {
+                composer: view.composer,
+                composing: view.composing,
+                selected_message: view.selected_message_id.is_some(),
+                selected_news_message: view.selected_news_message,
+                reaction_picker_active: view.reaction_picker_active,
+                reply_author: view.reply_author,
+                is_editing: view.is_editing,
+                mention_active: view.mention_active,
+                mention_matches: view.mention_matches,
+                mention_selected: view.mention_selected,
+            },
+        );
+    }
+}
+
+/// Center pane for the merged Home/Chat shell. The room rail is rendered by
+/// the outer shell, so this draws only the selected room/feed content plus the
+/// relevant composer or hint row.
+pub fn draw_chat_center(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
+    if view.chat_rooms.is_empty() {
+        let empty = Paragraph::new("No chat rooms yet.")
+            .style(Style::default().fg(theme::TEXT_DIM()))
+            .centered();
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    let selection_mode = chat_selection_mode(&view, area);
+    let layout = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(selection_mode.composer_height()),
+    ])
+    .split(area);
+    let messages_area = layout[0];
+    let composer_area = layout[1];
+
+    draw_selected_content(frame, messages_area, composer_area, view);
+}
+
+fn draw_selected_content(
+    frame: &mut Frame,
+    messages_area: Rect,
+    composer_area: Rect,
+    view: ChatRenderInput<'_>,
+) {
+    let selected_room_id = view.selected_room_id;
+    let current_user_id = view.current_user_id;
+    let feeds_selected = view.feeds_selected;
+    let news_selected = view.news_selected;
+
+    if feeds_selected {
+        super::feeds::ui::draw_feed_list(frame, messages_area, &view.feeds_view);
+    } else if view.notifications_selected {
+        super::notifications::ui::draw_notification_list(
+            frame,
+            messages_area,
+            &view.notifications_view,
+        );
+    } else if view.discover_selected {
+        super::discover::ui::draw_discover_list(frame, messages_area, &view.discover_view);
+    } else if view.showcase_selected {
+        super::showcase::ui::draw_showcase_list(frame, messages_area, &view.showcase_view);
+    } else if view.work_selected {
+        super::work::ui::draw_work_list(frame, messages_area, &view.work_view);
+    } else if news_selected {
+        super::news::ui::draw_article_list(frame, messages_area, &view.news_view);
+    } else {
+        let selected_room = selected_room_id
+            .and_then(|id| view.chat_rooms.iter().find(|(room, _)| room.id == id))
+            .filter(|(room, _)| is_chat_list_room(room))
+            .or_else(|| {
+                view.chat_rooms
+                    .iter()
+                    .find(|(room, _)| is_chat_list_room(room))
+            });
+
+        let (message_title, message_lines): (String, Vec<Line>) =
+            if let Some((room, messages)) = selected_room {
+                let title = if room.kind == "dm" {
+                    let other_id = if room.dm_user_a == Some(current_user_id) {
+                        room.dm_user_b
+                    } else {
+                        room.dm_user_a
+                    };
+                    other_id
+                        .and_then(|id| {
+                            view.usernames
+                                .get(&id)
+                                .map(|name| format_username_with_country(id, name, view.countries))
+                        })
+                        .unwrap_or_else(|| "DM".to_string())
+                } else {
+                    room.slug
+                        .as_deref()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| room.kind.clone())
+                };
+                let height = messages_area.height.saturating_sub(2).max(1) as usize;
+                let width = messages_area.width.saturating_sub(2).max(1) as usize;
+
+                ensure_chat_rows_cache(
+                    view.rows_cache,
+                    messages.iter().collect(),
+                    width,
+                    ChatRowsContext {
+                        current_user_id,
+                        usernames: view.usernames,
+                        countries: view.countries,
                         bonsai_glyphs: view.bonsai_glyphs,
                         message_reactions: view.message_reactions,
                         inline_images: view.inline_images,
