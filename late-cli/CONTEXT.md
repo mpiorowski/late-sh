@@ -79,7 +79,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 ## 3. Entry Points and Files [STABLE]
 
 - `src/main.rs` - top-level orchestration, mode split, audio/WS lifecycle
-- `src/clipboard.rs` - paired `/paste-image` clipboard read, Wayland/X clipboard backend use, PNG encoding, and local size guards
+- `src/clipboard.rs` - paired `/paste-image` clipboard read, Wayland/X clipboard backend use, PNG encoding, and local size guards. Clipboard support is only advertised on Linux, macOS, and Windows; Android/Termux builds do not depend on `arboard`.
 - `src/config.rs` - flags, env vars, defaults, logging
 - `src/identity.rs` - dedicated key discovery/generation
 - `src/ssh.rs` - native SSH, OpenSSH ControlMaster mode, legacy PTY subprocess mode, token parsing, resize forwarding
@@ -257,7 +257,7 @@ Client to server, in response to `request_clipboard_image`:
 Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
-- `capabilities`: optional list; current CLI advertises `clipboard_image` when it can service chat `/paste-image`.
+- `capabilities`: optional list; desktop CLI builds advertise `clipboard_image` when they can service chat `/paste-image`. Android/Termux builds leave it empty.
 
 Pairing behavior:
 - The server stores one paired-client sender/state entry per token.

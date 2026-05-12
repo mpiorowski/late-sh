@@ -34,7 +34,11 @@ enum PairControlMessage {
     RequestClipboardImage,
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image"];
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+const CLIENT_CAPABILITIES: &[&str] = &[];
 
 pub(super) async fn run_viz_ws(
     api_base_url: &str,

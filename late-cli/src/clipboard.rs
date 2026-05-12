@@ -1,12 +1,20 @@
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use std::io::Cursor;
 
-use anyhow::{Context, Result};
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use image::{ExtendedColorType, ImageEncoder, codecs::png::PngEncoder};
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const IMAGE_MAX_PIXELS: usize = 25_000_000;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const IMAGE_MAX_RGBA_BYTES: usize = 64 * 1024 * 1024;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const IMAGE_MAX_PNG_BYTES: usize = 10 * 1024 * 1024;
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub(crate) fn image_png_bytes() -> Result<Vec<u8>> {
     let mut clipboard = arboard::Clipboard::new().context("failed to access system clipboard")?;
     let image = clipboard
@@ -52,4 +60,9 @@ pub(crate) fn image_png_bytes() -> Result<Vec<u8>> {
         anyhow::bail!("clipboard image is too large");
     }
     Ok(png)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub(crate) fn image_png_bytes() -> Result<Vec<u8>> {
+    anyhow::bail!("clipboard image upload is not supported on this platform");
 }
