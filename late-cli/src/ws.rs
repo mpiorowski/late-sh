@@ -84,14 +84,14 @@ pub(super) async fn run_viz_ws(
                 };
                 match msg? {
                     Message::Text(text) => {
-                        if handle_pair_control(
+                        let should_send_state = handle_pair_control(
                             &text,
                             &mut ws,
                             playback.muted,
                             playback.volume_percent,
                         )
-                        .await?
-                        {
+                        .await?;
+                        if should_send_state {
                             send_client_state(&mut ws, client, playback).await?;
                         }
                     }
