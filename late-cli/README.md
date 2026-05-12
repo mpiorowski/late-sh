@@ -22,6 +22,12 @@ irm https://cli.late.sh/install.ps1 | iex
 
 The PowerShell installer places `late.exe` in `%LOCALAPPDATA%\Programs\late` and prints a PATH hint if that directory is not available in the current shell.
 
+Nix / NixOS:
+
+```bash
+nix run github:mpiorowski/late-sh#late
+```
+
 ## Build from source
 
 ```bash

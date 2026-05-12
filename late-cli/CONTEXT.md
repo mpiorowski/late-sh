@@ -335,6 +335,7 @@ Shutdown invariant:
 Public installers:
 - macOS/Linux/Termux: `curl -fsSL https://cli.late.sh/install.sh | bash`
 - Windows PowerShell: `irm https://cli.late.sh/install.ps1 | iex`
+- Nix/NixOS: `nix run github:mpiorowski/late-sh#late`
 
 Installer defaults:
 - `scripts/install.sh` and `scripts/install.ps1` default to `https://cli.late.sh`
@@ -350,6 +351,11 @@ Release workflow:
 - `.github/workflows/deploy_cli.yml` builds `late-cli` release artifacts
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
+
+Nix flake outputs:
+- `packages.${system}.late` builds only the `late-cli` binary and sets `mainProgram = "late"`
+- `apps.${system}.late` runs that CLI package for `nix run ...#late`
+- `packages.${system}.late-sh` remains the default multi-binary package with `mainProgram = "late-ssh"`
 
 ---
 
