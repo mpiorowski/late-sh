@@ -119,6 +119,9 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     if chrome.wire {
         constraints.push(Constraint::Length(WIRE_STRIP_ROW_HEIGHT));
     }
+    if chrome.pinned_top_rule {
+        constraints.push(Constraint::Length(1)); // rule between lounge boxes and pinned message
+    }
     if chrome.pinned {
         constraints.push(Constraint::Length(PINNED_ROW_HEIGHT));
     }
@@ -141,6 +144,10 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
             view.wire_news_articles,
             view.dashboard_cycle_secs,
         );
+        idx += 1;
+    }
+    if chrome.pinned_top_rule {
+        draw_horizontal_rule(frame, chunks[idx]);
         idx += 1;
     }
     if chrome.pinned {
@@ -168,6 +175,7 @@ struct DashboardChrome {
     top: bool,
     wire: bool,
     pinned: bool,
+    pinned_top_rule: bool,
     chat_rule: bool,
 }
 
@@ -192,6 +200,7 @@ fn dashboard_chrome(
         top,
         wire,
         pinned,
+        pinned_top_rule: pinned && top && !wire,
         chat_rule: pinned || (top && !wire),
     }
 }
@@ -204,12 +213,17 @@ fn dashboard_chrome_height(top: bool, wire: bool, pinned: bool) -> u16 {
     let top_height = if top { TOP_STRIP_ROW_HEIGHT } else { 0 };
     let wire_height = if wire { WIRE_STRIP_ROW_HEIGHT } else { 0 };
     let pinned_height = if pinned { PINNED_ROW_HEIGHT } else { 0 };
+    let pinned_top_rule_height = if pinned && top && !wire {
+        CHAT_RULE_HEIGHT
+    } else {
+        0
+    };
     let rule_height = if pinned || (top && !wire) {
         CHAT_RULE_HEIGHT
     } else {
         0
     };
-    top_height + wire_height + pinned_height + rule_height
+    top_height + wire_height + pinned_top_rule_height + pinned_height + rule_height
 }
 
 fn draw_top_strip(

@@ -108,8 +108,9 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
                     meta: room_meta(room),
                     unread_count: chat.unread_counts.get(&room.id).copied().unwrap_or(0),
                     last_message_at: messages
-                        .first()
+                        .iter()
                         .map(|message| message.created)
+                        .max()
                         .or(Some(room.updated)),
                     favorite: chat.favorite_room_ids().contains(&room.id),
                 });
@@ -124,6 +125,7 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
             }
         }
     }
+    sort_picker_items(&mut items);
     items
 }
 
@@ -143,16 +145,19 @@ pub(crate) fn filtered_items(
         .filter(|item| item_matches_query(item, &query))
         .collect();
 
-    if matches!(query.kind, SearchQueryKind::Dms) {
-        items.sort_by(|a, b| {
-            b.unread_count
-                .cmp(&a.unread_count)
-                .then_with(|| b.last_message_at.cmp(&a.last_message_at))
-                .then_with(|| normalize_text(&a.label).cmp(&normalize_text(&b.label)))
-        });
-    }
+    sort_picker_items(&mut items);
 
     items
+}
+
+fn sort_picker_items(items: &mut [RoomSearchItem]) {
+    items.sort_by(|a, b| {
+        b.favorite
+            .cmp(&a.favorite)
+            .then_with(|| (b.unread_count > 0).cmp(&(a.unread_count > 0)))
+            .then_with(|| b.last_message_at.cmp(&a.last_message_at))
+            .then_with(|| normalize_text(&a.label).cmp(&normalize_text(&b.label)))
+    });
 }
 
 fn item_matches_query(item: &RoomSearchItem, query: &SearchQuery) -> bool {

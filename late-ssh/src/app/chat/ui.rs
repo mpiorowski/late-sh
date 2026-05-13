@@ -22,8 +22,8 @@ use crate::app::common::{
 };
 
 use super::state::{
-    MentionMatch, ROOM_JUMP_KEYS, RoomSlot, SelectedRoomSlotState, is_chat_list_room,
-    is_selected_slot, visual_order_for_rooms,
+    MentionMatch, ROOM_JUMP_KEYS, RoomSlot, SelectedRoomSlotState, compare_dm_rooms_for_nav,
+    is_chat_list_room, is_selected_slot, visual_order_for_rooms,
 };
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
@@ -1309,10 +1309,16 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     }
 
     let mut dm_rooms: Vec<_> = chat_rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
-    dm_rooms.sort_by(|(a, _), (b, _)| {
-        let name_a = dm_display_label(a, view.usernames, view.current_user_id);
-        let name_b = dm_display_label(b, view.usernames, view.current_user_id);
-        name_a.cmp(&name_b)
+    dm_rooms.sort_by(|(a_room, a_messages), (b_room, b_messages)| {
+        compare_dm_rooms_for_nav(
+            a_room,
+            a_messages,
+            b_room,
+            b_messages,
+            view.current_user_id,
+            view.usernames,
+            view.unread_counts,
+        )
     });
     if !dm_rooms.is_empty() {
         push_row(Line::from(""), None, false);
@@ -1550,6 +1556,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         view.chat_rooms,
         view.current_user_id,
         view.usernames,
+        view.unread_counts,
         view.feeds_available,
         view.favorite_room_ids,
     );
@@ -1727,10 +1734,16 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .iter()
         .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm" && !favorite_ids.contains(&r.id))
         .collect();
-    dms.sort_by(|(a, _), (b, _)| {
-        let a = dm_display_label(a, view.usernames, view.current_user_id);
-        let b = dm_display_label(b, view.usernames, view.current_user_id);
-        a.cmp(&b)
+    dms.sort_by(|(a_room, a_messages), (b_room, b_messages)| {
+        compare_dm_rooms_for_nav(
+            a_room,
+            a_messages,
+            b_room,
+            b_messages,
+            view.current_user_id,
+            view.usernames,
+            view.unread_counts,
+        )
     });
     if !dms.is_empty() {
         push_row(blank(), None, false);

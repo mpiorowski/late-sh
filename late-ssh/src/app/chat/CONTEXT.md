@@ -155,7 +155,7 @@ Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by co
 6. Feeds, when the current user has at least one RSS/Atom subscription.
 7. Showcase.
 8. Work.
-9. DMs, sorted by peer display name.
+9. DMs, sorted by unread status, then newest message, then peer display name.
 10. Discover / `+ browse rooms`.
 
 Feeds:
@@ -170,7 +170,7 @@ Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_
 Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
 - `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`. Jumping to the already selected room/synthetic entry still re-runs the entry's read/list side effects so stale unread badges clear.
-- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for feeds, News, Showcase, Work, Mentions, and custom room browse. Typing bare `@` shows all DMs ordered by unread count, then latest message; typing `@name` searches DMs with the same ordering.
+- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for feeds, News, Showcase, Work, Mentions, and custom room browse. Results are ordered favorites first, then unread entries, then latest message/activity; typed `@` and `#` prefixes filter to DMs or rooms while keeping that ordering.
 - While composing on Home, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
 - Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`, `work_selected`), not `selected_room_id`.
 
