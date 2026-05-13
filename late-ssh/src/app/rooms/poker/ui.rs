@@ -722,13 +722,6 @@ fn draw_table_compact(
     snapshot: &PokerPublicSnapshot,
     usernames: &HashMap<Uuid, String>,
 ) {
-    let block = Block::default()
-        .title(" Poker ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     let mut lines = vec![
         Line::from(vec![
             Span::styled("Board: ", Style::default().fg(theme::TEXT_DIM())),
@@ -769,7 +762,7 @@ fn draw_table_compact(
     )));
     lines.push(key_line(state, snapshot));
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn status_text(snapshot: &PokerPublicSnapshot) -> String {
