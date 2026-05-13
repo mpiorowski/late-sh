@@ -10,7 +10,10 @@ use ratatui::{
 
 use crate::app::{
     activity::event::ActivityEvent,
-    chat::ui::{DashboardChatView, draw_dashboard_chat_card},
+    chat::{
+        news::ui::split_summary_bullets,
+        ui::{DashboardChatView, draw_dashboard_chat_card},
+    },
     common::theme,
     rooms::{
         registry::{RoomDirectorySummary, RoomGameRegistry},
@@ -90,30 +93,27 @@ pub struct DashboardRenderInput<'a> {
     pub chat_view: DashboardChatView<'a>,
 }
 
-/// Page-1 Home surface: rituals strip, live activity, and the selected room's
-/// chat. Non-general rooms bypass this and render as full chat in `render.rs`.
+/// Page-1 Home surface: top strip (activity/quest/shop), a wide wire feed, and
+/// the selected room's chat. Non-general rooms bypass this and render as full
+/// chat in `render.rs`.
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
     if area.width <= 30 || area.height < 10 {
         draw_dashboard_chat_card(frame, area, view.chat_view);
         return;
     }
 
-    let want_rituals = area.width > RITUALS_HIDE_AT_WIDTH && area.height >= 18;
-    let want_activity = area.height >= ACTIVITY_HIDE_AT_HEIGHT;
+    let want_top = area.width > TOP_STRIP_HIDE_AT_WIDTH && area.height >= 18;
+    let want_wire = area.height >= WIRE_HIDE_AT_HEIGHT;
 
-    let rituals_height = if want_rituals { RITUALS_ROW_HEIGHT } else { 0 };
-    let activity_height = if want_activity {
-        1 + ACTIVITY_ROWS_BUDGET
-    } else {
-        0
-    };
+    let top_height = if want_top { TOP_STRIP_ROW_HEIGHT } else { 0 };
+    let wire_height = if want_wire { WIRE_STRIP_ROW_HEIGHT } else { 0 };
 
     let mut constraints: Vec<Constraint> = Vec::new();
-    if rituals_height > 0 {
-        constraints.push(Constraint::Length(rituals_height));
+    if top_height > 0 {
+        constraints.push(Constraint::Length(top_height));
     }
-    if activity_height > 0 {
-        constraints.push(Constraint::Length(activity_height));
+    if wire_height > 0 {
+        constraints.push(Constraint::Length(wire_height));
     }
     constraints.push(Constraint::Length(1));
     constraints.push(Constraint::Fill(1));
@@ -121,8 +121,12 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     let chunks = Layout::vertical(constraints).split(area);
     let mut idx = 0;
 
-    if rituals_height > 0 {
-        draw_rituals_strip(
+    if top_height > 0 {
+        draw_top_strip(frame, chunks[idx], view.activity, view.online_count);
+        idx += 1;
+    }
+    if wire_height > 0 {
+        draw_wire_strip(
             frame,
             chunks[idx],
             view.wire_news_articles,
@@ -130,25 +134,21 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         );
         idx += 1;
     }
-    if activity_height > 0 {
-        draw_activity_banner_section(frame, chunks[idx], view.activity, view.online_count);
-        idx += 1;
-    }
     draw_horizontal_rule(frame, chunks[idx]);
     idx += 1;
     draw_dashboard_chat_card(frame, chunks[idx], view.chat_view);
 }
 
-const RITUALS_HIDE_AT_WIDTH: u16 = 50;
-const ACTIVITY_HIDE_AT_HEIGHT: u16 = 22;
-const RITUALS_ROW_HEIGHT: u16 = 5;
-const ACTIVITY_ROWS_BUDGET: u16 = 4;
+const TOP_STRIP_HIDE_AT_WIDTH: u16 = 50;
+const WIRE_HIDE_AT_HEIGHT: u16 = 22;
+const TOP_STRIP_ROW_HEIGHT: u16 = 5;
+const WIRE_STRIP_ROW_HEIGHT: u16 = 5;
 
-fn draw_rituals_strip(
+fn draw_top_strip(
     frame: &mut Frame,
     area: Rect,
-    wire_news_articles: &[ArticleFeedItem],
-    cycle_secs: u64,
+    activity: &VecDeque<ActivityEvent>,
+    online_count: usize,
 ) {
     let cols = Layout::horizontal([
         Constraint::Fill(1),
@@ -159,9 +159,9 @@ fn draw_rituals_strip(
     ])
     .split(area);
 
-    draw_box_daily_quest(frame, cols[0]);
-    draw_box_shop(frame, cols[2]);
-    draw_box_wire(frame, cols[4], wire_news_articles, cycle_secs);
+    draw_box_activity(frame, cols[0], activity, online_count);
+    draw_box_daily_quest(frame, cols[2]);
+    draw_box_shop(frame, cols[4]);
 
     crate::app::common::sidebar::paint_vertical_separator(
         frame,
@@ -189,6 +189,27 @@ fn draw_box_label(frame: &mut Frame, area: Rect, label: &str) {
     );
 }
 
+fn draw_box_label_with_hint(frame: &mut Frame, area: Rect, label: &str, hint: &str) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                label.to_string(),
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                hint.to_string(),
+                Style::default()
+                    .fg(theme::BORDER_DIM())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ])),
+        area,
+    );
+}
+
 fn draw_box_daily_quest(frame: &mut Frame, area: Rect) {
     let rows = Layout::vertical([
         Constraint::Length(1),
@@ -198,7 +219,7 @@ fn draw_box_daily_quest(frame: &mut Frame, area: Rect) {
     ])
     .split(area);
 
-    draw_box_label(frame, rows[0], "daily quest");
+    draw_box_label_with_hint(frame, rows[0], "daily quest", "(coming soon)");
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             "win 3 hands",
@@ -238,7 +259,7 @@ fn draw_box_shop(frame: &mut Frame, area: Rect) {
     ])
     .split(area);
 
-    draw_box_label(frame, rows[0], "shop");
+    draw_box_label_with_hint(frame, rows[0], "shop", "(coming soon)");
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             "golden chips",
@@ -265,8 +286,14 @@ fn draw_box_shop(frame: &mut Frame, area: Rect) {
     );
 }
 
-fn draw_box_wire(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], cycle_secs: u64) {
+fn draw_box_activity(
+    frame: &mut Frame,
+    area: Rect,
+    activity: &VecDeque<ActivityEvent>,
+    online_count: usize,
+) {
     let rows = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -274,8 +301,82 @@ fn draw_box_wire(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], cy
     ])
     .split(area);
 
-    draw_box_label(frame, rows[0], "the wire");
-    let max = rows[1].width as usize;
+    draw_box_label(frame, rows[0], "online");
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("● ", Style::default().fg(theme::SUCCESS())),
+            Span::styled(
+                online_count.to_string(),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" here", Style::default().fg(theme::TEXT_DIM())),
+        ])),
+        rows[1],
+    );
+
+    let event_rows = [rows[2], rows[3], rows[4]];
+    let mut drawn = 0;
+    for (i, event) in activity.iter().rev().take(event_rows.len()).enumerate() {
+        let row = event_rows[i];
+        let body_w = row.width as usize;
+        let elapsed = event.at.elapsed().as_secs();
+        let ago = if elapsed < 60 {
+            format!("{}s", elapsed)
+        } else if elapsed < 3600 {
+            format!("{}m", elapsed / 60)
+        } else {
+            format!("{}h", elapsed / 3600)
+        };
+        let user = truncate(&event.username, 12);
+        let user_part = format!("@{}", user);
+        let action_w = body_w
+            .saturating_sub(user_part.chars().count() + ago.chars().count() + 4);
+        let action = truncate(&event.action, action_w);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(user_part, Style::default().fg(theme::TEXT())),
+                Span::raw("  "),
+                Span::styled(action, Style::default().fg(theme::TEXT_DIM())),
+                Span::raw("  "),
+                Span::styled(ago, Style::default().fg(theme::TEXT_FAINT())),
+            ])),
+            row,
+        );
+        drawn += 1;
+    }
+    if drawn == 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "the room is quiet",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ))),
+            event_rows[0],
+        );
+    }
+}
+
+fn draw_wire_strip(
+    frame: &mut Frame,
+    area: Rect,
+    articles: &[ArticleFeedItem],
+    cycle_secs: u64,
+) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let constraints: Vec<Constraint> = (0..area.height).map(|_| Constraint::Length(1)).collect();
+    let rows = Layout::vertical(constraints).split(area);
+
+    draw_wire_top_border(frame, rows[0]);
+    if rows.len() < 2 {
+        return;
+    }
+
     let pool = &articles[..articles.len().min(WIRE_NEWS_MAX_ITEMS)];
     if pool.is_empty() {
         frame.render_widget(
@@ -289,82 +390,22 @@ fn draw_box_wire(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], cy
     }
 
     let first = ((cycle_secs / WIRE_NEWS_CYCLE_SECONDS) as usize) % pool.len();
-    let visible = (rows.len() - 1).min(pool.len());
-    for offset in 0..visible {
-        let item = &pool[(first + offset) % pool.len()];
-        let txt = truncate(item.article.title.as_str(), max);
-        let style = if offset == 0 {
-            Style::default()
-                .fg(theme::TEXT())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_DIM())
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(txt, style))),
-            rows[offset + 1],
-        );
-    }
+    draw_wire_article(frame, &rows, &pool[first]);
 }
 
-fn draw_activity_banner_section(
-    frame: &mut Frame,
-    area: Rect,
-    activity: &VecDeque<ActivityEvent>,
-    online_count: usize,
-) {
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
-    draw_online_banner(frame, rows[0], online_count);
-
-    let body = rows[1];
-    let rows_budget = body.height.min(ACTIVITY_ROWS_BUDGET) as usize;
-    let mut lines: Vec<Line<'_>> = Vec::with_capacity(rows_budget);
-    for event in activity.iter().rev().take(rows_budget) {
-        let elapsed = event.at.elapsed().as_secs();
-        let ago = if elapsed < 60 {
-            format!("{}s", elapsed)
-        } else if elapsed < 3600 {
-            format!("{}m", elapsed / 60)
-        } else {
-            format!("{}h", elapsed / 3600)
-        };
-        let action_w = (body.width as usize).saturating_sub(ago.len() + 22);
-        let action = truncate(&event.action, action_w);
-        let user = truncate(&event.username, 16);
-        lines.push(Line::from(vec![
-            Span::styled(format!("@{}", user), Style::default().fg(theme::TEXT())),
-            Span::raw("  "),
-            Span::styled(action, Style::default().fg(theme::TEXT_DIM())),
-            Span::raw("  "),
-            Span::styled(ago, Style::default().fg(theme::TEXT_FAINT())),
-        ]));
-    }
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "the room is quiet",
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        )));
-    }
-    frame.render_widget(Paragraph::new(lines), body);
-}
-
-fn draw_online_banner(frame: &mut Frame, area: Rect, online_count: usize) {
-    let count_str = format!("{online_count}");
-    let consumed = 3 + 2 + 7 + count_str.chars().count() + 1;
+fn draw_wire_top_border(frame: &mut Frame, area: Rect) {
+    let label = "the wire";
+    let consumed = 3 + label.chars().count() + 1;
     let trail_w = (area.width as usize).saturating_sub(consumed);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("── ", Style::default().fg(theme::BORDER_DIM())),
-            Span::styled("● ", Style::default().fg(theme::SUCCESS())),
             Span::styled(
-                "online ",
+                label,
                 Style::default()
                     .fg(theme::TEXT_DIM())
                     .add_modifier(Modifier::ITALIC),
             ),
-            Span::styled(count_str, Style::default().fg(theme::AMBER_DIM())),
             Span::raw(" "),
             Span::styled(
                 "─".repeat(trail_w),
@@ -373,6 +414,39 @@ fn draw_online_banner(frame: &mut Frame, area: Rect, online_count: usize) {
         ])),
         area,
     );
+}
+
+fn draw_wire_article(frame: &mut Frame, rows: &[Rect], item: &ArticleFeedItem) {
+    if rows.len() < 2 {
+        return;
+    }
+    let title_w = rows[1].width as usize;
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate(item.article.title.as_str(), title_w),
+            Style::default()
+                .fg(theme::TEXT())
+                .add_modifier(Modifier::BOLD),
+        ))),
+        rows[1],
+    );
+
+    if rows.len() < 3 {
+        return;
+    }
+    let bullet_rows = &rows[2..];
+    let bullets = split_summary_bullets(&item.article.summary);
+    for (i, row) in bullet_rows.iter().enumerate() {
+        let Some(bullet) = bullets.get(i) else { break };
+        let text = truncate(bullet, row.width as usize);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                text,
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            *row,
+        );
+    }
 }
 
 fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
@@ -403,3 +477,4 @@ fn truncate(text: &str, max: usize) -> String {
     out.push('…');
     out
 }
+

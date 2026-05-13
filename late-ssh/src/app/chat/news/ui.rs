@@ -352,7 +352,7 @@ fn normalize_inline_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn split_summary_bullets(text: &str) -> Vec<String> {
+pub(crate) fn split_summary_bullets(text: &str) -> Vec<String> {
     text.replace("\\n", "\n")
         .lines()
         .map(str::trim)

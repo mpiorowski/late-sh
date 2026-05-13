@@ -1421,7 +1421,7 @@ pub(crate) fn room_list_hit_test(
         height: rooms_area.height.saturating_sub(1),
     };
     let hint_rows = build_rail_nav_hint_lines().len() as u16;
-    let footer_reserve = hint_rows + 1;
+    let footer_reserve = hint_rows + 2;
     let list_area = if inner.height > footer_reserve + 2 {
         Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)]).split(inner)[0]
     } else {
@@ -1472,8 +1472,9 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
 
     let hint_lines = build_rail_nav_hint_lines();
     let hint_rows = hint_lines.len() as u16;
-    // Reserve: 1 blank + hint rows. If the rail is too short, skip hints.
-    let footer_reserve = hint_rows + 1;
+    // Reserve: top border + hint rows + bottom border. If the rail is too
+    // short, skip hints.
+    let footer_reserve = hint_rows + 2;
     let (list_area, hint_area) = if inner.height > footer_reserve + 2 {
         let split = Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)])
             .split(inner);
@@ -1519,13 +1520,24 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
     frame.render_widget(Paragraph::new(display_lines), list_area);
 
     if let Some(hint_area) = hint_area {
-        // Skip the first row of the reserved footer as a breathing gap, then
-        // render the hint lines pinned to the very bottom.
+        let buf = frame.buffer_mut();
+        for dx in 0..hint_area.width {
+            if let Some(cell) = buf.cell_mut((hint_area.x + dx, hint_area.y)) {
+                cell.set_symbol("─").set_fg(theme::BORDER_DIM());
+            }
+            if let Some(cell) =
+                buf.cell_mut((hint_area.x + dx, hint_area.bottom().saturating_sub(1)))
+            {
+                cell.set_symbol("─").set_fg(theme::BORDER_DIM());
+            }
+        }
+
+        // Render the hint lines between the footer separators.
         let hint_render_area = Rect {
             x: hint_area.x,
             y: hint_area.y + 1,
             width: hint_area.width,
-            height: hint_area.height.saturating_sub(1),
+            height: hint_area.height.saturating_sub(2),
         };
         frame.render_widget(Paragraph::new(hint_lines), hint_render_area);
     }
@@ -1670,6 +1682,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     }
 
     let core_order = ["general", "announcements", "suggestions", "bugs"];
+    push_row(section_label("core"), None, false);
     for slug in &core_order {
         if let Some((room, _)) = view.chat_rooms.iter().find(|(r, _)| {
             is_chat_list_room(r)
@@ -1782,7 +1795,7 @@ fn room_display_label(
     }
 }
 
-/// Two-row nav-hint footer. Caller pins this to the bottom of the rail so the
+/// Nav-hint footer. Caller pins this to the bottom of the rail so the
 /// hints stay anchored regardless of how long the room list is.
 fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
     let key = |k: &str| -> Span<'static> {
@@ -1798,6 +1811,7 @@ fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
     };
     vec![
         Line::from(vec![key("h l space"), hint(" jump room")]),
+        Line::from(vec![key("f"), hint("         favorite")]),
         Line::from(vec![key("ctrl+/"), hint("    find room")]),
     ]
 }

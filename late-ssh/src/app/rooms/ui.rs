@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -18,6 +18,7 @@ use crate::app::{
 };
 
 const NARROW_WIDTH: u16 = 80;
+const ROOM_FILTER_PADDING_X: u16 = 4;
 
 pub struct RoomsPageView<'a> {
     pub create_flow: Option<&'a CreateRoomFlow>,
@@ -62,6 +63,7 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_
     }
 
     let layout = Layout::vertical([
+        Constraint::Length(1), // top padding
         Constraint::Length(1), // filter pills
         Constraint::Length(1), // spacer
         Constraint::Min(3),    // list
@@ -69,16 +71,16 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_
     ])
     .split(area);
 
-    draw_filter_bar(frame, layout[0], &view);
+    draw_filter_bar(frame, layout[1], &view);
 
     let rows = build_rows(&view);
     if area.width >= NARROW_WIDTH {
-        draw_room_list_wide(frame, layout[2], &view, &rows);
+        draw_room_list_wide(frame, layout[3], &view, &rows);
     } else {
-        draw_room_list_narrow(frame, layout[2], &view, &rows);
+        draw_room_list_narrow(frame, layout[3], &view, &rows);
     }
 
-    draw_footer(frame, layout[3], &view);
+    draw_footer(frame, layout[4], &view);
 
     if let Some(flow) = view.create_flow {
         match flow {
@@ -111,6 +113,11 @@ fn draw_filter_bar(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
     if area.height == 0 {
         return;
     }
+
+    let area = area.inner(Margin {
+        horizontal: ROOM_FILTER_PADDING_X,
+        vertical: 0,
+    });
 
     if view.search_active {
         let line = Line::from(vec![
