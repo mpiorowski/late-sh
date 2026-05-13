@@ -332,8 +332,7 @@ fn draw_box_activity(
         };
         let user = truncate(&event.username, 12);
         let user_part = format!("@{}", user);
-        let action_w = body_w
-            .saturating_sub(user_part.chars().count() + ago.chars().count() + 4);
+        let action_w = body_w.saturating_sub(user_part.chars().count() + ago.chars().count() + 4);
         let action = truncate(&event.action, action_w);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -360,12 +359,7 @@ fn draw_box_activity(
     }
 }
 
-fn draw_wire_strip(
-    frame: &mut Frame,
-    area: Rect,
-    articles: &[ArticleFeedItem],
-    cycle_secs: u64,
-) {
+fn draw_wire_strip(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], cycle_secs: u64) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -477,4 +471,3 @@ fn truncate(text: &str, max: usize) -> String {
     out.push('…');
     out
 }
-

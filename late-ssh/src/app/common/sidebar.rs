@@ -156,15 +156,11 @@ fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomCard]
     let mut lines: Vec<Line<'_>> = Vec::new();
     for (idx, card) in visible_rooms.enumerate() {
         let inner_w = body.width as usize;
-        let room_hint = if idx == 0 {
-            Some(active_tables_rooms_hint())
-        } else {
-            None
-        };
+        let room_hint = active_tables_room_hint(idx);
         let hint_w = room_hint
-            .as_ref()
-            .map(|hint| hint.iter().map(|span| span.content.chars().count()).sum())
-            .unwrap_or(0);
+            .iter()
+            .map(|span| span.content.chars().count())
+            .sum::<usize>();
         let name_budget = inner_w.saturating_sub(hint_w + 1).max(1);
         let name = truncate_chars(&card.room.display_name, name_budget);
         let mut row = vec![Span::styled(
@@ -173,16 +169,14 @@ fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomCard]
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         )];
-        if let Some(hint) = room_hint {
-            let pad = inner_w.saturating_sub(
-                row.iter()
-                    .map(|span| span.content.chars().count())
-                    .sum::<usize>()
-                    + hint_w,
-            );
-            row.push(Span::raw(" ".repeat(pad)));
-            row.extend(hint);
-        }
+        let pad = inner_w.saturating_sub(
+            row.iter()
+                .map(|span| span.content.chars().count())
+                .sum::<usize>()
+                + hint_w,
+        );
+        row.push(Span::raw(" ".repeat(pad)));
+        row.extend(room_hint);
         lines.push(Line::from(row));
 
         lines.push(active_table_status_line(card, body.width as usize));
@@ -191,16 +185,13 @@ fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomCard]
     frame.render_widget(Paragraph::new(lines), body);
 }
 
-fn active_tables_rooms_hint() -> Vec<Span<'static>> {
-    vec![
-        Span::styled(
-            "3",
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" rooms", Style::default().fg(theme::TEXT_DIM())),
-    ]
+fn active_tables_room_hint(idx: usize) -> Vec<Span<'static>> {
+    vec![Span::styled(
+        format!("b{}", idx + 1),
+        Style::default()
+            .fg(theme::AMBER_DIM())
+            .add_modifier(Modifier::BOLD),
+    )]
 }
 
 fn draw_empty_active_tables(frame: &mut Frame, area: Rect) {
@@ -226,7 +217,7 @@ fn draw_empty_active_tables(frame: &mut Frame, area: Rect) {
 
     let lines = vec![
         Line::from(faint("no active tables")),
-        Line::from(vec![key("3"), dim(" rooms")]),
+        Line::from(vec![key("b1"), dim("/"), key("b2"), dim("/"), key("b3")]),
         Line::from(vec![key("n"), dim(" create table")]),
         Line::from(vec![key("Enter"), dim(" join")]),
     ];

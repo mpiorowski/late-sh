@@ -1694,6 +1694,38 @@ fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_terminal_help = true;
 }
 
+fn hot_room_suffix_index(byte: u8) -> Option<usize> {
+    match byte {
+        b'1' => Some(0),
+        b'2' => Some(1),
+        b'3' => Some(2),
+        _ => None,
+    }
+}
+
+fn enter_hot_room(app: &mut App, index: usize) -> bool {
+    let Some(room) = crate::app::dashboard::ui::top_dashboard_rooms(
+        &app.rooms_snapshot,
+        &app.room_game_registry,
+        3,
+    )
+    .into_iter()
+    .nth(index)
+    .map(|card| card.room) else {
+        app.banner = Some(crate::app::common::primitives::Banner::error(&format!(
+            "No hot room in slot {}.",
+            index + 1
+        )));
+        return true;
+    };
+
+    if crate::app::rooms::input::enter_room(app, room) {
+        reset_composers_for_page_change(app);
+        app.set_screen(Screen::Rooms);
+    }
+    true
+}
+
 pub(crate) fn trigger_global_quit(app: &mut App) {
     match quit_confirm::input::action_for(app.show_quit_confirm) {
         quit_confirm::input::QuitAction::OpenConfirm => {
@@ -1707,6 +1739,13 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
+
+    if app.hot_room_prefix_armed {
+        app.hot_room_prefix_armed = false;
+        if let Some(index) = hot_room_suffix_index(byte) {
+            return enter_hot_room(app, index);
+        }
+    }
 
     // ? opens the global guide unless the current screen owns it.
     if byte == b'?'
@@ -1819,6 +1858,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                     "No paired client session",
                 ));
             }
+            true
+        }
+        b'b' | b'B'
+            if !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && !ctx.showcase_composing
+                && !ctx.work_composing =>
+        {
+            app.hot_room_prefix_armed = true;
             true
         }
         b'w' | b'W'
@@ -2594,6 +2643,15 @@ mod tests {
             sanitize_paste_markers("https://example.com"),
             "https://example.com"
         );
+    }
+
+    #[test]
+    fn hot_room_suffixes_are_one_based_digits() {
+        assert_eq!(hot_room_suffix_index(b'1'), Some(0));
+        assert_eq!(hot_room_suffix_index(b'2'), Some(1));
+        assert_eq!(hot_room_suffix_index(b'3'), Some(2));
+        assert_eq!(hot_room_suffix_index(b'4'), None);
+        assert_eq!(hot_room_suffix_index(b'b'), None);
     }
 
     // --- autocomplete arrow routing ---
