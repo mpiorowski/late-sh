@@ -9,7 +9,7 @@ use late_core::models::{
     chat_room::ChatRoom,
     profile::{Profile, ProfileParams},
     server_ban::ServerBan,
-    user::{User, UserParams},
+    user::{RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, UserParams},
 };
 use late_core::test_utils::create_test_user;
 use late_ssh::app::profile::svc::{ProfileEvent, ProfileService};
@@ -94,6 +94,8 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             enable_background_color: false,
             show_dashboard_header: false,
             show_right_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
@@ -160,6 +162,8 @@ async fn edit_profile_normalizes_username_before_persisting() {
             enable_background_color: false,
             show_dashboard_header: true,
             show_right_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
@@ -220,6 +224,8 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             enable_background_color: false,
             show_dashboard_header: true,
             show_right_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),

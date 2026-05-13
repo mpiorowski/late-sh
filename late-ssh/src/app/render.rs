@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::user::RightSidebarMode;
 
 use super::{
     artboard, bonsai, chat,
@@ -66,6 +67,30 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
         draft_enabled
     } else {
         profile_enabled
+    }
+}
+
+/// Map a top-level screen to its 1-based slot in `right_sidebar_screens`.
+pub(crate) fn screen_number(screen: Screen) -> u8 {
+    match screen {
+        Screen::Dashboard => 1,
+        Screen::Arcade => 2,
+        Screen::Rooms => 3,
+        Screen::Artboard => 4,
+    }
+}
+
+/// Resolve whether the right sidebar should render on `screen` given a profile
+/// (or draft) sidebar mode and per-screen visibility set.
+pub(crate) fn resolve_right_sidebar_enabled(
+    mode: RightSidebarMode,
+    screens: &[u8],
+    screen: Screen,
+) -> bool {
+    match mode {
+        RightSidebarMode::On => true,
+        RightSidebarMode::Off => false,
+        RightSidebarMode::Custom => screens.contains(&screen_number(screen)),
     }
 }
 
@@ -214,8 +239,16 @@ impl App {
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
-            self.settings_modal_state.draft().show_right_sidebar,
-            self.profile_state.profile().show_right_sidebar,
+            resolve_right_sidebar_enabled(
+                self.settings_modal_state.draft().right_sidebar_mode,
+                &self.settings_modal_state.draft().right_sidebar_screens,
+                self.screen,
+            ),
+            resolve_right_sidebar_enabled(
+                self.profile_state.profile().right_sidebar_mode,
+                &self.profile_state.profile().right_sidebar_screens,
+                self.screen,
+            ),
         );
         let show_room_list_sidebar = room_list_sidebar_enabled(
             self.show_settings,
