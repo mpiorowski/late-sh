@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use chrono::Utc;
+use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -14,11 +15,16 @@ use crate::app::activity::event::ActivityEvent;
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::dashboard::ui::DashboardRoomCard;
 use crate::app::visualizer::Visualizer;
+use crate::app::vote::ui::VoteCardView;
+use crate::session::ClientAudioState;
 
 pub struct SidebarProps<'a> {
     pub game_selection: usize,
     pub is_playing_game: bool,
     pub visualizer: &'a Visualizer,
+    pub now_playing: Option<&'a NowPlaying>,
+    pub paired_client: Option<&'a ClientAudioState>,
+    pub vote: VoteCardView<'a>,
     pub online_count: usize,
     pub bonsai: &'a BonsaiState,
     pub audio_beat: f32,
@@ -53,6 +59,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     //   1 row  ── rule
     //   6 rows visualizer (borderless)
     //   1 row  ── rule
+    //   9 rows now playing / pair status / vote rows
+    //   1 row  ── rule
     //   6 rows active tables (up to 3 rooms × 2 rows; empty state draws its own label)
     //   1 row  ── rule
     //   Fill   bonsai
@@ -60,6 +68,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         Constraint::Length(1), // time
         Constraint::Length(1), // ── rule
         Constraint::Length(6), // visualizer
+        Constraint::Length(1), // ── rule
+        Constraint::Length(9), // now playing + vote
         Constraint::Length(1), // ── rule
         Constraint::Length(6), // active tables
         Constraint::Length(1), // ── rule
@@ -86,13 +96,23 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
     draw_horizontal_rule(frame, inset(layout[3]));
 
-    draw_active_tables(frame, inset(layout[4]), props.top_rooms);
+    draw_now_playing_block(
+        frame,
+        inset(layout[4]),
+        props.now_playing,
+        props.paired_client,
+        &props.vote,
+    );
 
     draw_horizontal_rule(frame, inset(layout[5]));
 
+    draw_active_tables(frame, inset(layout[6]), props.top_rooms);
+
+    draw_horizontal_rule(frame, inset(layout[7]));
+
     crate::app::bonsai::ui::draw_bonsai_inline(
         frame,
-        inset(layout[6]),
+        inset(layout[8]),
         props.bonsai,
         props.audio_beat,
     );
@@ -278,6 +298,166 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
         Style::default().fg(theme::BORDER_DIM()),
     ));
     frame.render_widget(Paragraph::new(line), area);
+}
+
+fn draw_now_playing_block(
+    frame: &mut Frame,
+    area: Rect,
+    now_playing: Option<&NowPlaying>,
+    paired_client: Option<&ClientAudioState>,
+    vote: &VoteCardView<'_>,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // title
+        Constraint::Length(1), // artist
+        Constraint::Length(1), // progress
+        Constraint::Length(1), // pair status
+        Constraint::Length(1), // controls
+        Constraint::Length(1), // now/next vibe
+        Constraint::Fill(1),   // vote rows
+    ])
+    .split(area);
+
+    let (title, artist) = match now_playing {
+        Some(np) => (
+            truncate_chars(&np.track.title, area.width as usize),
+            truncate_chars(
+                np.track.artist.as_deref().unwrap_or("unknown"),
+                area.width as usize,
+            ),
+        ),
+        None => ("waiting for stream".to_string(), String::new()),
+    };
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            title,
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ))),
+        rows[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            artist,
+            Style::default().fg(theme::TEXT_DIM()),
+        ))),
+        rows[1],
+    );
+
+    if let Some(np) = now_playing
+        && let Some(dur) = np.track.duration_seconds
+    {
+        draw_progress_line(frame, rows[2], np.started_at.elapsed().as_secs(), dur);
+    }
+
+    let pair_text = match paired_client {
+        Some(state) => format!(
+            "{} · {}%{}",
+            state.client_kind.label(),
+            state.volume_percent,
+            if state.muted { " · muted" } else { "" }
+        ),
+        None => "no pair".to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate_chars(&pair_text, rows[3].width as usize),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ))),
+        rows[3],
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "-/=",
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" vol  ", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(
+                "m",
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" mute", Style::default().fg(theme::TEXT_FAINT())),
+        ])),
+        rows[4],
+    );
+
+    draw_vibe_line(frame, rows[5], vote);
+    crate::app::vote::ui::draw_vote_inline(frame, rows[6], vote);
+}
+
+fn draw_vibe_line(frame: &mut Frame, area: Rect, vote: &VoteCardView<'_>) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let next = vote.vote_counts.winner_or(vote.current_genre);
+    let current =
+        crate::app::common::primitives::genre_label(vote.current_genre).to_ascii_lowercase();
+    let next = crate::app::common::primitives::genre_label(next).to_ascii_lowercase();
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "now ",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::styled(current, Style::default().fg(theme::SUCCESS())),
+            Span::styled(" > ", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(next, Style::default().fg(theme::AMBER())),
+        ])),
+        area,
+    );
+}
+
+fn draw_progress_line(frame: &mut Frame, area: Rect, elapsed_secs: u64, duration_secs: u64) {
+    if area.width == 0 || duration_secs == 0 {
+        return;
+    }
+    let elapsed = elapsed_secs.min(duration_secs);
+    let elapsed_str = format!("{}:{:02}", elapsed / 60, elapsed % 60);
+    let total_str = format!("{}:{:02}", duration_secs / 60, duration_secs % 60);
+    let time_w = elapsed_str.len() + total_str.len() + 2;
+    let bar_w = (area.width as usize).saturating_sub(time_w);
+    if bar_w == 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                elapsed_str,
+                Style::default().fg(theme::AMBER()),
+            ))),
+            area,
+        );
+        return;
+    }
+
+    let progress = (elapsed as f64 / duration_secs as f64).clamp(0.0, 1.0);
+    let dot = ((bar_w as f64 * progress) as usize).min(bar_w.saturating_sub(1));
+    let bar_before = "─".repeat(dot);
+    let bar_after = "─".repeat(bar_w.saturating_sub(dot + 1));
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(elapsed_str, Style::default().fg(theme::AMBER())),
+            Span::raw(" "),
+            Span::styled(bar_before, Style::default().fg(theme::BORDER_DIM())),
+            Span::styled("●", Style::default().fg(theme::AMBER_GLOW())),
+            Span::styled(bar_after, Style::default().fg(theme::BORDER_DIM())),
+            Span::raw(" "),
+            Span::styled(total_str, Style::default().fg(theme::TEXT_FAINT())),
+        ])),
+        area,
+    );
 }
 
 /// Paint a thin vertical line (1 column wide) in BORDER_DIM. Used by the

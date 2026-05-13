@@ -187,6 +187,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         paired_client_registry: Some(state.paired_client_registry.clone()),
         web_chat_registry: Some(state.web_chat_registry.clone()),
         session_rx,
+        now_playing_rx: Some(state.now_playing_rx.clone()),
         active_users: Some(state.active_users.clone()),
         activity_feed_rx,
         user_id,

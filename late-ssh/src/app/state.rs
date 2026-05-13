@@ -4,7 +4,7 @@ use crossterm::{
     cursor,
     terminal::{self, ClearType},
 };
-use late_core::{MutexRecover, audio::VizFrame};
+use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame};
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::{
     collections::VecDeque,
@@ -159,6 +159,7 @@ pub struct SessionConfig {
     pub paired_client_registry: Option<PairedClientRegistry>,
     pub web_chat_registry: Option<WebChatRegistry>,
     pub session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
+    pub now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub active_users: Option<ActiveUsers>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
@@ -228,6 +229,7 @@ pub struct App {
     pub(crate) show_pair_modal: bool,
     pub(super) session_token: String,
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
+    pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) activity: VecDeque<ActivityEvent>,
@@ -585,6 +587,7 @@ impl App {
             show_pair_modal: false,
             session_token: config.session_token,
             session_rx: config.session_rx,
+            now_playing_rx: config.now_playing_rx,
             active_users: active_users.clone(),
             activity_feed_rx: config.activity_feed_rx,
             activity: VecDeque::new(),

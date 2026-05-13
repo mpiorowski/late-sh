@@ -123,7 +123,6 @@ pub fn draw_vote_inline(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) 
         ),
     ];
     let total = view.vote_counts.total().max(1) as usize;
-    // 14 = name(8) + count(3 incl. leading space) + gap(1) + hint(2)
     let max_bar = (area.width as usize).saturating_sub(14).max(1);
 
     let layout = Layout::vertical(vec![Constraint::Length(1); options.len()]).split(area);

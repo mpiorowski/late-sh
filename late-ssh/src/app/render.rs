@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use late_core::MutexRecover;
+use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -116,6 +117,9 @@ struct DrawContext<'a> {
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
+    now_playing: Option<&'a NowPlaying>,
+    paired_client: Option<&'a crate::session::ClientAudioState>,
+    vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
@@ -125,7 +129,6 @@ struct DrawContext<'a> {
     is_moderator: bool,
     show_right_sidebar: bool,
     show_room_list_sidebar: bool,
-    show_lounge_info: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
@@ -217,6 +220,13 @@ impl App {
             self.profile_state.profile().show_dashboard_header,
         );
         let screen = self.screen;
+        let now_playing: Option<NowPlaying> = self
+            .now_playing_rx
+            .as_mut()
+            .and_then(|rx| rx.borrow_and_update().clone());
+        let paired_client = self.paired_client_state();
+        let vote_snapshot = self.vote.snapshot();
+        let vote_my_vote = self.vote.my_vote();
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let visualizer = &self.visualizer;
@@ -457,6 +467,13 @@ impl App {
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
+                        now_playing: now_playing.as_ref(),
+                        paired_client: paired_client.as_ref(),
+                        vote_view: crate::app::vote::ui::VoteCardView {
+                            vote_counts: &vote_snapshot.counts,
+                            current_genre: vote_snapshot.current_genre,
+                            my_vote: vote_my_vote,
+                        },
                         sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
@@ -466,7 +483,6 @@ impl App {
                         is_moderator: self.is_moderator,
                         show_right_sidebar,
                         show_room_list_sidebar,
-                        show_lounge_info,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
@@ -734,6 +750,13 @@ impl App {
                     game_selection: ctx.game_selection,
                     is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
+                    now_playing: ctx.now_playing,
+                    paired_client: ctx.paired_client,
+                    vote: crate::app::vote::ui::VoteCardView {
+                        vote_counts: ctx.vote_view.vote_counts,
+                        current_genre: ctx.vote_view.current_genre,
+                        my_vote: ctx.vote_view.my_vote,
+                    },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
                     audio_beat: ctx.visualizer.beat(),

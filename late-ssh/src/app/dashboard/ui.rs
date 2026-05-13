@@ -112,6 +112,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     let top_height = if want_top { TOP_STRIP_ROW_HEIGHT } else { 0 };
     let wire_height = if want_wire { WIRE_STRIP_ROW_HEIGHT } else { 0 };
     let pinned_height: u16 = if want_pinned { 1 } else { 0 };
+    let want_bottom_rule = top_height > 0 || wire_height > 0 || pinned_height > 0;
 
     let mut constraints: Vec<Constraint> = Vec::new();
     if top_height > 0 {
@@ -124,7 +125,9 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         constraints.push(Constraint::Length(1)); // dim rule above pin
         constraints.push(Constraint::Length(pinned_height));
     }
-    constraints.push(Constraint::Length(1)); // bottom rule (amber if pinned, dim otherwise)
+    if want_bottom_rule {
+        constraints.push(Constraint::Length(1)); // bottom rule (amber if pinned, dim otherwise)
+    }
     constraints.push(Constraint::Fill(1));
 
     let chunks = Layout::vertical(constraints).split(area);
@@ -149,10 +152,11 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         draw_pinned_row(frame, chunks[idx], &view.pinned_messages[0]);
         idx += 1;
         draw_amber_rule(frame, chunks[idx]);
-    } else {
+        idx += 1;
+    } else if want_bottom_rule {
         draw_horizontal_rule(frame, chunks[idx]);
+        idx += 1;
     }
-    idx += 1;
     draw_dashboard_chat_card(frame, chunks[idx], view.chat_view);
 }
 
