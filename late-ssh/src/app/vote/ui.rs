@@ -16,7 +16,7 @@ pub struct VoteCardView<'a> {
 
 pub fn draw_vote_card(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) {
     let block = Block::default()
-        .title(" Vote Next (v+l/a/c) ")
+        .title(" Vote Next (v1/v2/v3) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
@@ -33,19 +33,19 @@ pub fn draw_vote_options(
 ) {
     let options = [
         (
-            "vL",
+            "v1",
             "Lofi",
             &vote_counts.lofi,
             my_vote == Some(Genre::Lofi),
         ),
         (
-            "vA",
+            "v2",
             "Ambient",
             &vote_counts.ambient,
             my_vote == Some(Genre::Ambient),
         ),
         (
-            "vC",
+            "v3",
             "Classic",
             &vote_counts.classic,
             my_vote == Some(Genre::Classic),
@@ -97,24 +97,24 @@ pub fn draw_vote_options(
 }
 
 /// Borderless, label-less vote rows for the merged-shell stream block.
-/// Renders 3 short lines: `vL lofi    ████   12`. The active vote is sage,
+/// Renders 3 short lines: `v1 lofi    ████   12`. The active vote is sage,
 /// everything else stays dim. No section header — caller owns that.
 pub fn draw_vote_inline(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) {
     let options = [
         (
-            "vL",
+            "v1",
             "lofi",
             &view.vote_counts.lofi,
             view.my_vote == Some(Genre::Lofi),
         ),
         (
-            "vA",
+            "v2",
             "ambient",
             &view.vote_counts.ambient,
             view.my_vote == Some(Genre::Ambient),
         ),
         (
-            "vC",
+            "v3",
             "classic",
             &view.vote_counts.classic,
             view.my_vote == Some(Genre::Classic),
@@ -179,19 +179,19 @@ fn draw_vote_sidebar_options(
 ) {
     let options = [
         (
-            "vL",
+            "v1",
             "Lofi",
             &vote_counts.lofi,
             my_vote == Some(Genre::Lofi),
         ),
         (
-            "vA",
+            "v2",
             "Ambient",
             &vote_counts.ambient,
             my_vote == Some(Genre::Ambient),
         ),
         (
-            "vC",
+            "v3",
             "Classic",
             &vote_counts.classic,
             my_vote == Some(Genre::Classic),

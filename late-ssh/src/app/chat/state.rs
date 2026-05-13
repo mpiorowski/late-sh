@@ -228,6 +228,7 @@ pub struct ChatState {
     pub(crate) showcase: showcase::state::State,
     pub(crate) work_selected: bool,
     pub(crate) work: work::state::State,
+    favorite_room_ids: Vec<Uuid>,
 
     /// Pending desktop notifications drained on render. `kind` matches the
     /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
@@ -362,6 +363,7 @@ impl ChatState {
             ),
             work_selected: false,
             work: work::state::State::new(work_service, user_id, permissions.is_admin()),
+            favorite_room_ids: Vec::new(),
             pending_notifications: Vec::new(),
             requested_help_topic: None,
             requested_settings_modal: false,
@@ -934,19 +936,42 @@ impl ChatState {
         dm_sort_key(room, self.user_id, &self.usernames)
     }
 
-    /// Build the flat visual navigation order.
-    /// Order matches the cozy rail: core rooms, mentions, channels, feeds, DMs.
-    pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        let mut order = visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames);
-        if self.feeds.has_feeds() {
-            let insert_at = order
-                .iter()
-                .position(|slot| *slot == RoomSlot::News)
-                .map(|idx| idx + 1)
-                .unwrap_or(order.len());
-            order.insert(insert_at, RoomSlot::Feeds);
+    pub(crate) fn set_favorite_room_ids(&mut self, favorite_room_ids: Vec<Uuid>) {
+        self.favorite_room_ids = favorite_room_ids;
+    }
+
+    pub(crate) fn favorite_room_ids(&self) -> &[Uuid] {
+        &self.favorite_room_ids
+    }
+
+    pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
+        if self.feeds_selected
+            || self.news_selected
+            || self.notifications_selected
+            || self.discover_selected
+            || self.showcase_selected
+            || self.work_selected
+        {
+            return None;
         }
-        order
+        let room_id = self.selected_room_id?;
+        self.rooms
+            .iter()
+            .any(|(room, _)| room.id == room_id && is_chat_list_room(room))
+            .then_some(room_id)
+    }
+
+    /// Build the flat visual navigation order.
+    /// Order matches the cozy rail exactly: favorites, core, mentions,
+    /// channels, feeds, DMs.
+    pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
+        visual_order_for_rooms(
+            &self.rooms,
+            self.user_id,
+            &self.usernames,
+            self.feeds.has_feeds(),
+            &self.favorite_room_ids,
+        )
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -2750,8 +2775,21 @@ pub(crate) fn visual_order_for_rooms(
     rooms: &[(ChatRoom, Vec<ChatMessage>)],
     user_id: Uuid,
     usernames: &HashMap<Uuid, String>,
+    feeds_available: bool,
+    favorite_room_ids: &[Uuid],
 ) -> Vec<RoomSlot> {
     let mut order = Vec::new();
+    let mut pushed_rooms = HashSet::new();
+
+    for favorite_id in favorite_room_ids {
+        if rooms
+            .iter()
+            .any(|(room, _)| room.id == *favorite_id && is_chat_list_room(room))
+            && pushed_rooms.insert(*favorite_id)
+        {
+            order.push(RoomSlot::Room(*favorite_id));
+        }
+    }
 
     // Core: permanent rooms, hardcoded order
     let core_order = ["general", "announcements", "suggestions", "bugs"];
@@ -2759,6 +2797,7 @@ pub(crate) fn visual_order_for_rooms(
         if let Some((room, _)) = rooms
             .iter()
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
+            && pushed_rooms.insert(room.id)
         {
             order.push(RoomSlot::Room(room.id));
         }
@@ -2770,12 +2809,16 @@ pub(crate) fn visual_order_for_rooms(
         if is_chat_list_room(room)
             && room.kind != "dm"
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+            && pushed_rooms.insert(room.id)
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
 
     order.push(RoomSlot::News);
+    if feeds_available {
+        order.push(RoomSlot::Feeds);
+    }
     order.push(RoomSlot::Showcase);
     order.push(RoomSlot::Work);
 
@@ -2786,7 +2829,10 @@ pub(crate) fn visual_order_for_rooms(
         let name_b = dm_sort_key(b, user_id, usernames);
         name_a.cmp(&name_b)
     });
-    order.extend(dms.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+    order.extend(
+        dms.iter()
+            .filter_map(|(r, _)| pushed_rooms.insert(r.id).then_some(RoomSlot::Room(r.id))),
+    );
     order.push(RoomSlot::Discover);
 
     order
@@ -3775,7 +3821,7 @@ mod tests {
         ];
 
         assert_eq!(
-            visual_order_for_rooms(&rooms, me, &usernames),
+            visual_order_for_rooms(&rooms, me, &usernames, false, &[]),
             vec![
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),

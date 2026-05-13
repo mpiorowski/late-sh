@@ -48,7 +48,6 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Tab::Settings => draw_settings_tab(frame, layout[3], state),
         Tab::Themes => draw_themes_tab(frame, layout[3], state),
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
-        Tab::Favorites => draw_favorites_tab(frame, layout[3], state),
         Tab::Account => draw_account_tab(frame, layout[3], state),
         Tab::Feeds => draw_feeds_tab(frame, layout[3], state),
         Tab::Special => draw_special_tab(frame, layout[3], state),
@@ -139,22 +138,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
             spans.extend([
                 Span::styled("←→ ↵", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
-            ]);
-        }
-        (Tab::Favorites, _) => {
-            spans.extend([
-                Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("J/K", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" reorder  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("d", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" remove  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" add  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),

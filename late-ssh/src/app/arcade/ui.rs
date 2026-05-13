@@ -30,20 +30,13 @@ pub struct GameBottomBar {
 pub fn draw_game_frame(
     frame: &mut Frame,
     area: Rect,
-    title: &str,
+    _title: &str,
     bottom: GameBottomBar,
     show_bottom: bool,
 ) -> Rect {
-    let block = Block::default()
-        .title(format!(" {title} "))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     let bottom_rows: u16 = if bottom.tip.is_some() { 3 } else { 2 };
-    if !show_bottom || inner.height < bottom_rows + 3 {
-        return inner;
+    if !show_bottom || area.height < bottom_rows + 3 {
+        return area;
     }
 
     let mut constraints = vec![
@@ -54,7 +47,7 @@ pub fn draw_game_frame(
     if bottom.tip.is_some() {
         constraints.push(Constraint::Length(1));
     }
-    let rows = Layout::vertical(constraints).split(inner);
+    let rows = Layout::vertical(constraints).split(area);
 
     frame.render_widget(
         Paragraph::new(bottom.status).alignment(Alignment::Center),
@@ -83,18 +76,11 @@ pub fn tip_line(text: impl Into<String>) -> Line<'static> {
 pub fn draw_game_frame_with_info_sidebar<'a>(
     frame: &mut Frame,
     area: Rect,
-    title: &str,
+    _title: &str,
     info_lines: Vec<Line<'a>>,
     show_sidebar: bool,
 ) -> Rect {
-    let block = Block::default()
-        .title(format!(" {title} "))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let (content_area, sidebar_area) = arcade_sidebar_layout(inner, show_sidebar);
+    let (content_area, sidebar_area) = arcade_sidebar_layout(area, show_sidebar);
 
     if let Some(sidebar_area) = sidebar_area {
         draw_arcade_sidebar(frame, sidebar_area, ArcadeSidebarContent::Info(info_lines));
@@ -234,6 +220,19 @@ pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
         spans.push(Span::styled(desc, Style::default().fg(theme::TEXT_DIM())));
     }
     Line::from(spans)
+}
+
+pub fn game_title(selection: usize) -> &'static str {
+    match selection {
+        GAME_SELECTION_2048 => "2048",
+        GAME_SELECTION_TETRIS => "Tetris",
+        GAME_SELECTION_SUDOKU => "Sudoku",
+        GAME_SELECTION_NONOGRAMS => "Nonograms",
+        GAME_SELECTION_MINESWEEPER => "Minesweeper",
+        GAME_SELECTION_SOLITAIRE => "Solitaire",
+        GAME_SELECTION_SNAKE => "Snake",
+        _ => "The Arcade",
+    }
 }
 
 pub struct ArcadeHubView<'a> {

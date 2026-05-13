@@ -350,6 +350,7 @@ impl App {
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
+            favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
@@ -901,6 +902,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         append_rooms_title_extras(&mut spans, ctx);
     }
 
+    if screen == Screen::Arcade && ctx.is_playing_game {
+        append_arcade_title_extras(&mut spans, ctx);
+    }
+
     if screen == Screen::Artboard {
         spans.push(Span::styled(
             "by github.com/mevanlc ",
@@ -938,6 +943,17 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     Line::from(spans)
+}
+
+fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
+    spans.push(Span::styled("· ", Style::default().fg(theme::TEXT_DIM())));
+    spans.push(Span::styled(
+        format!(
+            "{} ",
+            crate::app::arcade::ui::game_title(ctx.game_selection)
+        ),
+        Style::default().fg(theme::TEXT_BRIGHT()),
+    ));
 }
 
 fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {

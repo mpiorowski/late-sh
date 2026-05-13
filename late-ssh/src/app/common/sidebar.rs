@@ -321,9 +321,9 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
 ///   progress bar          (e.g. 0:40 ──●──── 3:00)
 ///   <blank>
 ///   "what's next"         (italic dim label)
-///   L lofi    ███▒    1
-///   A ambient  ·       0
-///   C classic  ·       0
+///   v1 lofi    ███▒    1
+///   v2 ambient  ·       0
+///   v3 classic  ·       0
 fn draw_stream_block(
     frame: &mut Frame,
     area: Rect,

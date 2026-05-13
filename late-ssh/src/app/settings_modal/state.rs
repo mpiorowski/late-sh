@@ -127,14 +127,12 @@ impl SystemField {
 /// Top-level tab in the settings modal. `Settings` holds every compact row
 /// (identity/appearance/location/notifications); `Themes` is a fast browser
 /// for the expanded theme catalog; `Bio` is a separate full-width pane with
-/// the markdown editor + preview; `Favorites` manages the dashboard
-/// quick-switch room list.
+/// the markdown editor + preview.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
     Bio,
     Themes,
-    Favorites,
     Account,
     Feeds,
     /// Hidden until the user has filled out at least one of bio, country,
@@ -143,11 +141,10 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 7] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Settings,
         Tab::Bio,
         Tab::Themes,
-        Tab::Favorites,
         Tab::Feeds,
         Tab::Account,
         Tab::Special,
@@ -158,7 +155,6 @@ impl Tab {
             Tab::Settings => "Settings",
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
-            Tab::Favorites => "Favorites",
             Tab::Account => "Account",
             Tab::Feeds => "Feeds",
             Tab::Special => "Special",

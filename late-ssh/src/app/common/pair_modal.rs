@@ -67,7 +67,7 @@ pub fn draw(frame: &mut Frame, area: Rect, pair_url: &str) {
     .areas(inner);
 
     draw_install_section(frame, install_area);
-    draw_divider(frame, divider_area, "── pair browser ──");
+    draw_divider(frame, divider_area, "── alternatively pair browser ──");
     draw_pair_section(frame, pair_area, qr_widget.as_ref(), qr_size, pair_url);
     draw_footer(frame, footer_area);
 }
@@ -75,25 +75,15 @@ pub fn draw(frame: &mut Frame, area: Rect, pair_url: &str) {
 fn draw_install_section(frame: &mut Frame, area: Rect) {
     let faint = Style::default().fg(theme::TEXT_FAINT());
     let amber = Style::default().fg(theme::AMBER());
-    let amber_bold = Style::default()
-        .fg(theme::AMBER_GLOW())
-        .add_modifier(Modifier::BOLD);
     let code = Style::default()
         .fg(theme::TEXT_BRIGHT())
         .bg(theme::BG_HIGHLIGHT());
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(Span::styled("linux / macos", faint)).centered());
+    lines.push(Line::from(Span::styled("linux / macos / windows", faint)).centered());
     lines.push(Line::from(Span::styled(pill(INSTALL_COMMAND), code)).centered());
     lines.push(Line::from(""));
-    lines.push(
-        Line::from(vec![
-            Span::styled("nixos", faint),
-            Span::raw("  "),
-            Span::styled("CLI support is live", amber_bold),
-        ])
-        .centered(),
-    );
+    lines.push(Line::from(vec![Span::styled("nixos", faint)]).centered());
     lines.push(Line::from(Span::styled(pill(NIX_COMMAND), code)).centered());
     lines.push(Line::from(""));
     lines.push(

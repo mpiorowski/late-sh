@@ -189,6 +189,21 @@ fn switch_room(app: &mut App, delta: isize) {
     }
 }
 
+fn toggle_selected_room_favorite(app: &mut App) -> bool {
+    let Some(room_id) = app.chat.selected_favorite_room_id() else {
+        return false;
+    };
+    let added = app.profile_state.toggle_favorite_room(room_id);
+    app.chat
+        .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+    app.banner = Some(if added {
+        Banner::success("Room added to favorites")
+    } else {
+        Banner::success("Room removed from favorites")
+    });
+    true
+}
+
 /// Shared message-list navigation and actions. Consumed by both the chat page
 /// and the dashboard card so that d/r/e/p/j/k/etc. behave identically on both
 /// screens and new message actions only need to be wired here.
@@ -398,6 +413,10 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
 
     if byte == b' ' {
         app.chat.activate_room_jump();
+        return true;
+    }
+
+    if matches!(byte, b'f' | b'F') && toggle_selected_room_favorite(app) {
         return true;
     }
 

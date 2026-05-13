@@ -1371,6 +1371,7 @@ fn chat_room_list_view(app: &App) -> crate::app::chat::ui::ChatRoomListView<'_> 
         usernames: app.chat.usernames(),
         countries: app.chat.countries(),
         unread_counts: &app.chat.unread_counts,
+        favorite_room_ids: &app.profile_state.profile().favorite_room_ids,
         selected_room_id: app.chat.selected_room_id,
         room_jump_active: app.chat.room_jump_active,
         current_user_id: app.user_id,
@@ -1412,9 +1413,9 @@ fn handle_mouse_scroll_over_screen(
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
-    let content_area = app_content_area(app);
-    let selection_mode = chat_selection_mode(app, content_area);
-    let rooms_area = crate::app::chat::ui::room_list_area(content_area, selection_mode);
+    let Some(rooms_area) = dashboard_room_rail_area(app) else {
+        return false;
+    };
     let room_list_view = chat_room_list_view(app);
     let over_room_list =
         crate::app::chat::ui::room_list_panel_contains(rooms_area, &room_list_view, x, y);
@@ -1441,12 +1442,11 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         select_screen_from_topbar(app, screen, target);
         return true;
     }
-    let content_area = app_content_area(app);
-
     match screen {
         Screen::Dashboard => {
-            let selection_mode = chat_selection_mode(app, content_area);
-            let rooms_area = crate::app::chat::ui::room_list_area(content_area, selection_mode);
+            let Some(rooms_area) = dashboard_room_rail_area(app) else {
+                return false;
+            };
             let room_list_view = chat_room_list_view(app);
             let slot = crate::app::chat::ui::room_list_hit_test(rooms_area, &room_list_view, x, y);
             if let Some(slot) = slot {
@@ -1462,6 +1462,17 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         }
         _ => false,
     }
+}
+
+fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
+    const HOME_RAIL_WIDTH: u16 = 24;
+    let content_area = app_content_area(app);
+    (content_area.width > HOME_RAIL_WIDTH + 20).then_some(Rect {
+        x: content_area.x,
+        y: content_area.y,
+        width: HOME_RAIL_WIDTH,
+        height: content_area.height,
+    })
 }
 
 fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {

@@ -752,6 +752,6 @@ On the Dashboard or Chat screen, press `P` to open a QR code + copy the pairing 
 
 Both options give you:
   m = mute | +/- = volume | visualizer in the sidebar
-  Vote for genres on the Dashboard: L C A
+  Vote for genres on the Dashboard: v1 v2 v3
 
 The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";

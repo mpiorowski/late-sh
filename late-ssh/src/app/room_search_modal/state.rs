@@ -11,6 +11,7 @@ pub(crate) struct RoomSearchItem {
     pub meta: String,
     pub unread_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,
+    pub favorite: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -110,6 +111,7 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
                         .first()
                         .map(|message| message.created)
                         .or(Some(room.updated)),
+                    favorite: chat.favorite_room_ids().contains(&room.id),
                 });
             }
             RoomSlot::Feeds
@@ -186,6 +188,7 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
         meta: meta.to_string(),
         unread_count,
         last_message_at: None,
+        favorite: false,
     }
 }
 
@@ -304,6 +307,7 @@ mod tests {
             meta: meta.to_string(),
             unread_count,
             last_message_at: None,
+            favorite: false,
         }
     }
 

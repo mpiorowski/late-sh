@@ -13,16 +13,16 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
 
 pub fn handle_vote_suffix(app: &mut App, byte: u8) -> bool {
     match byte {
-        b'l' | b'L' => {
+        b'1' | b'l' | b'L' => {
             app.vote.cast_task(Genre::Lofi);
             true
         }
-        b'c' | b'C' => {
-            app.vote.cast_task(Genre::Classic);
+        b'2' | b'a' | b'A' => {
+            app.vote.cast_task(Genre::Ambient);
             true
         }
-        b'a' | b'A' => {
-            app.vote.cast_task(Genre::Ambient);
+        b'3' | b'c' | b'C' => {
+            app.vote.cast_task(Genre::Classic);
             true
         }
         // b'z' | b'Z' => {

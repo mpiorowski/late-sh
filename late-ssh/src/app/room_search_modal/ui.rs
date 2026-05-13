@@ -107,66 +107,78 @@ fn draw_results(
         .saturating_sub(height.saturating_sub(1))
         .min(items.len().saturating_sub(height));
     let width = area.width as usize;
-    let lines: Vec<Line<'static>> = items
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(height)
-        .map(|(index, item)| {
-            let active = index == selected;
-            let marker = if active { ">" } else { " " };
-            let style = if active {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut last_section: Option<bool> = None;
+    for (index, item) in items.iter().enumerate().skip(start) {
+        if lines.len() >= height {
+            break;
+        }
+        if last_section != Some(item.favorite) {
+            last_section = Some(item.favorite);
+            let label = if item.favorite { "favorites" } else { "rooms" };
+            lines.push(Line::from(Span::styled(
+                format!("  {label}"),
                 Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .bg(theme::BG_SELECTION())
-                    .add_modifier(Modifier::BOLD)
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            )));
+            if lines.len() >= height {
+                break;
+            }
+        }
+        let active = index == selected;
+        let marker = if active { ">" } else { " " };
+        let style = if active {
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let meta_style = if active {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        let unread = if item.unread_count > 0 {
+            item.unread_count.to_string()
+        } else {
+            String::new()
+        };
+        let unread_style = if item.unread_count > 0 {
+            let base = Style::default().fg(theme::AMBER_GLOW());
+            if active {
+                base.bg(theme::BG_SELECTION())
             } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let meta_style = if active {
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .bg(theme::BG_SELECTION())
-            } else {
-                Style::default().fg(theme::TEXT_DIM())
-            };
-            let unread = if item.unread_count > 0 {
-                item.unread_count.to_string()
-            } else {
-                String::new()
-            };
-            let unread_style = if item.unread_count > 0 {
-                let base = Style::default().fg(theme::AMBER_GLOW());
-                if active {
-                    base.bg(theme::BG_SELECTION())
-                } else {
-                    base
-                }
-            } else {
-                meta_style
-            };
-            let unread_width = 6usize.min(width.saturating_sub(6));
-            let meta_width = 16usize.min(width.saturating_sub(unread_width + 6));
-            let label_width = width.saturating_sub(meta_width + unread_width + 5);
-            Line::from(vec![
-                Span::styled(format!("{marker} "), style),
-                Span::styled(
-                    pad_right(&truncate_to_width(&item.label, label_width), label_width),
-                    style,
-                ),
-                Span::styled(" ", style),
-                Span::styled(
-                    pad_right(&truncate_to_width(&item.meta, meta_width), meta_width),
-                    meta_style,
-                ),
-                Span::styled(" ", style),
-                Span::styled(
-                    pad_left(&truncate_to_width(&unread, unread_width), unread_width),
-                    unread_style,
-                ),
-            ])
-        })
-        .collect();
+                base
+            }
+        } else {
+            meta_style
+        };
+        let unread_width = 6usize.min(width.saturating_sub(6));
+        let meta_width = 16usize.min(width.saturating_sub(unread_width + 6));
+        let label_width = width.saturating_sub(meta_width + unread_width + 5);
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} "), style),
+            Span::styled(
+                pad_right(&truncate_to_width(&item.label, label_width), label_width),
+                style,
+            ),
+            Span::styled(" ", style),
+            Span::styled(
+                pad_right(&truncate_to_width(&item.meta, meta_width), meta_width),
+                meta_style,
+            ),
+            Span::styled(" ", style),
+            Span::styled(
+                pad_left(&truncate_to_width(&unread, unread_width), unread_width),
+                unread_style,
+            ),
+        ]));
+    }
 
     frame.render_widget(Paragraph::new(lines), area);
 }

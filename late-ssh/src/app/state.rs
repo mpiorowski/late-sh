@@ -672,6 +672,8 @@ impl App {
         if app.screen == Screen::Artboard {
             app.enter_dartboard();
         }
+        app.chat
+            .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
         app.chat.sync_selection();
         app.sync_visible_chat_room();
         Ok(app)
