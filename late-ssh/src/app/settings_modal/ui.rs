@@ -814,12 +814,12 @@ fn draw_feeds_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     ])
     .split(area);
 
-    frame.render_widget(Paragraph::new(section_heading("Feeds")), sections[0]);
+    frame.render_widget(Paragraph::new(section_heading("RSS")), sections[0]);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                "RSS/Atom entries stay private until you share them from Chat > feeds.",
+                "RSS/Atom entries stay private until you share them from Chat > rss.",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ])),
@@ -850,7 +850,7 @@ fn draw_feeds_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 fn feed_display_title(feed: &late_core::models::rss_feed::RssFeed) -> String {
     let title = feed.title.trim();
     if title.is_empty() {
-        "untitled feed".to_string()
+        "untitled RSS".to_string()
     } else {
         title.to_string()
     }
@@ -958,7 +958,7 @@ fn feed_add_line(
         )
     } else if active {
         (
-            "+ Add feed…".to_string(),
+            "+ Add RSS…".to_string(),
             Style::default()
                 .fg(theme::AMBER_GLOW())
                 .bg(theme::BG_SELECTION())
@@ -966,7 +966,7 @@ fn feed_add_line(
         )
     } else {
         (
-            "+ Add feed…".to_string(),
+            "+ Add RSS…".to_string(),
             Style::default().fg(theme::AMBER_DIM()),
         )
     };

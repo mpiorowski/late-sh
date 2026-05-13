@@ -150,7 +150,7 @@ impl Tab {
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Account => "Account",
-            Tab::Feeds => "Feeds",
+            Tab::Feeds => "RSS",
             Tab::Special => "Special",
         }
     }
@@ -1230,13 +1230,13 @@ impl SettingsModalState {
         loop {
             match self.feed_event_rx.try_recv() {
                 Ok(FeedEvent::FeedAdded { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed connected."));
+                    banner = Some(Banner::success("RSS connected."));
                 }
                 Ok(FeedEvent::FeedDeleted { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed removed."));
+                    banner = Some(Banner::success("RSS removed."));
                 }
                 Ok(FeedEvent::FeedFailed { user_id, error }) if user_id == self.user_id => {
-                    banner = Some(Banner::error(&format!("Feed failed: {error}")));
+                    banner = Some(Banner::error(&format!("RSS failed: {error}")));
                 }
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,

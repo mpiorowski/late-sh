@@ -174,7 +174,7 @@ fn item_matches_query(item: &RoomSearchItem, query: &SearchQuery) -> bool {
 
 fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
     let (label, meta, unread_count) = match slot {
-        RoomSlot::Feeds => ("feeds", "rss inbox", chat.feeds.unread_count()),
+        RoomSlot::Feeds => ("rss", "rss inbox", chat.feeds.unread_count()),
         RoomSlot::News => ("news", "shared links", chat.news.unread_count()),
         RoomSlot::Notifications => (
             "mentions",

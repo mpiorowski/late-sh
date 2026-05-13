@@ -939,7 +939,7 @@ impl ChatState {
 
     /// Build the flat visual navigation order.
     /// Order matches the cozy rail exactly: favorites, core, mentions,
-    /// channels, feeds, DMs.
+    /// channels, updates, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
         visual_order_for_rooms(
             &self.rooms,

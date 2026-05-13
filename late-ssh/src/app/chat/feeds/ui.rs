@@ -26,9 +26,9 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
 
     if view.entries.is_empty() {
         let text = if view.has_feeds {
-            "No feed entries yet. Press r to refresh."
+            "No RSS entries yet. Press r to refresh."
         } else {
-            "No feeds connected. Add RSS/Atom URLs in Settings > Feeds."
+            "No RSS sources connected. Add RSS/Atom URLs in Settings > RSS."
         };
         frame.render_widget(
             Paragraph::new(Text::from(text)).style(Style::default().fg(theme::TEXT_DIM())),

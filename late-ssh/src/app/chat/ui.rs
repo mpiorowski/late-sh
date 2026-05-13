@@ -1153,9 +1153,9 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
                 Style::default().fg(theme::TEXT())
             };
             let label = if view.feeds_unread_count > 0 {
-                format!("{prefix}feeds ({})", view.feeds_unread_count)
+                format!("{prefix}rss ({})", view.feeds_unread_count)
             } else {
-                format!("{prefix}feeds")
+                format!("{prefix}rss")
             };
             Line::from(Span::styled(label, style))
         };
@@ -1716,7 +1716,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     }
 
     push_row(blank(), None, false);
-    push_row(section_label("feeds"), None, false);
+    push_row(section_label("updates"), None, false);
     for slot in [
         RoomSlot::News,
         RoomSlot::Feeds,
@@ -1982,14 +1982,14 @@ fn draw_selected_content(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::AMBER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " Sharing feed entry to news · Esc cancel",
+                " Sharing RSS entry to news · Esc cancel",
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
             frame.render_widget(hint_text, composer_area);
         } else {
             let hint_block = Block::default()
-                .title(" Feeds ")
+                .title(" RSS ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
