@@ -446,7 +446,7 @@ fn compact_vote_duration(duration: std::time::Duration) -> String {
     if secs < 60 {
         return format!("{secs}s");
     }
-    let minutes = (secs + 59) / 60;
+    let minutes = secs.div_ceil(60);
     if minutes < 60 {
         return format!("{minutes}m");
     }
