@@ -999,8 +999,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
 | `b` then `1` / `2` / `3` / `4` | Dashboard | Activate a dashboard chord: featured room game, current daily game, current News wire article, or `#announcements` |
-| `P` | Dashboard / Chat | Show browser-pairing QR (copies pairing URL) |
-| `B` | Dashboard / Chat | Open CLI install/build-source modal |
+| `P` | Dashboard / Chat | Open combined install + pair modal: curl / `nix run` / build-from-source CLI options on top, pairing QR underneath (copies pairing URL) |
 | Dashboard chat keys | Dashboard | See `late-ssh/src/app/chat/CONTEXT.md`. |
 | `Enter` | Arcade lobby | Launch selected game |
 | `Esc` | Active Arcade game | Exit back to Arcade lobby |

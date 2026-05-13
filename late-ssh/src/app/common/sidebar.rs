@@ -22,7 +22,6 @@ pub struct SidebarProps<'a> {
     pub game_selection: usize,
     pub is_playing_game: bool,
     pub visualizer: &'a Visualizer,
-    pub show_audio_shortcuts: bool,
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
     pub online_count: usize,
@@ -66,7 +65,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     //   1 row  ── rule
     //   9 rows stream block (now playing + vote merged)
     //   1 row  ── rule
-    //   8 rows active tables (label + up to 3 rooms × 2 rows + spacer)
+    //   6 rows active tables (up to 3 rooms × 2 rows; empty state draws its own label)
     //   1 row  ── rule
     //   Fill   bonsai
     let layout = Layout::vertical([
@@ -76,7 +75,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         Constraint::Length(1), // ── rule
         Constraint::Length(9), // stream block
         Constraint::Length(1), // ── rule
-        Constraint::Length(8), // active tables
+        Constraint::Length(6), // active tables
         Constraint::Length(1), // ── rule
         Constraint::Fill(1),   // bonsai
     ])
@@ -123,90 +122,154 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     );
 }
 
-/// Compact "active tables" panel for the right rail. Shows up to 3 rooms,
-/// 2 rows each (name + seats / dim detail), with a quiet italic label on top.
+/// Compact active tables panel for the right rail. Shows up to 3 busy rooms,
+/// 2 rows each: name, then seat dots + timer.
 fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomCard]) {
     if area.width == 0 || area.height < 2 {
         return;
     }
 
-    let chunks = Layout::vertical([
-        Constraint::Length(1), // "active tables" label
-        Constraint::Fill(1),   // room rows
-    ])
-    .split(area);
-
-    // Label row
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "active tables",
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        ))),
-        chunks[0],
-    );
-
     if rooms.is_empty() {
-        let line = Line::from(Span::styled(
-            "no tables open",
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        ));
-        frame.render_widget(Paragraph::new(line), chunks[1]);
+        let chunks = Layout::vertical([
+            Constraint::Length(1), // empty-state label
+            Constraint::Fill(1),   // hints
+        ])
+        .split(area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "multiplayer",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ))),
+            chunks[0],
+        );
+        draw_empty_active_tables(frame, chunks[1]);
         return;
     }
 
-    let body = chunks[1];
+    let body = area;
     let rows_per_room: u16 = 2;
-    let max_rooms = (body.height / rows_per_room) as usize;
+    let max_rooms = ((body.height / rows_per_room) as usize).min(3);
     let visible_rooms = rooms.iter().take(max_rooms.max(1));
 
     let mut lines: Vec<Line<'_>> = Vec::new();
-    for card in visible_rooms {
-        let occupied = card.occupied_seats.unwrap_or(0);
-        let total = card.total_seats;
-        let seats_str = format!("{}/{}", occupied, total);
+    for (idx, card) in visible_rooms.enumerate() {
         let inner_w = body.width as usize;
-        let name_max = inner_w.saturating_sub(seats_str.len() + 1);
-        let name = truncate_chars(&card.room.display_name, name_max);
-        let pad = inner_w.saturating_sub(name.chars().count() + seats_str.len());
-        let seat_color = if occupied >= total && total > 0 {
-            theme::AMBER()
-        } else if occupied == 0 {
-            theme::TEXT_FAINT()
+        let room_hint = if idx == 0 {
+            Some(active_tables_rooms_hint())
         } else {
-            theme::SUCCESS()
+            None
         };
-        lines.push(Line::from(vec![
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" ".repeat(pad)),
-            Span::styled(seats_str, Style::default().fg(seat_color)),
-        ]));
+        let hint_w = room_hint
+            .as_ref()
+            .map(|hint| hint.iter().map(|span| span.content.chars().count()).sum())
+            .unwrap_or(0);
+        let name_budget = inner_w.saturating_sub(hint_w + 1).max(1);
+        let name = truncate_chars(&card.room.display_name, name_budget);
+        let mut row = vec![Span::styled(
+            name,
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        )];
+        if let Some(hint) = room_hint {
+            let pad = inner_w.saturating_sub(
+                row.iter()
+                    .map(|span| span.content.chars().count())
+                    .sum::<usize>()
+                    + hint_w,
+            );
+            row.push(Span::raw(" ".repeat(pad)));
+            row.extend(hint);
+        }
+        lines.push(Line::from(row));
 
-        let detail = if !card.pace.is_empty() && !card.stakes.is_empty() {
-            format!("{} · {}", card.pace, card.stakes)
-        } else if !card.pace.is_empty() {
-            card.pace.clone()
-        } else if !card.stakes.is_empty() {
-            card.stakes.clone()
-        } else {
-            "waiting".to_string()
-        };
-        let detail = truncate_chars(&detail, body.width as usize);
-        lines.push(Line::from(Span::styled(
-            detail,
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
+        lines.push(active_table_status_line(card, body.width as usize));
     }
 
     frame.render_widget(Paragraph::new(lines), body);
+}
+
+fn active_tables_rooms_hint() -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            "3",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" rooms", Style::default().fg(theme::TEXT_DIM())),
+    ]
+}
+
+fn draw_empty_active_tables(frame: &mut Frame, area: Rect) {
+    let key = |text: &str| -> Span<'static> {
+        Span::styled(
+            text.to_string(),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    let dim = |text: &str| -> Span<'static> {
+        Span::styled(text.to_string(), Style::default().fg(theme::TEXT_DIM()))
+    };
+    let faint = |text: &str| -> Span<'static> {
+        Span::styled(
+            text.to_string(),
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        )
+    };
+
+    let lines = vec![
+        Line::from(faint("no active tables")),
+        Line::from(vec![key("3"), dim(" rooms")]),
+        Line::from(vec![key("n"), dim(" create table")]),
+        Line::from(vec![key("Enter"), dim(" join")]),
+    ];
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn active_table_status_line(card: &DashboardRoomCard, width: usize) -> Line<'static> {
+    let occupied = card.occupied_seats.unwrap_or(0);
+    let total = card.total_seats;
+    let dots = seat_dot_spans(occupied, total);
+    let dot_width = total.min(6);
+    let timer = compact_timer_label(&card.pace);
+    let timer_budget = width.saturating_sub(dot_width + 1);
+    let timer = truncate_chars(&timer, timer_budget);
+
+    let mut spans = dots;
+    if !timer.is_empty() {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(timer, Style::default().fg(theme::TEXT_DIM())));
+    }
+    Line::from(spans)
+}
+
+fn seat_dot_spans(occupied: usize, total: usize) -> Vec<Span<'static>> {
+    let visible_total = total.max(1).min(6);
+    let visible_occupied = occupied.min(visible_total);
+    let mut spans = Vec::with_capacity(visible_total);
+    for idx in 0..visible_total {
+        let symbol = if idx < visible_occupied { "●" } else { "○" };
+        spans.push(Span::styled(symbol, Style::default().fg(theme::AMBER())));
+    }
+    spans
+}
+
+fn compact_timer_label(label: &str) -> String {
+    let label = label.trim();
+    if label.is_empty() {
+        return "waiting".to_string();
+    }
+    label
+        .replace(" action timer", " timer")
+        .replace('-', " ")
+        .to_string()
 }
 
 /// Top-of-rail time. Centered, `◷` clock glyph in dim amber, optional timezone

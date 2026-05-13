@@ -79,12 +79,9 @@ pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, be
                 .add_modifier(Modifier::ITALIC),
         ));
     }
-    lines.push(Line::from(footer));
+    lines.push(Line::from(footer).centered());
 
-    frame.render_widget(
-        ratatui::widgets::Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center),
-        area,
-    );
+    frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
 }
 
 /// Render the bonsai widget for the sidebar. Takes a fixed area.

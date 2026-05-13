@@ -226,7 +226,7 @@ pub struct App {
     pub(super) web_chat_registry: Option<WebChatRegistry>,
     pub(crate) show_web_chat_qr: bool,
     pub(crate) web_chat_qr_url: Option<String>,
-    pub(crate) show_cli_install_modal: bool,
+    pub(crate) show_pair_modal: bool,
     pub(super) session_token: String,
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
@@ -250,10 +250,6 @@ pub struct App {
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
 
-    /// `true` after `b` on the dashboard, waiting for a dashboard box slot
-    /// key (`1` for the featured room, `2` for dailies, `3` for wire,
-    /// `4` for announcements).
-    pub(crate) dashboard_box_prefix_armed: bool,
     pub(crate) vote_prefix_armed: bool,
 
     /// Profile
@@ -349,7 +345,7 @@ impl App {
 
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
         match self.screen {
-            Screen::Dashboard | Screen::Chat => self.chat.selected_room_id,
+            Screen::Dashboard => self.chat.selected_room_id,
             Screen::Rooms => self
                 .rooms_active_room
                 .as_ref()
@@ -587,7 +583,7 @@ impl App {
             web_chat_registry: config.web_chat_registry,
             show_web_chat_qr: false,
             web_chat_qr_url: None,
-            show_cli_install_modal: false,
+            show_pair_modal: false,
             session_token: config.session_token,
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
@@ -619,7 +615,6 @@ impl App {
             rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
-            dashboard_box_prefix_armed: false,
             vote_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
@@ -816,7 +811,7 @@ impl App {
 
         self.screen = screen;
 
-        if matches!(self.screen, Screen::Dashboard | Screen::Chat) {
+        if matches!(self.screen, Screen::Dashboard) {
             self.chat.request_list();
             self.chat.sync_selection();
         }

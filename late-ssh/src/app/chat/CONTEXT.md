@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat feeds, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-10
+- Last updated: 2026-05-12
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -171,6 +171,7 @@ Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_
 Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
 - `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`. Jumping to the already selected room/synthetic entry still re-runs the entry's read/list side effects so stale unread badges clear.
+- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for feeds, News, Showcase, Work, Mentions, and custom room browse. Typing bare `@` shows all DMs ordered by unread count, then latest message; typing `@name` searches DMs with the same ordering.
 - While composing on the Chat page, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
 - Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`, `work_selected`), not `selected_room_id`.
 

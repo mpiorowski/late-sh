@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
 
@@ -8,6 +9,8 @@ pub(crate) struct RoomSearchItem {
     pub slot: RoomSlot,
     pub label: String,
     pub meta: String,
+    pub unread_count: i64,
+    pub last_message_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -89,20 +92,35 @@ impl RoomSearchModalState {
 pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomSearchItem> {
     let mut items = Vec::new();
     for slot in chat.visual_order() {
-        let RoomSlot::Room(room_id) = slot else {
-            continue;
-        };
-        let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id) else {
-            continue;
-        };
-        if !is_chat_list_room(room) {
-            continue;
+        match slot {
+            RoomSlot::Room(room_id) => {
+                let Some((room, messages)) = chat.rooms.iter().find(|(room, _)| room.id == room_id)
+                else {
+                    continue;
+                };
+                if !is_chat_list_room(room) {
+                    continue;
+                }
+                items.push(RoomSearchItem {
+                    slot,
+                    label: room_label(room, current_user_id, &chat.usernames),
+                    meta: room_meta(room),
+                    unread_count: chat.unread_counts.get(&room.id).copied().unwrap_or(0),
+                    last_message_at: messages
+                        .first()
+                        .map(|message| message.created)
+                        .or(Some(room.updated)),
+                });
+            }
+            RoomSlot::Feeds
+            | RoomSlot::News
+            | RoomSlot::Notifications
+            | RoomSlot::Discover
+            | RoomSlot::Showcase
+            | RoomSlot::Work => {
+                items.push(synthetic_item(slot, chat));
+            }
         }
-        items.push(RoomSearchItem {
-            slot,
-            label: room_label(room, current_user_id, &chat.usernames),
-            meta: room_meta(room),
-        });
     }
     items
 }
@@ -112,19 +130,63 @@ pub(crate) fn filtered_items(
     current_user_id: Uuid,
     query: &str,
 ) -> Vec<RoomSearchItem> {
-    let query = normalize_query(query);
-    let all = search_items(chat, current_user_id);
-    if query.is_empty() {
+    let query = SearchQuery::parse(query);
+    let mut all = search_items(chat, current_user_id);
+    if query.kind == SearchQueryKind::All && query.text.is_empty() {
         return all;
     }
 
-    all.into_iter()
-        .filter(|item| {
-            let label = normalize_query(&item.label);
-            let meta = normalize_query(&item.meta);
-            label.contains(&query) || meta.contains(&query)
-        })
-        .collect()
+    let mut items: Vec<_> = all
+        .drain(..)
+        .filter(|item| item_matches_query(item, &query))
+        .collect();
+
+    if matches!(query.kind, SearchQueryKind::Dms) {
+        items.sort_by(|a, b| {
+            b.unread_count
+                .cmp(&a.unread_count)
+                .then_with(|| b.last_message_at.cmp(&a.last_message_at))
+                .then_with(|| normalize_text(&a.label).cmp(&normalize_text(&b.label)))
+        });
+    }
+
+    items
+}
+
+fn item_matches_query(item: &RoomSearchItem, query: &SearchQuery) -> bool {
+    if query.kind == SearchQueryKind::Dms && !item.label.starts_with('@') {
+        return false;
+    }
+    if query.kind == SearchQueryKind::Rooms && !item.label.starts_with('#') {
+        return false;
+    }
+    let label = normalize_text(&item.label);
+    let meta = normalize_text(&item.meta);
+    query.text.is_empty() || label.contains(&query.text) || meta.contains(&query.text)
+}
+
+fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
+    let (label, meta, unread_count) = match slot {
+        RoomSlot::Feeds => ("feeds", "rss inbox", chat.feeds.unread_count()),
+        RoomSlot::News => ("news", "shared links", chat.news.unread_count()),
+        RoomSlot::Notifications => (
+            "mentions",
+            "notifications",
+            chat.notifications.unread_count(),
+        ),
+        RoomSlot::Discover => ("browse rooms", "custom rooms", 0),
+        RoomSlot::Showcase => ("showcases", "projects", chat.showcase.unread_count()),
+        RoomSlot::Work => ("work", "profiles", chat.work.unread_count()),
+        RoomSlot::Room(_) => unreachable!("real rooms are built from ChatRoom"),
+    };
+
+    RoomSearchItem {
+        slot,
+        label: label.to_string(),
+        meta: meta.to_string(),
+        unread_count,
+        last_message_at: None,
+    }
 }
 
 fn room_label(
@@ -173,7 +235,44 @@ fn room_meta(room: &ChatRoom) -> String {
     }
 }
 
-fn normalize_query(input: &str) -> String {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchQueryKind {
+    All,
+    Rooms,
+    Dms,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SearchQuery {
+    kind: SearchQueryKind,
+    text: String,
+}
+
+impl SearchQuery {
+    fn parse(input: &str) -> Self {
+        let trimmed = input.trim();
+        if let Some(rest) = trimmed.strip_prefix('@') {
+            return Self {
+                kind: SearchQueryKind::Dms,
+                text: normalize_text(rest),
+            };
+        }
+
+        if let Some(rest) = trimmed.strip_prefix('#') {
+            return Self {
+                kind: SearchQueryKind::Rooms,
+                text: normalize_text(rest),
+            };
+        }
+
+        Self {
+            kind: SearchQueryKind::All,
+            text: normalize_text(trimmed),
+        }
+    }
+}
+
+fn normalize_text(input: &str) -> String {
     input.trim().trim_start_matches(['#', '@']).to_lowercase()
 }
 
@@ -198,10 +297,72 @@ mod tests {
         }
     }
 
+    fn item(label: &str, meta: &str, unread_count: i64) -> RoomSearchItem {
+        RoomSearchItem {
+            slot: RoomSlot::Room(Uuid::from_u128(1)),
+            label: label.to_string(),
+            meta: meta.to_string(),
+            unread_count,
+            last_message_at: None,
+        }
+    }
+
     #[test]
     fn query_ignores_room_prefixes() {
-        assert_eq!(normalize_query("#general"), "general");
-        assert_eq!(normalize_query("@alice"), "alice");
+        assert_eq!(SearchQuery::parse("#general").text, "general");
+        assert_eq!(SearchQuery::parse("@alice").text, "alice");
+    }
+
+    #[test]
+    fn bare_at_filters_to_dms() {
+        assert_eq!(
+            SearchQuery::parse("@"),
+            SearchQuery {
+                kind: SearchQueryKind::Dms,
+                text: String::new()
+            }
+        );
+    }
+
+    #[test]
+    fn prefixed_queries_select_room_kind() {
+        assert_eq!(SearchQuery::parse("@alice").kind, SearchQueryKind::Dms);
+        assert_eq!(SearchQuery::parse("#general").kind, SearchQueryKind::Rooms);
+        assert_eq!(SearchQuery::parse("general").kind, SearchQueryKind::All);
+    }
+
+    #[test]
+    fn bare_at_matches_all_dms() {
+        let query = SearchQuery::parse("@");
+        assert!(item_matches_query(
+            &item("@alice", "direct message", 2),
+            &query
+        ));
+        assert!(item_matches_query(
+            &item("@bob", "direct message", 0),
+            &query
+        ));
+        assert!(!item_matches_query(
+            &item("#general", "core room", 3),
+            &query
+        ));
+    }
+
+    #[test]
+    fn named_at_matches_dms_by_name_or_meta() {
+        let query = SearchQuery::parse("@ali");
+        assert!(item_matches_query(
+            &item("@alice", "direct message", 0),
+            &query
+        ));
+        assert!(!item_matches_query(
+            &item("#alice", "public room", 0),
+            &query
+        ));
+        assert!(!item_matches_query(
+            &item("@bob", "direct message", 0),
+            &query
+        ));
     }
 
     #[test]

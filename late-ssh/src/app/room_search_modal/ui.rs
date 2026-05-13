@@ -74,10 +74,10 @@ fn draw_query(frame: &mut Frame, area: Rect, state: &RoomSearchModalState) {
     let mut query = state.query().to_string();
     query.push('█');
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("/", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(query, Style::default().fg(theme::TEXT_BRIGHT())),
-        ])),
+        Paragraph::new(Line::from(Span::styled(
+            query,
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ))),
         inner,
     );
 }
@@ -130,8 +130,24 @@ fn draw_results(
             } else {
                 Style::default().fg(theme::TEXT_DIM())
             };
-            let meta_width = 16usize.min(width.saturating_sub(6));
-            let label_width = width.saturating_sub(meta_width + 4);
+            let unread = if item.unread_count > 0 {
+                item.unread_count.to_string()
+            } else {
+                String::new()
+            };
+            let unread_style = if item.unread_count > 0 {
+                let base = Style::default().fg(theme::AMBER_GLOW());
+                if active {
+                    base.bg(theme::BG_SELECTION())
+                } else {
+                    base
+                }
+            } else {
+                meta_style
+            };
+            let unread_width = 6usize.min(width.saturating_sub(6));
+            let meta_width = 16usize.min(width.saturating_sub(unread_width + 6));
+            let label_width = width.saturating_sub(meta_width + unread_width + 5);
             Line::from(vec![
                 Span::styled(format!("{marker} "), style),
                 Span::styled(
@@ -139,7 +155,15 @@ fn draw_results(
                     style,
                 ),
                 Span::styled(" ", style),
-                Span::styled(truncate_to_width(&item.meta, meta_width), meta_style),
+                Span::styled(
+                    pad_right(&truncate_to_width(&item.meta, meta_width), meta_width),
+                    meta_style,
+                ),
+                Span::styled(" ", style),
+                Span::styled(
+                    pad_left(&truncate_to_width(&unread, unread_width), unread_width),
+                    unread_style,
+                ),
             ])
         })
         .collect();
@@ -174,6 +198,14 @@ fn pad_right(text: &str, width: usize) -> String {
     let mut out = String::with_capacity(text.len() + width.saturating_sub(used));
     out.push_str(text);
     out.push_str(&" ".repeat(width.saturating_sub(used)));
+    out
+}
+
+fn pad_left(text: &str, width: usize) -> String {
+    let used = UnicodeWidthStr::width(text);
+    let mut out = String::with_capacity(text.len() + width.saturating_sub(used));
+    out.push_str(&" ".repeat(width.saturating_sub(used)));
+    out.push_str(text);
     out
 }
 

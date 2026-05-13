@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear},
 };
 
-use late_core::models::leaderboard::{DailyCompletionStatus, DailyGame, LeaderboardData};
+use late_core::models::leaderboard::LeaderboardData;
 
 use super::{
     artboard, bonsai, chat,
@@ -78,45 +78,6 @@ fn arcade_sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enab
     }
 }
 
-fn dashboard_header_enabled(
-    show_settings: bool,
-    draft_enabled: bool,
-    profile_enabled: bool,
-) -> bool {
-    if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
-    }
-}
-
-fn dashboard_daily_statuses(
-    completion: &DailyCompletionStatus,
-) -> [dashboard::ui::DashboardDailyStatus; 4] {
-    [
-        dashboard::ui::DashboardDailyStatus {
-            game: DailyGame::Sudoku,
-            completed_today: completion.completed(DailyGame::Sudoku),
-            launch_key: 's',
-        },
-        dashboard::ui::DashboardDailyStatus {
-            game: DailyGame::Nonogram,
-            completed_today: completion.completed(DailyGame::Nonogram),
-            launch_key: 'n',
-        },
-        dashboard::ui::DashboardDailyStatus {
-            game: DailyGame::Solitaire,
-            completed_today: completion.completed(DailyGame::Solitaire),
-            launch_key: 'o',
-        },
-        dashboard::ui::DashboardDailyStatus {
-            game: DailyGame::Minesweeper,
-            completed_today: completion.completed(DailyGame::Minesweeper),
-            launch_key: 'm',
-        },
-    ]
-}
-
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -176,7 +137,8 @@ struct DrawContext<'a> {
     splash_hint: &'a str,
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
-    show_cli_install_modal: bool,
+    show_pair_modal: bool,
+    pair_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
     chat_state: &'a chat::state::ChatState,
@@ -236,11 +198,6 @@ impl App {
             self.settings_modal_state.draft().show_right_sidebar,
             self.profile_state.profile().show_right_sidebar,
         );
-        let show_dashboard_header = dashboard_header_enabled(
-            self.show_settings,
-            self.settings_modal_state.draft().show_dashboard_header,
-            self.profile_state.profile().show_dashboard_header,
-        );
         let show_arcade_sidebar = arcade_sidebar_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_arcade_sidebar,
@@ -255,10 +212,6 @@ impl App {
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
-        let now_playing_text = now_playing.as_ref().map(|np| np.track.to_string());
-        let vote_next_switch_in = vote_snapshot
-            .next_switch_in
-            .saturating_sub(vote_snapshot.updated_at.elapsed());
         let visualizer = &self.visualizer;
         let paired_client_state = self.paired_client_state();
         let chat_usernames = self.chat.usernames();
@@ -276,8 +229,6 @@ impl App {
             && !self.chat.discover_selected
             && !self.chat.showcase_selected
             && !self.chat.work_selected;
-        let dashboard_featured_room =
-            dashboard::ui::featured_dashboard_room(&self.rooms_snapshot, &self.room_game_registry);
         let top_rooms =
             dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 3);
         let online_count = self
@@ -285,13 +236,6 @@ impl App {
             .as_ref()
             .map(|active_users| active_users.lock_recover().len())
             .unwrap_or(0);
-        let dashboard_daily_completion = self
-            .leaderboard
-            .user_daily_statuses
-            .get(&self.user_id)
-            .cloned()
-            .unwrap_or_default();
-        let dashboard_daily_statuses = dashboard_daily_statuses(&dashboard_daily_completion);
         let dashboard_cycle_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
@@ -303,16 +247,8 @@ impl App {
         let dashboard_selected_news_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_view = dashboard::ui::DashboardRenderInput {
-            now_playing: now_playing_text.as_deref(),
-            vote_counts: &vote_snapshot.counts,
-            current_genre: vote_snapshot.current_genre,
-            next_switch_in: vote_next_switch_in,
-            my_vote: vote_my_vote,
-            show_header: show_dashboard_header,
-            pinned_messages: self.chat.pinned_messages(),
-            featured_room: dashboard_featured_room.as_ref(),
-            box_prefix_armed: self.dashboard_box_prefix_armed,
-            daily_statuses: &dashboard_daily_statuses,
+            activity: &self.activity,
+            online_count,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
             chat_view: chat::ui::DashboardChatView {
@@ -541,7 +477,8 @@ impl App {
                         splash_hint: &self.splash_hint,
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
-                        show_cli_install_modal: self.show_cli_install_modal,
+                        show_pair_modal: self.show_pair_modal,
+                        pair_url: &self.connect_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
                         chat_state: &self.chat,
@@ -736,21 +673,11 @@ impl App {
                 }
 
                 if ctx.home_selected {
-                    dashboard::home_new::draw_home_new_shell(
-                        frame,
-                        center_area,
-                        dashboard::home_new::HomeNewRenderInput {
-                            top_rooms: ctx.top_rooms,
-                            activity: ctx.activity,
-                            online_count: ctx.online_count,
-                            chat_view: ctx.dashboard_view.chat_view,
-                        },
-                    );
+                    dashboard::ui::draw_dashboard(frame, center_area, ctx.dashboard_view);
                 } else {
                     chat::ui::draw_chat_center(frame, center_area, ctx.chat_view);
                 }
             }
-            Screen::Chat => chat::ui::draw_chat(frame, content_area, ctx.chat_view),
             Screen::Artboard => {
                 if let Some(state) = ctx.dartboard_state {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
@@ -801,7 +728,6 @@ impl App {
                     game_selection: ctx.game_selection,
                     is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
-                    show_audio_shortcuts: matches!(screen, Screen::Dashboard | Screen::Chat),
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
                     online_count: ctx.online_count,
@@ -904,8 +830,8 @@ impl App {
             super::common::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
         }
 
-        if ctx.show_cli_install_modal {
-            super::common::cli_install::draw(frame, inner);
+        if ctx.show_pair_modal {
+            super::common::pair_modal::draw(frame, inner, ctx.pair_url);
         }
 
         if ctx.room_search_modal_open {
@@ -957,7 +883,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     let page_title = match screen {
-        Screen::Dashboard | Screen::Chat => "Home",
+        Screen::Dashboard => "Home",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",

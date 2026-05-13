@@ -500,7 +500,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                     .map_or(&*app.connect_url, |p| p.0);
                 let token = registry.create_link(app.user_id, username);
                 let url = format!("{}/chat/{}", base_url, token);
-                app.pending_clipboard = Some(url.clone());
                 app.web_chat_qr_url = Some(url);
                 app.show_web_chat_qr = true;
             }

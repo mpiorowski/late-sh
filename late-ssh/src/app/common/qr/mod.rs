@@ -71,13 +71,12 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
 
     let dim = Style::default().fg(theme::TEXT_DIM());
     let amber = Style::default().fg(theme::AMBER());
-    let green = Style::default().fg(theme::SUCCESS());
 
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(format!("  {subtitle}"), dim)),
-            Line::from(Span::styled("  URL copied to clipboard", green)),
+            Line::from(""),
             Line::from(Span::styled(format!("  {url}"), amber)),
             Line::from(""),
         ])

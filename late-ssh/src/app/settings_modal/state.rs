@@ -52,7 +52,6 @@ pub enum Row {
     Langs,
     Theme,
     BackgroundColor,
-    DashboardHeader,
     RightSidebar,
     Country,
     Timezone,
@@ -65,7 +64,7 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 17] = [
+    pub const ALL: [Row; 16] = [
         Row::Username,
         Row::Ide,
         Row::Terminal,
@@ -73,7 +72,6 @@ impl Row {
         Row::Langs,
         Row::Theme,
         Row::BackgroundColor,
-        Row::DashboardHeader,
         Row::RightSidebar,
         Row::Country,
         Row::Timezone,
@@ -1393,10 +1391,6 @@ impl SettingsModalState {
             }
             Row::BackgroundColor => {
                 self.draft.enable_background_color ^= true;
-                true
-            }
-            Row::DashboardHeader => {
-                self.draft.show_dashboard_header ^= true;
                 true
             }
             Row::RightSidebar => {
