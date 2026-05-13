@@ -28,13 +28,20 @@ function Fail {
 }
 
 function Get-Target {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    $arch = if ([System.Environment]::Is64BitOperatingSystem) {
+        $env:PROCESSOR_ARCHITEW6432
+        if (-not $env:PROCESSOR_ARCHITEW6432) {
+            $env:PROCESSOR_ARCHITECTURE
+        }
+    } else {
+        $env:PROCESSOR_ARCHITECTURE
+    }
 
-    switch ($arch) {
-        "X64" {
+    switch -Regex ($arch) {
+        "^(AMD64|x86_64)$" {
             return "x86_64-pc-windows-msvc"
         }
-        "Arm64" {
+        "^ARM64$" {
             Fail "unsupported architecture: ARM64 (native ARM64 build is not published yet)"
         }
         default {

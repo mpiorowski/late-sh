@@ -68,7 +68,7 @@ jobs:
 
       - name: set_up_android_sdk
         if: matrix.android == true
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4.0.1
 
       - name: install_android_ndk
         if: matrix.android == true

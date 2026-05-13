@@ -9,7 +9,7 @@ use late_core::models::{
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::ServerBan,
-    user::{RightSidebarMode, User},
+    user::User,
 };
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::chat::notifications::svc::NotificationService;
@@ -344,7 +344,8 @@ async fn admin_can_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(message.id, true);
+    let (pinned_tx, _pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    service.toggle_message_pin_task(message.id, true, pinned_tx);
 
     timeout(Duration::from_secs(2), async {
         loop {
@@ -386,7 +387,8 @@ async fn non_admin_cannot_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(message.id, false);
+    let (pinned_tx, _pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    service.toggle_message_pin_task(message.id, false, pinned_tx);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let updated = ChatMessage::get(&client, message.id)
@@ -704,9 +706,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             enable_background_color: false,
             show_dashboard_header: true,
             show_right_sidebar: true,
-            right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_screens: vec![1, 2, 3, 4, 5],
-            show_arcade_sidebar: true,
+            show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: vec![favorite_room.id],
         },

@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-05-11
+- Last updated: 2026-05-13
 - Purpose: local working context for The Arcade screen, single-player terminal games, and shared card/chip helpers.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -46,11 +46,12 @@ Per-game directories generally follow:
 
 ## Navigation
 
-- The top-level screen is `Screen::Arcade`, key `3`, rendered as `The Arcade`.
-- `Tab` / `Shift+Tab` cycle through Dashboard -> Chat -> Arcade -> Rooms -> Artboard.
+- The top-level screen is `Screen::Arcade`, key `2`, rendered as `The Arcade`.
+- `Tab` / `Shift+Tab` cycle through Dashboard/Home -> Arcade -> Rooms -> Artboard.
 - Lobby order is defined in `arcade/input.rs` as `LOBBY_GAME_ORDER`; keep it in sync with `arcade/ui.rs` render order.
 - `j/k` and up/down arrows move through the lobby.
 - `Enter` launches the selected available game and sets `is_playing_game = true`.
+- Nonograms are only launchable when `nonogram_state.has_puzzles()` is true; otherwise the lobby card is present but treated as unavailable/coming soon.
 - `Esc`, `q`, or `Q` leaves an active Arcade game and returns to the lobby. Snake persists progress before leaving.
 - Backtick from an active Arcade game records `DashboardGameToggleTarget::Arcade` and returns to Dashboard; Dashboard can return to the last Arcade target.
 
@@ -130,8 +131,8 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 
 - `arcade/ui.rs` renders the lobby header/list and delegates active games to their `ui.rs`.
 - The lobby hides the ASCII header when the terminal is short and auto-scrolls the selected entry near the top third of the viewport.
-- `draw_game_frame`, `draw_game_frame_with_info_sidebar`, `status_line`, `keys_line`, `tip_line`, and `info_label_value` are shared helpers used by Arcade games and some non-Arcade surfaces.
-- The Arcade sidebar is controlled by profile setting `show_arcade_sidebar`; the reader still accepts the legacy `show_games_sidebar` key.
+- `draw_game_frame`, `draw_game_frame_with_info_sidebar`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, `tip_line`, `key_hint`, `info_label_value`, and `info_tagline` are shared helpers used by Arcade games and some non-Arcade surfaces.
+- The old profile-controlled Arcade sidebar preference has been removed. Arcade game bottom status/key bars render unconditionally; `draw_game_frame_with_info_sidebar` remains a shared helper for non-Arcade room-game surfaces such as Blackjack.
 
 ## Keybindings
 

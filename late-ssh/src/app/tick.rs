@@ -31,6 +31,25 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        // Poll image upload results.
+        if let Some(result) = self.chat.poll_image_upload() {
+            let target_room_id = self.chat.take_image_upload_target_room_id();
+            match result {
+                Ok(url) => {
+                    if let Some(room_id) = target_room_id.or(self.chat.selected_room_id) {
+                        self.chat.start_composing_in_room(room_id);
+                        self.chat.composer_push_str(&url);
+                    }
+                    self.banner = Some(crate::app::common::primitives::Banner::success(
+                        "Image uploaded - press Enter to send",
+                    ));
+                }
+                Err(msg) => {
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&msg));
+                }
+            }
+        }
+        self.chat.poll_inline_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state
                 .append_result(output.success, output.lines);
@@ -38,7 +57,7 @@ impl App {
         self.sync_visible_chat_room();
         if self.chat.pending_chat_screen_switch {
             self.chat.pending_chat_screen_switch = false;
-            self.set_screen(Screen::Chat);
+            self.set_screen(Screen::Dashboard);
         }
         if let Some(b) = self.vote.tick() {
             self.banner = Some(b);
@@ -47,6 +66,8 @@ impl App {
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
         }
+        self.chat
+            .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
         if let Some(b) = self.settings_modal_state.tick() {
             self.banner = Some(b);
         }
@@ -58,11 +79,8 @@ impl App {
             && !self.profile_state.profile().username.is_empty()
         {
             if self.profile_state.profile().show_settings_on_connect {
-                self.settings_modal_state.open_from_profile(
-                    self.profile_state.profile(),
-                    self.chat.favorite_room_options(),
-                    crate::app::settings_modal::ui::MODAL_WIDTH,
-                );
+                self.settings_modal_state
+                    .open_from_profile(self.profile_state.profile());
             } else {
                 self.show_settings = false;
             }
@@ -74,6 +92,26 @@ impl App {
                 SessionMessage::Heartbeat => {}
                 SessionMessage::Viz(viz) => {
                     self.push_browser_frame(viz);
+                    updated = true;
+                }
+                SessionMessage::ClipboardImage { data } => {
+                    let Some(upload) = self.chat.take_pending_clipboard_image_upload() else {
+                        tracing::warn!("ignoring unsolicited paired clipboard image");
+                        continue;
+                    };
+                    if let Some(banner) = self.chat.start_image_upload_in_room(data, upload.room_id)
+                    {
+                        self.banner = Some(banner);
+                    } else {
+                        self.banner = Some(crate::app::common::primitives::Banner::success(
+                            "Clipboard image found - uploading...",
+                        ));
+                    }
+                    updated = true;
+                }
+                SessionMessage::ClipboardImageFailed { message } => {
+                    self.chat.clear_pending_clipboard_image_upload();
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&message));
                     updated = true;
                 }
                 SessionMessage::Terminate { reason } => {

@@ -6,6 +6,7 @@
 RUST_LOG ?= info,late_web=debug,late_ssh=debug,late_core=debug
 CARGO_TARGET_DIR ?= /app/target
 INSTANCE ?= late                                            # Prefix for container names; bump (e.g. late2) for a parallel clone
+LATE_UI_NEW_SHELL=1
 
 # --- SSH ---
 LATE_FORCE_ADMIN ?= 1
@@ -56,6 +57,15 @@ LATE_AI_ENABLED ?= 1                                        # Enable AI-powered 
 LATE_AI_API_KEY ?=                                              # Gemini API key for AI features
 LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to use
 
+# --- Files / uploads (optional; blank disables uploads) ---
+LATE_FILES_S3_ENDPOINT ?= https://8ecfba101ed3834cf19fd86e68fc325b.r2.cloudflarestorage.com # S3/R2 endpoint URL
+LATE_FILES_S3_BUCKET ?= late-sh-r-files                     								# S3/R2 bucket for uploaded files
+LATE_FILES_PUBLIC_BASE_URL ?= https://files.late.sh                               			# Public base URL, e.g. https://files.late.sh
+LATE_FILES_S3_REGION ?= auto                                								# Cloudflare R2 signing region
+LATE_FILES_MAX_UPLOAD_BYTES ?= 10485760                     								# Max image upload size
+LATE_FILES_S3_ACCESS_KEY_ID ?=  								                            # S3/R2 access key ID
+LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secret access key
+
 ####################################################
 # Targets
 ####################################################
@@ -65,6 +75,7 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "RUST_LOG=$(RUST_LOG)" > .env
 	@echo "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" >> .env
 	@echo "INSTANCE=$(INSTANCE)" >> .env
+	@echo "LATE_UI_NEW_SHELL=$(LATE_UI_NEW_SHELL)" >> .env
 	@echo "LATE_FORCE_ADMIN=$(LATE_FORCE_ADMIN)" >> .env
 	@echo "LATE_SSH_PORT=$(LATE_SSH_PORT)" >> .env
 	@echo "LATE_API_PORT=$(LATE_API_PORT)" >> .env
@@ -102,6 +113,13 @@ LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to us
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env
 	@echo "LATE_AI_MODEL=$(LATE_AI_MODEL)" >> .env
+	@echo "LATE_FILES_S3_ENDPOINT=$(LATE_FILES_S3_ENDPOINT)" >> .env
+	@echo "LATE_FILES_S3_BUCKET=$(LATE_FILES_S3_BUCKET)" >> .env
+	@echo "LATE_FILES_PUBLIC_BASE_URL=$(LATE_FILES_PUBLIC_BASE_URL)" >> .env
+	@echo "LATE_FILES_S3_REGION=$(LATE_FILES_S3_REGION)" >> .env
+	@echo "LATE_FILES_S3_ACCESS_KEY_ID=$(LATE_FILES_S3_ACCESS_KEY_ID)" >> .env
+	@echo "LATE_FILES_S3_SECRET_ACCESS_KEY=$(LATE_FILES_S3_SECRET_ACCESS_KEY)" >> .env
+	@echo "LATE_FILES_MAX_UPLOAD_BYTES=$(LATE_FILES_MAX_UPLOAD_BYTES)" >> .env
 
 # Recipe for a parallel "instance 2" clone. Run from the second clone:
 #   make start-instance2          # bring up the stack (foreground)
@@ -129,7 +147,7 @@ keys:
 	@if [ ! -f server_key ]; then ssh-keygen -t ed25519 -f server_key -N "" -q; fi
 
 check:
-	cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace --all-targets
+	cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace --all-targets --no-fail-fast
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build

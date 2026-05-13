@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat feeds, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-10
+- Last updated: 2026-05-13
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -14,8 +14,8 @@
 This file owns chat-specific context that used to make the root `CONTEXT.md` too large.
 
 Included here:
-- Main chat rooms, DMs, public/private topic rooms, and game-backed room chat.
-- Dashboard chat and embedded Rooms chat surfaces.
+- Home chat rooms, DMs, public/private topic rooms, synthetic entries, and game-backed room chat.
+- Home/Dashboard chat center, room rail, and embedded Rooms chat surfaces.
 - Message composer, replies, edits, deletes, reactions, pinned messages, ignores, overlays, and autocomplete.
 - Synthetic chat entries: Feeds, News, Mentions/Notifications, Showcase, Work, and Discover.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
@@ -31,8 +31,8 @@ late-ssh/src/app/chat/
 |-- mod.rs                       # Module declarations only
 |-- svc.rs                       # ChatService: DB boundary, snapshots, events, room/message tasks
 |-- state.rs                     # ChatState: local UI state, receivers, composer, room/message selection
-|-- input.rs                     # Chat-page input plus shared message actions used by Dashboard/Rooms
-|-- ui.rs                        # Full chat, dashboard chat, embedded room chat, room list, composer, row cache
+|-- input.rs                     # Home chat input plus shared message actions used by Dashboard/Rooms
+|-- ui.rs                        # Home room rail/chat center, dashboard-general view, embedded room chat, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- feeds/                       # Synthetic Feeds entry: private per-user RSS/Atom inbox
@@ -67,8 +67,8 @@ Chat-owned moderation commands also use `room_ban.rs`,
 
 - `svc.rs` is the async boundary between TUI state, DB models, mention notifications, and broadcast/watch channels.
 - `state.rs` owns local chat data, room/message selection, composer state, reply/edit/reaction/pin state, overlays, synthetic-entry substates, unread/read tracking, and cache inputs.
-- `input.rs` maps chat keys to state/service actions. `handle_message_action_in_room` is shared by the full Chat screen, Dashboard chat, and embedded Rooms chat.
-- `ui.rs` renders chat surfaces and owns `ChatRowsCache`.
+- `input.rs` maps Home chat keys to state/service actions. `handle_message_action_in_room` is shared by Home chat and embedded Rooms chat.
+- `ui.rs` renders Home room rail/chat center surfaces and owns `ChatRowsCache`.
 - `ui_text.rs` centralizes wrapping for normal messages, the small Markdown subset, reply quotes, `---NEWS---` cards, and reaction footers.
 
 Keep `mod.rs` declaration-only; no `pub use` re-export layer.
@@ -144,20 +144,19 @@ Notifications:
 
 ## 6. Rooms And Selection
 
-`RoomSlot` represents either a real room or one of the synthetic entries: News, Notifications, Discover, Showcase, or Work.
+`RoomSlot` represents either a real room or one of the synthetic entries: Feeds, News, Notifications/Mentions, Discover, Showcase, or Work.
 
-Visual order is defined in `state.rs` and mirrored by room-list rendering in `ui.rs`:
-1. Core permanent rooms: `general`, `announcements`, `suggestions`, `bugs`.
-2. Other permanent rooms.
-3. Feeds, when the current user has at least one RSS/Atom subscription.
-4. News.
-5. Showcase.
-6. Work.
-7. Notifications/Mentions.
-8. Discover.
-9. Public topic rooms, sorted by slug.
-10. Private topic rooms, sorted by slug.
-11. DMs, sorted by peer display name.
+Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`:
+1. Favorite real rooms in `users.settings.favorite_room_ids` order.
+2. Core permanent rooms: `general`, `announcements`, `suggestions`, `bugs`.
+3. Notifications/Mentions.
+4. Other non-DM chat-list rooms/channels, excluding favorites.
+5. News.
+6. Feeds, when the current user has at least one RSS/Atom subscription.
+7. Showcase.
+8. Work.
+9. DMs, sorted by peer display name.
+10. Discover / `+ browse rooms`.
 
 Feeds:
 - Feed subscriptions are per-user and managed in `Settings -> Feeds`.
@@ -166,43 +165,39 @@ Feeds:
 - The `feeds` synthetic room is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#general` announcement.
 - Enter copies the selected feed entry URL, `d` dismisses it, and `r` asks the feed poller to refresh.
 
-Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_room` hides them from the main Chat room list/navigation and favorite-room picker.
+Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.
 
 Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
 - `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`. Jumping to the already selected room/synthetic entry still re-runs the entry's read/list side effects so stale unread badges clear.
-- While composing on the Chat page, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
+- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for feeds, News, Showcase, Work, Mentions, and custom room browse. Typing bare `@` shows all DMs ordered by unread count, then latest message; typing `@name` searches DMs with the same ordering.
+- While composing on Home, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
 - Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`, `work_selected`), not `selected_room_id`.
 
 ---
 
-## 7. Dashboard And Embedded Chat
+## 7. Home Shell And Embedded Chat
 
-Dashboard chat displays `App::dashboard_active_room_id()`:
-- No favorites: `#general`.
-- One favorite: that room if still joined, otherwise `#general`.
-- Two or more favorites: `favorites[dashboard_favorite_index]`, clamped and falling back to `#general`.
+There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
+- If `chat.selected_room_id` is `#general` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: optional top activity/quest/shop strip, optional slow wire-news strip, pinned row when present, then general chat. Pinned messages have priority and render whenever present; when vertical space is tight, the wire hides before the top strip.
+- If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
+- On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
 
-Dashboard favorite controls:
-- `[` / `]` cycle.
-- `,` jumps to the previously active favorite.
-- `g<digit>` jumps to slot 1..9.
-- The favorite strip renders only when at least two resolvable favorites exist.
+Room favorites:
+- Press `f` on a selected real room to toggle it in `ProfileState::toggle_favorite_room`.
+- Favorites are stored in `users.settings.favorite_room_ids`.
+- Favorites render first in the Home room rail and in the global room picker.
+- Favorites are no longer edited through a Settings tab.
 
-Dashboard box row:
-- The three dashboard boxes are always the top dashboard body when the content width/height can fit them, even if the stream/vote header is hidden.
-- `b` then `1` enters the featured room-game box, currently the room with the most occupied seats across Rooms.
-- `b` then `2` launches the currently displayed unfinished daily game.
-- `b` then `3` opens the Chat screen with News selected and the currently displayed wire article selected.
-- `b` then `4` opens the Chat screen with `#announcements` selected; its chip renders on pinned dashboard messages.
-- The daily-game and wire-news boxes rotate every 60 seconds; the wire rotates through at most five articles.
-- Dashboard pinned messages render with the dashboard box row: a detached top pin strip when roomy, otherwise embedded into the bottom grid rule. There is no separate pinned strip above dashboard chat.
+Home hot-room shortcuts:
+- The right rail renders up to three top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 3)`.
+- `b1`, `b2`, and `b3` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
-`App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Dashboard, Chat, or Rooms screen, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, room, favorite, or active-room changes.
+`App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.
 
 There are separate `ChatRowsCache` instances on `App` for:
-- Dashboard chat.
-- Full Chat screen active room.
+- Home general dashboard chat.
+- Home chat center for the selected real room/synthetic entry.
 - Rooms embedded chat.
 
 Do not share a row cache across surfaces unless width and visible messages are guaranteed identical.
@@ -213,7 +208,7 @@ Do not share a row cache across surfaces unless width and visible messages are g
 
 The main composer is a `ratatui_textarea::TextArea<'static>`.
 
-`composer_room_id` is the authoritative send target while composing. This matters because Dashboard and Rooms do not necessarily drive `selected_room_id`.
+`composer_room_id` is the authoritative send target while composing. This matters because Home and Rooms do not necessarily drive `selected_room_id` in the same way.
 
 Starting compose in a room:
 - Clears message selection.
@@ -223,7 +218,7 @@ Starting compose in a room:
 
 Submit flow in `ChatState::submit_composer`:
 - Commands are handled before normal send.
-- `/leave` and `/invite` are refused from Dashboard because they depend on Chat-page room selection.
+- `/leave` and `/invite` are refused from Home contexts where the target cannot be resolved safely.
 - `/members` resolves the target before clearing the composer because clearing removes `composer_room_id`.
 - Normal send calls `send_message_with_reply_task`.
 - Edit calls `edit_message_task`.
@@ -243,10 +238,12 @@ User commands:
 - `/members` lists selected-room members.
 - `/mod` opens the moderation command modal; `/mod ...` in chat is rejected because commands run only in the modal.
 - `/music` opens music help.
+- `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
 - `/private #room` creates a private topic room and joins the caller.
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
 - `/settings` opens settings.
 - `/unignore [@user]` removes an ignored user.
+- `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.
 
 Admin commands:
 - `/create-room #room` creates/promotes a permanent auto-join room and bulk-adds existing users.
@@ -289,7 +286,17 @@ Autocomplete:
 - Arrow keys move selection.
 - Tab/Enter confirms.
 - Esc dismisses popup without leaving compose mode.
-- Pressing `/` while not composing on Dashboard/Chat starts command compose for the active room.
+- Pressing `/` while not composing on Home starts command compose for the active room, except on News/Showcase/Work where `/` is a synthetic-entry filter toggle.
+
+Image uploads and inline rendering:
+- File-upload storage is optional. It is enabled only when `LATE_FILES_S3_ENDPOINT`/`S3_ENDPOINT`, `LATE_FILES_S3_BUCKET`, `LATE_FILES_PUBLIC_BASE_URL`, and S3 credentials are present. Infra variable details live in `infra/README.md`.
+- Pasting raw PNG/JPEG/GIF/WebP bytes into the chat composer starts an upload because there is no stable URL to preview until the bytes are hosted.
+- Pasting an image URL does not upload or rehost it. It is inserted as normal composer text; after send, inline rendering previews that URL best-effort.
+- `/upload <url>` is the explicit URL upload path: it downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send and preview.
+- `/paste-image` is the explicit paired-CLI clipboard path. It requires an updated `late` paired client, not just browser pairing or plain `ssh`.
+- Non-admin uploads use a per-session `ChatState` cooldown. This is intentionally lightweight, not a server-side quota.
+- URL downloads for upload and inline rendering must go through `files::image_upload::download_url_bytes`: validate `http(s)`, reject localhost/private/link-local/reserved resolved IPs, pin reqwest DNS to the validated addresses, disable redirects, and stream with a hard byte cap. Do not add new ad hoc `reqwest.get(url).bytes()` paths for chat images.
+- Inline image rendering detects likely image URLs in visible room messages, fetches them through the same secure downloader, rejects oversized decoded dimensions, retries transient failures with backoff, and caches rendered terminal lines by message id. Inline previews are best-effort; failures are intentionally silent/noisy only at trace level.
 
 ---
 
@@ -328,7 +335,7 @@ Pins:
 - `chat_messages.pinned` is global, not scoped to a room or user.
 - Only admins can toggle pins.
 - Toggling pin does not optimistically update local pinned dashboard state.
-- Dashboard pinned stack comes from `load_pinned_messages_task` through a separate watch channel, not from the 10s summary snapshot.
+- Home pinned stack comes from `load_pinned_messages_task` through a separate watch channel, not from the 10s summary snapshot.
 
 Ignores:
 - `users.settings.ignored_user_ids` stores UUIDs, not usernames.
@@ -375,7 +382,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Links require `http://` or `https://`, cap at 6, and are stored for later web rendering.
 - Skills normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each skill at 24 chars and total skills at 12.
 - Public profiles show bio and showcases when the author has data for them. The composer does not expose include toggles.
-- `i` creates or edits the caller's own profile; `e` edits selected owned/admin entry; `d` deletes owned/admin entry; Enter or `c` copies a recruiter-friendly profile summary when not composing.
+- `i` creates or edits the caller's own profile; `e` edits selected owned/admin entry; `d` deletes owned/admin entry; Enter or `c` copies the selected public work profile link when not composing.
 - Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`.
 
 ### Notifications / Mentions
@@ -397,20 +404,20 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 ## 12. Rendering Constraints
 
-Full Chat layout:
-- 26-column room sidebar.
-- Fill-width message area.
-- Composer at the bottom.
+Home chat center:
+- The room rail is rendered by `draw_room_list_rail` outside the center pane when the terminal is wide enough.
+- The center pane renders messages or a synthetic entry, with the composer at the bottom.
 - Composer height is dynamic but capped at 8 lines.
 
-Dashboard chat:
+Home general dashboard chat:
 - Uses `DashboardChatView`.
 - Composer is capped at 5 visible lines.
+- Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always when present, wire drops first, top activity/quest/shop strip drops second.
 
 Embedded Rooms chat:
 - Uses `EmbeddedRoomChatView`.
 - Composer is capped at 4 visible lines.
-- Game-backed chat rooms are joined through Rooms flow, not the main Chat list.
+- Game-backed chat rooms are joined through Rooms flow, not the Home room rail.
 
 Message rendering:
 - Local message storage is newest-first.
@@ -431,7 +438,7 @@ Cache:
 
 ## 13. Keybindings
 
-### Chat Screen
+### Home Chat Center
 
 | Key | Action |
 |-----|--------|
@@ -451,23 +458,21 @@ Cache:
 | `d` | Delete selected own/admin message, News article, Showcase entry, or Work profile |
 | `p` | Open selected author's read-only profile |
 | `c` | Copy selected message body |
+| `f` | Favorite/unfavorite the selected real room |
 | `f` then `1..8` | React to selected message |
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
-| `C` | Open web chat QR/copy URL |
+| `C` | Show web chat QR/link for the current session |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
 
-### Dashboard Chat
+### Home General Chat
 
 | Key | Action |
 |-----|--------|
-| `i` | Compose in dashboard active room |
-| `j` / `k` / arrows | Move dashboard message selection |
-| `r` / `e` / `d` / `p` / `c` / `f` | Same selected-message actions as Chat |
+| `i` | Compose in `#general` |
+| `j` / `k` / arrows | Move message selection |
+| `r` / `e` / `d` / `p` / `c` / `f` | Same selected-message actions as Home chat center |
 | `Enter` | Open selected news preview, or jump selected reply target when loaded |
-| `[` / `]` | Cycle dashboard favorite rooms |
-| `,` | Toggle previous dashboard favorite |
-| `g<digit>` | Jump favorite slot 1..9 |
 
 ### Synthetic Entries
 
@@ -475,7 +480,7 @@ Cache:
 |-------|------|
 | News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
 | Showcase | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields, `/` toggle filter to mine, `Esc` cancel |
-| Work | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy profile summary, Tab cycle fields, `/` toggle filter to mine, `Esc` cancel |
+| Work | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields, `/` toggle filter to mine, `Esc` cancel |
 | Mentions | `j/k` navigate, Enter jump to referenced room/message |
 | Discover | `j/k` navigate, Enter join selected public room |
 

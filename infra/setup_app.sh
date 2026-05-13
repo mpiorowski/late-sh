@@ -102,17 +102,20 @@ fi
 # --- S3-Compatible Storage ---
 TF_STATE_BUCKET="${CONTEXT}-tf-state"
 DB_BACKUPS_BUCKET="${CONTEXT}-db-backups"
+FILES_BUCKET="${CONTEXT}-files"
 
 echo ""
-echo "--- S3-Compatible Storage (for TF state and DB backups) ---"
-echo "Create these two buckets in your provider before continuing:"
+echo "--- S3-Compatible Storage (for TF state, DB backups, and uploads) ---"
+echo "Create these buckets in your provider before continuing:"
 echo "  - $TF_STATE_BUCKET"
 echo "  - $DB_BACKUPS_BUCKET"
+echo "  - $FILES_BUCKET"
 echo ""
 read -p "Enter S3 endpoint URL (e.g., https://s3.amazonaws.com): " S3_ENDPOINT
 read -p "Enter S3 Access Key ID: " S3_ACCESS_KEY_ID
 read -sp "Enter S3 Secret Access Key: " S3_SECRET_ACCESS_KEY
 echo ""
+read -p "Enter public files base URL (e.g., https://files.${DOMAIN}): " FILES_PUBLIC_BASE_URL
 
 # --- Confirmation ---
 echo ""
@@ -129,6 +132,8 @@ if [ -n "$S3_ENDPOINT" ]; then
 echo "S3 Endpoint:         $S3_ENDPOINT"
 echo "TF State Bucket:     $TF_STATE_BUCKET"
 echo "DB Backups Bucket:   $DB_BACKUPS_BUCKET"
+echo "Files Bucket:        $FILES_BUCKET"
+echo "Files Public URL:    $FILES_PUBLIC_BASE_URL"
 fi
 echo "----------------------------------------"
 echo ""
@@ -166,6 +171,8 @@ if [ -n "$S3_ENDPOINT" ]; then
     gh variable set S3_ENDPOINT --body "$S3_ENDPOINT" --env $GITHUB_ENV --repo $OWNER_REPO
     gh variable set TF_STATE_BUCKET --body "$TF_STATE_BUCKET" --env $GITHUB_ENV --repo $OWNER_REPO
     gh variable set DB_BACKUPS_BUCKET --body "$DB_BACKUPS_BUCKET" --env $GITHUB_ENV --repo $OWNER_REPO
+    gh variable set FILES_BUCKET --body "$FILES_BUCKET" --env $GITHUB_ENV --repo $OWNER_REPO
+    gh variable set FILES_PUBLIC_BASE_URL --body "$FILES_PUBLIC_BASE_URL" --env $GITHUB_ENV --repo $OWNER_REPO
 fi
 echo "Variables set."
 

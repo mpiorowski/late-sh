@@ -158,7 +158,10 @@ fn open_help(app: &mut App) {
 }
 
 fn copy_snippet(app: &mut App) {
-    app.pending_clipboard = Some(app.bonsai_state.share_snippet());
+    app.pending_clipboard = Some(
+        app.bonsai_state
+            .share_snippet_with_care(&app.bonsai_care_state),
+    );
     app.banner = Some(crate::app::common::primitives::Banner::success(
         "Bonsai copied to clipboard!",
     ));

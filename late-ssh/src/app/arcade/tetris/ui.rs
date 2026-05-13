@@ -12,7 +12,7 @@ use crate::app::arcade::ui::{
 };
 use crate::app::common::theme;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let bottom = GameBottomBar {
         status: status_line(vec![
             ("score", state.score.to_string(), theme::AMBER_GLOW()),
@@ -34,7 +34,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         tip: None,
     };
 
-    let board_area = draw_game_frame(frame, area, "Tetris", bottom, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "Tetris", bottom, show_bottom_bar);
     let board_rect = centered_rect(
         board_area,
         24.min(board_area.width),

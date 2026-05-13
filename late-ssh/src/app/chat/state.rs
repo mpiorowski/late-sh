@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use late_core::{
@@ -38,6 +39,22 @@ pub(crate) const ROOM_JUMP_KEYS: &[u8] =
 const USER_CREATED_CHANNEL_NAME_MAX_CHARS: usize = 16;
 const REACTION_OWNER_DISPLAY_LIMIT: usize = 4;
 const REACTION_OWNER_COLUMNS: usize = 3;
+const INLINE_IMAGE_FETCHES_PER_TICK: usize = 8;
+const INLINE_IMAGE_SCAN_LIMIT: usize = 100;
+const INLINE_IMAGE_MAX_WIDTH: u32 = 96;
+const INLINE_IMAGE_MAX_ROWS: u32 = 12;
+const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
+const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
+const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+pub(crate) type InlineImageLines = Vec<ratatui::text::Line<'static>>;
+pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImageLines, String>);
+
+#[derive(Clone, Copy, Debug)]
+struct InlineImageFailure {
+    attempts: u8,
+    next_retry_at: Instant,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionMatch {
@@ -71,13 +88,38 @@ pub(crate) struct ModCommandOutput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingUrlUpload {
+    pub url: String,
+    pub room_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingClipboardImageUpload {
+    pub room_id: Option<Uuid>,
+    requested_at: Instant,
+}
+
+impl PendingClipboardImageUpload {
+    fn new(room_id: Option<Uuid>) -> Self {
+        Self {
+            room_id,
+            requested_at: Instant::now(),
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.requested_at.elapsed() >= CLIPBOARD_IMAGE_REQUEST_TIMEOUT
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
     pub meta: String,
     pub article_id: Option<Uuid>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
     Feeds,
@@ -86,6 +128,37 @@ pub(crate) enum RoomSlot {
     Discover,
     Showcase,
     Work,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SelectedRoomSlotState {
+    pub selected_room_id: Option<Uuid>,
+    pub feeds_selected: bool,
+    pub news_selected: bool,
+    pub notifications_selected: bool,
+    pub discover_selected: bool,
+    pub showcase_selected: bool,
+    pub work_selected: bool,
+}
+
+pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) -> bool {
+    match slot {
+        RoomSlot::Room(room_id) => {
+            !selected.feeds_selected
+                && !selected.news_selected
+                && !selected.notifications_selected
+                && !selected.discover_selected
+                && !selected.showcase_selected
+                && !selected.work_selected
+                && selected.selected_room_id == Some(room_id)
+        }
+        RoomSlot::Feeds => selected.feeds_selected,
+        RoomSlot::News => selected.news_selected,
+        RoomSlot::Notifications => selected.notifications_selected,
+        RoomSlot::Discover => selected.discover_selected,
+        RoomSlot::Showcase => selected.showcase_selected,
+        RoomSlot::Work => selected.work_selected,
+    }
 }
 
 pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
@@ -157,6 +230,7 @@ pub struct ChatState {
     pub(crate) showcase: showcase::state::State,
     pub(crate) work_selected: bool,
     pub(crate) work: work::state::State,
+    favorite_room_ids: Vec<Uuid>,
 
     /// Pending desktop notifications drained on render. `kind` matches the
     /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
@@ -166,6 +240,24 @@ pub struct ChatState {
     requested_mod_modal: bool,
     requested_quit: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
+
+    // image upload
+    pub(crate) image_upload_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
+    pub(crate) image_upload_pending: bool,
+    pub(crate) image_upload_target_room_id: Option<Uuid>,
+    pub(crate) requested_url_upload: Option<PendingUrlUpload>,
+    requested_clipboard_image_upload: Option<PendingClipboardImageUpload>,
+    pending_clipboard_image_upload: Option<PendingClipboardImageUpload>,
+
+    // inline image rendering
+    pub(crate) inline_image_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<InlineImageRenderResult>>,
+    pub(crate) inline_image_tx: Option<tokio::sync::mpsc::UnboundedSender<InlineImageRenderResult>>,
+    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImageLines>,
+    pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
+    inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
+    inline_image_tracked_order: VecDeque<uuid::Uuid>,
+    pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
 pub(crate) struct PendingNotification {
@@ -208,9 +300,11 @@ impl ChatState {
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
         let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
+        service.load_pinned_messages_task(pinned_tx.clone());
         let (room_tx, room_rx) = watch::channel(None);
         let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
+        let (inline_image_tx, inline_image_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             service,
             user_id,
@@ -272,12 +366,26 @@ impl ChatState {
             ),
             work_selected: false,
             work: work::state::State::new(work_service, user_id, permissions.is_admin()),
+            favorite_room_ids: Vec::new(),
             pending_notifications: Vec::new(),
             requested_help_topic: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_quit: false,
             pending_mod_outputs: VecDeque::new(),
+            image_upload_rx: None,
+            image_upload_pending: false,
+            image_upload_target_room_id: None,
+            requested_url_upload: None,
+            requested_clipboard_image_upload: None,
+            pending_clipboard_image_upload: None,
+            inline_image_rx: Some(inline_image_rx),
+            inline_image_tx: Some(inline_image_tx),
+            inline_image_cache: HashMap::new(),
+            inline_image_requested: HashSet::new(),
+            inline_image_failures: HashMap::new(),
+            inline_image_tracked_order: VecDeque::new(),
+            last_image_upload_at: None,
         }
     }
 
@@ -762,7 +870,7 @@ impl ChatState {
             return Some(Banner::error("Admin only: pin messages"));
         }
         self.service
-            .toggle_message_pin_task(message.id, self.is_admin);
+            .toggle_message_pin_task(message.id, self.is_admin, self.pinned_tx.clone());
         let label = if message.pinned {
             "Unpinning message..."
         } else {
@@ -803,47 +911,42 @@ impl ChatState {
         })
     }
 
-    /// Flatten joined rooms into the pick-list the settings modal shows in
-    /// its Favorites tab. Labels are pre-resolved here (DMs → `@peer`, rooms
-    /// → `#slug`, language rooms → `#lang-xx`) so the modal stays ignorant of
-    /// `ChatRoom` internals.
-    pub fn favorite_room_options(&self) -> Vec<crate::app::settings_modal::state::RoomOption> {
-        use crate::app::settings_modal::state::RoomOption;
-        self.rooms
-            .iter()
-            .filter(|(room, _)| is_chat_list_room(room))
-            .map(|(room, _)| {
-                let label = if room.kind == "dm" {
-                    self.dm_display_name(room)
-                } else if let Some(slug) = room.slug.as_deref().filter(|s| !s.is_empty()) {
-                    format!("#{slug}")
-                } else if let Some(code) = room.language_code.as_deref() {
-                    format!("#lang-{code}")
-                } else {
-                    format!("#{}", room.kind)
-                };
-                RoomOption { id: room.id, label }
-            })
-            .collect()
+    pub(crate) fn set_favorite_room_ids(&mut self, favorite_room_ids: Vec<Uuid>) {
+        self.favorite_room_ids = favorite_room_ids;
     }
 
-    fn dm_display_name(&self, room: &ChatRoom) -> String {
-        dm_sort_key(room, self.user_id, &self.usernames)
+    pub(crate) fn favorite_room_ids(&self) -> &[Uuid] {
+        &self.favorite_room_ids
+    }
+
+    pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
+        if self.feeds_selected
+            || self.news_selected
+            || self.notifications_selected
+            || self.discover_selected
+            || self.showcase_selected
+            || self.work_selected
+        {
+            return None;
+        }
+        let room_id = self.selected_room_id?;
+        self.rooms
+            .iter()
+            .any(|(room, _)| room.id == room_id && is_chat_list_room(room))
+            .then_some(room_id)
     }
 
     /// Build the flat visual navigation order.
-    /// Order: core (general, announcements) → news → showcases → work
-    /// → mentions → discover → public rooms (alpha) → private rooms (alpha) → DMs
+    /// Order matches the cozy rail exactly: favorites, core, mentions,
+    /// channels, feeds, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        let mut order = visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames);
-        if self.feeds.has_feeds() {
-            let insert_at = order
-                .iter()
-                .position(|slot| *slot == RoomSlot::News)
-                .unwrap_or(order.len());
-            order.insert(insert_at, RoomSlot::Feeds);
-        }
-        order
+        visual_order_for_rooms(
+            &self.rooms,
+            self.user_id,
+            &self.usernames,
+            self.feeds.has_feeds(),
+            &self.favorite_room_ids,
+        )
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -1181,6 +1284,41 @@ impl ChatState {
             return None;
         }
 
+        if let Some(url) = body.trim().strip_prefix("/upload ") {
+            let url = url.trim().to_string();
+            if url.is_empty() {
+                return Some(Banner::error("Usage: /upload <url>"));
+            }
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Some(Banner::error("/upload: URL must start with http(s)://"));
+            }
+            if !crate::app::files::image_upload::is_file_upload_configured() {
+                return Some(Banner::error("File uploads are disabled"));
+            }
+            let room_id = self.upload_target_room_id();
+            self.clear_composer_after_submit();
+            self.requested_url_upload = Some(PendingUrlUpload { url, room_id });
+            return None;
+        }
+
+        if body.trim() == "/paste-image" {
+            if !crate::app::files::image_upload::is_file_upload_configured() {
+                return Some(Banner::error("File uploads are disabled"));
+            }
+            self.clear_expired_pending_clipboard_image_upload();
+            if self.pending_clipboard_image_upload.is_some()
+                || self.requested_clipboard_image_upload.is_some()
+            {
+                return Some(Banner::error(
+                    "A clipboard image request is already in progress",
+                ));
+            }
+            let room_id = self.upload_target_room_id();
+            self.clear_composer_after_submit();
+            self.requested_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+            return None;
+        }
+
         if body.trim() == "/active" {
             self.clear_composer_after_submit();
             self.open_active_users_overlay();
@@ -1379,6 +1517,10 @@ impl ChatState {
         self.composer.insert_char(ch);
     }
 
+    pub fn composer_push_str(&mut self, s: &str) {
+        self.composer.insert_str(s);
+    }
+
     pub fn composer_cursor_left(&mut self) {
         self.composer.move_cursor(CursorMove::Back);
     }
@@ -1424,11 +1566,247 @@ impl ChatState {
         self.composer.input(input);
     }
 
+    pub fn start_image_upload(&mut self, bytes: Vec<u8>) -> Option<Banner> {
+        self.start_image_upload_in_room(bytes, self.upload_target_room_id())
+    }
+
+    pub(crate) fn start_image_upload_in_room(
+        &mut self,
+        bytes: Vec<u8>,
+        room_id: Option<Uuid>,
+    ) -> Option<Banner> {
+        let Some(mime) = crate::app::files::image_upload::detect_image_mime(&bytes) else {
+            return Some(Banner::error("Unsupported image type"));
+        };
+        if !crate::app::files::image_upload::is_file_upload_configured() {
+            return Some(Banner::error("File uploads are disabled"));
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Some(banner) = self.begin_image_upload(room_id, rx) {
+            return Some(banner);
+        }
+        let mime = mime.to_string();
+
+        tokio::spawn(async move {
+            let result = crate::app::files::image_upload::upload_image_bytes(bytes, &mime)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+
+        None
+    }
+
+    pub(crate) fn upload_target_room_id(&self) -> Option<Uuid> {
+        self.composer_room_id
+            .or(self.visible_room_id)
+            .or(self.selected_room_id)
+    }
+
+    pub(crate) fn begin_image_upload(
+        &mut self,
+        room_id: Option<Uuid>,
+        rx: tokio::sync::oneshot::Receiver<Result<String, String>>,
+    ) -> Option<Banner> {
+        if self.image_upload_pending {
+            return Some(Banner::error("An image upload is already in progress"));
+        }
+
+        if !self.is_admin
+            && let Some(last) = self.last_image_upload_at
+            && last.elapsed() < std::time::Duration::from_secs(30)
+        {
+            let wait = 30 - last.elapsed().as_secs();
+            return Some(Banner::error(&format!(
+                "Please wait {}s before uploading another image",
+                wait
+            )));
+        }
+
+        self.image_upload_rx = Some(rx);
+        self.image_upload_pending = true;
+        self.image_upload_target_room_id = room_id;
+        self.last_image_upload_at = Some(std::time::Instant::now());
+        None
+    }
+
+    pub(crate) fn take_image_upload_target_room_id(&mut self) -> Option<Uuid> {
+        self.image_upload_target_room_id.take()
+    }
+
+    pub(crate) fn take_requested_url_upload(&mut self) -> Option<PendingUrlUpload> {
+        self.requested_url_upload.take()
+    }
+
+    pub(crate) fn take_requested_clipboard_image_upload(
+        &mut self,
+    ) -> Option<PendingClipboardImageUpload> {
+        self.requested_clipboard_image_upload.take()
+    }
+
+    pub(crate) fn begin_pending_clipboard_image_upload(&mut self, room_id: Option<Uuid>) {
+        self.pending_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+    }
+
+    pub(crate) fn take_pending_clipboard_image_upload(
+        &mut self,
+    ) -> Option<PendingClipboardImageUpload> {
+        self.pending_clipboard_image_upload.take()
+    }
+
+    pub(crate) fn clear_pending_clipboard_image_upload(&mut self) {
+        self.pending_clipboard_image_upload = None;
+    }
+
+    fn clear_expired_pending_clipboard_image_upload(&mut self) -> bool {
+        if self
+            .pending_clipboard_image_upload
+            .as_ref()
+            .is_some_and(PendingClipboardImageUpload::is_expired)
+        {
+            self.pending_clipboard_image_upload = None;
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn expire_pending_clipboard_image_upload(&mut self) -> Option<Banner> {
+        if self.clear_expired_pending_clipboard_image_upload() {
+            return Some(Banner::error("Clipboard image request timed out"));
+        }
+        None
+    }
+
+    pub(crate) fn poll_image_upload(&mut self) -> Option<Result<String, String>> {
+        let rx = self.image_upload_rx.as_mut()?;
+        match rx.try_recv() {
+            Ok(result) => {
+                self.image_upload_rx = None;
+                self.image_upload_pending = false;
+                Some(result)
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                self.image_upload_rx = None;
+                self.image_upload_pending = false;
+                Some(Err("Upload cancelled".to_string()))
+            }
+        }
+    }
+
+    pub(crate) fn poll_inline_images(&mut self) {
+        let Some(rx) = self.inline_image_rx.as_mut() else {
+            return;
+        };
+        let now = Instant::now();
+        let mut completed = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            completed.push(result);
+        }
+
+        let mut received_ids = Vec::new();
+        for (msg_id, result) in completed {
+            self.inline_image_requested.remove(&msg_id);
+            match result {
+                Ok(lines) => {
+                    self.inline_image_failures.remove(&msg_id);
+                    self.inline_image_cache.insert(msg_id, lines);
+                }
+                Err(error) => {
+                    let attempts = self
+                        .inline_image_failures
+                        .get(&msg_id)
+                        .map(|failure| failure.attempts)
+                        .unwrap_or(0)
+                        .saturating_add(1);
+                    let next_retry_at = now + inline_image_retry_delay(attempts);
+                    self.inline_image_failures.insert(
+                        msg_id,
+                        InlineImageFailure {
+                            attempts,
+                            next_retry_at,
+                        },
+                    );
+                    tracing::trace!(
+                        message_id = %msg_id,
+                        attempts,
+                        error,
+                        "inline image render failed"
+                    );
+                }
+            }
+            received_ids.push(msg_id);
+        }
+        for msg_id in received_ids {
+            self.track_inline_image_id(msg_id);
+        }
+
+        // Request missing images for currently visible room
+        let Some(room_id) = self.visible_room_id else {
+            return;
+        };
+        let Some(tx) = self.inline_image_tx.clone() else {
+            return;
+        };
+
+        let messages = self.messages_for_room(room_id);
+        if messages.is_empty() {
+            return;
+        }
+
+        let requests = inline_image_request_candidates(
+            messages,
+            &self.inline_image_requested,
+            &self.inline_image_cache,
+            &self.inline_image_failures,
+            now,
+        );
+
+        for (msg_id, url) in requests {
+            self.inline_image_requested.insert(msg_id);
+            self.track_inline_image_id(msg_id);
+            if !url.is_empty() {
+                let tx_clone = tx.clone();
+                tokio::spawn(async move {
+                    let result = crate::app::files::inline_image::fetch_and_render_image(
+                        url,
+                        INLINE_IMAGE_MAX_WIDTH,
+                        INLINE_IMAGE_MAX_ROWS,
+                    )
+                    .await
+                    .map_err(|e| e.to_string());
+                    let _ = tx_clone.send((msg_id, result));
+                });
+            }
+        }
+    }
+
+    fn track_inline_image_id(&mut self, msg_id: Uuid) {
+        if !self.inline_image_cache.contains_key(&msg_id)
+            && !self.inline_image_requested.contains(&msg_id)
+            && !self.inline_image_failures.contains_key(&msg_id)
+        {
+            return;
+        }
+        if !self.inline_image_tracked_order.contains(&msg_id) {
+            self.inline_image_tracked_order.push_back(msg_id);
+        }
+        while self.inline_image_tracked_order.len() > INLINE_IMAGE_TRACKED_LIMIT {
+            if let Some(old_id) = self.inline_image_tracked_order.pop_front() {
+                self.inline_image_requested.remove(&old_id);
+                self.inline_image_cache.remove(&old_id);
+                self.inline_image_failures.remove(&old_id);
+            }
+        }
+    }
+
     pub fn tick(&mut self) -> Option<Banner> {
         self.sync_refresh_room_id();
         self.drain_username_directory();
         self.drain_snapshot();
         self.drain_pinned_messages();
+        let clipboard_banner = self.expire_pending_clipboard_image_upload();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_banner = self.feeds.tick();
@@ -1436,7 +1814,8 @@ impl ChatState {
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
         let work_banner = self.work.tick();
-        moderation_banner
+        clipboard_banner
+            .or(moderation_banner)
             .or(banner)
             .or(feeds_banner)
             .or(news_banner)
@@ -1548,6 +1927,17 @@ impl ChatState {
         self.mention_ac.active
     }
 
+    pub(crate) fn username_mention_matches(&self, query_lower: &str) -> Vec<MentionMatch> {
+        let active_users = self.active_users.as_ref();
+        rank_mention_matches(self.all_usernames.as_ref(), query_lower, || {
+            online_username_set(active_users)
+        })
+    }
+
+    pub(crate) fn room_name_matches(&self, query_lower: &str) -> Vec<MentionMatch> {
+        rank_room_name_matches(self.rooms.iter().map(|(room, _)| room), query_lower)
+    }
+
     pub fn update_autocomplete(&mut self) {
         // Scan backward from end of composer to find a trigger in the current token.
         let text = self.composer.lines().join("\n");
@@ -1575,10 +1965,7 @@ impl ChatState {
         let query = &text[offset + 1..];
         let query_lower = query.to_ascii_lowercase();
         let matches = if trigger_byte == b'@' {
-            let active_users = self.active_users.as_ref();
-            rank_mention_matches(self.all_usernames.as_ref(), &query_lower, || {
-                online_username_set(active_users)
-            })
+            self.username_mention_matches(&query_lower)
         } else {
             rank_command_matches(&query_lower)
         };
@@ -2281,12 +2668,103 @@ impl ChatState {
     }
 }
 
-fn visual_order_for_rooms(
+fn inline_image_request_candidates(
+    messages: &[ChatMessage],
+    requested: &HashSet<Uuid>,
+    cached: &HashMap<Uuid, InlineImageLines>,
+    failures: &HashMap<Uuid, InlineImageFailure>,
+    now: Instant,
+) -> Vec<(Uuid, String)> {
+    let mut requests = Vec::new();
+    for msg in messages.iter().take(INLINE_IMAGE_SCAN_LIMIT) {
+        if requested.contains(&msg.id) || cached.contains_key(&msg.id) {
+            continue;
+        }
+        if let Some(failure) = failures.get(&msg.id)
+            && (failure.attempts >= INLINE_IMAGE_MAX_FAILURES || now < failure.next_retry_at)
+        {
+            continue;
+        }
+        if let Some(url) = inline_image_url_in_body(&msg.body) {
+            tracing::trace!("found image url in chat: {}", url);
+            requests.push((msg.id, url));
+            if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
+                break;
+            }
+        }
+    }
+    requests
+}
+
+fn inline_image_url_in_body(body: &str) -> Option<String> {
+    let mut rest = body;
+    while let Some(url_start) = rest.find("http") {
+        let url_str = &rest[url_start..];
+        let end_idx = url_str
+            .find(|c: char| c.is_ascii_whitespace() || c == ')' || c == ']' || c == '}')
+            .unwrap_or(url_str.len());
+        let mut url = &url_str[..end_idx];
+        while url.ends_with('.')
+            || url.ends_with(',')
+            || url.ends_with(';')
+            || url.ends_with('!')
+            || url.ends_with('?')
+        {
+            url = &url[..url.len() - 1];
+        }
+
+        if is_inline_image_url(url) {
+            return Some(url.to_string());
+        }
+
+        rest = &url_str["http".len()..];
+    }
+    None
+}
+
+fn is_inline_image_url(url: &str) -> bool {
+    let lower_url = url.to_ascii_lowercase();
+    if lower_url.contains("uguu.se")
+        || lower_url.contains("0x0.st")
+        || lower_url.contains("catbox.moe")
+    {
+        return true;
+    }
+
+    let path = reqwest::Url::parse(url)
+        .ok()
+        .map(|parsed| parsed.path().to_ascii_lowercase())
+        .unwrap_or(lower_url);
+
+    [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+        .iter()
+        .any(|ext| path.ends_with(ext))
+}
+
+fn inline_image_retry_delay(attempts: u8) -> Duration {
+    let exp = attempts.saturating_sub(1).min(5) as u32;
+    Duration::from_secs((1_u64 << exp).min(30))
+}
+
+pub(crate) fn visual_order_for_rooms(
     rooms: &[(ChatRoom, Vec<ChatMessage>)],
     user_id: Uuid,
     usernames: &HashMap<Uuid, String>,
+    feeds_available: bool,
+    favorite_room_ids: &[Uuid],
 ) -> Vec<RoomSlot> {
     let mut order = Vec::new();
+    let mut pushed_rooms = HashSet::new();
+
+    for favorite_id in favorite_room_ids {
+        if rooms
+            .iter()
+            .any(|(room, _)| room.id == *favorite_id && is_chat_list_room(room))
+            && pushed_rooms.insert(*favorite_id)
+        {
+            order.push(RoomSlot::Room(*favorite_id));
+        }
+    }
 
     // Core: permanent rooms, hardcoded order
     let core_order = ["general", "announcements", "suggestions", "bugs"];
@@ -2294,46 +2772,30 @@ fn visual_order_for_rooms(
         if let Some((room, _)) = rooms
             .iter()
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
+            && pushed_rooms.insert(room.id)
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
-    // Any other permanent rooms not in the hardcoded list
+    order.push(RoomSlot::Notifications);
+
+    // Channels: all non-DM rooms outside Core, public + private merged.
     for (room, _) in rooms {
         if is_chat_list_room(room)
             && room.kind != "dm"
-            && room.permanent
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+            && pushed_rooms.insert(room.id)
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
 
     order.push(RoomSlot::News);
+    if feeds_available {
+        order.push(RoomSlot::Feeds);
+    }
     order.push(RoomSlot::Showcase);
     order.push(RoomSlot::Work);
-    order.push(RoomSlot::Notifications);
-    order.push(RoomSlot::Discover);
-
-    // Public rooms (non-DM, non-permanent, alpha by slug)
-    let mut public: Vec<_> = rooms
-        .iter()
-        .filter(|(r, _)| {
-            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "public"
-        })
-        .collect();
-    public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-    order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-    // Private rooms (visibility=private, alpha by slug)
-    let mut private: Vec<_> = rooms
-        .iter()
-        .filter(|(r, _)| {
-            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "private"
-        })
-        .collect();
-    private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-    order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
 
     // DMs (sorted by display name to match nav rendering)
     let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
@@ -2342,7 +2804,11 @@ fn visual_order_for_rooms(
         let name_b = dm_sort_key(b, user_id, usernames);
         name_a.cmp(&name_b)
     });
-    order.extend(dms.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+    order.extend(
+        dms.iter()
+            .filter_map(|(r, _)| pushed_rooms.insert(r.id).then_some(RoomSlot::Room(r.id))),
+    );
+    order.push(RoomSlot::Discover);
 
     order
 }
@@ -2519,8 +2985,41 @@ pub(crate) fn rank_mention_matches(
     matches.into_iter().map(|(_, m)| m).collect()
 }
 
+pub(crate) fn rank_room_name_matches<'a>(
+    rooms: impl IntoIterator<Item = &'a ChatRoom>,
+    query_lower: &str,
+) -> Vec<MentionMatch> {
+    let mut rooms: Vec<(String, String)> = rooms
+        .into_iter()
+        .filter_map(|room| {
+            if room.kind == "dm" {
+                return None;
+            }
+            let name = room.slug.as_deref()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let lower = name.to_ascii_lowercase();
+            lower
+                .starts_with(query_lower)
+                .then(|| (lower, name.to_string()))
+        })
+        .collect();
+    rooms.sort_by(|(a, _), (b, _)| a.cmp(b));
+    rooms.dedup_by(|(a, _), (b, _)| a == b);
+    rooms
+        .into_iter()
+        .map(|(_, name)| MentionMatch {
+            name,
+            online: true,
+            prefix: "#",
+            description: None,
+        })
+        .collect()
+}
+
 const CHAT_COMMANDS: &[(&str, &str)] = &[
-    ("active", "active users"),
+    ("active", "list active users"),
     ("binds", "chat guide"),
     ("dm", "open DM"),
     ("exit", "quit confirm"),
@@ -2530,10 +3029,12 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("list", "public rooms"),
     ("members", "room members"),
     ("music", "music help"),
+    ("paste-image", "upload image from CLI clipboard"),
     ("private", "new private room"),
     ("public", "open public room for everyone"),
     ("settings", "open settings"),
     ("unignore", "unmute user"),
+    ("upload", "upload image from url"),
 ];
 
 fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {
@@ -2918,6 +3419,25 @@ mod tests {
     }
 
     #[test]
+    fn rank_room_name_matches_filters_and_prefixes_non_dm_rooms() {
+        let rust = make_room(Uuid::from_u128(1), "topic", "public", false, Some("rust"));
+        let recipes = make_room(
+            Uuid::from_u128(2),
+            "topic",
+            "public",
+            false,
+            Some("recipes"),
+        );
+        let dm = make_room(Uuid::from_u128(3), "dm", "dm", false, None);
+
+        let rooms = [&rust.0, &recipes.0, &dm.0];
+        let ranked = rank_room_name_matches(rooms, "r");
+
+        assert_eq!(names(&ranked), vec!["recipes", "rust"]);
+        assert!(ranked.iter().all(|m| m.prefix == "#"));
+    }
+
+    #[test]
     fn rank_command_matches_lists_user_commands_for_empty_query() {
         let ranked = rank_command_matches("");
         let ranked_names = names(&ranked);
@@ -3241,7 +3761,7 @@ mod tests {
     }
 
     #[test]
-    fn visual_order_places_work_after_showcases() {
+    fn visual_order_matches_cozy_rail_grouping() {
         let me = Uuid::from_u128(1);
         let alice = Uuid::from_u128(2);
         let bob = Uuid::from_u128(3);
@@ -3276,20 +3796,20 @@ mod tests {
         ];
 
         assert_eq!(
-            visual_order_for_rooms(&rooms, me, &usernames),
+            visual_order_for_rooms(&rooms, me, &usernames, false, &[]),
             vec![
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
+                RoomSlot::Notifications,
+                RoomSlot::Room(public_zeta),
+                RoomSlot::Room(private_beta),
+                RoomSlot::Room(public_alpha),
                 RoomSlot::News,
                 RoomSlot::Showcase,
                 RoomSlot::Work,
-                RoomSlot::Notifications,
-                RoomSlot::Discover,
-                RoomSlot::Room(public_alpha),
-                RoomSlot::Room(public_zeta),
-                RoomSlot::Room(private_beta),
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
+                RoomSlot::Discover,
             ]
         );
     }
@@ -3674,6 +4194,104 @@ mod tests {
             reply_to_message_id: Some(reply_to_message_id),
             ..make_msg(id)
         }
+    }
+
+    #[test]
+    fn inline_image_url_in_body_accepts_image_url_with_query() {
+        assert_eq!(
+            inline_image_url_in_body("look https://example.com/image.webp?size=large"),
+            Some("https://example.com/image.webp?size=large".to_string())
+        );
+    }
+
+    #[test]
+    fn inline_image_request_candidates_scan_newest_messages_first() {
+        let now = Instant::now();
+        let mut messages: Vec<ChatMessage> = (1..=101)
+            .map(|idx| make_msg(Uuid::from_u128(idx)))
+            .collect();
+        messages[0].body = "https://files.example.com/newest.png".to_string();
+
+        let requests = inline_image_request_candidates(
+            &messages,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            now,
+        );
+
+        assert_eq!(
+            requests,
+            vec![(
+                messages[0].id,
+                "https://files.example.com/newest.png".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn inline_image_request_candidates_respect_retry_backoff() {
+        let now = Instant::now();
+        let mut message = make_msg(Uuid::from_u128(1));
+        message.body = "https://files.example.com/pending.png".to_string();
+        let messages = vec![message.clone()];
+        let mut failures = HashMap::from([(
+            message.id,
+            InlineImageFailure {
+                attempts: 1,
+                next_retry_at: now + Duration::from_secs(5),
+            },
+        )]);
+
+        assert!(
+            inline_image_request_candidates(
+                &messages,
+                &HashSet::new(),
+                &HashMap::new(),
+                &failures,
+                now,
+            )
+            .is_empty()
+        );
+
+        failures.insert(
+            message.id,
+            InlineImageFailure {
+                attempts: 1,
+                next_retry_at: now - Duration::from_secs(1),
+            },
+        );
+        assert_eq!(
+            inline_image_request_candidates(
+                &messages,
+                &HashSet::new(),
+                &HashMap::new(),
+                &failures,
+                now,
+            ),
+            vec![(
+                message.id,
+                "https://files.example.com/pending.png".to_string()
+            )]
+        );
+
+        failures.insert(
+            message.id,
+            InlineImageFailure {
+                attempts: INLINE_IMAGE_MAX_FAILURES,
+                next_retry_at: now - Duration::from_secs(1),
+            },
+        );
+        assert!(
+            inline_image_request_candidates(
+                &messages,
+                &HashSet::new(),
+                &HashMap::new(),
+                &failures,
+                now,
+            )
+            .is_empty()
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@ use crate::app::arcade::ui::{
 };
 use crate::app::common::theme;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let top_tile = state
         .grid
         .iter()
@@ -36,7 +36,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         tip: None,
     };
 
-    let board_area = draw_game_frame(frame, area, "2048", bottom, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "2048", bottom, show_bottom_bar);
 
     let game_area = centered_rect(
         board_area,

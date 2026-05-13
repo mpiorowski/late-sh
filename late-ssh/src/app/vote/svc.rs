@@ -114,6 +114,13 @@ pub struct VoteSnapshot {
     pub round_id: u64,
 }
 
+impl VoteSnapshot {
+    pub fn remaining_until_switch(&self) -> Duration {
+        self.next_switch_in
+            .saturating_sub(self.updated_at.elapsed())
+    }
+}
+
 impl Default for VoteSnapshot {
     fn default() -> Self {
         Self {
@@ -454,5 +461,16 @@ mod tests {
         assert_eq!(snapshot.round_id, 0);
         assert_eq!(snapshot.current_genre, Genre::Lofi);
         assert!(snapshot.next_switch_in <= Duration::from_secs(60));
+    }
+
+    #[test]
+    fn vote_snapshot_remaining_until_switch_never_exceeds_snapshot_interval() {
+        let snapshot = VoteSnapshot {
+            next_switch_in: Duration::from_secs(10),
+            updated_at: Instant::now(),
+            ..VoteSnapshot::default()
+        };
+
+        assert!(snapshot.remaining_until_switch() <= Duration::from_secs(10));
     }
 }

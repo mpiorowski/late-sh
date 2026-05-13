@@ -3,6 +3,10 @@
   stdenv,
   rustPlatform,
   gitRev ? null,
+  packageName ? "late-sh",
+  packageDescription ? "Social SSH terminal — late.sh",
+  mainProgram ? "late-ssh",
+  cargoBuildFlags ? ["--workspace" "--bins"],
   pkg-config,
   cmake,
   perl,
@@ -20,7 +24,7 @@
     };
 in
   rustPlatform.buildRustPackage {
-    pname = "late-sh";
+    pname = packageName;
     version = "${packageVersion}-unstable-${
       if gitRev != null
       then gitRev
@@ -29,7 +33,7 @@ in
 
     # Build all deployable workspace binaries. late-web's CSS is a pre-built,
     # committed asset; tailwind is not invoked at build time.
-    cargoBuildFlags = ["--workspace" "--bins"];
+    inherit cargoBuildFlags;
     useNextest = true;
 
     src = filterSrc ./. [
@@ -69,7 +73,7 @@ in
     };
 
     meta = {
-      description = "Social SSH terminal — late.sh";
+      description = packageDescription;
       homepage = "https://github.com/mpiorowski/late-sh";
       # Source-available under FSL-1.1-MIT (converts to MIT after 2 years).
       license = {
@@ -79,6 +83,6 @@ in
         free = true;
         redistributable = true;
       };
-      mainProgram = "late-ssh";
+      inherit mainProgram;
     };
   }

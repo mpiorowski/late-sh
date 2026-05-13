@@ -99,7 +99,8 @@ pub fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not a country flag or custom contributor icon.\n",
+        - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not a country flag or custom contributor icon.\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, and Artboard.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -127,6 +128,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /active            list active users",
         "  /members           list users in this room",
         "  /list              list public rooms",
+        "  /paste-image       upload image from paired CLI clipboard",
         "  /ignore [@user]    ignore a user, or list ignored users",
         "  /unignore [@user]  remove a user from your ignore list",
         "  /music             explain how music works",
@@ -156,7 +158,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  h / l  or  ← / →   previous / next room",
         "  Space              room jump hints",
         "  Enter / i          start composing",
-        "  C                  copy a web-chat link to this session",
+        "  C                  show web-chat QR/link for this session",
         "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
         "",
         "Compose",
@@ -202,7 +204,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  j / k              scroll overlay",
         "",
         "Synthetic entries",
-        "  Chat sidebar also contains Feeds, News, Showcase, Work, Mentions, and Discover.",
+        "  Home room rail also contains Feeds, News, Showcase, Work, Mentions, and Discover.",
         "  Their detailed keys and fields live in the Social and News tabs.",
     ]
     .into_iter()
@@ -218,7 +220,7 @@ fn social_help_lines() -> Vec<String> {
     [
         "Social surfaces",
         "",
-        "These are chat-adjacent feeds and profile surfaces. They appear in the Chat room list but are not normal chat rooms.",
+        "These are chat-adjacent feeds and profile surfaces. They appear in the Home room rail but are not normal chat rooms.",
         "",
         "Feeds",
         "  Private per-user RSS/Atom inbox.",
@@ -306,7 +308,7 @@ fn rooms_help_lines() -> Vec<String> {
         "Rooms are persistent table-game rooms. Each room has a paired game chat pane, while the game runtime itself is process-local and resets if the SSH server restarts.",
         "",
         "Directory",
-        "  4                 open Rooms",
+        "  3                 open Rooms",
         "  j / k or ↑ / ↓   navigate rooms",
         "  h / l or ← / →   cycle filters",
         "  Filters           All, Blackjack, Poker, Tic-Tac-Toe",
@@ -340,12 +342,9 @@ fn rooms_help_lines() -> Vec<String> {
         "  r/e/d/p/c/f       reply, edit, delete, profile, copy, react selected chat message",
         "  Arrows            game gets first chance; otherwise embedded chat handles them",
         "",
-        "Dashboard room shortcuts",
-        "  b then 1          enter busiest game room",
-        "  b then 2          launch current unfinished daily game",
-        "  b then 3          open current Wire/News article",
-        "  b then 4          open #announcements",
-        "  Daily and wire boxes rotate every 60 seconds.",
+        "Home shortcuts",
+        "  3                 open Rooms",
+        "  b then 1-3         enter one of the hot room shortcuts in the right rail",
         "",
         "Blackjack",
         "  4 seats, chips, 6-deck shoe, dealer stands soft 17, blackjack pays 3:2.",
@@ -398,41 +397,33 @@ fn overview_lines() -> Vec<String> {
         "late.sh is a terminal clubhouse over SSH: chat, music, news, games, settings, and shared presence in one session.",
         "",
         "Primary screens",
-        "  1 Dashboard       stream status, voting, and chat snapshot",
-        "  2 Chat            public rooms, DMs, mentions, web-chat links",
-        "  3 The Arcade      daily puzzles, endless games, leaderboard",
-        "  4 Rooms           persistent table-game rooms",
-        "  5 Artboard        shared persistent ASCII canvas",
+        "  1 Home            chat, rooms, music, and live activity",
+        "  2 The Arcade      daily puzzles, endless games, leaderboard",
+        "  3 Rooms           persistent table-game rooms",
+        "  4 Artboard        shared persistent ASCII canvas",
         "",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  1-5               jump straight to a screen",
+        "  1-4               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
         "  m                 mute paired client",
         "  + / -             paired client volume",
+        "  v then v          cycle Home panels: left, right, lounge info, combos",
         "",
-        "Dashboard / Chat",
-        "  P                 show browser pairing QR",
-        "  B                 open CLI install / BUILD SOURCE modal",
+        "Home",
+        "  P                 install CLI · pair browser (curl / nix / source + QR)",
         "",
-        "Dashboard favorites",
-        "  Pin rooms in Settings → Favorites so the dashboard's chat card",
-        "  can switch between them without leaving the home screen.",
-        "  Strip appears once you have 2+ pins.",
-        "  [ / ]             cycle prev / next pinned room",
-        "  ,                 jump back to the previously-active pin",
-        "  g then 1-9        jump directly to favorite slot N",
+        "Room favorites",
+        "  f                 favorite / unfavorite the selected room",
+        "  favorites appear first in the room rail and room picker",
         "  `                 toggle Dashboard / last game",
         "",
-        "Dashboard boxes",
-        "  b then 1          enter busiest game room",
-        "  b then 2          launch current unfinished daily game",
-        "  b then 3          open current Wire/News article",
-        "  b then 4          open #announcements",
-        "  Daily and wire boxes rotate every 60 seconds.",
+        "Home room shortcuts",
+        "  3                 open Rooms",
+        "  b then 1-3         enter one of the hot room shortcuts in the right rail",
         "",
         "This modal",
         "  Tab / Shift+Tab   next / previous tab",
@@ -469,8 +460,8 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Dashboard, Chat, The Arcade, Rooms, Artboard, and the persistent bonsai sidebar",
-        "  Chat includes synthetic feeds: Feeds, News, Showcase, Work, Mentions, Discover",
+        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, and the persistent bonsai sidebar",
+        "  Home chat includes synthetic feeds: Feeds, News, Showcase, Work, Mentions, Discover",
         "  Rooms are persistent DB rows with paired chat_rooms(kind='game')",
         "  Room game runtime state is process-local and can reset on SSH server restart",
         "",
@@ -516,7 +507,7 @@ fn news_help_lines() -> Vec<String> {
         "  private RSS/Atom entries from Feeds when you press s there",
         "",
         "Feeds relationship",
-        "  Feeds is a private inbox in the Chat sidebar.",
+        "  Feeds is a private inbox in the Home room rail.",
         "  RSS/Atom subscriptions are managed in Settings > Feeds.",
         "  Sharing a feed entry sends its URL through this News pipeline.",
         "  Only shared entries become public News articles and #general announcements.",
@@ -538,16 +529,16 @@ fn arcade_help_lines() -> Vec<String> {
         "The Arcade mixes daily puzzle runs with endless score chases. Ctrl+G opens Hub with monthly leaderboards.",
         "",
         "Games in rotation",
-        "  High score: 2048, Tetris",
+        "  High score: 2048, Tetris, Snake",
         "  Daily: Sudoku, Nonograms, Minesweeper, Solitaire",
         "",
-        "Hub controls",
+        "Arcade controls",
         "  j / k             browse games",
         "  Enter             play selected game",
         "  Esc               leave current game",
         "",
         "Artboard",
-        "  5                 open dedicated Artboard page",
+        "  4                 open dedicated Artboard page",
         "  i / Enter         enter active mode",
         "  Esc               return Artboard to view mode",
         "",
@@ -574,7 +565,7 @@ fn artboard_help_lines() -> Vec<String> {
         "The Artboard is a shared, persistent ASCII canvas. Everyone paints on the same live board from the dedicated screen.",
         "",
         "Where to find it",
-        "  5                 open the Artboard screen",
+        "  4                 open the Artboard screen",
         "  Tab / Shift+Tab   cycle to it from other screens",
         "  https://late.sh/gallery",
         "                    web gallery for Artboard snapshots",
@@ -637,7 +628,6 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "  Bio               multiline markdown bio and late.fetch fields".to_string(),
         "  Themes            theme browser and background color".to_string(),
-        "  Favorites         dashboard quick-switch room pins".to_string(),
         "  Feeds             private RSS/Atom subscriptions".to_string(),
         "  Account           account deletion flow".to_string(),
         "".to_string(),
@@ -649,8 +639,7 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  stream/vote-header visibility and right-sidebar mode (on/off/custom)".to_string(),
-        "  favorite rooms (dashboard quick-switch strip)".to_string(),
+        "  background color, right sidebar, room list, and lounge info visibility".to_string(),
         "  private RSS/Atom feed subscriptions".to_string(),
         "".to_string(),
         "How to open it".to_string(),
@@ -746,21 +735,27 @@ SSH is a terminal protocol - it carries text, not audio. To hear music you need 
 
 Option 1 (recommended): Install the CLI
 
-  curl -fsSL https://cli.late.sh/install.sh | bash
+  macOS / Linux / Termux:
+    curl -fsSL https://cli.late.sh/install.sh | bash
+
+  Windows PowerShell:
+    irm https://cli.late.sh/install.ps1 | iex
 
 Then run `late` instead of `ssh late.sh`. It launches SSH + local audio playback in one process - no browser needed. The CLI decodes the MP3 stream locally, plays through your system audio, and pairs with the TUI over WebSocket for visualizer + controls.
 
 Don't trust the install script? Build from source:
 
   git clone https://github.com/mpiorowski/late-sh
-  cargo install --path late-cli
+  cargo build --release --bin late
+
+You can also use the Nix option shown in the Home pair modal.
 
 Option 2: Browser pairing
 
-On the Dashboard or Chat screen, press `P` to open a QR code + copy the pairing URL. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
+On Home, press `P` to open CLI install options plus the browser pairing QR/link. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
 
 Both options give you:
   m = mute | +/- = volume | visualizer in the sidebar
-  Vote for genres on the Dashboard: L C A
+  Vote for genres on Home: v1 v2 v3
 
 The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";

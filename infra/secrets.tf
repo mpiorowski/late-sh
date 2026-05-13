@@ -15,7 +15,7 @@ resource "kubernetes_secret_v1" "regcred" {
 }
 
 # =============================================================================
-# S3 Credentials (for CloudNativePG backups)
+# S3 Credentials (for CloudNativePG backups and public file uploads)
 # =============================================================================
 
 resource "kubernetes_secret_v1" "s3_credentials" {

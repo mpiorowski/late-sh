@@ -1,4 +1,4 @@
-use late_core::models::profile::Profile;
+use late_core::models::profile::{Profile, ProfileParams};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -47,6 +47,28 @@ impl ProfileState {
             .theme_id
             .as_deref()
             .unwrap_or_else(|| theme::normalize_id(""))
+    }
+
+    pub fn toggle_favorite_room(&mut self, room_id: Uuid) -> bool {
+        let added = if let Some(index) = self
+            .profile
+            .favorite_room_ids
+            .iter()
+            .position(|id| *id == room_id)
+        {
+            self.profile.favorite_room_ids.remove(index);
+            false
+        } else {
+            self.profile.favorite_room_ids.push(room_id);
+            true
+        };
+        self.save_profile();
+        added
+    }
+
+    fn save_profile(&self) {
+        self.profile_service
+            .edit_profile(self.user_id, profile_params_from_profile(&self.profile));
     }
 
     // Tick
@@ -100,5 +122,34 @@ impl ProfileState {
             }
         }
         banner
+    }
+}
+
+fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
+    ProfileParams {
+        username: profile.username.clone(),
+        bio: profile.bio.clone(),
+        country: profile.country.clone(),
+        timezone: profile.timezone.clone(),
+        ide: profile.ide.clone(),
+        terminal: profile.terminal.clone(),
+        os: profile.os.clone(),
+        langs: profile.langs.clone(),
+        notify_kinds: profile.notify_kinds.clone(),
+        notify_bell: profile.notify_bell,
+        notify_cooldown_mins: profile.notify_cooldown_mins,
+        notify_format: profile.notify_format.clone(),
+        theme_id: Some(
+            profile
+                .theme_id
+                .clone()
+                .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
+        ),
+        enable_background_color: profile.enable_background_color,
+        show_dashboard_header: profile.show_dashboard_header,
+        show_right_sidebar: profile.show_right_sidebar,
+        show_room_list_sidebar: profile.show_room_list_sidebar,
+        show_settings_on_connect: profile.show_settings_on_connect,
+        favorite_room_ids: profile.favorite_room_ids.clone(),
     }
 }

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-05-01
+- Last updated: 2026-05-13
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -79,6 +79,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 ## 3. Entry Points and Files [STABLE]
 
 - `src/main.rs` - top-level orchestration, mode split, audio/WS lifecycle
+- `src/clipboard.rs` - paired `/paste-image` clipboard read, Wayland/X clipboard backend use, PNG encoding, and local size guards. Clipboard support is only advertised on Linux, macOS, and Windows; Android/Termux builds do not depend on `arboard`.
 - `src/config.rs` - flags, env vars, defaults, logging
 - `src/identity.rs` - dedicated key discovery/generation
 - `src/ssh.rs` - native SSH, OpenSSH ControlMaster mode, legacy PTY subprocess mode, token parsing, resize forwarding
@@ -219,6 +220,7 @@ Client to server:
   "client_kind": "cli",
   "ssh_mode": "native",
   "platform": "linux",
+  "capabilities": ["clipboard_image"],
   "muted": false,
   "volume_percent": 30
 }
@@ -238,15 +240,33 @@ Server to client:
 { "event": "volume_down" }
 ```
 
+```json
+{ "event": "request_clipboard_image" }
+```
+
+Client to server, in response to `request_clipboard_image`:
+
+```json
+{ "event": "clipboard_image", "data_base64": "<base64 png bytes>" }
+```
+
+```json
+{ "event": "clipboard_image_failed", "message": "clipboard does not contain an image" }
+```
+
 Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
+- `capabilities`: optional list; desktop CLI builds advertise `clipboard_image` when they can service chat `/paste-image`. Android/Termux builds leave it empty.
 
 Pairing behavior:
 - The server stores one paired-client sender/state entry per token.
 - If multiple browser/CLI clients pair with the same token, latest registration owns control/state until it disconnects.
 - CLI WebSocket reconnects up to 10 consecutive failures with a 2s delay.
 - The first `client_state` is sent immediately after connect, then sent again after any applied control message.
+- `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client's `client_state.capabilities`, so older CLIs and browser pairs do not receive unsupported control events.
+- Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
+- Clipboard images are converted to PNG in the CLI before upload. The CLI rejects zero-size images, very large decoded RGBA buffers, and PNG payloads above the upload cap before sending them over the pair socket.
 
 ---
 
@@ -315,14 +335,15 @@ Shutdown invariant:
 Public installers:
 - macOS/Linux/Termux: `curl -fsSL https://cli.late.sh/install.sh | bash`
 - Windows PowerShell: `irm https://cli.late.sh/install.ps1 | iex`
+- Nix/NixOS: `nix run github:mpiorowski/late-sh#late`
 
 Installer defaults:
 - `scripts/install.sh` and `scripts/install.ps1` default to `https://cli.late.sh`
 - `LATE_INSTALL_BASE_URL` overrides distribution host
 - `LATE_INSTALL_VERSION` selects a specific version instead of `latest`
 - `LATE_INSTALL_DIR` overrides install directory
-- Shell installer detects WSL and Termux; Termux receives the Android build
-- Shell installer targets `/usr/local/bin`, `$HOME/.local/bin`, or the Termux prefix, depending on platform and permissions
+- Shell installer detects WSL, Termux, and Git Bash/MSYS/Cygwin; Termux receives the Android build and Windows shell environments receive the Windows `late.exe` build
+- Shell installer targets `/usr/local/bin`, `$HOME/.local/bin`, the Termux prefix, or `%LOCALAPPDATA%\Programs\late` under Windows shell environments, depending on platform and permissions
 - PowerShell installer places `late.exe` under `%LOCALAPPDATA%\Programs\late` unless overridden and prints a PATH hint when needed
 - Checksum verification runs when checksum download succeeds; checksum download failure is warning-only
 
@@ -330,6 +351,11 @@ Release workflow:
 - `.github/workflows/deploy_cli.yml` builds `late-cli` release artifacts
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
+
+Nix flake outputs:
+- `packages.${system}.late` builds only the `late-cli` binary and sets `mainProgram = "late"`
+- `apps.${system}.late` runs that CLI package for `nix run ...#late`
+- `packages.${system}.late-sh` remains the default multi-binary package with `mainProgram = "late-ssh"`
 
 ---
 
@@ -385,8 +411,7 @@ Relevant TUI controls:
 - `m`: toggle mute on paired client
 - `+` / `=`: volume up on paired client
 - `-` / `_`: volume down on paired client
-- `P`: dashboard/chat browser-pairing QR
-- `B`: dashboard/chat CLI install/build-source modal
+- `P`: Home combined install + pair modal, with curl, Nix, build-from-source options and browser pairing QR/link
 
 ---
 

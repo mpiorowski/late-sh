@@ -19,7 +19,7 @@ const SOLITAIRE_CARD_THEME: AsciiCardTheme = AsciiCardTheme::Outline;
 const FACE_DOWN_PEEK_LINES: usize = 1;
 const FACE_UP_PEEK_LINES: usize = 2;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let mode_str = match state.mode {
         Mode::Daily => "daily".to_string(),
         Mode::Personal => "personal".to_string(),
@@ -50,7 +50,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         )),
     };
 
-    let board_area = draw_game_frame(frame, area, "Solitaire", bottom, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "Solitaire", bottom, show_bottom_bar);
     let board_width = 78.min(board_area.width);
     let board_height = 44.min(board_area.height);
     let board_rect = Rect {
