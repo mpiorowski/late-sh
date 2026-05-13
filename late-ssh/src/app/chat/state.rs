@@ -298,6 +298,7 @@ impl ChatState {
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
         let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
+        service.load_pinned_messages_task(pinned_tx.clone());
         let (room_tx, room_rx) = watch::channel(None);
         let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
@@ -867,7 +868,7 @@ impl ChatState {
             return Some(Banner::error("Admin only: pin messages"));
         }
         self.service
-            .toggle_message_pin_task(message.id, self.is_admin);
+            .toggle_message_pin_task(message.id, self.is_admin, self.pinned_tx.clone());
         let label = if message.pinned {
             "Unpinning message..."
         } else {

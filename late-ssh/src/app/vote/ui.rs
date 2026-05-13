@@ -11,6 +11,7 @@ use crate::app::common::theme;
 
 pub struct VoteCardView<'a> {
     pub vote_counts: &'a VoteCount,
+    pub current_genre: Genre,
     pub my_vote: Option<Genre>,
 }
 

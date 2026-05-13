@@ -106,6 +106,15 @@ fn pick_title_that_fits<'a>(block_width: u16, tiers: &[&'a str]) -> &'a str {
 }
 
 fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
+    let picked = pick_composer_title_text(view, block_width);
+    if picked.is_empty() {
+        String::new()
+    } else {
+        format!("──{picked}")
+    }
+}
+
+fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     if !view.composing {
         return pick_title_that_fits(
             block_width,
@@ -244,7 +253,7 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
     };
     let composer_block = Block::default()
         .title(composer_title.as_str())
-        .borders(Borders::ALL)
+        .borders(Borders::TOP | Borders::BOTTOM)
         .border_style(composer_style);
     let composer_inner = composer_block.inner(area);
     frame.render_widget(composer_block, area);

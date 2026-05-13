@@ -251,6 +251,7 @@ impl App {
             online_count,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
+            pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
@@ -492,6 +493,7 @@ impl App {
                         mentions_unread_count: self.chat.notifications.unread_count(),
                         vote_view: crate::app::vote::ui::VoteCardView {
                             vote_counts: &vote_snapshot.counts,
+                            current_genre: vote_snapshot.current_genre,
                             my_vote: vote_my_vote,
                         },
                         top_rooms: &top_rooms,
@@ -739,6 +741,7 @@ impl App {
                     clock_text: ctx.sidebar_clock,
                     vote: Some(crate::app::vote::ui::VoteCardView {
                         vote_counts: ctx.vote_view.vote_counts,
+                        current_genre: ctx.vote_view.current_genre,
                         my_vote: ctx.vote_view.my_vote,
                     }),
                     top_rooms: ctx.top_rooms,

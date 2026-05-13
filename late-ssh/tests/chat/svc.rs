@@ -344,7 +344,8 @@ async fn admin_can_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(message.id, true);
+    let (pinned_tx, _pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    service.toggle_message_pin_task(message.id, true, pinned_tx);
 
     timeout(Duration::from_secs(2), async {
         loop {
@@ -386,7 +387,8 @@ async fn non_admin_cannot_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(message.id, false);
+    let (pinned_tx, _pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    service.toggle_message_pin_task(message.id, false, pinned_tx);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let updated = ChatMessage::get(&client, message.id)

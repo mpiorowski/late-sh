@@ -10,7 +10,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::theme;
+use super::{primitives::genre_label, theme};
 use crate::app::activity::event::ActivityEvent;
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::dashboard::ui::DashboardRoomCard;
@@ -310,8 +310,9 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
 ///   artist · genre        (dim)
 ///   <blank>
 ///   progress bar          (e.g. 0:40 ──●──── 3:00)
-///   <blank>
-///   "what's next"         (italic dim label)
+///   pair status
+///   -/= vol   m mute
+///   now/next vibe
 ///   v1 lofi    ███▒    1
 ///   v2 ambient  ·       0
 ///   v3 classic  ·       0
@@ -330,9 +331,9 @@ fn draw_stream_block(
         Constraint::Length(1), // title
         Constraint::Length(1), // artist
         Constraint::Length(1), // progress
-        Constraint::Length(1), // gutter / pair status
-        Constraint::Length(1), // "next" label
-        Constraint::Fill(1),   // vote rows
+        Constraint::Length(1), // pair status
+        Constraint::Length(1), // audio controls
+        Constraint::Fill(1),   // vibe + vote rows
     ])
     .split(area);
 
@@ -415,21 +416,75 @@ fn draw_stream_block(
         chunks[3],
     );
 
-    // "next" label
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "what's next",
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        ))),
-        chunks[4],
-    );
+    draw_audio_hint_line(frame, chunks[4]);
 
-    // Vote rows (3, borderless, sage for your pick, dim otherwise)
     if let Some(vote) = vote {
-        crate::app::vote::ui::draw_vote_inline(frame, chunks[5], vote);
+        let rows = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(chunks[5]);
+        draw_vibe_line(frame, rows[0], vote);
+        let vote_area = Rect {
+            x: rows[1].x,
+            y: rows[1].y,
+            width: rows[1].width,
+            height: rows.iter().skip(1).map(|row| row.height).sum(),
+        };
+        crate::app::vote::ui::draw_vote_inline(frame, vote_area, vote);
     }
+}
+
+fn draw_vibe_line(frame: &mut Frame, area: Rect, vote: &VoteCardView<'_>) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let next = vote.vote_counts.winner_or(vote.current_genre);
+    let current = genre_label(vote.current_genre).to_ascii_lowercase();
+    let next = genre_label(next).to_ascii_lowercase();
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "now ",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::styled(current, Style::default().fg(theme::SUCCESS())),
+            Span::styled(" > ", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(next, Style::default().fg(theme::AMBER())),
+        ])),
+        area,
+    );
+}
+
+fn draw_audio_hint_line(frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "-/=",
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" vol  ", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(
+                "m",
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" mute", Style::default().fg(theme::TEXT_FAINT())),
+        ])),
+        area,
+    );
 }
 
 /// Paint a thin vertical line (1 column wide) in BORDER_DIM. Used by the

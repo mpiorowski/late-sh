@@ -20,7 +20,7 @@ use crate::app::{
         svc::{GameKind, RoomListItem, RoomsSnapshot},
     },
 };
-use late_core::models::article::ArticleFeedItem;
+use late_core::models::{article::ArticleFeedItem, chat_message::ChatMessage};
 
 /// 1 minute per wire headline. The wire is meant as a slow ambient feed:
 /// glance at Home every few minutes and see something new without churn.
@@ -90,6 +90,7 @@ pub struct DashboardRenderInput<'a> {
     pub online_count: usize,
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
+    pub pinned_messages: &'a [ChatMessage],
     pub chat_view: DashboardChatView<'a>,
 }
 
@@ -104,9 +105,11 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 
     let want_top = area.width > TOP_STRIP_HIDE_AT_WIDTH && area.height >= 18;
     let want_wire = area.height >= WIRE_HIDE_AT_HEIGHT;
+    let want_pinned = !view.pinned_messages.is_empty() && area.height >= 14;
 
     let top_height = if want_top { TOP_STRIP_ROW_HEIGHT } else { 0 };
     let wire_height = if want_wire { WIRE_STRIP_ROW_HEIGHT } else { 0 };
+    let pinned_height: u16 = if want_pinned { 1 } else { 0 };
 
     let mut constraints: Vec<Constraint> = Vec::new();
     if top_height > 0 {
@@ -115,7 +118,11 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     if wire_height > 0 {
         constraints.push(Constraint::Length(wire_height));
     }
-    constraints.push(Constraint::Length(1));
+    if pinned_height > 0 {
+        constraints.push(Constraint::Length(1)); // dim rule above pin
+        constraints.push(Constraint::Length(pinned_height));
+    }
+    constraints.push(Constraint::Length(1)); // bottom rule (amber if pinned, dim otherwise)
     constraints.push(Constraint::Fill(1));
 
     let chunks = Layout::vertical(constraints).split(area);
@@ -134,7 +141,15 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         );
         idx += 1;
     }
-    draw_horizontal_rule(frame, chunks[idx]);
+    if pinned_height > 0 {
+        draw_horizontal_rule(frame, chunks[idx]);
+        idx += 1;
+        draw_pinned_row(frame, chunks[idx], &view.pinned_messages[0]);
+        idx += 1;
+        draw_amber_rule(frame, chunks[idx]);
+    } else {
+        draw_horizontal_rule(frame, chunks[idx]);
+    }
     idx += 1;
     draw_dashboard_chat_card(frame, chunks[idx], view.chat_view);
 }
@@ -441,6 +456,48 @@ fn draw_wire_article(frame: &mut Frame, rows: &[Rect], item: &ArticleFeedItem) {
             *row,
         );
     }
+}
+
+fn draw_pinned_row(frame: &mut Frame, area: Rect, message: &ChatMessage) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let glyph = "● ";
+    let label = "pinned  ";
+    let prefix_w = glyph.chars().count() + label.chars().count();
+    let body_w = (area.width as usize).saturating_sub(prefix_w);
+    let flat_body: String = message
+        .body
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let body = truncate(&flat_body, body_w);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(glyph, Style::default().fg(theme::AMBER())),
+            Span::styled(
+                label,
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::styled(body, Style::default().fg(theme::TEXT())),
+        ])),
+        area,
+    );
+}
+
+fn draw_amber_rule(frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(theme::AMBER_DIM()),
+        ))),
+        area,
+    );
 }
 
 fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {

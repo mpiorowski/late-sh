@@ -1740,13 +1740,6 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
-    if app.hot_room_prefix_armed {
-        app.hot_room_prefix_armed = false;
-        if let Some(index) = hot_room_suffix_index(byte) {
-            return enter_hot_room(app, index);
-        }
-    }
-
     // ? opens the global guide unless the current screen owns it.
     if byte == b'?'
         && !ctx.chat_composing
@@ -1769,16 +1762,26 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    if ctx.screen == Screen::Dashboard && app.vote_prefix_armed {
-        return false;
-    }
-
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         return false;
     }
 
     if ctx.screen == Screen::Artboard && app.artboard_interacting {
         return false;
+    }
+
+    if app.vote_prefix_armed {
+        app.vote_prefix_armed = false;
+        if crate::app::vote::input::handle_vote_suffix(app, byte) {
+            return true;
+        }
+    }
+
+    if app.hot_room_prefix_armed {
+        app.hot_room_prefix_armed = false;
+        if let Some(index) = hot_room_suffix_index(byte) {
+            return enter_hot_room(app, index);
+        }
     }
 
     match byte {
@@ -1868,6 +1871,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.work_composing =>
         {
             app.hot_room_prefix_armed = true;
+            true
+        }
+        b'v' | b'V'
+            if !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && !ctx.showcase_composing
+                && !ctx.work_composing =>
+        {
+            app.vote_prefix_armed = true;
             true
         }
         b'w' | b'W'
