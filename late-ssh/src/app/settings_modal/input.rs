@@ -259,6 +259,7 @@ fn activate_selected_row(app: &mut App, open_custom_sidebar: bool) {
         | Row::BackgroundColor
         | Row::RoomListSidebar
         | Row::LoungeInfo
+        | Row::WireBox
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents

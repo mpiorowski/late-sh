@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
     time::{Duration, Instant},
@@ -938,12 +939,13 @@ impl ChatState {
 
     /// Build the flat visual navigation order.
     /// Order matches the cozy rail exactly: favorites, core, mentions,
-    /// channels, feeds, DMs.
+    /// channels, updates, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
         visual_order_for_rooms(
             &self.rooms,
             self.user_id,
             &self.usernames,
+            &self.unread_counts,
             self.feeds.has_feeds(),
             &self.favorite_room_ids,
         )
@@ -2750,6 +2752,7 @@ pub(crate) fn visual_order_for_rooms(
     rooms: &[(ChatRoom, Vec<ChatMessage>)],
     user_id: Uuid,
     usernames: &HashMap<Uuid, String>,
+    unread_counts: &HashMap<Uuid, i64>,
     feeds_available: bool,
     favorite_room_ids: &[Uuid],
 ) -> Vec<RoomSlot> {
@@ -2797,12 +2800,18 @@ pub(crate) fn visual_order_for_rooms(
     order.push(RoomSlot::Showcase);
     order.push(RoomSlot::Work);
 
-    // DMs (sorted by display name to match nav rendering)
+    // DMs: unread rooms first, then newest message, then display name.
     let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
-    dms.sort_by(|(a, _), (b, _)| {
-        let name_a = dm_sort_key(a, user_id, usernames);
-        let name_b = dm_sort_key(b, user_id, usernames);
-        name_a.cmp(&name_b)
+    dms.sort_by(|(a_room, a_messages), (b_room, b_messages)| {
+        compare_dm_rooms_for_nav(
+            a_room,
+            a_messages,
+            b_room,
+            b_messages,
+            user_id,
+            usernames,
+            unread_counts,
+        )
     });
     order.extend(
         dms.iter()
@@ -2813,8 +2822,31 @@ pub(crate) fn visual_order_for_rooms(
     order
 }
 
+pub(crate) fn compare_dm_rooms_for_nav(
+    a_room: &ChatRoom,
+    a_messages: &[ChatMessage],
+    b_room: &ChatRoom,
+    b_messages: &[ChatMessage],
+    user_id: Uuid,
+    usernames: &HashMap<Uuid, String>,
+    unread_counts: &HashMap<Uuid, i64>,
+) -> Ordering {
+    let a_unread = unread_counts.get(&a_room.id).copied().unwrap_or(0) > 0;
+    let b_unread = unread_counts.get(&b_room.id).copied().unwrap_or(0) > 0;
+    b_unread
+        .cmp(&a_unread)
+        .then_with(|| dm_last_message_at(b_messages).cmp(&dm_last_message_at(a_messages)))
+        .then_with(|| {
+            dm_sort_key(a_room, user_id, usernames).cmp(&dm_sort_key(b_room, user_id, usernames))
+        })
+        .then_with(|| a_room.id.cmp(&b_room.id))
+}
+
+fn dm_last_message_at(messages: &[ChatMessage]) -> Option<chrono::DateTime<chrono::Utc>> {
+    messages.iter().map(|message| message.created).max()
+}
+
 /// Sort key for DMs: resolves the other participant's username.
-/// Must match the sort used by the nav UI (`dm_label` in `ui.rs`).
 fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>) -> String {
     let other_id = if room.dm_user_a == Some(user_id) {
         room.dm_user_b
@@ -3796,7 +3828,7 @@ mod tests {
         ];
 
         assert_eq!(
-            visual_order_for_rooms(&rooms, me, &usernames, false, &[]),
+            visual_order_for_rooms(&rooms, me, &usernames, &HashMap::new(), false, &[]),
             vec![
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),

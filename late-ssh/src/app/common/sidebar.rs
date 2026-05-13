@@ -54,28 +54,40 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         height: area.height,
     };
 
-    // Vertical real estate, top to bottom:
-    //   1 row  time (centered)
-    //   1 row  ── rule
-    //   6 rows visualizer (borderless)
-    //   1 row  ── rule
-    //   9 rows now playing / pair status / vote rows
-    //   1 row  ── rule
-    //   6 rows active tables (up to 3 rooms × 2 rows; empty state draws its own label)
-    //   1 row  ── rule
-    //   Fill   bonsai
-    let layout = Layout::vertical([
-        Constraint::Length(1), // time
-        Constraint::Length(1), // ── rule
-        Constraint::Length(6), // visualizer
-        Constraint::Length(1), // ── rule
-        Constraint::Length(9), // now playing + vote
-        Constraint::Length(1), // ── rule
-        Constraint::Length(6), // active tables
-        Constraint::Length(1), // ── rule
-        Constraint::Fill(1),   // bonsai
-    ])
-    .split(area);
+    const TIME_HEIGHT: u16 = 1;
+    const RULE_HEIGHT: u16 = 1;
+    const VISUALIZER_HEIGHT: u16 = 6;
+    const NOW_PLAYING_HEIGHT: u16 = 9;
+    const ACTIVE_TABLES_HEIGHT: u16 = 6;
+    const BONSAI_MIN_HEIGHT: u16 = 3;
+
+    let fixed_without_active = TIME_HEIGHT
+        + RULE_HEIGHT
+        + VISUALIZER_HEIGHT
+        + RULE_HEIGHT
+        + NOW_PLAYING_HEIGHT
+        + RULE_HEIGHT;
+    let active_tables_budget = ACTIVE_TABLES_HEIGHT + RULE_HEIGHT;
+    let show_active_tables =
+        fixed_without_active + active_tables_budget + BONSAI_MIN_HEIGHT <= area.height;
+
+    // Vertical real estate, top to bottom. Active tables are lower priority
+    // than bonsai: hide them before squeezing the tree below its visible size.
+    let mut constraints = vec![
+        Constraint::Length(TIME_HEIGHT),        // time
+        Constraint::Length(RULE_HEIGHT),        // ── rule
+        Constraint::Length(VISUALIZER_HEIGHT),  // visualizer
+        Constraint::Length(RULE_HEIGHT),        // ── rule
+        Constraint::Length(NOW_PLAYING_HEIGHT), // now playing + vote
+        Constraint::Length(RULE_HEIGHT),        // ── rule
+    ];
+    if show_active_tables {
+        constraints.push(Constraint::Length(ACTIVE_TABLES_HEIGHT)); // active tables
+        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+    }
+    constraints.push(Constraint::Fill(1)); // bonsai
+
+    let layout = Layout::vertical(constraints).split(area);
 
     // Inset content one column from the right so it doesn't kiss the frame.
     let inset = |r: Rect| -> Rect {
@@ -106,13 +118,15 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
     draw_horizontal_rule(frame, inset(layout[5]));
 
-    draw_active_tables(frame, inset(layout[6]), props.top_rooms);
-
-    draw_horizontal_rule(frame, inset(layout[7]));
-
+    let mut bonsai_idx = 6;
+    if show_active_tables {
+        draw_active_tables(frame, inset(layout[6]), props.top_rooms);
+        draw_horizontal_rule(frame, inset(layout[7]));
+        bonsai_idx = 8;
+    }
     crate::app::bonsai::ui::draw_bonsai_inline(
         frame,
-        inset(layout[8]),
+        inset(layout[bonsai_idx]),
         props.bonsai,
         props.audio_beat,
     );

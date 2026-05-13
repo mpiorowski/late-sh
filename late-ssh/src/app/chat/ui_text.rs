@@ -343,7 +343,7 @@ fn wrap_room_seat_to_lines(
             right_rows.push((row, body_style));
         }
     }
-    for row in wrap_plain_display_width("open [4] Rooms to join", right_width) {
+    for row in wrap_plain_display_width("open [3] Rooms to join", right_width) {
         right_rows.push((row, meta_style));
     }
     if right_rows.is_empty() {

@@ -705,6 +705,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             theme_id: Some("late".to_string()),
             enable_background_color: false,
             show_dashboard_header: true,
+            show_dashboard_wire: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),

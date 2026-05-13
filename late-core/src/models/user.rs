@@ -63,6 +63,7 @@ const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
+const SHOW_DASHBOARD_WIRE_KEY: &str = "show_dashboard_wire";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_SCREENS_KEY: &str = "right_sidebar_screens";
@@ -473,6 +474,13 @@ pub fn extract_show_dashboard_header(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
+pub fn extract_show_dashboard_wire(settings: &Value) -> bool {
+    settings
+        .get(SHOW_DASHBOARD_WIRE_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| extract_show_dashboard_header(settings))
+}
+
 pub fn extract_show_right_sidebar(settings: &Value) -> bool {
     match settings
         .get(RIGHT_SIDEBAR_MODE_KEY)
@@ -738,6 +746,15 @@ mod tests {
     }
 
     #[test]
+    fn extract_show_dashboard_wire_defaults_to_dashboard_header() {
+        let settings = json!({});
+        assert!(extract_show_dashboard_wire(&settings));
+
+        let settings = json!({ "show_dashboard_header": false });
+        assert!(!extract_show_dashboard_wire(&settings));
+    }
+
+    #[test]
     fn extract_enable_background_color_defaults_to_true() {
         let settings = json!({});
         assert!(extract_enable_background_color(&settings));
@@ -753,6 +770,15 @@ mod tests {
     fn extract_show_dashboard_header_reads_explicit_false() {
         let settings = json!({ "show_dashboard_header": false });
         assert!(!extract_show_dashboard_header(&settings));
+    }
+
+    #[test]
+    fn extract_show_dashboard_wire_reads_explicit_false() {
+        let settings = json!({
+            "show_dashboard_header": true,
+            "show_dashboard_wire": false
+        });
+        assert!(!extract_show_dashboard_wire(&settings));
     }
 
     #[test]

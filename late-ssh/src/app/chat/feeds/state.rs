@@ -114,7 +114,7 @@ impl State {
             self.article_service
                 .process_url(self.user_id, item.entry.url.as_str()),
         );
-        Some(Banner::success("Sharing feed entry..."))
+        Some(Banner::success("Sharing RSS entry..."))
     }
 
     pub fn stop_processing(&mut self) {
@@ -128,7 +128,7 @@ impl State {
     pub fn dismiss_selected(&mut self) -> Option<Banner> {
         let item = self.entries.get(self.selected_index())?;
         self.service.dismiss_entry_task(self.user_id, item.entry.id);
-        Some(Banner::success("Feed entry dismissed."))
+        Some(Banner::success("RSS entry dismissed."))
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
@@ -154,13 +154,13 @@ impl State {
         loop {
             match self.event_rx.try_recv() {
                 Ok(FeedEvent::FeedAdded { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed connected."));
+                    banner = Some(Banner::success("RSS connected."));
                 }
                 Ok(FeedEvent::FeedDeleted { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed removed."));
+                    banner = Some(Banner::success("RSS removed."));
                 }
                 Ok(FeedEvent::FeedFailed { user_id, error }) if user_id == self.user_id => {
-                    banner = Some(Banner::error(&format!("Feed failed: {error}")));
+                    banner = Some(Banner::error(&format!("RSS failed: {error}")));
                 }
                 Ok(FeedEvent::UnreadCountUpdated {
                     user_id,
@@ -181,15 +181,15 @@ impl State {
                     self.unread_count = unread_count;
                     if increased {
                         banner = Some(Banner::success(&format!(
-                            "{unread_count} feed entries ready"
+                            "{unread_count} RSS entries ready"
                         )));
                     }
                 }
                 Ok(FeedEvent::EntryDismissed { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed entry dismissed."));
+                    banner = Some(Banner::success("RSS entry dismissed."));
                 }
                 Ok(FeedEvent::EntryShared { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed entry shared."));
+                    banner = Some(Banner::success("RSS entry shared."));
                 }
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,

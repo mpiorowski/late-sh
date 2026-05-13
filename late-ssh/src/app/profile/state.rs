@@ -147,6 +147,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         ),
         enable_background_color: profile.enable_background_color,
         show_dashboard_header: profile.show_dashboard_header,
+        show_dashboard_wire: profile.show_dashboard_wire,
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_screens: profile.right_sidebar_screens.clone(),

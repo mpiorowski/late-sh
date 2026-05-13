@@ -45,6 +45,7 @@ pub enum Row {
     RightSidebar,
     RoomListSidebar,
     LoungeInfo,
+    WireBox,
     Country,
     Timezone,
     DirectMessages,
@@ -56,7 +57,7 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 18] = [
+    pub const ALL: [Row; 19] = [
         Row::Username,
         Row::Ide,
         Row::Terminal,
@@ -67,6 +68,7 @@ impl Row {
         Row::RightSidebar,
         Row::RoomListSidebar,
         Row::LoungeInfo,
+        Row::WireBox,
         Row::Country,
         Row::Timezone,
         Row::DirectMessages,
@@ -150,7 +152,7 @@ impl Tab {
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Account => "Account",
-            Tab::Feeds => "Feeds",
+            Tab::Feeds => "RSS",
             Tab::Special => "Special",
         }
     }
@@ -1279,13 +1281,13 @@ impl SettingsModalState {
         loop {
             match self.feed_event_rx.try_recv() {
                 Ok(FeedEvent::FeedAdded { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed connected."));
+                    banner = Some(Banner::success("RSS connected."));
                 }
                 Ok(FeedEvent::FeedDeleted { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed removed."));
+                    banner = Some(Banner::success("RSS removed."));
                 }
                 Ok(FeedEvent::FeedFailed { user_id, error }) if user_id == self.user_id => {
-                    banner = Some(Banner::error(&format!("Feed failed: {error}")));
+                    banner = Some(Banner::error(&format!("RSS failed: {error}")));
                 }
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,
@@ -1329,6 +1331,10 @@ impl SettingsModalState {
             }
             Row::LoungeInfo => {
                 self.draft.show_dashboard_header ^= true;
+                true
+            }
+            Row::WireBox => {
+                self.draft.show_dashboard_wire ^= true;
                 true
             }
             Row::DirectMessages => {
@@ -1390,6 +1396,7 @@ impl SettingsModalState {
                 ),
                 enable_background_color: self.draft.enable_background_color,
                 show_dashboard_header: self.draft.show_dashboard_header,
+                show_dashboard_wire: self.draft.show_dashboard_wire,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 right_sidebar_mode: self.draft.right_sidebar_mode,
                 right_sidebar_screens: self.draft.right_sidebar_screens.clone(),

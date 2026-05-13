@@ -1,7 +1,7 @@
 # late-ssh Chat Context
 
 ## Metadata
-- Domain: late.sh SSH chat, synthetic chat feeds, and dashboard/room chat surfaces
+- Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
 - Last updated: 2026-05-13
 - Status: Active
@@ -17,7 +17,7 @@ Included here:
 - Home chat rooms, DMs, public/private topic rooms, synthetic entries, and game-backed room chat.
 - Home/Dashboard chat center, room rail, and embedded Rooms chat surfaces.
 - Message composer, replies, edits, deletes, reactions, pinned messages, ignores, overlays, and autocomplete.
-- Synthetic chat entries: Feeds, News, Mentions/Notifications, Showcase, Work, and Discover.
+- Synthetic chat entries: RSS, News, Mentions/Notifications, Showcase, Work, and Discover.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
 
 Global SSH, audio, games, profile, rooms/blackjack, observability, and repo-wide test policy stay in the root context.
@@ -35,7 +35,7 @@ late-ssh/src/app/chat/
 |-- ui.rs                        # Home room rail/chat center, dashboard-general view, embedded room chat, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
-|-- feeds/                       # Synthetic Feeds entry: private per-user RSS/Atom inbox
+|-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
 |-- news/                        # Synthetic News entry: articles + #general announcement
 |-- notifications/               # Synthetic Mentions entry: mention notifications
 |-- showcase/                    # Synthetic Showcase entry: user project links
@@ -144,7 +144,7 @@ Notifications:
 
 ## 6. Rooms And Selection
 
-`RoomSlot` represents either a real room or one of the synthetic entries: Feeds, News, Notifications/Mentions, Discover, Showcase, or Work.
+`RoomSlot` represents either a real room or one of the synthetic entries: RSS (`RoomSlot::Feeds`), News, Notifications/Mentions, Discover, Showcase, or Work.
 
 Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`:
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
@@ -152,25 +152,25 @@ Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by co
 3. Notifications/Mentions.
 4. Other non-DM chat-list rooms/channels, excluding favorites.
 5. News.
-6. Feeds, when the current user has at least one RSS/Atom subscription.
+6. RSS, when the current user has at least one RSS/Atom subscription.
 7. Showcase.
 8. Work.
-9. DMs, sorted by peer display name.
+9. DMs, sorted by unread status, then newest message, then peer display name.
 10. Discover / `+ browse rooms`.
 
-Feeds:
-- Feed subscriptions are per-user and managed in `Settings -> Feeds`.
+RSS:
+- RSS subscriptions are per-user and managed in `Settings -> RSS`.
 - `rss_feeds` stores connected RSS/Atom URLs; `rss_entries` stores private pending entries.
 - The background `FeedService` polls active feeds, parses a conservative RSS/Atom subset, stores unseen entries, and publishes per-user events.
-- The `feeds` synthetic room is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#general` announcement.
-- Enter copies the selected feed entry URL, `d` dismisses it, and `r` asks the feed poller to refresh.
+- The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#general` announcement.
+- Enter copies the selected RSS entry URL, `d` dismisses it, and `r` asks the RSS poller to refresh.
 
 Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.
 
 Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
 - `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`. Jumping to the already selected room/synthetic entry still re-runs the entry's read/list side effects so stale unread badges clear.
-- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for feeds, News, Showcase, Work, Mentions, and custom room browse. Typing bare `@` shows all DMs ordered by unread count, then latest message; typing `@name` searches DMs with the same ordering.
+- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for RSS, News, Showcase, Work, Mentions, and custom room browse. Results are ordered favorites first, then unread entries, then latest message/activity; typed `@` and `#` prefixes filter to DMs or rooms while keeping that ordering.
 - While composing on Home, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
 - Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`, `work_selected`), not `selected_room_id`.
 
