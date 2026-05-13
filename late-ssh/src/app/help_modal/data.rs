@@ -638,7 +638,7 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  background color and right-sidebar visibility".to_string(),
+        "  background color, right sidebar, room list, and lounge info visibility".to_string(),
         "  private RSS/Atom feed subscriptions".to_string(),
         "".to_string(),
         "How to open it".to_string(),

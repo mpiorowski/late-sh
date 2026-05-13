@@ -24,25 +24,26 @@ async fn make_app_harness() -> (late_core::test_utils::TestDb, late_ssh::app::st
 }
 
 #[tokio::test]
-async fn uppercase_b_on_dashboard_opens_cli_install_modal() {
+async fn uppercase_p_on_dashboard_opens_install_pair_modal() {
     let (_test_db, mut app) = make_app_harness().await;
 
     app.handle_input(b"b");
     assert!(
         !render_plain(&mut app).contains("build from source"),
-        "lowercase b should not open the CLI install modal"
+        "lowercase b should not open the install/pair modal"
     );
 
-    app.handle_input(b"B");
+    app.handle_input(b"P");
     wait_for_render_contains(&mut app, "build from source").await;
     wait_for_render_contains(&mut app, "curl -fsSL https://cli.late.sh/install.sh | bash").await;
+    wait_for_render_contains(&mut app, "alternatively pair browser").await;
 }
 
 #[tokio::test]
 async fn mouse_move_does_not_close_cli_install_modal() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"B");
+    app.handle_input(b"P");
     wait_for_render_contains(&mut app, "build from source").await;
 
     app.handle_input(b"\x1b[<35;20;5M");
@@ -57,7 +58,8 @@ async fn uppercase_p_opens_pairing_qr_on_home() {
     let (_test_db, mut app) = make_app_harness().await;
 
     app.handle_input(b"P");
-    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+    wait_for_render_contains(&mut app, "Install CLI & Pair Browser").await;
+    wait_for_render_contains(&mut app, "alternatively pair browser").await;
 }
 
 #[tokio::test]
@@ -65,13 +67,13 @@ async fn mouse_move_does_not_close_pairing_qr() {
     let (_test_db, mut app) = make_app_harness().await;
 
     app.handle_input(b"P");
-    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+    wait_for_render_contains(&mut app, "Install CLI & Pair Browser").await;
 
     app.handle_input(b"\x1b[<35;20;5M");
-    wait_for_render_contains(&mut app, "Scan to pair audio").await;
+    wait_for_render_contains(&mut app, "Install CLI & Pair Browser").await;
 
     app.handle_input(b"x");
-    assert!(!render_plain(&mut app).contains("Scan to pair audio"));
+    assert!(!render_plain(&mut app).contains("Install CLI & Pair Browser"));
 }
 
 #[tokio::test]

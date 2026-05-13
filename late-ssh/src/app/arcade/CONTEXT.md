@@ -132,7 +132,7 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 - `arcade/ui.rs` renders the lobby header/list and delegates active games to their `ui.rs`.
 - The lobby hides the ASCII header when the terminal is short and auto-scrolls the selected entry near the top third of the viewport.
 - `draw_game_frame`, `draw_game_frame_with_info_sidebar`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, `tip_line`, `key_hint`, `info_label_value`, and `info_tagline` are shared helpers used by Arcade games and some non-Arcade surfaces.
-- The Arcade sidebar is controlled by profile setting `show_arcade_sidebar`; the reader still accepts the legacy `show_games_sidebar` key.
+- The old profile-controlled Arcade sidebar preference has been removed. Arcade game bottom status/key bars render unconditionally; `draw_game_frame_with_info_sidebar` remains a shared helper for non-Arcade room-game surfaces such as Blackjack.
 
 ## Keybindings
 

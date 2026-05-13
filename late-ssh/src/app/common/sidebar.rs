@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 
 use chrono::Utc;
-use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -10,27 +9,22 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::{primitives::genre_label, theme};
+use super::theme;
 use crate::app::activity::event::ActivityEvent;
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::dashboard::ui::DashboardRoomCard;
 use crate::app::visualizer::Visualizer;
-use crate::app::vote::ui::VoteCardView;
-use crate::session::ClientAudioState;
 
 pub struct SidebarProps<'a> {
     pub game_selection: usize,
     pub is_playing_game: bool,
     pub visualizer: &'a Visualizer,
-    pub now_playing: Option<&'a NowPlaying>,
-    pub paired_client: Option<&'a ClientAudioState>,
     pub online_count: usize,
     pub bonsai: &'a BonsaiState,
     pub audio_beat: f32,
     pub connect_url: &'a str,
     pub activity: &'a VecDeque<ActivityEvent>,
     pub clock_text: &'a str,
-    pub vote: Option<VoteCardView<'a>>,
     /// Top multiplayer rooms — rendered as a compact "active tables" block
     /// in the right rail.
     pub top_rooms: &'a [DashboardRoomCard],
@@ -43,10 +37,6 @@ pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
 fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     // Single thin separator on the LEFT edge anchors the rail; sections inside
     // breathe without their own borders. Italic dim labels mark each block.
-    let visualizer = props.visualizer;
-    let now_playing = props.now_playing;
-    let paired_client = props.paired_client;
-
     // Paint the separator column first so content rendering overdraws nothing.
     paint_vertical_separator(frame, area.x, area.y, area.height);
 
@@ -63,8 +53,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     //   1 row  ── rule
     //   6 rows visualizer (borderless)
     //   1 row  ── rule
-    //   9 rows stream block (now playing + vote merged)
-    //   1 row  ── rule
     //   6 rows active tables (up to 3 rooms × 2 rows; empty state draws its own label)
     //   1 row  ── rule
     //   Fill   bonsai
@@ -72,8 +60,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         Constraint::Length(1), // time
         Constraint::Length(1), // ── rule
         Constraint::Length(6), // visualizer
-        Constraint::Length(1), // ── rule
-        Constraint::Length(9), // stream block
         Constraint::Length(1), // ── rule
         Constraint::Length(6), // active tables
         Constraint::Length(1), // ── rule
@@ -96,27 +82,17 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     draw_horizontal_rule(frame, inset(layout[1]));
 
     // Visualizer: borderless inline render.
-    visualizer.render_inline(frame, inset(layout[2]));
+    props.visualizer.render_inline(frame, inset(layout[2]));
 
     draw_horizontal_rule(frame, inset(layout[3]));
 
-    draw_stream_block(
-        frame,
-        inset(layout[4]),
-        now_playing,
-        paired_client,
-        props.vote.as_ref(),
-    );
+    draw_active_tables(frame, inset(layout[4]), props.top_rooms);
 
     draw_horizontal_rule(frame, inset(layout[5]));
 
-    draw_active_tables(frame, inset(layout[6]), props.top_rooms);
-
-    draw_horizontal_rule(frame, inset(layout[7]));
-
     crate::app::bonsai::ui::draw_bonsai_inline(
         frame,
-        inset(layout[8]),
+        inset(layout[6]),
         props.bonsai,
         props.audio_beat,
     );
@@ -302,189 +278,6 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
         Style::default().fg(theme::BORDER_DIM()),
     ));
     frame.render_widget(Paragraph::new(line), area);
-}
-
-/// Merged "what's playing + what's next" block. No border, no title bar.
-/// Layout (9 rows):
-///   track title
-///   artist · genre        (dim)
-///   <blank>
-///   progress bar          (e.g. 0:40 ──●──── 3:00)
-///   pair status
-///   -/= vol   m mute
-///   now/next vibe
-///   lofi    ███▒    1  v1
-///   ambient  ·       0  v2
-///   classic  ·       0  v3
-fn draw_stream_block(
-    frame: &mut Frame,
-    area: Rect,
-    now_playing: Option<&NowPlaying>,
-    paired_client: Option<&ClientAudioState>,
-    vote: Option<&VoteCardView<'_>>,
-) {
-    if area.height < 4 {
-        return;
-    }
-
-    let chunks = Layout::vertical([
-        Constraint::Length(1), // title
-        Constraint::Length(1), // artist
-        Constraint::Length(1), // progress
-        Constraint::Length(1), // pair status
-        Constraint::Length(1), // audio controls
-        Constraint::Fill(1),   // vibe + vote rows
-    ])
-    .split(area);
-
-    let (title, artist) = match now_playing {
-        Some(np) => (
-            np.track.title.clone(),
-            np.track
-                .artist
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
-        ),
-        None => ("waiting for stream".to_string(), String::new()),
-    };
-
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            title,
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ))),
-        chunks[0],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            artist,
-            Style::default().fg(theme::TEXT_DIM()),
-        ))),
-        chunks[1],
-    );
-
-    // Progress
-    if let Some(np) = now_playing {
-        let elapsed_secs = np.started_at.elapsed().as_secs();
-        let duration = np.track.duration_seconds;
-        if let Some(dur) = duration {
-            let elapsed = elapsed_secs.min(dur);
-            let elapsed_str = format!("{}:{:02}", elapsed / 60, elapsed % 60);
-            let total_str = format!("{}:{:02}", dur / 60, dur % 60);
-            let time_w = elapsed_str.len() + total_str.len() + 2;
-            let bar_w = (chunks[2].width as usize).saturating_sub(time_w);
-            let progress = if dur > 0 {
-                (elapsed as f64 / dur as f64).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let dot = ((bar_w as f64 * progress) as usize).min(bar_w.saturating_sub(1));
-            let bar_before = "─".repeat(dot);
-            let bar_after = "─".repeat(bar_w.saturating_sub(dot + 1));
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(elapsed_str, Style::default().fg(theme::AMBER())),
-                    Span::raw(" "),
-                    Span::styled(bar_before, Style::default().fg(theme::BORDER_DIM())),
-                    Span::styled("●", Style::default().fg(theme::AMBER_GLOW())),
-                    Span::styled(bar_after, Style::default().fg(theme::BORDER_DIM())),
-                    Span::raw(" "),
-                    Span::styled(total_str, Style::default().fg(theme::TEXT_FAINT())),
-                ])),
-                chunks[2],
-            );
-        }
-    }
-
-    // Pair status (dim, one line)
-    let pair_text = match paired_client {
-        Some(state) => format!(
-            "{} · {}%{}",
-            state.client_kind.label(),
-            state.volume_percent,
-            if state.muted { " · muted" } else { "" }
-        ),
-        None => "no pair".to_string(),
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            pair_text,
-            Style::default().fg(theme::TEXT_FAINT()),
-        ))),
-        chunks[3],
-    );
-
-    draw_audio_hint_line(frame, chunks[4]);
-
-    if let Some(vote) = vote {
-        let rows = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .split(chunks[5]);
-        draw_vibe_line(frame, rows[0], vote);
-        let vote_area = Rect {
-            x: rows[1].x,
-            y: rows[1].y,
-            width: rows[1].width,
-            height: rows.iter().skip(1).map(|row| row.height).sum(),
-        };
-        crate::app::vote::ui::draw_vote_inline(frame, vote_area, vote);
-    }
-}
-
-fn draw_vibe_line(frame: &mut Frame, area: Rect, vote: &VoteCardView<'_>) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-
-    let next = vote.vote_counts.winner_or(vote.current_genre);
-    let current = genre_label(vote.current_genre).to_ascii_lowercase();
-    let next = genre_label(next).to_ascii_lowercase();
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "now ",
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::styled(current, Style::default().fg(theme::SUCCESS())),
-            Span::styled(" > ", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(next, Style::default().fg(theme::AMBER())),
-        ])),
-        area,
-    );
-}
-
-fn draw_audio_hint_line(frame: &mut Frame, area: Rect) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "-/=",
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" vol  ", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(
-                "m",
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" mute", Style::default().fg(theme::TEXT_FAINT())),
-        ])),
-        area,
-    );
 }
 
 /// Paint a thin vertical line (1 column wide) in BORDER_DIM. Used by the

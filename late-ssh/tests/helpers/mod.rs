@@ -294,7 +294,6 @@ pub fn make_app_with_chat_service(
         paired_client_registry: None,
         web_chat_registry: None,
         session_rx: None,
-        now_playing_rx: None,
         user_id,
         permissions: Permissions::default(),
         artboard_banned: false,
@@ -397,7 +396,6 @@ pub fn make_app_with_paired_client(
         paired_client_registry: Some(registry),
         web_chat_registry: None,
         session_rx: None,
-        now_playing_rx: None,
         user_id,
         permissions: Permissions::default(),
         artboard_banned: false,
@@ -446,8 +444,7 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
         .expect("join general room");
 
     let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow-it"));
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "lounge").await;
     app.handle_input(b"i");
     wait_for_render_contains(&mut app, "Compose (Enter send").await;
     (test_db, app)

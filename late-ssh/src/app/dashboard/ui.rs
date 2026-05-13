@@ -90,6 +90,7 @@ pub struct DashboardRenderInput<'a> {
     pub online_count: usize,
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
+    pub show_lounge_info: bool,
     pub pinned_messages: &'a [ChatMessage],
     pub chat_view: DashboardChatView<'a>,
 }
@@ -103,8 +104,9 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         return;
     }
 
-    let want_top = area.width > TOP_STRIP_HIDE_AT_WIDTH && area.height >= 18;
-    let want_wire = area.height >= WIRE_HIDE_AT_HEIGHT;
+    let want_top =
+        view.show_lounge_info && area.width > TOP_STRIP_HIDE_AT_WIDTH && area.height >= 18;
+    let want_wire = view.show_lounge_info && area.height >= WIRE_HIDE_AT_HEIGHT;
     let want_pinned = !view.pinned_messages.is_empty() && area.height >= 14;
 
     let top_height = if want_top { TOP_STRIP_ROW_HEIGHT } else { 0 };

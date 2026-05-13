@@ -1426,6 +1426,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
 }
 
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
+    if !app.profile_state.profile().show_room_list_sidebar {
+        return None;
+    }
     const HOME_RAIL_WIDTH: u16 = 24;
     let content_area = app_content_area(app);
     (content_area.width > HOME_RAIL_WIDTH + 20).then_some(Rect {

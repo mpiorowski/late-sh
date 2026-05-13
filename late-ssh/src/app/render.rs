@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use late_core::MutexRecover;
-use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -26,7 +25,6 @@ use super::{
     terminal_help_modal,
     visualizer::Visualizer,
 };
-use crate::session::ClientAudioState;
 
 fn sanitize_notification_field(input: &str) -> String {
     input
@@ -70,7 +68,19 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
     }
 }
 
-fn arcade_sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
+fn room_list_sidebar_enabled(
+    show_settings: bool,
+    draft_enabled: bool,
+    profile_enabled: bool,
+) -> bool {
+    if show_settings {
+        draft_enabled
+    } else {
+        profile_enabled
+    }
+}
+
+fn lounge_info_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
     if show_settings {
         draft_enabled
     } else {
@@ -106,8 +116,6 @@ struct DrawContext<'a> {
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
-    now_playing: Option<&'a NowPlaying>,
-    paired_client: Option<&'a ClientAudioState>,
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
@@ -116,7 +124,8 @@ struct DrawContext<'a> {
     is_admin: bool,
     is_moderator: bool,
     show_right_sidebar: bool,
-    show_arcade_sidebar: bool,
+    show_room_list_sidebar: bool,
+    show_lounge_info: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
@@ -149,7 +158,6 @@ struct DrawContext<'a> {
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
-    vote_view: crate::app::vote::ui::VoteCardView<'a>,
     top_rooms: &'a [dashboard::ui::DashboardRoomCard],
     home_selected: bool,
 }
@@ -198,22 +206,20 @@ impl App {
             self.settings_modal_state.draft().show_right_sidebar,
             self.profile_state.profile().show_right_sidebar,
         );
-        let show_arcade_sidebar = arcade_sidebar_enabled(
+        let show_room_list_sidebar = room_list_sidebar_enabled(
             self.show_settings,
-            self.settings_modal_state.draft().show_arcade_sidebar,
-            self.profile_state.profile().show_arcade_sidebar,
+            self.settings_modal_state.draft().show_room_list_sidebar,
+            self.profile_state.profile().show_room_list_sidebar,
+        );
+        let show_lounge_info = lounge_info_enabled(
+            self.show_settings,
+            self.settings_modal_state.draft().show_dashboard_header,
+            self.profile_state.profile().show_dashboard_header,
         );
         let screen = self.screen;
-        let now_playing: Option<NowPlaying> = self
-            .now_playing_rx
-            .as_mut()
-            .and_then(|rx| rx.borrow_and_update().clone());
         let banner = self.active_banner().cloned();
-        let vote_snapshot = self.vote.snapshot();
-        let vote_my_vote = self.vote.my_vote();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let visualizer = &self.visualizer;
-        let paired_client_state = self.paired_client_state();
         let chat_usernames = self.chat.usernames();
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
@@ -228,7 +234,9 @@ impl App {
             && !self.chat.notifications_selected
             && !self.chat.discover_selected
             && !self.chat.showcase_selected
-            && !self.chat.work_selected;
+            && !self.chat.work_selected
+            && !self.chat.composing
+            && !self.chat.is_reaction_leader_active();
         let top_rooms =
             dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 3);
         let online_count = self
@@ -251,6 +259,7 @@ impl App {
             online_count,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
+            show_lounge_info,
             pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
@@ -448,8 +457,6 @@ impl App {
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
-                        now_playing: now_playing.as_ref(),
-                        paired_client: paired_client_state.as_ref(),
                         sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
@@ -458,7 +465,8 @@ impl App {
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
                         show_right_sidebar,
-                        show_arcade_sidebar,
+                        show_room_list_sidebar,
+                        show_lounge_info,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
@@ -491,11 +499,6 @@ impl App {
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
-                        vote_view: crate::app::vote::ui::VoteCardView {
-                            vote_counts: &vote_snapshot.counts,
-                            current_genre: vote_snapshot.current_genre,
-                            my_vote: vote_my_vote,
-                        },
                         top_rooms: &top_rooms,
                         home_selected,
                     },
@@ -660,16 +663,17 @@ impl App {
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
-                let (rail_area, center_area) = if content_area.width > HOME_RAIL_WIDTH + 20 {
-                    let split = Layout::horizontal([
-                        Constraint::Length(HOME_RAIL_WIDTH),
-                        Constraint::Fill(1),
-                    ])
-                    .split(content_area);
-                    (Some(split[0]), split[1])
-                } else {
-                    (None, content_area)
-                };
+                let (rail_area, center_area) =
+                    if ctx.show_room_list_sidebar && content_area.width > HOME_RAIL_WIDTH + 20 {
+                        let split = Layout::horizontal([
+                            Constraint::Length(HOME_RAIL_WIDTH),
+                            Constraint::Fill(1),
+                        ])
+                        .split(content_area);
+                        (Some(split[0]), split[1])
+                    } else {
+                        (None, content_area)
+                    };
 
                 if let Some(rail_area) = rail_area {
                     chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
@@ -699,7 +703,6 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
-                    show_sidebar: ctx.show_arcade_sidebar,
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
@@ -731,19 +734,12 @@ impl App {
                     game_selection: ctx.game_selection,
                     is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
-                    now_playing: ctx.now_playing,
-                    paired_client: ctx.paired_client,
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
-                    vote: Some(crate::app::vote::ui::VoteCardView {
-                        vote_counts: ctx.vote_view.vote_counts,
-                        current_genre: ctx.vote_view.current_genre,
-                        my_vote: ctx.vote_view.my_vote,
-                    }),
                     top_rooms: ctx.top_rooms,
                 },
             );
@@ -1058,8 +1054,8 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, arcade_sidebar_enabled, desktop_notification_bytes, mentions_hud_title,
-        sidebar_enabled,
+        NotificationMode, desktop_notification_bytes, lounge_info_enabled, mentions_hud_title,
+        room_list_sidebar_enabled, sidebar_enabled,
     };
 
     #[test]
@@ -1129,15 +1125,27 @@ mod tests {
     }
 
     #[test]
-    fn arcade_sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
-        assert!(!arcade_sidebar_enabled(true, false, true));
-        assert!(arcade_sidebar_enabled(true, true, false));
+    fn room_list_sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
+        assert!(!room_list_sidebar_enabled(true, false, true));
+        assert!(room_list_sidebar_enabled(true, true, false));
     }
 
     #[test]
-    fn arcade_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
-        assert!(arcade_sidebar_enabled(false, false, true));
-        assert!(!arcade_sidebar_enabled(false, true, false));
+    fn room_list_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
+        assert!(room_list_sidebar_enabled(false, false, true));
+        assert!(!room_list_sidebar_enabled(false, true, false));
+    }
+
+    #[test]
+    fn lounge_info_enabled_prefers_settings_draft_while_modal_is_open() {
+        assert!(!lounge_info_enabled(true, false, true));
+        assert!(lounge_info_enabled(true, true, false));
+    }
+
+    #[test]
+    fn lounge_info_enabled_uses_saved_profile_when_modal_is_closed() {
+        assert!(lounge_info_enabled(false, false, true));
+        assert!(!lounge_info_enabled(false, true, false));
     }
 
     #[test]

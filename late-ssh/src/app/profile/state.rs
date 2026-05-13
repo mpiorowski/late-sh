@@ -148,7 +148,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         enable_background_color: profile.enable_background_color,
         show_dashboard_header: profile.show_dashboard_header,
         show_right_sidebar: profile.show_right_sidebar,
-        show_arcade_sidebar: profile.show_arcade_sidebar,
+        show_room_list_sidebar: profile.show_room_list_sidebar,
         show_settings_on_connect: profile.show_settings_on_connect,
         favorite_room_ids: profile.favorite_room_ids.clone(),
     }

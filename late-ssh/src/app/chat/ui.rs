@@ -2759,9 +2759,23 @@ mod tests {
 
         let area = Rect::new(1, 1, 74, 30);
         let rooms_area = room_list_area(area, chat_selection_mode(&view, area));
-        let inner = Block::default().borders(Borders::ALL).inner(rooms_area);
         let room_list_view = room_list_view_from_render_input(&view);
-        let room_rows = build_room_list_rows(&room_list_view, rooms_area);
+        let inner = Rect {
+            x: rooms_area.x + 2,
+            y: rooms_area.y + 1,
+            width: rooms_area.width.saturating_sub(4),
+            height: rooms_area.height.saturating_sub(1),
+        };
+        let hint_rows = build_rail_nav_hint_lines().len() as u16;
+        let footer_reserve = hint_rows + 2;
+        let list_area = if inner.height > footer_reserve + 2 {
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)]).split(inner)
+                [0]
+        } else {
+            inner
+        };
+        let room_rows =
+            build_cozy_room_rail_rows(&room_list_view, rooms_area.width.saturating_sub(2));
         let rust_row = room_rows
             .hit_slots
             .iter()
@@ -2772,13 +2786,13 @@ mod tests {
             room_list_hit_test(
                 rooms_area,
                 &room_list_view,
-                inner.x,
-                inner.y + rust_row as u16
+                list_area.x,
+                list_area.y + rust_row as u16
             ),
             Some(RoomSlot::Room(rust.id))
         );
         assert_eq!(
-            room_list_hit_test(rooms_area, &room_list_view, inner.x, inner.y),
+            room_list_hit_test(rooms_area, &room_list_view, list_area.x, list_area.y),
             None
         );
         assert!(room_list_panel_contains(

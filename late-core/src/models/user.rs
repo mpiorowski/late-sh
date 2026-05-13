@@ -33,8 +33,7 @@ const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
-const SHOW_ARCADE_SIDEBAR_KEY: &str = "show_arcade_sidebar";
-const LEGACY_SHOW_GAMES_SIDEBAR_KEY: &str = "show_games_sidebar";
+const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
@@ -448,10 +447,9 @@ pub fn extract_show_right_sidebar(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-pub fn extract_show_arcade_sidebar(settings: &Value) -> bool {
+pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
     settings
-        .get(SHOW_ARCADE_SIDEBAR_KEY)
-        .or_else(|| settings.get(LEGACY_SHOW_GAMES_SIDEBAR_KEY))
+        .get(SHOW_ROOM_LIST_SIDEBAR_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }
@@ -680,21 +678,15 @@ mod tests {
     }
 
     #[test]
-    fn extract_show_arcade_sidebar_defaults_to_true() {
+    fn extract_show_room_list_sidebar_defaults_to_true() {
         let settings = json!({});
-        assert!(extract_show_arcade_sidebar(&settings));
+        assert!(extract_show_room_list_sidebar(&settings));
     }
 
     #[test]
-    fn extract_show_arcade_sidebar_reads_explicit_false() {
-        let settings = json!({ "show_arcade_sidebar": false });
-        assert!(!extract_show_arcade_sidebar(&settings));
-    }
-
-    #[test]
-    fn extract_show_arcade_sidebar_reads_legacy_games_key() {
-        let settings = json!({ "show_games_sidebar": false });
-        assert!(!extract_show_arcade_sidebar(&settings));
+    fn extract_show_room_list_sidebar_reads_explicit_false() {
+        let settings = json!({ "show_room_list_sidebar": false });
+        assert!(!extract_show_room_list_sidebar(&settings));
     }
 
     #[test]

@@ -147,7 +147,7 @@ keys:
 	@if [ ! -f server_key ]; then ssh-keygen -t ed25519 -f server_key -N "" -q; fi
 
 check:
-	cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace --all-targets
+	cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace --all-targets --no-fail-fast
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build
