@@ -455,7 +455,27 @@
                 </span>
             </div>
             <div class="mt-2 text-xs text-gray-600">
-                installs the local `late` companion CLI
+                installs the local `late` companion CLI on macOS, Linux, or Termux
+            </div>
+        </button>
+    </div>
+
+    <div class="stagger stagger-3 mb-4">
+        <button @click="copy('irm https://cli.late.sh/install.ps1 | iex')"
+            class="group w-full text-left border border-gray-800 hover:border-green-950 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
+            <div class="flex items-center justify-between gap-4">
+                <span class="text-sm sm:text-base text-gray-300 min-w-0 truncate">
+                    <span class="text-gray-600">PS&gt; </span>
+                    <span class="text-gray-100">irm https://cli.late.sh/install.ps1 | iex</span>
+                </span>
+                <span class="shrink-0 text-right text-xs">
+                    <span x-cloak x-show="copied !== 'irm https://cli.late.sh/install.ps1 | iex'"
+                        class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
+                    <span x-cloak x-show="copied === 'irm https://cli.late.sh/install.ps1 | iex'" class="text-green-600">copied</span>
+                </span>
+            </div>
+            <div class="mt-2 text-xs text-gray-600">
+                installs `late.exe` on Windows PowerShell
             </div>
         </button>
     </div>
@@ -687,7 +707,26 @@
                 </span>
             </div>
             <div class="mt-2 text-xs text-gray-600">
-                skip the browser &mdash; the companion CLI plays audio locally
+                skip the browser on macOS, Linux, or Termux
+            </div>
+        </button>
+
+        <button @click="copy('irm https://cli.late.sh/install.ps1 | iex')"
+            class="group w-full text-left mt-3 px-4 py-3 transition-colors duration-200 border border-gray-800 hover:border-green-950 bg-gray-900/20">
+            <div class="flex items-center justify-between gap-4">
+                <span class="text-xs text-gray-400 min-w-0 truncate">
+                    <span class="text-gray-600">PS&gt; </span>
+                    <span class="text-gray-300">irm https://cli.late.sh/install.ps1 | iex</span>
+                </span>
+                <span class="shrink-0 text-right text-xs">
+                    <span x-cloak x-show="copied !== 'irm https://cli.late.sh/install.ps1 | iex'"
+                        class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
+                    <span x-cloak x-show="copied === 'irm https://cli.late.sh/install.ps1 | iex'"
+                        class="text-green-600">copied</span>
+                </span>
+            </div>
+            <div class="mt-2 text-xs text-gray-600">
+                skip the browser on Windows PowerShell
             </div>
         </button>
     </div>

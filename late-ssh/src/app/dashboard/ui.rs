@@ -99,32 +99,28 @@ pub struct DashboardRenderInput<'a> {
 /// the selected room's chat. Non-general rooms bypass this and render as full
 /// chat in `render.rs`.
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
-    if area.width <= 30 || area.height < 10 {
+    if area.width == 0 || area.height == 0 {
         draw_dashboard_chat_card(frame, area, view.chat_view);
         return;
     }
 
-    let want_top =
-        view.show_lounge_info && area.width > TOP_STRIP_HIDE_AT_WIDTH && area.height >= 18;
-    let want_wire = view.show_lounge_info && area.height >= WIRE_HIDE_AT_HEIGHT;
-    let want_pinned = !view.pinned_messages.is_empty() && area.height >= 14;
-
-    let top_height = if want_top { TOP_STRIP_ROW_HEIGHT } else { 0 };
-    let wire_height = if want_wire { WIRE_STRIP_ROW_HEIGHT } else { 0 };
-    let pinned_height: u16 = if want_pinned { 1 } else { 0 };
-    let want_chat_rule = pinned_height > 0 || (top_height > 0 && wire_height == 0);
+    let chrome = dashboard_chrome(
+        area.height,
+        view.show_lounge_info,
+        !view.pinned_messages.is_empty(),
+    );
 
     let mut constraints: Vec<Constraint> = Vec::new();
-    if top_height > 0 {
-        constraints.push(Constraint::Length(top_height));
+    if chrome.top {
+        constraints.push(Constraint::Length(TOP_STRIP_ROW_HEIGHT));
     }
-    if wire_height > 0 {
-        constraints.push(Constraint::Length(wire_height));
+    if chrome.wire {
+        constraints.push(Constraint::Length(WIRE_STRIP_ROW_HEIGHT));
     }
-    if pinned_height > 0 {
-        constraints.push(Constraint::Length(pinned_height));
+    if chrome.pinned {
+        constraints.push(Constraint::Length(PINNED_ROW_HEIGHT));
     }
-    if want_chat_rule {
+    if chrome.chat_rule {
         constraints.push(Constraint::Length(1)); // bottom rule above chat
     }
     constraints.push(Constraint::Fill(1));
@@ -132,11 +128,11 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     let chunks = Layout::vertical(constraints).split(area);
     let mut idx = 0;
 
-    if top_height > 0 {
+    if chrome.top {
         draw_top_strip(frame, chunks[idx], view.activity, view.online_count);
         idx += 1;
     }
-    if wire_height > 0 {
+    if chrome.wire {
         draw_wire_strip(
             frame,
             chunks[idx],
@@ -145,24 +141,69 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         );
         idx += 1;
     }
-    if pinned_height > 0 {
+    if chrome.pinned {
         draw_pinned_row(frame, chunks[idx], &view.pinned_messages[0]);
         idx += 1;
     }
-    if pinned_height > 0 {
+    if chrome.pinned {
         draw_amber_rule(frame, chunks[idx]);
         idx += 1;
-    } else if want_chat_rule {
+    } else if chrome.chat_rule {
         draw_horizontal_rule(frame, chunks[idx]);
         idx += 1;
     }
     draw_dashboard_chat_card(frame, chunks[idx], view.chat_view);
 }
 
-const TOP_STRIP_HIDE_AT_WIDTH: u16 = 50;
-const WIRE_HIDE_AT_HEIGHT: u16 = 22;
 const TOP_STRIP_ROW_HEIGHT: u16 = 5;
 const WIRE_STRIP_ROW_HEIGHT: u16 = 6;
+const PINNED_ROW_HEIGHT: u16 = 1;
+const CHAT_RULE_HEIGHT: u16 = 1;
+const MIN_CHAT_HEIGHT_WITH_LOUNGE: u16 = 10;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DashboardChrome {
+    top: bool,
+    wire: bool,
+    pinned: bool,
+    chat_rule: bool,
+}
+
+fn dashboard_chrome(height: u16, show_lounge_info: bool, has_pinned: bool) -> DashboardChrome {
+    let pinned = has_pinned;
+    let mut top = show_lounge_info;
+    let mut wire = show_lounge_info;
+
+    if !dashboard_chrome_fits(height, top, wire, pinned) {
+        wire = false;
+    }
+    if !dashboard_chrome_fits(height, top, wire, pinned) {
+        top = false;
+    }
+
+    DashboardChrome {
+        top,
+        wire,
+        pinned,
+        chat_rule: pinned || (top && !wire),
+    }
+}
+
+fn dashboard_chrome_fits(height: u16, top: bool, wire: bool, pinned: bool) -> bool {
+    dashboard_chrome_height(top, wire, pinned) + MIN_CHAT_HEIGHT_WITH_LOUNGE <= height
+}
+
+fn dashboard_chrome_height(top: bool, wire: bool, pinned: bool) -> u16 {
+    let top_height = if top { TOP_STRIP_ROW_HEIGHT } else { 0 };
+    let wire_height = if wire { WIRE_STRIP_ROW_HEIGHT } else { 0 };
+    let pinned_height = if pinned { PINNED_ROW_HEIGHT } else { 0 };
+    let rule_height = if pinned || (top && !wire) {
+        CHAT_RULE_HEIGHT
+    } else {
+        0
+    };
+    top_height + wire_height + pinned_height + rule_height
+}
 
 fn draw_top_strip(
     frame: &mut Frame,
@@ -300,6 +341,7 @@ fn draw_box_activity(
     activity: &VecDeque<ActivityEvent>,
     online_count: usize,
 ) {
+    let area = horizontal_padding(area, 1);
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -378,6 +420,11 @@ fn draw_wire_strip(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], 
     }
     let constraints: Vec<Constraint> = (0..area.height).map(|_| Constraint::Length(1)).collect();
     let rows = Layout::vertical(constraints).split(area);
+    let rows: Vec<Rect> = rows
+        .iter()
+        .copied()
+        .map(|row| horizontal_padding(row, 1))
+        .collect();
 
     draw_wire_top_border(frame, rows[0]);
     if rows.len() < 2 {
@@ -477,8 +524,7 @@ fn draw_pinned_row(frame: &mut Frame, area: Rect, message: &ChatMessage) {
         return;
     }
     let glyph = "● ";
-    let label = "pinned  ";
-    let prefix_w = glyph.chars().count() + label.chars().count();
+    let prefix_w = glyph.chars().count();
     let body_w = (area.width as usize).saturating_sub(prefix_w);
     let flat_body: String = message
         .body
@@ -489,12 +535,6 @@ fn draw_pinned_row(frame: &mut Frame, area: Rect, message: &ChatMessage) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(glyph, Style::default().fg(theme::AMBER())),
-            Span::styled(
-                label,
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
             Span::styled(body, Style::default().fg(theme::TEXT())),
         ])),
         area,
@@ -527,6 +567,16 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
     );
 }
 
+fn horizontal_padding(area: Rect, padding: u16) -> Rect {
+    let padding = padding.min(area.width / 2);
+    Rect {
+        x: area.x + padding,
+        y: area.y,
+        width: area.width.saturating_sub(padding * 2),
+        height: area.height,
+    }
+}
+
 fn truncate(text: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
@@ -541,4 +591,57 @@ fn truncate(text: &str, max: usize) -> String {
     let mut out: String = chars.into_iter().take(max - 1).collect();
     out.push('…');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dashboard_chrome_always_requests_pinned_row_when_present() {
+        let chrome = dashboard_chrome(1, false, true);
+
+        assert!(chrome.pinned);
+        assert!(chrome.chat_rule);
+        assert!(!chrome.top);
+        assert!(!chrome.wire);
+    }
+
+    #[test]
+    fn dashboard_chrome_hides_wire_before_top_boxes() {
+        let full_height = dashboard_chrome_height(true, true, false) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
+        let chrome = dashboard_chrome(full_height - 1, true, false);
+
+        assert!(chrome.top);
+        assert!(!chrome.wire);
+    }
+
+    #[test]
+    fn dashboard_chrome_hides_top_boxes_after_wire_when_space_is_tighter() {
+        let top_only_height =
+            dashboard_chrome_height(true, false, false) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
+        let chrome = dashboard_chrome(top_only_height - 1, true, false);
+
+        assert!(!chrome.top);
+        assert!(!chrome.wire);
+    }
+
+    #[test]
+    fn dashboard_chrome_shows_top_and_wire_when_space_allows() {
+        let full_height = dashboard_chrome_height(true, true, true) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
+        let chrome = dashboard_chrome(full_height, true, true);
+
+        assert!(chrome.pinned);
+        assert!(chrome.top);
+        assert!(chrome.wire);
+    }
+
+    #[test]
+    fn horizontal_padding_insets_left_and_right() {
+        let area = Rect::new(10, 2, 20, 1);
+        let padded = horizontal_padding(area, 1);
+
+        assert_eq!(padded.x, 11);
+        assert_eq!(padded.width, 18);
+    }
 }

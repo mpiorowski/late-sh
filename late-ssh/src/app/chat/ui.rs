@@ -29,6 +29,7 @@ use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
+const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -308,6 +309,16 @@ fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
     )
 }
 
+fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
+    let layout = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(CHAT_COMPOSER_GAP_HEIGHT),
+        Constraint::Length(composer_height),
+    ])
+    .split(area);
+    (layout[0], layout[2])
+}
+
 pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
@@ -325,14 +336,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
         }));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
-    let layout = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(1),
-        Constraint::Length(composer_height),
-    ])
-    .split(area);
-    let messages_area = layout[0];
-    let composer_area = Some(layout[2]);
+    let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
 
     let mut lines = Vec::new();
     if view.messages.is_empty() {
@@ -369,24 +373,22 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
         draw_overlay(frame, messages_area, overlay);
     }
 
-    if let Some(area) = composer_area {
-        draw_composer_block(
-            frame,
-            area,
-            &ComposerBlockView {
-                composer: view.composer,
-                composing: view.composing,
-                selected_message: view.selected_message_id.is_some(),
-                selected_news_message: view.selected_news_message,
-                reaction_picker_active: view.reaction_picker_active,
-                reply_author: view.reply_author,
-                is_editing: view.is_editing,
-                mention_active: view.mention_active,
-                mention_matches: view.mention_matches,
-                mention_selected: view.mention_selected,
-            },
-        );
-    }
+    draw_composer_block(
+        frame,
+        composer_area,
+        &ComposerBlockView {
+            composer: view.composer,
+            composing: view.composing,
+            selected_message: view.selected_message_id.is_some(),
+            selected_news_message: view.selected_news_message,
+            reaction_picker_active: view.reaction_picker_active,
+            reply_author: view.reply_author,
+            is_editing: view.is_editing,
+            mention_active: view.mention_active,
+            mention_matches: view.mention_matches,
+            mention_selected: view.mention_selected,
+        },
+    );
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────
@@ -876,10 +878,7 @@ pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoom
             mention_selected: view.mention_selected,
         }));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
-    let layout =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
-    let messages_area = layout[0];
-    let composer_area = layout[1];
+    let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
 
     let messages_block = Block::default()
         .title(format!("── {} ", view.title))
@@ -1875,13 +1874,8 @@ pub fn draw_chat_center(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>
     }
 
     let selection_mode = chat_selection_mode(&view, area);
-    let layout = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(selection_mode.composer_height()),
-    ])
-    .split(area);
-    let messages_area = layout[0];
-    let composer_area = layout[1];
+    let (messages_area, composer_area) =
+        split_chat_and_composer(area, selection_mode.composer_height());
 
     draw_selected_content(frame, messages_area, composer_area, view);
 }
@@ -2112,6 +2106,17 @@ mod tests {
         assert!(is_bot_author("dealer"));
         assert!(is_bot_author(" Dealer "));
         assert!(!is_bot_author("mat"));
+    }
+
+    #[test]
+    fn chat_composer_layout_keeps_one_blank_row_gap() {
+        let area = Rect::new(0, 0, 80, 20);
+        let (messages_area, composer_area) = split_chat_and_composer(area, 3);
+
+        assert_eq!(
+            composer_area.y,
+            messages_area.y + messages_area.height + CHAT_COMPOSER_GAP_HEIGHT
+        );
     }
 
     #[test]

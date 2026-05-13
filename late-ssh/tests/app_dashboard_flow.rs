@@ -36,6 +36,7 @@ async fn uppercase_p_on_dashboard_opens_install_pair_modal() {
     app.handle_input(b"P");
     wait_for_render_contains(&mut app, "build from source").await;
     wait_for_render_contains(&mut app, "curl -fsSL https://cli.late.sh/install.sh | bash").await;
+    wait_for_render_contains(&mut app, "irm https://cli.late.sh/install.ps1 | iex").await;
     wait_for_render_contains(&mut app, "alternatively pair browser").await;
 }
 

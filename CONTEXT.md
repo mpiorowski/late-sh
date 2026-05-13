@@ -742,7 +742,8 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorite
 1. Trigger: VoteService background tick (5s) detects switch interval (default 60 min) elapsed since last switch
 2. Processing: `switch_to_winner()` → pick genre with most votes (or keep current) → clear all votes → increment `round_id` → send `vibe.set <genre>` to Liquidsoap
 3. Side effects: All clients detect `round_id` change → clear `my_vote`. Liquidsoap switches playlist.
-4. Failure: Liquidsoap TCP failure logged but round still switches locally.
+4. UI: `VoteSnapshot::remaining_until_switch()` derives a live countdown from `next_switch_in` and `updated_at`; the right sidebar vibe/vote line renders when the current vote round ends.
+5. Failure: Liquidsoap TCP failure logged but round still switches locally.
 
 ### 8.4 Easy-to-break gotchas
 

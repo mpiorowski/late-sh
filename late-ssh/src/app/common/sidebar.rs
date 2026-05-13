@@ -405,24 +405,44 @@ fn draw_vibe_line(frame: &mut Frame, area: Rect, vote: &VoteCardView<'_>) {
         return;
     }
 
+    frame.render_widget(Paragraph::new(vote_vibe_line(vote)), area);
+}
+
+fn vote_vibe_line(vote: &VoteCardView<'_>) -> Line<'static> {
     let next = vote.vote_counts.winner_or(vote.current_genre);
     let current =
         crate::app::common::primitives::genre_label(vote.current_genre).to_ascii_lowercase();
     let next = crate::app::common::primitives::genre_label(next).to_ascii_lowercase();
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "now ",
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::styled(current, Style::default().fg(theme::SUCCESS())),
-            Span::styled(" > ", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(next, Style::default().fg(theme::AMBER())),
-        ])),
-        area,
-    );
+    let ends = compact_vote_duration(vote.ends_in);
+
+    Line::from(vec![
+        Span::styled(current, Style::default().fg(theme::SUCCESS())),
+        Span::styled(" > ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(next, Style::default().fg(theme::AMBER())),
+        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(ends, Style::default().fg(theme::AMBER_DIM())),
+    ])
+}
+
+fn compact_vote_duration(duration: std::time::Duration) -> String {
+    let secs = duration.as_secs();
+    if secs == 0 {
+        return "now".to_string();
+    }
+    if secs < 60 {
+        return format!("{secs}s");
+    }
+    let minutes = (secs + 59) / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    let mins = minutes % 60;
+    if mins == 0 {
+        format!("{hours}h")
+    } else {
+        format!("{hours}h{mins:02}")
+    }
 }
 
 fn draw_progress_line(frame: &mut Frame, area: Rect, elapsed_secs: u64, duration_secs: u64) {
@@ -514,10 +534,44 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::vote::svc::{Genre, VoteCount};
+    use std::time::Duration;
 
     #[test]
     fn sidebar_clock_text_falls_back_to_utc_when_timezone_missing() {
         let clock = sidebar_clock_text(None);
         assert!(clock.starts_with("UTC "));
+    }
+
+    #[test]
+    fn compact_vote_duration_rounds_remaining_minutes_up() {
+        assert_eq!(compact_vote_duration(Duration::from_secs(0)), "now");
+        assert_eq!(compact_vote_duration(Duration::from_secs(42)), "42s");
+        assert_eq!(compact_vote_duration(Duration::from_secs(61)), "2m");
+        assert_eq!(compact_vote_duration(Duration::from_secs(3600)), "1h");
+        assert_eq!(compact_vote_duration(Duration::from_secs(3661)), "1h02");
+    }
+
+    #[test]
+    fn vote_vibe_line_includes_vote_end_time() {
+        let counts = VoteCount {
+            lofi: 1,
+            ambient: 3,
+            classic: 0,
+            jazz: 0,
+        };
+        let view = VoteCardView {
+            vote_counts: &counts,
+            current_genre: Genre::Lofi,
+            my_vote: None,
+            ends_in: Duration::from_secs(9 * 60),
+        };
+
+        let text: String = vote_vibe_line(&view)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+
+        assert_eq!(text, "lofi > ambient · 9m");
     }
 }

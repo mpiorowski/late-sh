@@ -1,7 +1,7 @@
 //! Combined "install CLI + pair browser" modal opened with the global `P` shortcut.
 //!
-//! The top half lists the three install paths (curl, nix run, build-from-source);
-//! the bottom half renders a QR and visible link for the user's session pairing URL.
+//! The top half lists install paths for common platforms; the bottom half renders
+//! a QR and visible link for the user's session pairing URL.
 
 use qrcodegen::{QrCode, QrCodeEcc};
 use ratatui::{
@@ -15,7 +15,8 @@ use ratatui::{
 use super::qr::{DarkOnLight, HalfBlock, QrWidget};
 use super::theme;
 
-pub const INSTALL_COMMAND: &str = "curl -fsSL https://cli.late.sh/install.sh | bash";
+pub const SHELL_INSTALL_COMMAND: &str = "curl -fsSL https://cli.late.sh/install.sh | bash";
+pub const WINDOWS_INSTALL_COMMAND: &str = "irm https://cli.late.sh/install.ps1 | iex";
 pub const NIX_COMMAND: &str = "nix run github:mpiorowski/late-sh#late";
 pub const SOURCE_URL: &str = "https://github.com/mpiorowski/late-sh";
 
@@ -79,8 +80,11 @@ fn draw_install_section(frame: &mut Frame, area: Rect) {
         .bg(theme::BG_HIGHLIGHT());
 
     let mut lines: Vec<Line<'static>> = vec![
-        Line::from(Span::styled("linux / macos / windows", faint)).centered(),
-        Line::from(Span::styled(pill(INSTALL_COMMAND), code)).centered(),
+        Line::from(Span::styled("linux / macos / termux", faint)).centered(),
+        Line::from(Span::styled(pill(SHELL_INSTALL_COMMAND), code)).centered(),
+        Line::from(""),
+        Line::from(Span::styled("windows powershell", faint)).centered(),
+        Line::from(Span::styled(pill(WINDOWS_INSTALL_COMMAND), code)).centered(),
         Line::from(""),
         Line::from(vec![Span::styled("nixos", faint)]).centered(),
         Line::from(Span::styled(pill(NIX_COMMAND), code)).centered(),

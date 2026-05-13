@@ -89,6 +89,14 @@ fn lounge_info_enabled(show_settings: bool, draft_enabled: bool, profile_enabled
     }
 }
 
+fn dashboard_home_selected(
+    general_room_id: Option<uuid::Uuid>,
+    selected_room_id: Option<uuid::Uuid>,
+    synthetic_selected: bool,
+) -> bool {
+    general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
+}
+
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -227,6 +235,7 @@ impl App {
         let paired_client = self.paired_client_state();
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
+        let vote_ends_in = vote_snapshot.remaining_until_switch();
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let visualizer = &self.visualizer;
@@ -235,17 +244,17 @@ impl App {
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let message_reactions = self.chat.message_reactions();
         let shell_active_room = self.chat.selected_room_id;
-        let home_selected = self
-            .chat
-            .general_room_id()
-            .is_some_and(|general| shell_active_room == Some(general))
-            && !self.chat.feeds_selected
-            && !self.chat.news_selected
-            && !self.chat.notifications_selected
-            && !self.chat.discover_selected
-            && !self.chat.showcase_selected
-            && !self.chat.work_selected
-            && !self.chat.is_reaction_leader_active();
+        let synthetic_selected = self.chat.feeds_selected
+            || self.chat.news_selected
+            || self.chat.notifications_selected
+            || self.chat.discover_selected
+            || self.chat.showcase_selected
+            || self.chat.work_selected;
+        let home_selected = dashboard_home_selected(
+            self.chat.general_room_id(),
+            shell_active_room,
+            synthetic_selected,
+        );
         let top_rooms =
             dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 3);
         let online_count = self
@@ -472,6 +481,7 @@ impl App {
                             vote_counts: &vote_snapshot.counts,
                             current_genre: vote_snapshot.current_genre,
                             my_vote: vote_my_vote,
+                            ends_in: vote_ends_in,
                         },
                         sidebar_clock: &sidebar_clock,
                         online_count,
@@ -755,6 +765,7 @@ impl App {
                         vote_counts: ctx.vote_view.vote_counts,
                         current_genre: ctx.vote_view.current_genre,
                         my_vote: ctx.vote_view.my_vote,
+                        ends_in: ctx.vote_view.ends_in,
                     },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
@@ -1076,9 +1087,10 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, desktop_notification_bytes, lounge_info_enabled, mentions_hud_title,
-        room_list_sidebar_enabled, sidebar_enabled,
+        NotificationMode, dashboard_home_selected, desktop_notification_bytes, lounge_info_enabled,
+        mentions_hud_title, room_list_sidebar_enabled, sidebar_enabled,
     };
+    use uuid::Uuid;
 
     #[test]
     fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
@@ -1168,6 +1180,21 @@ mod tests {
     fn lounge_info_enabled_uses_saved_profile_when_modal_is_closed() {
         assert!(lounge_info_enabled(false, false, true));
         assert!(!lounge_info_enabled(false, true, false));
+    }
+
+    #[test]
+    fn dashboard_home_selected_for_general_room_without_synthetic_entry() {
+        let general = Uuid::from_u128(1);
+        assert!(dashboard_home_selected(Some(general), Some(general), false));
+    }
+
+    #[test]
+    fn dashboard_home_selected_rejects_synthetic_and_non_general_rooms() {
+        let general = Uuid::from_u128(1);
+        let topic = Uuid::from_u128(2);
+        assert!(!dashboard_home_selected(Some(general), Some(general), true));
+        assert!(!dashboard_home_selected(Some(general), Some(topic), false));
+        assert!(!dashboard_home_selected(None, Some(topic), false));
     }
 
     #[test]

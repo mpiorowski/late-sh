@@ -179,7 +179,7 @@ Room navigation:
 ## 7. Home Shell And Embedded Chat
 
 There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
-- If `chat.selected_room_id` is `#general` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: top activity/quest/shop strip when roomy, slow wire-news strip, pinned row, then general chat.
+- If `chat.selected_room_id` is `#general` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: optional top activity/quest/shop strip, optional slow wire-news strip, pinned row when present, then general chat. Pinned messages have priority and render whenever present; when vertical space is tight, the wire hides before the top strip.
 - If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
 - On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
 
@@ -412,6 +412,7 @@ Home chat center:
 Home general dashboard chat:
 - Uses `DashboardChatView`.
 - Composer is capped at 5 visible lines.
+- Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always when present, wire drops first, top activity/quest/shop strip drops second.
 
 Embedded Rooms chat:
 - Uses `EmbeddedRoomChatView`.

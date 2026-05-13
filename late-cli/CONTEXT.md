@@ -342,8 +342,8 @@ Installer defaults:
 - `LATE_INSTALL_BASE_URL` overrides distribution host
 - `LATE_INSTALL_VERSION` selects a specific version instead of `latest`
 - `LATE_INSTALL_DIR` overrides install directory
-- Shell installer detects WSL and Termux; Termux receives the Android build
-- Shell installer targets `/usr/local/bin`, `$HOME/.local/bin`, or the Termux prefix, depending on platform and permissions
+- Shell installer detects WSL, Termux, and Git Bash/MSYS/Cygwin; Termux receives the Android build and Windows shell environments receive the Windows `late.exe` build
+- Shell installer targets `/usr/local/bin`, `$HOME/.local/bin`, the Termux prefix, or `%LOCALAPPDATA%\Programs\late` under Windows shell environments, depending on platform and permissions
 - PowerShell installer places `late.exe` under `%LOCALAPPDATA%\Programs\late` unless overridden and prints a PATH hint when needed
 - Checksum verification runs when checksum download succeeds; checksum download failure is warning-only
 

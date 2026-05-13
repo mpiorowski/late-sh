@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -13,6 +15,7 @@ pub struct VoteCardView<'a> {
     pub vote_counts: &'a VoteCount,
     pub current_genre: Genre,
     pub my_vote: Option<Genre>,
+    pub ends_in: Duration,
 }
 
 pub fn draw_vote_card(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) {
