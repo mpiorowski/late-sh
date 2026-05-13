@@ -307,22 +307,16 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
         return;
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if rows.is_empty() {
-        draw_empty_state(frame, inner, view);
+        draw_empty_state(frame, area, view);
         return;
     }
 
     let mut lines: Vec<Line> = Vec::with_capacity(rows.len() + 2);
     lines.push(header_line());
-    lines.push(divider_line(inner.width));
+    lines.push(divider_line(area.width));
 
-    let visible = (inner.height as usize).saturating_sub(2);
+    let visible = (area.height as usize).saturating_sub(2);
 
     for (real_index, row) in rows.iter().take(visible).enumerate() {
         let Row::Real(room) = row;
@@ -330,7 +324,7 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
         lines.push(real_row_wide(room, selected, view));
     }
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn header_line() -> Line<'static> {
@@ -403,19 +397,13 @@ fn draw_room_list_narrow(
         return;
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if rows.is_empty() {
-        draw_empty_state(frame, inner, view);
+        draw_empty_state(frame, area, view);
         return;
     }
 
     let mut lines: Vec<Line> = Vec::new();
-    let visible_lines = inner.height as usize;
+    let visible_lines = area.height as usize;
 
     for (real_index, row) in rows.iter().enumerate() {
         if lines.len() + 2 > visible_lines {
@@ -428,7 +416,7 @@ fn draw_room_list_narrow(
         lines.push(b);
     }
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn real_card_narrow<'a>(
