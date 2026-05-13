@@ -79,11 +79,8 @@ impl App {
             && !self.profile_state.profile().username.is_empty()
         {
             if self.profile_state.profile().show_settings_on_connect {
-                self.settings_modal_state.open_from_profile(
-                    self.profile_state.profile(),
-                    self.chat.favorite_room_options(),
-                    crate::app::settings_modal::ui::MODAL_WIDTH,
-                );
+                self.settings_modal_state
+                    .open_from_profile(self.profile_state.profile());
             } else {
                 self.show_settings = false;
             }

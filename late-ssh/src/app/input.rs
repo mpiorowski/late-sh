@@ -2,8 +2,8 @@ use super::{
     chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
     room_search_modal, settings_modal, state::App, terminal_help_modal,
 };
+use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
-use crate::app::{common::primitives::Screen, profile::state::LayoutVisibility};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     widgets::{Block, Borders},
@@ -1022,8 +1022,7 @@ fn handle_view_vote_prefix_input(app: &mut App, ctx: InputContext, event: &Parse
 
     if app.vote_prefix_armed {
         app.vote_prefix_armed = false;
-        if matches!(byte, b'v' | b'V') && ctx.screen == Screen::Dashboard {
-            cycle_layout_visibility(app);
+        if matches!(byte, b'v' | b'V') {
             return true;
         }
         if crate::app::vote::input::handle_vote_suffix(app, byte) {
@@ -1056,31 +1055,6 @@ fn prefix_blocked(app: &App, ctx: InputContext) -> bool {
         || (ctx.screen == Screen::Arcade && app.is_playing_game)
         || (ctx.screen == Screen::Artboard && app.artboard_interacting)
         || (matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && app.chat.has_overlay())
-}
-
-fn cycle_layout_visibility(app: &mut App) {
-    let visibility = app.profile_state.cycle_layout_visibility();
-    app.banner = Some(crate::app::common::primitives::Banner::success(&format!(
-        "View: {}",
-        layout_visibility_label(visibility)
-    )));
-}
-
-fn layout_visibility_label(visibility: LayoutVisibility) -> &'static str {
-    match (
-        visibility.show_room_list_sidebar,
-        visibility.show_right_sidebar,
-        visibility.show_dashboard_header,
-    ) {
-        (true, true, true) => "all panels on",
-        (false, true, true) => "left rail off",
-        (true, false, true) => "right rail off",
-        (true, true, false) => "lounge info off",
-        (false, false, true) => "left + right rails off",
-        (false, true, false) => "left rail + lounge info off",
-        (true, false, false) => "right rail + lounge info off",
-        (false, false, false) => "all lounge panels off",
-    }
 }
 
 fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
@@ -1656,7 +1630,13 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
     matches!(event, ParsedInput::Byte(0x1F))
 }
 
+fn clear_prefix_arms(app: &mut App) {
+    app.vote_prefix_armed = false;
+    app.hot_room_prefix_armed = false;
+}
+
 fn open_room_search_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
@@ -1676,6 +1656,7 @@ fn open_room_search_modal_globally(app: &mut App) {
 }
 
 fn open_settings_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
@@ -1689,15 +1670,13 @@ fn open_settings_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.settings_modal_state.open_from_profile(
-        app.profile_state.profile(),
-        app.chat.favorite_room_options(),
-        crate::app::settings_modal::ui::MODAL_WIDTH,
-    );
+    app.settings_modal_state
+        .open_from_profile(app.profile_state.profile());
     app.show_settings = true;
 }
 
 fn open_hub_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_profile_modal = false;
@@ -1718,6 +1697,7 @@ fn open_hub_modal_globally(app: &mut App) {
 }
 
 fn open_terminal_help_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;

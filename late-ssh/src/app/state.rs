@@ -544,11 +544,7 @@ impl App {
             config.feed_service.clone(),
             config.user_id,
         );
-        settings_modal_state.open_from_profile(
-            &initial_profile,
-            Vec::new(),
-            settings_modal::ui::MODAL_WIDTH,
-        );
+        settings_modal_state.open_from_profile(&initial_profile);
         let mut app = Self {
             running: true,
             size: (cols, rows),

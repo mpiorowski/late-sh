@@ -350,10 +350,13 @@ fn draw_now_playing_block(
         rows[1],
     );
 
-    if let Some(np) = now_playing
-        && let Some(dur) = np.track.duration_seconds
-    {
-        draw_progress_line(frame, rows[2], np.started_at.elapsed().as_secs(), dur);
+    if let Some(np) = now_playing {
+        let elapsed = np.started_at.elapsed().as_secs();
+        if let Some(dur) = np.track.duration_seconds {
+            draw_progress_line(frame, rows[2], elapsed, dur);
+        } else {
+            draw_elapsed_line(frame, rows[2], elapsed);
+        }
     }
 
     let pair_text = match paired_client {
@@ -455,6 +458,20 @@ fn draw_progress_line(frame: &mut Frame, area: Rect, elapsed_secs: u64, duration
             Span::styled(bar_after, Style::default().fg(theme::BORDER_DIM())),
             Span::raw(" "),
             Span::styled(total_str, Style::default().fg(theme::TEXT_FAINT())),
+        ])),
+        area,
+    );
+}
+
+fn draw_elapsed_line(frame: &mut Frame, area: Rect, elapsed_secs: u64) {
+    if area.width == 0 {
+        return;
+    }
+    let elapsed = format!("{}:{:02}", elapsed_secs / 60, elapsed_secs % 60);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(elapsed, Style::default().fg(theme::AMBER())),
+            Span::styled(" live", Style::default().fg(theme::TEXT_FAINT())),
         ])),
         area,
     );

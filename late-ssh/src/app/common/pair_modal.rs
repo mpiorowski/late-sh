@@ -1,8 +1,7 @@
 //! Combined "install CLI + pair browser" modal opened with the global `P` shortcut.
 //!
 //! The top half lists the three install paths (curl, nix run, build-from-source);
-//! the bottom half renders a QR for the user's session pairing URL. The URL is
-//! also staged into the clipboard via `pending_clipboard` at open time.
+//! the bottom half renders a QR and visible link for the user's session pairing URL.
 
 use qrcodegen::{QrCode, QrCodeEcc};
 use ratatui::{

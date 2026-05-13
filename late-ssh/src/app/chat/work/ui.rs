@@ -1,3 +1,4 @@
+use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::common::theme;
 use crate::app::common::{composer, primitives::format_relative_time};
 use chrono::{DateTime, Utc};
@@ -29,7 +30,10 @@ const ITEM_HEIGHT: u16 = 9;
 const SUMMARY_LINES: usize = 2;
 
 pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
-    let inner = area;
+    let (status_area, inner) = filtered_list_areas(area, view.mine_only);
+    if let Some(status_area) = status_area {
+        draw_mine_only_status(frame, status_area, "work");
+    }
 
     if view.items.is_empty() {
         let text = Text::from(vec![

@@ -106,11 +106,8 @@ fn open_help_modal(app: &mut App, topic: HelpTopic) {
 
 fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
-    app.settings_modal_state.open_from_profile(
-        app.profile_state.profile(),
-        app.chat.favorite_room_options(),
-        crate::app::settings_modal::ui::MODAL_WIDTH,
-    );
+    app.settings_modal_state
+        .open_from_profile(app.profile_state.profile());
     app.show_settings = true;
 }
 

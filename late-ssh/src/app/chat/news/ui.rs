@@ -1,3 +1,4 @@
+use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::chat::ui_text::{NewsPayload, format_news_ascii_art_for_display};
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
@@ -35,7 +36,10 @@ const MODAL_MAX_WIDTH: u16 = 160;
 const MODAL_MIN_WIDTH: u16 = 24;
 
 pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'_>) {
-    let list_area = area;
+    let (status_area, list_area) = filtered_list_areas(area, view.mine_only);
+    if let Some(status_area) = status_area {
+        draw_mine_only_status(frame, status_area, "news");
+    }
 
     if view.articles.is_empty() {
         let text = Text::from("No news yet. Press 'i' to share a link.");

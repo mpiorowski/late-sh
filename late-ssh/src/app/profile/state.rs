@@ -13,13 +13,6 @@ pub struct ProfileState {
     event_rx: broadcast::Receiver<ProfileEvent>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LayoutVisibility {
-    pub(crate) show_room_list_sidebar: bool,
-    pub(crate) show_right_sidebar: bool,
-    pub(crate) show_dashboard_header: bool,
-}
-
 impl Drop for ProfileState {
     fn drop(&mut self) {
         self.profile_service
@@ -71,68 +64,6 @@ impl ProfileState {
         };
         self.save_profile();
         added
-    }
-
-    pub(crate) fn cycle_layout_visibility(&mut self) -> LayoutVisibility {
-        const PRESETS: [LayoutVisibility; 8] = [
-            LayoutVisibility {
-                show_room_list_sidebar: true,
-                show_right_sidebar: true,
-                show_dashboard_header: true,
-            },
-            LayoutVisibility {
-                show_room_list_sidebar: false,
-                show_right_sidebar: true,
-                show_dashboard_header: true,
-            },
-            LayoutVisibility {
-                show_room_list_sidebar: true,
-                show_right_sidebar: false,
-                show_dashboard_header: true,
-            },
-            LayoutVisibility {
-                show_room_list_sidebar: true,
-                show_right_sidebar: true,
-                show_dashboard_header: false,
-            },
-            LayoutVisibility {
-                show_room_list_sidebar: false,
-                show_right_sidebar: false,
-                show_dashboard_header: true,
-            },
-            LayoutVisibility {
-                show_room_list_sidebar: false,
-                show_right_sidebar: true,
-                show_dashboard_header: false,
-            },
-            LayoutVisibility {
-                show_room_list_sidebar: true,
-                show_right_sidebar: false,
-                show_dashboard_header: false,
-            },
-            LayoutVisibility {
-                show_room_list_sidebar: false,
-                show_right_sidebar: false,
-                show_dashboard_header: false,
-            },
-        ];
-
-        let current = LayoutVisibility {
-            show_room_list_sidebar: self.profile.show_room_list_sidebar,
-            show_right_sidebar: self.profile.show_right_sidebar,
-            show_dashboard_header: self.profile.show_dashboard_header,
-        };
-        let index = PRESETS
-            .iter()
-            .position(|preset| *preset == current)
-            .unwrap_or(0);
-        let next = PRESETS[(index + 1) % PRESETS.len()];
-
-        self.profile.show_room_list_sidebar = next.show_room_list_sidebar;
-        self.profile.show_right_sidebar = next.show_right_sidebar;
-        self.profile.show_dashboard_header = next.show_dashboard_header;
-        self.save_profile();
-        next
     }
 
     fn save_profile(&self) {

@@ -753,6 +753,5 @@ On Home, press `P` to open CLI install options plus the browser pairing QR/link.
 Both options give you:
   m = mute | +/- = volume | visualizer in the sidebar
   Vote for genres on Home: v1 v2 v3
-  Cycle Home panels: vv
 
 The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";

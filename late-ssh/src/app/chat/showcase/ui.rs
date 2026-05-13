@@ -1,3 +1,4 @@
+use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::common::theme;
 use crate::app::common::{composer, primitives::format_relative_time};
 use chrono::{DateTime, Utc};
@@ -25,7 +26,10 @@ const ITEM_HEIGHT: u16 = 7;
 const SUMMARY_LINES: usize = 3;
 
 pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView<'_>) {
-    let inner = area;
+    let (status_area, inner) = filtered_list_areas(area, view.mine_only);
+    if let Some(status_area) = status_area {
+        draw_mine_only_status(frame, status_area, "showcases");
+    }
 
     if view.items.is_empty() {
         let text = Text::from(vec![

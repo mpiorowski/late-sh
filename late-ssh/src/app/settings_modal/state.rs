@@ -31,17 +31,6 @@ pub enum PickerKind {
     Timezone,
 }
 
-/// Snapshot of one room the user is a member of, flattened to the minimum
-/// the modal needs to render + filter. Built by the caller (dashboard/chat
-/// code has access to slug/kind/DM peer usernames), so this module stays
-/// decoupled from `ChatRoom` and `usernames` lookups.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RoomOption {
-    pub id: Uuid,
-    /// Display label: e.g. `"#general"`, `"#rust-nerds"`, `"@alice"`.
-    pub label: String,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Row {
     Username,
@@ -239,9 +228,6 @@ pub struct SettingsModalState {
     editing_bio: bool,
     bio_input: TextArea<'static>,
     picker: PickerState,
-    /// Catalog of rooms the user can pick favorites from. Re-supplied on
-    /// every modal open so we always reflect current membership.
-    available_rooms: Vec<RoomOption>,
     delete_account: DeleteAccountDialogState,
     feeds: Vec<RssFeed>,
     feed_index: usize,
@@ -278,7 +264,6 @@ impl SettingsModalState {
             editing_bio: false,
             bio_input: new_bio_textarea(false),
             picker: PickerState::default(),
-            available_rooms: Vec::new(),
             delete_account: DeleteAccountDialogState::new(),
             feeds: Vec::new(),
             feed_index: 0,
@@ -298,15 +283,8 @@ impl SettingsModalState {
         &mut self.gem
     }
 
-    pub fn open_from_profile(
-        &mut self,
-        profile: &Profile,
-        available_rooms: Vec<RoomOption>,
-        _modal_width: u16,
-    ) {
+    pub fn open_from_profile(&mut self, profile: &Profile) {
         self.draft = profile.clone();
-        prune_favorites_against_loaded_rooms(&mut self.draft.favorite_room_ids, &available_rooms);
-        self.available_rooms = available_rooms;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.sync_theme_index_to_draft();
@@ -1382,19 +1360,6 @@ fn cycle_notify_format(current: Option<&str>, forward: bool) -> &'static str {
     OPTIONS[next]
 }
 
-fn prune_favorites_against_loaded_rooms(favorite_room_ids: &mut Vec<Uuid>, rooms: &[RoomOption]) {
-    if rooms.is_empty() {
-        return;
-    }
-
-    // Drop favorites the user is no longer a member of so the modal never
-    // shows ghost entries. Preserve order of the survivors. An empty room
-    // catalog means chat membership has not loaded yet, not that every room
-    // was left.
-    let member_ids: std::collections::HashSet<Uuid> = rooms.iter().map(|room| room.id).collect();
-    favorite_room_ids.retain(|id| member_ids.contains(id));
-}
-
 fn toggle_kind(kinds: &mut Vec<String>, kind: &str) {
     if let Some(idx) = kinds.iter().position(|value| value == kind) {
         kinds.remove(idx);
@@ -1595,38 +1560,5 @@ mod tests {
         move_bio_cursor_to_end(&mut input);
 
         assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
-    }
-
-    #[test]
-    fn empty_room_catalog_preserves_favorites() {
-        let first = Uuid::from_u128(1);
-        let second = Uuid::from_u128(2);
-        let mut favorites = vec![first, second];
-
-        prune_favorites_against_loaded_rooms(&mut favorites, &[]);
-
-        assert_eq!(favorites, vec![first, second]);
-    }
-
-    #[test]
-    fn loaded_room_catalog_prunes_unjoined_favorites() {
-        let first = Uuid::from_u128(1);
-        let second = Uuid::from_u128(2);
-        let third = Uuid::from_u128(3);
-        let mut favorites = vec![first, second, third];
-        let rooms = vec![
-            RoomOption {
-                id: third,
-                label: "#third".to_string(),
-            },
-            RoomOption {
-                id: first,
-                label: "#first".to_string(),
-            },
-        ];
-
-        prune_favorites_against_loaded_rooms(&mut favorites, &rooms);
-
-        assert_eq!(favorites, vec![first, third]);
     }
 }
