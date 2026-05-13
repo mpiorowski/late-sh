@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub modal for leaderboard/dailies/shop/events surfaces, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Arcade behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai), the Home room-list rail, and the general-room lounge info strip (top boxes plus wire). Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub modal for leaderboard/dailies/shop/events surfaces, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Arcade behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai), the Home room-list rail, and the general-room lounge info strip (top boxes plus wire); `v` then `v` cycles persisted combinations of those panels. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -984,6 +984,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `v` then `1` / `2` / `3` | Home | Vote Lofi / Ambient / Classic. Suffixes also accept `l`, `a`, `c`. |
+| `v` then `v` | Home | Cycle persisted Home panel visibility: all on, left rail off, right rail off, lounge info off, pair combinations, all off. |
 | `b` then `1` / `2` / `3` | Home | Enter one of the top hot multiplayer rooms shown in the right rail. |
 | `P` | Home | Open combined install + pair modal: curl / `nix run` / build-from-source CLI options on top, pairing QR underneath. |
 | Home chat keys | Home | See `late-ssh/src/app/chat/CONTEXT.md`. |
@@ -997,7 +998,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `j` / `k` / `↑` / `↓` | Terminal-help modal | Scroll the current tab |
 | `Esc` / `q` / `Ctrl+L` | Terminal-help modal | Close |
 | `Tab` / `Shift+Tab` | Settings modal | Switch tabs: Settings, Bio, Themes, Feeds, Account, and hidden Special when available |
-| `↑` / `↓` / `j` / `k` | Settings modal | Move within the active tab. Settings rows include Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format |
+| `↑` / `↓` / `j` / `k` | Settings modal | Move within the active tab. Settings rows include Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Room list, Lounge info, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
 | `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/system fields/bio, cycle a setting, or open the country/timezone picker |
 | `a` / `d` / `r` | Settings modal Feeds tab | Add, delete, or refresh private RSS/Atom subscriptions |

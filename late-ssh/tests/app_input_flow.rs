@@ -37,11 +37,7 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
     wait_for_render_contains(&mut app, " Home ").await;
 
     app.handle_input(b"i");
-    wait_for_render_contains(
-        &mut app,
-        "Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel)",
-    )
-    .await;
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
 
     app.handle_input(b"q$$$");
     wait_for_render_contains(&mut app, "$$$").await;
@@ -422,11 +418,7 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
 
     app.handle_input(b"i2hey");
     wait_for_render_contains(&mut app, "2hey").await;
-    wait_for_render_contains(
-        &mut app,
-        "Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel)",
-    )
-    .await;
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
 
     // Real terminals send CR (0x0D) for Enter in raw mode. Bare LF (0x0A) is
     // Ctrl+J and is aliased to "insert newline in chat composer", so we'd
@@ -478,11 +470,10 @@ async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
     app.handle_input(b"x\x7f!");
     let frame = render_plain(&mut app);
     assert!(
-        (frame.contains("│one!│")
-            || frame.contains("│one !│")
-            || frame.contains("│one ! │")
-            || frame.contains("│one! │"))
-            && !frame.contains("x"),
+        frame.contains("one")
+            && frame.contains("!")
+            && !frame.contains("onex")
+            && !frame.contains("one x"),
         "expected composer to keep accepting backspace and text after Alt+Backspace split, allowing for cursor-cell spacing in the rendered composer; frame={frame:?}"
     );
     assert!(

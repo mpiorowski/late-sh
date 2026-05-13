@@ -416,10 +416,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    if matches!(byte, b'f' | b'F') && toggle_selected_room_favorite(app) {
-        return true;
-    }
-
     if app.chat.notifications_selected {
         if is_next_room_key(byte) {
             switch_room(app, 1);
@@ -494,6 +490,10 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     }
 
     if handle_message_action(app, byte) {
+        return true;
+    }
+
+    if matches!(byte, b'f' | b'F') && toggle_selected_room_favorite(app) {
         return true;
     }
 

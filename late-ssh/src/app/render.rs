@@ -245,7 +245,6 @@ impl App {
             && !self.chat.discover_selected
             && !self.chat.showcase_selected
             && !self.chat.work_selected
-            && !self.chat.composing
             && !self.chat.is_reaction_leader_active();
         let top_rooms =
             dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 3);

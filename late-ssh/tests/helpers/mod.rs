@@ -454,6 +454,7 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
 
 pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
     let deadline = Instant::now() + Duration::from_secs(3);
+    let mut last_plain = String::new();
     while Instant::now() < deadline {
         app.tick();
         app.reset_render();
@@ -462,9 +463,10 @@ pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
         if plain.contains(needle) {
             return;
         }
+        last_plain = plain;
         sleep(Duration::from_millis(30)).await;
     }
-    panic!("timed out waiting for render to contain {needle:?}");
+    panic!("timed out waiting for render to contain {needle:?}; last render:\n{last_plain}");
 }
 
 pub async fn assert_render_not_contains_for(app: &mut App, needle: &str, duration: Duration) {

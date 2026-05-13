@@ -112,7 +112,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     let top_height = if want_top { TOP_STRIP_ROW_HEIGHT } else { 0 };
     let wire_height = if want_wire { WIRE_STRIP_ROW_HEIGHT } else { 0 };
     let pinned_height: u16 = if want_pinned { 1 } else { 0 };
-    let want_bottom_rule = top_height > 0 || wire_height > 0 || pinned_height > 0;
+    let want_chat_rule = pinned_height > 0 || (top_height > 0 && wire_height == 0);
 
     let mut constraints: Vec<Constraint> = Vec::new();
     if top_height > 0 {
@@ -122,11 +122,10 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         constraints.push(Constraint::Length(wire_height));
     }
     if pinned_height > 0 {
-        constraints.push(Constraint::Length(1)); // dim rule above pin
         constraints.push(Constraint::Length(pinned_height));
     }
-    if want_bottom_rule {
-        constraints.push(Constraint::Length(1)); // bottom rule (amber if pinned, dim otherwise)
+    if want_chat_rule {
+        constraints.push(Constraint::Length(1)); // bottom rule above chat
     }
     constraints.push(Constraint::Fill(1));
 
@@ -147,13 +146,13 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         idx += 1;
     }
     if pinned_height > 0 {
-        draw_horizontal_rule(frame, chunks[idx]);
-        idx += 1;
         draw_pinned_row(frame, chunks[idx], &view.pinned_messages[0]);
         idx += 1;
+    }
+    if pinned_height > 0 {
         draw_amber_rule(frame, chunks[idx]);
         idx += 1;
-    } else if want_bottom_rule {
+    } else if want_chat_rule {
         draw_horizontal_rule(frame, chunks[idx]);
         idx += 1;
     }
@@ -163,7 +162,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
 const TOP_STRIP_HIDE_AT_WIDTH: u16 = 50;
 const WIRE_HIDE_AT_HEIGHT: u16 = 22;
 const TOP_STRIP_ROW_HEIGHT: u16 = 5;
-const WIRE_STRIP_ROW_HEIGHT: u16 = 5;
+const WIRE_STRIP_ROW_HEIGHT: u16 = 6;
 
 fn draw_top_strip(
     frame: &mut Frame,
@@ -384,6 +383,9 @@ fn draw_wire_strip(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], 
     if rows.len() < 2 {
         return;
     }
+    if let Some(bottom) = rows.last().copied() {
+        draw_wire_bottom_border(frame, bottom);
+    }
 
     let pool = &articles[..articles.len().min(WIRE_NEWS_MAX_ITEMS)];
     if pool.is_empty() {
@@ -398,7 +400,7 @@ fn draw_wire_strip(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], 
     }
 
     let first = ((cycle_secs / WIRE_NEWS_CYCLE_SECONDS) as usize) % pool.len();
-    draw_wire_article(frame, &rows, &pool[first]);
+    draw_wire_article(frame, &rows[..rows.len().saturating_sub(1)], &pool[first]);
 }
 
 fn draw_wire_top_border(frame: &mut Frame, area: Rect) {
@@ -420,6 +422,19 @@ fn draw_wire_top_border(frame: &mut Frame, area: Rect) {
                 Style::default().fg(theme::BORDER_DIM()),
             ),
         ])),
+        area,
+    );
+}
+
+fn draw_wire_bottom_border(frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(theme::BORDER_DIM()),
+        ))),
         area,
     );
 }

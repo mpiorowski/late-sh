@@ -172,6 +172,7 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
             " Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
             " (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
             " (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
+            " Compose (Enter send, Esc cancel) ",
             " (⏎ send, Esc cancel) ",
             " (Esc cancel) ",
             " Esc ",
@@ -2304,6 +2305,7 @@ mod tests {
         let full = " Compose (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ";
         let long = " (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) ";
         let short = " (⏎ send, Alt+S stay, Alt+⏎/Ctrl+J newline, Esc cancel) ";
+        let compact = " Compose (Enter send, Esc cancel) ";
         let minimal = " (⏎ send, Esc cancel) ";
         let cancel = " (Esc cancel) ";
         let esc = " Esc ";
@@ -2317,7 +2319,10 @@ mod tests {
         assert_eq!(composer_title(&view, need(long) - 1), titled(short));
 
         assert_eq!(composer_title(&view, need(short)), titled(short));
-        assert_eq!(composer_title(&view, need(short) - 1), titled(minimal));
+        assert_eq!(composer_title(&view, need(short) - 1), titled(compact));
+
+        assert_eq!(composer_title(&view, need(compact)), titled(compact));
+        assert_eq!(composer_title(&view, need(compact) - 1), titled(minimal));
 
         assert_eq!(composer_title(&view, need(minimal)), titled(minimal));
         assert_eq!(composer_title(&view, need(minimal) - 1), titled(cancel));
