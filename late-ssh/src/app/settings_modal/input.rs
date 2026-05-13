@@ -253,6 +253,7 @@ fn activate_selected_row(app: &mut App) {
         | Row::RightSidebar
         | Row::RoomListSidebar
         | Row::LoungeInfo
+        | Row::WireBox
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents

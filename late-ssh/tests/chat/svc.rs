@@ -705,6 +705,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             theme_id: Some("late".to_string()),
             enable_background_color: false,
             show_dashboard_header: true,
+            show_dashboard_wire: true,
             show_right_sidebar: true,
             show_room_list_sidebar: true,
             show_settings_on_connect: true,

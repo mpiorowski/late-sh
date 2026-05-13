@@ -89,6 +89,14 @@ fn lounge_info_enabled(show_settings: bool, draft_enabled: bool, profile_enabled
     }
 }
 
+fn dashboard_wire_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
+    if show_settings {
+        draft_enabled
+    } else {
+        profile_enabled
+    }
+}
+
 fn dashboard_home_selected(
     general_room_id: Option<uuid::Uuid>,
     selected_room_id: Option<uuid::Uuid>,
@@ -227,6 +235,11 @@ impl App {
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
         );
+        let show_dashboard_wire = dashboard_wire_enabled(
+            self.show_settings,
+            self.settings_modal_state.draft().show_dashboard_wire,
+            self.profile_state.profile().show_dashboard_wire,
+        );
         let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
@@ -278,6 +291,7 @@ impl App {
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
             show_lounge_info,
+            show_dashboard_wire,
             pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,

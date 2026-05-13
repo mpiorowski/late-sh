@@ -28,26 +28,23 @@ function Fail {
 }
 
 function Get-Target {
-    $arch = if ([System.Environment]::Is64BitOperatingSystem) {
-        $env:PROCESSOR_ARCHITEW6432
-        if (-not $env:PROCESSOR_ARCHITEW6432) {
-            $env:PROCESSOR_ARCHITECTURE
-        }
-    } else {
-        $env:PROCESSOR_ARCHITECTURE
+    $arch = $env:PROCESSOR_ARCHITEW6432
+    if ([string]::IsNullOrWhiteSpace($arch)) {
+        $arch = $env:PROCESSOR_ARCHITECTURE
+    }
+    if ([string]::IsNullOrWhiteSpace($arch)) {
+        Fail "could not determine CPU architecture"
     }
 
-    switch -Regex ($arch) {
-        "^(AMD64|x86_64)$" {
-            return "x86_64-pc-windows-msvc"
-        }
-        "^ARM64$" {
-            Fail "unsupported architecture: ARM64 (native ARM64 build is not published yet)"
-        }
-        default {
-            Fail "unsupported architecture: $arch"
-        }
+    $arch = $arch.Trim().ToUpperInvariant()
+    if ($arch -eq "AMD64" -or $arch -eq "X64" -or $arch -eq "X86_64") {
+        return "x86_64-pc-windows-msvc"
     }
+    if ($arch -eq "ARM64") {
+        Fail "unsupported architecture: ARM64 (native ARM64 build is not published yet)"
+    }
+
+    Fail "unsupported architecture: $arch"
 }
 
 function Get-Prefix {

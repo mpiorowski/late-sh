@@ -43,6 +43,7 @@ pub enum Row {
     RightSidebar,
     RoomListSidebar,
     LoungeInfo,
+    WireBox,
     Country,
     Timezone,
     DirectMessages,
@@ -54,7 +55,7 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 18] = [
+    pub const ALL: [Row; 19] = [
         Row::Username,
         Row::Ide,
         Row::Terminal,
@@ -65,6 +66,7 @@ impl Row {
         Row::RightSidebar,
         Row::RoomListSidebar,
         Row::LoungeInfo,
+        Row::WireBox,
         Row::Country,
         Row::Timezone,
         Row::DirectMessages,
@@ -1278,6 +1280,10 @@ impl SettingsModalState {
                 self.draft.show_dashboard_header ^= true;
                 true
             }
+            Row::WireBox => {
+                self.draft.show_dashboard_wire ^= true;
+                true
+            }
             Row::DirectMessages => {
                 toggle_kind(&mut self.draft.notify_kinds, "dms");
                 true
@@ -1337,6 +1343,7 @@ impl SettingsModalState {
                 ),
                 enable_background_color: self.draft.enable_background_color,
                 show_dashboard_header: self.draft.show_dashboard_header,
+                show_dashboard_wire: self.draft.show_dashboard_wire,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,

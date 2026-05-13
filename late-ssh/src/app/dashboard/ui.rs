@@ -91,6 +91,7 @@ pub struct DashboardRenderInput<'a> {
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
     pub show_lounge_info: bool,
+    pub show_dashboard_wire: bool,
     pub pinned_messages: &'a [ChatMessage],
     pub chat_view: DashboardChatView<'a>,
 }
@@ -107,6 +108,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     let chrome = dashboard_chrome(
         area.height,
         view.show_lounge_info,
+        view.show_dashboard_wire,
         !view.pinned_messages.is_empty(),
     );
 
@@ -169,10 +171,15 @@ struct DashboardChrome {
     chat_rule: bool,
 }
 
-fn dashboard_chrome(height: u16, show_lounge_info: bool, has_pinned: bool) -> DashboardChrome {
+fn dashboard_chrome(
+    height: u16,
+    show_lounge_info: bool,
+    show_dashboard_wire: bool,
+    has_pinned: bool,
+) -> DashboardChrome {
     let pinned = has_pinned;
     let mut top = show_lounge_info;
-    let mut wire = show_lounge_info;
+    let mut wire = show_dashboard_wire;
 
     if !dashboard_chrome_fits(height, top, wire, pinned) {
         wire = false;
@@ -599,7 +606,7 @@ mod tests {
 
     #[test]
     fn dashboard_chrome_always_requests_pinned_row_when_present() {
-        let chrome = dashboard_chrome(1, false, true);
+        let chrome = dashboard_chrome(1, false, false, true);
 
         assert!(chrome.pinned);
         assert!(chrome.chat_rule);
@@ -610,7 +617,7 @@ mod tests {
     #[test]
     fn dashboard_chrome_hides_wire_before_top_boxes() {
         let full_height = dashboard_chrome_height(true, true, false) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
-        let chrome = dashboard_chrome(full_height - 1, true, false);
+        let chrome = dashboard_chrome(full_height - 1, true, true, false);
 
         assert!(chrome.top);
         assert!(!chrome.wire);
@@ -620,7 +627,7 @@ mod tests {
     fn dashboard_chrome_hides_top_boxes_after_wire_when_space_is_tighter() {
         let top_only_height =
             dashboard_chrome_height(true, false, false) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
-        let chrome = dashboard_chrome(top_only_height - 1, true, false);
+        let chrome = dashboard_chrome(top_only_height - 1, true, true, false);
 
         assert!(!chrome.top);
         assert!(!chrome.wire);
@@ -629,11 +636,21 @@ mod tests {
     #[test]
     fn dashboard_chrome_shows_top_and_wire_when_space_allows() {
         let full_height = dashboard_chrome_height(true, true, true) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
-        let chrome = dashboard_chrome(full_height, true, true);
+        let chrome = dashboard_chrome(full_height, true, true, true);
 
         assert!(chrome.pinned);
         assert!(chrome.top);
         assert!(chrome.wire);
+    }
+
+    #[test]
+    fn dashboard_chrome_allows_wire_without_top_boxes() {
+        let full_height = dashboard_chrome_height(false, true, false) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
+        let chrome = dashboard_chrome(full_height, false, true, false);
+
+        assert!(!chrome.top);
+        assert!(chrome.wire);
+        assert!(!chrome.chat_rule);
     }
 
     #[test]

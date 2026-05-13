@@ -8,8 +8,8 @@ use super::user::{
     User, extract_bio, extract_country, extract_enable_background_color, extract_favorite_room_ids,
     extract_ide, extract_langs, extract_notify_bell, extract_notify_cooldown_mins,
     extract_notify_format, extract_notify_kinds, extract_os, extract_show_dashboard_header,
-    extract_show_right_sidebar, extract_show_room_list_sidebar, extract_show_settings_on_connect,
-    extract_terminal, extract_theme_id, extract_timezone,
+    extract_show_dashboard_wire, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    extract_show_settings_on_connect, extract_terminal, extract_theme_id, extract_timezone,
 };
 
 #[derive(Clone, Debug)]
@@ -30,8 +30,10 @@ pub struct Profile {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
-    /// Controls the general-room lounge chrome: top info boxes plus wire strip.
+    /// Controls the general-room lounge top info boxes.
     pub show_dashboard_header: bool,
+    /// Controls the general-room dashboard wire strip.
+    pub show_dashboard_wire: bool,
     pub show_right_sidebar: bool,
     pub show_room_list_sidebar: bool,
     /// When false, the settings modal is not auto-opened on connect.
@@ -59,6 +61,7 @@ impl Default for Profile {
             theme_id: None,
             enable_background_color: true,
             show_dashboard_header: true,
+            show_dashboard_wire: true,
             show_right_sidebar: true,
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
@@ -84,6 +87,7 @@ pub struct ProfileParams {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub show_dashboard_header: bool,
+    pub show_dashboard_wire: bool,
     pub show_right_sidebar: bool,
     pub show_room_list_sidebar: bool,
     pub show_settings_on_connect: bool,
@@ -100,8 +104,8 @@ impl Profile {
 
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
-    /// enable_background_color/show_dashboard_header/show_right_sidebar/
-    /// show_room_list_sidebar/show_settings_on_connect into settings via
+    /// enable_background_color/show_dashboard_header/show_dashboard_wire/
+    /// show_right_sidebar/show_room_list_sidebar/show_settings_on_connect into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to unrelated keys
     /// (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
@@ -174,10 +178,11 @@ impl Profile {
                          'ide', $16::text,
                          'terminal', $17::text,
                          'os', $18::text,
-                         'langs', $19::jsonb
+                         'langs', $19::jsonb,
+                         'show_dashboard_wire', $20::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $20
+                 WHERE id = $21
                  RETURNING *",
                 &[
                     &params.username,
@@ -199,6 +204,7 @@ impl Profile {
                     &terminal,
                     &os,
                     &langs_json,
+                    &params.show_dashboard_wire,
                     &user_id,
                 ],
             )
@@ -225,6 +231,7 @@ impl Profile {
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
             show_dashboard_header: extract_show_dashboard_header(&user.settings),
+            show_dashboard_wire: extract_show_dashboard_wire(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),
             show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
             show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
