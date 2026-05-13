@@ -242,7 +242,7 @@ fn active_table_status_line(card: &DashboardRoomCard, width: usize) -> Line<'sta
 }
 
 fn seat_dot_spans(occupied: usize, total: usize) -> Vec<Span<'static>> {
-    let visible_total = total.max(1).min(6);
+    let visible_total = total.clamp(1, 6);
     let visible_occupied = occupied.min(visible_total);
     let mut spans = Vec::with_capacity(visible_total);
     for idx in 0..visible_total {
@@ -313,9 +313,9 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
 ///   pair status
 ///   -/= vol   m mute
 ///   now/next vibe
-///   v1 lofi    ███▒    1
-///   v2 ambient  ·       0
-///   v3 classic  ·       0
+///   lofi    ███▒    1  v1
+///   ambient  ·       0  v2
+///   classic  ·       0  v3
 fn draw_stream_block(
     frame: &mut Frame,
     area: Rect,

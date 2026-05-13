@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-10
+- Last updated: 2026-05-13
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -42,7 +42,7 @@
 - Deleting a room is a soft close through `GameRoom::close_by_id`; closed rows disappear because snapshots use `GameRoom::list_open`.
 
 ## Directory Behavior
-- The Rooms screen is key `4`.
+- The Rooms screen is key `3`.
 - The list contains real `game_rooms`; placeholder rows were removed when Tic-Tac-Toe shipped.
 - Filters cycle through `All` and each real `GameKind`.
 - Search is a case-insensitive substring match on `RoomListItem.display_name`.
@@ -80,14 +80,14 @@
 - Successful first-time seating emits `RoomGameEvent::SeatJoined { room_id, user_id, game_kind, display_name, seat_index }`. Repeated sit presses by an already seated user must not emit another join event.
 - `RoomGameRegistry::start_general_seat_announcer_task` is started from `main.rs`. It listens to all manager event streams and posts a normal `#general` chat message from the seated user via `ChatService::send_general_message_task`.
 - The announcer sanitizes room display names for a single-line message and neutralizes `@` mentions. Individual games must not know about chat or post directly.
+- The registry suppresses repeated `(user_id, room_id)` seat announcements for 60 seconds to avoid reconnect or leave/rejoin spam.
 
-## Dashboard Integration
-- `dashboard/ui.rs` renders a featured room-game box above dashboard chat when the full dashboard/header layout is active, room showcases are enabled, the viewport meets the dashboard's width/height gates, and there is enough space above the chat section.
-- The featured room is selected from all current `RoomsSnapshot` rows by highest occupied-seat count using `RoomGameRegistry::directory_summary`; ties prefer higher total seat count. This is game-kind agnostic, so Poker, Tic-Tac-Toe, and future room games participate by implementing `RoomGameManager::directory_meta` and `directory_hints`.
-- Slot keying is a two-key prefix: `b1` enters the featured room, `b2` launches the current daily, `b3` opens the current wire article, and `b4` opens `#announcements`.
-- `dashboard/input.rs::enter_dashboard_room_slot` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and runtime setup are shared with the directory path.
-- Backtick toggles Dashboard <-> the last active game target. Room-backed tables set the target to `DashboardGameToggleTarget::Room`; Arcade games under `late-ssh/src/app/arcade` set it to `DashboardGameToggleTarget::Arcade`. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves room targets against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
-- Direct global screen jump `4` opens the Rooms directory, not the active room. It clears `App.rooms_active_room` but keeps `rooms_last_active_room_id`, so backtick remains the way to return to the last game room.
+## Home Integration
+- `dashboard::ui::top_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, 3)` selects up to three multiplayer rooms for the Home right rail by occupied-seat count descending, game priority Poker -> Blackjack -> Tic-Tac-Toe, then total seats descending.
+- The Home right rail displays those rooms as active-table shortcuts with `b1`, `b2`, and `b3`.
+- The global `b` prefix in `app/input.rs` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and runtime setup are shared with the directory path.
+- Backtick toggles Dashboard/Home <-> the last active game target. Room-backed tables set the target to `DashboardGameToggleTarget::Room`; Arcade games under `late-ssh/src/app/arcade` set it to `DashboardGameToggleTarget::Arcade`. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves room targets against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
+- Direct global screen jump `3` opens the Rooms directory, not the active room. It clears `App.rooms_active_room` but keeps `rooms_last_active_room_id`, so backtick remains the way to return to the last game room.
 
 ## Blackjack Table Runtime
 - `BlackjackTableManager` is process-local. It lazily maps each entered `GameRoom.id` to a `BlackjackService`.
@@ -159,7 +159,7 @@
 
 ## Chat Interactions
 - `chat_rooms.kind = 'game'` stays in chat state so embedded room chat works.
-- Main Chat room-list rendering skips game rooms, so game-backed rooms do not appear as normal chat rooms or favorites.
+- Home room-rail rendering skips game rooms, so game-backed rooms do not appear as normal chat rooms or favorites.
 - Room entry requests a chat tail; live broadcasts then keep the embedded chat updated like other room-explicit chat flows.
 
 ## Asymmetric-Info Game Pattern

@@ -130,32 +130,34 @@ pub(crate) enum RoomSlot {
     Work,
 }
 
-pub(crate) fn is_selected_slot(
-    slot: RoomSlot,
-    selected_room_id: Option<Uuid>,
-    feeds_selected: bool,
-    news_selected: bool,
-    notifications_selected: bool,
-    discover_selected: bool,
-    showcase_selected: bool,
-    work_selected: bool,
-) -> bool {
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SelectedRoomSlotState {
+    pub selected_room_id: Option<Uuid>,
+    pub feeds_selected: bool,
+    pub news_selected: bool,
+    pub notifications_selected: bool,
+    pub discover_selected: bool,
+    pub showcase_selected: bool,
+    pub work_selected: bool,
+}
+
+pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) -> bool {
     match slot {
         RoomSlot::Room(room_id) => {
-            !feeds_selected
-                && !news_selected
-                && !notifications_selected
-                && !discover_selected
-                && !showcase_selected
-                && !work_selected
-                && selected_room_id == Some(room_id)
+            !selected.feeds_selected
+                && !selected.news_selected
+                && !selected.notifications_selected
+                && !selected.discover_selected
+                && !selected.showcase_selected
+                && !selected.work_selected
+                && selected.selected_room_id == Some(room_id)
         }
-        RoomSlot::Feeds => feeds_selected,
-        RoomSlot::News => news_selected,
-        RoomSlot::Notifications => notifications_selected,
-        RoomSlot::Discover => discover_selected,
-        RoomSlot::Showcase => showcase_selected,
-        RoomSlot::Work => work_selected,
+        RoomSlot::Feeds => selected.feeds_selected,
+        RoomSlot::News => selected.news_selected,
+        RoomSlot::Notifications => selected.notifications_selected,
+        RoomSlot::Discover => selected.discover_selected,
+        RoomSlot::Showcase => selected.showcase_selected,
+        RoomSlot::Work => selected.work_selected,
     }
 }
 

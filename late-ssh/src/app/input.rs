@@ -1327,49 +1327,10 @@ fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
     app.chat.clear_message_selection();
 }
 
-fn chat_selection_mode(app: &App, area: Rect) -> crate::app::chat::ui::ChatSelectionMode {
-    let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
-    if app.chat.notifications_selected || app.chat.discover_selected || app.chat.feeds_selected {
-        crate::app::chat::ui::ChatSelectionMode::Compact
-    } else if app.chat.news_selected {
-        crate::app::chat::ui::ChatSelectionMode::Composer {
-            lines: crate::app::chat::ui::chat_composer_lines_for_height(
-                app.chat.news.composer(),
-                composer_text_width,
-            ),
-            max_lines: 8,
-        }
-    } else if app.chat.showcase_selected {
-        crate::app::chat::ui::ChatSelectionMode::Composer {
-            lines: if app.chat.showcase.composing() { 8 } else { 1 },
-            max_lines: 8,
-        }
-    } else if app.chat.work_selected {
-        crate::app::chat::ui::ChatSelectionMode::Composer {
-            lines: if app.chat.work.composing() { 9 } else { 1 },
-            max_lines: 9,
-        }
-    } else {
-        crate::app::chat::ui::ChatSelectionMode::Composer {
-            lines: crate::app::chat::ui::chat_composer_lines_for_height(
-                app.chat.composer(),
-                composer_text_width,
-            )
-            .max(crate::app::chat::ui::chat_composer_placeholder_lines(
-                app.chat.composer(),
-                app.chat.mention_ac.active,
-                app.chat.is_reaction_leader_active(),
-            )),
-            max_lines: 8,
-        }
-    }
-}
-
 fn chat_room_list_view(app: &App) -> crate::app::chat::ui::ChatRoomListView<'_> {
     crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
         usernames: app.chat.usernames(),
-        countries: app.chat.countries(),
         unread_counts: &app.chat.unread_counts,
         favorite_room_ids: &app.profile_state.profile().favorite_room_ids,
         selected_room_id: app.chat.selected_room_id,

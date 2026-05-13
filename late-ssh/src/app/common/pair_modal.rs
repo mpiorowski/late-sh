@@ -79,20 +79,19 @@ fn draw_install_section(frame: &mut Frame, area: Rect) {
         .fg(theme::TEXT_BRIGHT())
         .bg(theme::BG_HIGHLIGHT());
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(Span::styled("linux / macos / windows", faint)).centered());
-    lines.push(Line::from(Span::styled(pill(INSTALL_COMMAND), code)).centered());
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled("nixos", faint)]).centered());
-    lines.push(Line::from(Span::styled(pill(NIX_COMMAND), code)).centered());
-    lines.push(Line::from(""));
-    lines.push(
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(Span::styled("linux / macos / windows", faint)).centered(),
+        Line::from(Span::styled(pill(INSTALL_COMMAND), code)).centered(),
+        Line::from(""),
+        Line::from(vec![Span::styled("nixos", faint)]).centered(),
+        Line::from(Span::styled(pill(NIX_COMMAND), code)).centered(),
+        Line::from(""),
         Line::from(vec![
             Span::styled("or build from source · ", faint),
             Span::styled(SOURCE_URL, amber),
         ])
         .centered(),
-    );
+    ];
     for step in BUILD_STEPS {
         lines.push(Line::from(Span::styled(pill(step), code)).centered());
     }

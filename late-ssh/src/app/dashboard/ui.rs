@@ -192,18 +192,6 @@ fn draw_top_strip(
     );
 }
 
-fn draw_box_label(frame: &mut Frame, area: Rect, label: &str) {
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            label.to_string(),
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        ))),
-        area,
-    );
-}
-
 fn draw_box_label_with_hint(frame: &mut Frame, area: Rect, label: &str, hint: &str) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -316,10 +304,15 @@ fn draw_box_activity(
     ])
     .split(area);
 
-    draw_box_label(frame, rows[0], "online");
-
     frame.render_widget(
         Paragraph::new(Line::from(vec![
+            Span::styled(
+                "online",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::raw("  "),
             Span::styled("● ", Style::default().fg(theme::SUCCESS())),
             Span::styled(
                 online_count.to_string(),
@@ -329,10 +322,10 @@ fn draw_box_activity(
             ),
             Span::styled(" here", Style::default().fg(theme::TEXT_DIM())),
         ])),
-        rows[1],
+        rows[0],
     );
 
-    let event_rows = [rows[2], rows[3], rows[4]];
+    let event_rows = [rows[1], rows[2], rows[3], rows[4]];
     let mut drawn = 0;
     for (i, event) in activity.iter().rev().take(event_rows.len()).enumerate() {
         let row = event_rows[i];

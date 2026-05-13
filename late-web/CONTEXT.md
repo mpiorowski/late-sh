@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: public web frontend for late.sh
 - Primary audience: LLM agents working on `late-web`, human contributors
-- Last updated: 2026-05-03
+- Last updated: 2026-05-13
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -86,8 +86,8 @@ Important route details:
 
 - `connect` audio pairing sends paired-client `client_state`, `viz`, and fallback `heartbeat` payloads to `late-ssh` `/api/ws/pair`.
 - `play` builds `/api/ws/tunnel?token=...` from `LATE_SSH_PUBLIC_URL` and `LATE_WEB_TUNNEL_TOKEN`, converting HTTPS to WSS, HTTP/local to WS, and bare public hosts to WSS.
-- `gallery` reads saved `artboard_snapshots` rows through `late_core::models::artboard::Snapshot`; it does not read live `late-ssh` memory.
-- `profiles` reads `WorkProfile`, `Profile`, `Showcase`, and `User` models from DB. The index limits to 100 and sorts `open`, then `casual`, then `not-looking`.
+- `gallery` reads saved `artboard_snapshots` rows through `late_core::models::artboard::Snapshot`; it does not read live `late-ssh` memory. Default selection falls back to `main`, then first daily, then first monthly snapshot.
+- `profiles` reads `WorkProfile`, `Profile`, `Showcase`, and `User` models from DB. The index limits to 100 and sorts `open`, then `casual`, then `not-looking`. Detail pages render profile bio through sanitized Markdown with raw HTML stripped, split comma-separated contact entries, and only create links for `http://`, `https://`, or email-like values.
 - `stream` normalizes `LATE_AUDIO_URL` so `/stream` is appended once.
 
 ---

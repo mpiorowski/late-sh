@@ -583,15 +583,7 @@ fn draw_active_room(
     draw_game_area(frame, layout[0], active_room_game, usernames);
     draw_active_room_spacer(frame, layout[1]);
     if let Some(chat) = active_room_chat {
-        let chat_cols =
-            Layout::horizontal([Constraint::Length(1), Constraint::Fill(1)]).split(layout[2]);
-        crate::app::common::sidebar::paint_vertical_separator(
-            frame,
-            chat_cols[0].x,
-            chat_cols[0].y,
-            chat_cols[0].height,
-        );
-        crate::app::chat::ui::draw_embedded_room_chat(frame, chat_cols[1], chat);
+        crate::app::chat::ui::draw_embedded_room_chat(frame, layout[2], chat);
     }
 }
 

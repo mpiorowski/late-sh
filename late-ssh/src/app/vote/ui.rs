@@ -98,8 +98,9 @@ pub fn draw_vote_options(
 }
 
 /// Borderless, label-less vote rows for the merged-shell stream block.
-/// Renders 3 short lines: `v1 lofi    ████   12`. The active vote is sage,
-/// everything else stays dim. No section header — caller owns that.
+/// Renders 3 short lines: `lofi    ████   12  v1`. Hint key sits at the row's
+/// right edge to match the b1/b2/b3 layout in active tables. Active vote is
+/// sage, everything else dim. No section header — caller owns that.
 pub fn draw_vote_inline(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) {
     let options = [
         (
@@ -122,8 +123,8 @@ pub fn draw_vote_inline(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) 
         ),
     ];
     let total = view.vote_counts.total().max(1) as usize;
-    // 13 = key(2) + name(8) + count(3)
-    let max_bar = (area.width as usize).saturating_sub(13).max(1);
+    // 14 = name(8) + count(3 incl. leading space) + gap(1) + hint(2)
+    let max_bar = (area.width as usize).saturating_sub(14).max(1);
 
     let layout = Layout::vertical(vec![Constraint::Length(1); options.len()]).split(area);
     for (i, (key, name, votes, mine)) in options.iter().enumerate() {
@@ -142,18 +143,19 @@ pub fn draw_vote_inline(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) 
         };
 
         let spans = vec![
-            Span::styled(
-                format!("{} ", key),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
             Span::styled(format!("{:<8}", name), Style::default().fg(name_color)),
             Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
             Span::styled("·".repeat(empty), Style::default().fg(theme::BORDER_DIM())),
             Span::styled(
                 format!(" {:>2}", votes),
                 Style::default().fg(theme::TEXT_FAINT()),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                key.to_string(),
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
             ),
         ];
         frame.render_widget(Paragraph::new(Line::from(spans)), layout[i]);

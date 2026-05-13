@@ -2,7 +2,7 @@
 
 ## Scope
 
-`late-ssh/src/app/artboard` implements the interactive shared ASCII Artboard page for late.sh. It owns per-session UI state, keyboard/mouse routing, rendering overlays, local editor integration, snapshot browsing, and attribution display.
+`late-ssh/src/app/artboard` implements the interactive shared ASCII Artboard page for late.sh. It owns per-session UI state, keyboard/mouse routing, rendering overlays, local editor integration, snapshot browsing, attribution display, and edit-ban enforcement.
 
 It does not own the process-wide board server or the durable persistence loop. Those live in `late-ssh/src/dartboard.rs`, but they are documented here because the Artboard page depends on their lifecycle.
 
@@ -10,7 +10,7 @@ Naming note: `Artboard` is the user-facing name. Code and upstream crates still 
 
 ## High-Level Model
 
-- Top-level screen: `Screen::Artboard`, key `5`, also reachable through `Tab` / `Shift+Tab`.
+- Top-level screen: `Screen::Artboard`, key `4`, also reachable through `Tab` / `Shift+Tab`.
 - Shared canvas: `dartboard_core::Canvas`, canonical size `384 x 192`.
 - Server: one in-process `dartboard_local::ServerHandle` per `late-ssh` process.
 - Session connection: created lazily when the user enters Artboard; dropped when leaving Artboard.
@@ -107,7 +107,7 @@ Local state:
 1. `late-ssh/src/main.rs` loads the last persisted Artboard row from Postgres with `late_ssh::dartboard::load_persisted_artboard`.
 2. Startup initializes shared provenance from the persisted row or an empty `ArtboardProvenance`.
 3. Startup spawns the process-wide persistent server with `spawn_persistent_server`.
-4. `SessionConfig` carries the shared `dartboard_server`, shared provenance, and `ArtboardSnapshotService` into every SSH `App`.
+4. Session bootstrap loads active `ArtboardBan` state. `SessionConfig` carries the shared `dartboard_server`, shared provenance, `ArtboardSnapshotService`, and ban state into every SSH `App`.
 5. `App::set_screen(Screen::Artboard)` calls `enter_dartboard()`.
 6. `enter_dartboard()` creates a per-session `DartboardService` and `artboard::state::State`, then switches the terminal cursor to steady underline.
 7. `DartboardService::new` calls `ServerHandle::try_connect_local`.
@@ -154,7 +154,7 @@ Gallery behavior:
 
 Artboard has two main interaction modes plus archive viewing:
 
-- `view`: inspect board, move cursor/viewport, keep global page switching (`1-5`, `Tab`, `Shift+Tab`) available.
+- `view`: inspect board, move cursor/viewport, keep global page switching (`1-4`, `Tab`, `Shift+Tab`) available.
 - `active`: edit board; single-key global shortcuts are suppressed so typing goes to the canvas/editor.
 - `snapshot`: read-only historical daily/monthly archive view. `g` opens the browser in view mode; selecting an archive replaces the local snapshot until returning live.
 
@@ -168,7 +168,7 @@ Keyboard reference:
 
 | Action | Keys / Mouse | Notes |
 | --- | --- | --- |
-| Open Artboard | `5`, `Tab`, `Shift+Tab` | Dedicated top-level screen; entering connects a local client |
+| Open Artboard | `4`, `Tab`, `Shift+Tab` | Dedicated top-level screen; entering connects a local client |
 | Move in view mode | Arrows, `Home`, `End`, `PgUp`, `PgDn`, mouse wheel | Inspect/pan without drawing |
 | Pan viewport in view mode | `Alt+arrows`, right-drag | Moves viewport without moving the cursor for Alt-arrows |
 | Enter active mode | `i`, `I`, `Enter`, canvas left-click | Disabled for archive snapshots |
@@ -186,7 +186,7 @@ Keyboard reference:
 | Help | `Ctrl+P` or `?` in view mode | Four tabs: Overview / Drawing / Brushes / Session |
 | Ownership overlay | `Ctrl+\` | Renders owner initials with deterministic colors |
 | Leave edit mode | `Esc` | Also closes help/glyph picker/local transient state first |
-| Leave Artboard page | `1-5`, `Tab`, `Shift+Tab` | Available from view mode |
+| Leave Artboard page | `1-4`, `Tab`, `Shift+Tab` | Available from view mode |
 
 Mouse-specific extras:
 - Click swatch pin icon to pin/unpin a swatch.
@@ -233,6 +233,7 @@ Inline module tests:
 - Provenance for shifts/replaces must be applied against the pre-op canvas.
 - Unknown actor `CanvasOp::Replace` does not invent attribution; it reloads cloned shared provenance.
 - Archive view is read-only and must not be overwritten by live watch updates during `State::tick()`.
+- Active artboard bans block editing through `App::activate_artboard_interaction` and show an error banner while the ban is active; viewing and archive browsing remain available.
 - Snapshot browser selection index `0` means live; archive items are offset by one.
 - Swatch slot `0` is the primary clipboard slot and is not pinnable.
 - Local paint palette is separate from the server-assigned peer color.
