@@ -65,11 +65,6 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.settings_modal_state.selected_tab() == Tab::Favorites {
-        handle_favorites_tab_input(app, event);
-        return;
-    }
-
     if app.settings_modal_state.selected_tab() == Tab::Account {
         handle_account_tab_input(app, event);
         return;
@@ -114,40 +109,6 @@ fn handle_themes_tab_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Arrow(b'D') => state.theme_cursor_left(),
         ParsedInput::Arrow(b'C') => state.theme_cursor_right(),
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => state.toggle_theme_tree_row(),
-        _ => {}
-    }
-}
-
-/// Favorites tab:
-/// - j/k / ↑↓ move the cursor across favorites + the "Add…" row
-/// - J/K (shift) or Alt+↑↓ reorder the selected favorite (no-op on "Add…")
-/// - d / Backspace / Delete remove the selected favorite
-/// - Enter opens the room picker when on "Add…", no-op on a favorite row
-fn handle_favorites_tab_input(app: &mut App, event: ParsedInput) {
-    let state: &mut SettingsModalState = &mut app.settings_modal_state;
-    match event {
-        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
-        ParsedInput::Byte(b'j') | ParsedInput::Char('j') | ParsedInput::Arrow(b'B') => {
-            state.move_favorites_cursor(1)
-        }
-        ParsedInput::Byte(b'k') | ParsedInput::Char('k') | ParsedInput::Arrow(b'A') => {
-            state.move_favorites_cursor(-1)
-        }
-        ParsedInput::Byte(b'J') | ParsedInput::Char('J') | ParsedInput::AltArrow(b'B') => {
-            state.reorder_selected_favorite(1)
-        }
-        ParsedInput::Byte(b'K') | ParsedInput::Char('K') | ParsedInput::AltArrow(b'A') => {
-            state.reorder_selected_favorite(-1)
-        }
-        ParsedInput::Byte(b'd')
-        | ParsedInput::Char('d')
-        | ParsedInput::Byte(0x7F)
-        | ParsedInput::Delete => state.remove_selected_favorite(),
-        ParsedInput::Byte(b'\r') | ParsedInput::Char('a') | ParsedInput::Char('A')
-            if state.favorites_index_is_add_row() && !state.filtered_rooms().is_empty() =>
-        {
-            state.open_picker(PickerKind::Room);
-        }
         _ => {}
     }
 }
@@ -289,8 +250,9 @@ fn activate_selected_row(app: &mut App) {
         }
         Row::Theme
         | Row::BackgroundColor
-        | Row::DashboardHeader
         | Row::RightSidebar
+        | Row::RoomListSidebar
+        | Row::LoungeInfo
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents

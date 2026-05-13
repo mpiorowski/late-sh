@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -18,6 +18,7 @@ use crate::app::{
 };
 
 const NARROW_WIDTH: u16 = 80;
+const ROOM_FILTER_PADDING_X: u16 = 4;
 
 pub struct RoomsPageView<'a> {
     pub create_flow: Option<&'a CreateRoomFlow>,
@@ -62,6 +63,7 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_
     }
 
     let layout = Layout::vertical([
+        Constraint::Length(1), // top padding
         Constraint::Length(1), // filter pills
         Constraint::Length(1), // spacer
         Constraint::Min(3),    // list
@@ -69,16 +71,16 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_
     ])
     .split(area);
 
-    draw_filter_bar(frame, layout[0], &view);
+    draw_filter_bar(frame, layout[1], &view);
 
     let rows = build_rows(&view);
     if area.width >= NARROW_WIDTH {
-        draw_room_list_wide(frame, layout[2], &view, &rows);
+        draw_room_list_wide(frame, layout[3], &view, &rows);
     } else {
-        draw_room_list_narrow(frame, layout[2], &view, &rows);
+        draw_room_list_narrow(frame, layout[3], &view, &rows);
     }
 
-    draw_footer(frame, layout[3], &view);
+    draw_footer(frame, layout[4], &view);
 
     if let Some(flow) = view.create_flow {
         match flow {
@@ -111,6 +113,11 @@ fn draw_filter_bar(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
     if area.height == 0 {
         return;
     }
+
+    let area = area.inner(Margin {
+        horizontal: ROOM_FILTER_PADDING_X,
+        vertical: 0,
+    });
 
     if view.search_active {
         let line = Line::from(vec![
@@ -307,22 +314,16 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
         return;
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if rows.is_empty() {
-        draw_empty_state(frame, inner, view);
+        draw_empty_state(frame, area, view);
         return;
     }
 
     let mut lines: Vec<Line> = Vec::with_capacity(rows.len() + 2);
     lines.push(header_line());
-    lines.push(divider_line(inner.width));
+    lines.push(divider_line(area.width));
 
-    let visible = (inner.height as usize).saturating_sub(2);
+    let visible = (area.height as usize).saturating_sub(2);
 
     for (real_index, row) in rows.iter().take(visible).enumerate() {
         let Row::Real(room) = row;
@@ -330,7 +331,7 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
         lines.push(real_row_wide(room, selected, view));
     }
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn header_line() -> Line<'static> {
@@ -403,19 +404,13 @@ fn draw_room_list_narrow(
         return;
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if rows.is_empty() {
-        draw_empty_state(frame, inner, view);
+        draw_empty_state(frame, area, view);
         return;
     }
 
     let mut lines: Vec<Line> = Vec::new();
-    let visible_lines = inner.height as usize;
+    let visible_lines = area.height as usize;
 
     for (real_index, row) in rows.iter().enumerate() {
         if lines.len() + 2 > visible_lines {
@@ -428,7 +423,7 @@ fn draw_room_list_narrow(
         lines.push(b);
     }
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn real_card_narrow<'a>(

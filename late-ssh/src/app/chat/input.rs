@@ -106,11 +106,8 @@ fn open_help_modal(app: &mut App, topic: HelpTopic) {
 
 fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
-    app.settings_modal_state.open_from_profile(
-        app.profile_state.profile(),
-        app.chat.favorite_room_options(),
-        crate::app::settings_modal::ui::MODAL_WIDTH,
-    );
+    app.settings_modal_state
+        .open_from_profile(app.profile_state.profile());
     app.show_settings = true;
 }
 
@@ -187,6 +184,21 @@ fn switch_room(app: &mut App, delta: isize) {
         app.sync_visible_chat_room();
         app.chat.request_list();
     }
+}
+
+fn toggle_selected_room_favorite(app: &mut App) -> bool {
+    let Some(room_id) = app.chat.selected_favorite_room_id() else {
+        return false;
+    };
+    let added = app.profile_state.toggle_favorite_room(room_id);
+    app.chat
+        .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+    app.banner = Some(if added {
+        Banner::success("Room added to favorites")
+    } else {
+        Banner::success("Room removed from favorites")
+    });
+    true
 }
 
 /// Shared message-list navigation and actions. Consumed by both the chat page
@@ -478,6 +490,10 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
+    if matches!(byte, b'f' | b'F') && toggle_selected_room_favorite(app) {
+        return true;
+    }
+
     match byte {
         b if is_next_room_key(b) => {
             switch_room(app, 1);
@@ -500,7 +516,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                     .map_or(&*app.connect_url, |p| p.0);
                 let token = registry.create_link(app.user_id, username);
                 let url = format!("{}/chat/{}", base_url, token);
-                app.pending_clipboard = Some(url.clone());
                 app.web_chat_qr_url = Some(url);
                 app.show_web_chat_qr = true;
             }

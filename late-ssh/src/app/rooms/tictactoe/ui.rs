@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use uuid::Uuid;
 
@@ -18,25 +18,17 @@ const SIDE_WIDE: u16 = 28;
 const SIDE_NARROW: u16 = 24;
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<Uuid, String>) {
-    let block = Block::default()
-        .title(" Tic-Tac-Toe ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 11 || inner.width < 28 {
-        draw_compact(frame, inner, state);
+    if area.height < 11 || area.width < 28 {
+        draw_compact(frame, area, state);
         return;
     }
 
-    let side_w = if inner.width >= 60 {
+    let side_w = if area.width >= 60 {
         SIDE_WIDE
     } else {
         SIDE_NARROW
     };
-    let columns =
-        Layout::horizontal([Constraint::Min(20), Constraint::Length(side_w)]).split(inner);
+    let columns = Layout::horizontal([Constraint::Min(20), Constraint::Length(side_w)]).split(area);
     draw_board(frame, columns[0], state);
     draw_side(frame, columns[1], state, usernames);
 }

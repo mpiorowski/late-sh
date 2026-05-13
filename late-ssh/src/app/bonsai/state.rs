@@ -4,7 +4,10 @@ use uuid::Uuid;
 
 use late_core::models::bonsai::{MAX_GROWTH_POINTS, Tree};
 
-use super::svc::BonsaiService;
+use super::{
+    care::{BonsaiCareState, branch_targets_for},
+    svc::BonsaiService,
+};
 
 pub(crate) const STAGE_GROWTH_POINTS: i32 = 100;
 pub(crate) const WRONG_CUT_GROWTH_LOSS: i32 = 10;
@@ -195,6 +198,12 @@ impl BonsaiState {
         let label = share_label(self.is_alive, self.age_days);
         format!("{art}\n{label}")
     }
+
+    pub(crate) fn share_snippet_with_care(&self, care: &BonsaiCareState) -> String {
+        let art = share_art_with_care(self.stage(), self.seed, care);
+        let label = share_label(self.is_alive, self.age_days);
+        format!("{art}\n{label}")
+    }
 }
 
 fn should_die(reference_date: NaiveDate, today: NaiveDate) -> bool {
@@ -286,6 +295,29 @@ impl Stage {
 /// Derives from the same `tree_ascii` used by the UI so the two never drift.
 fn share_art(stage: Stage, seed: i64) -> String {
     let lines = super::ui::tree_ascii(stage, seed, false);
+    share_lines(&lines)
+}
+
+fn share_art_with_care(stage: Stage, seed: i64, care: &BonsaiCareState) -> String {
+    let mut lines = super::ui::tree_ascii(stage, seed, false);
+    let targets = branch_targets_for(stage, seed, care.date, &lines, care.branch_goal);
+    for target in targets {
+        if care.cut_branch_ids.contains(&target.id) {
+            continue;
+        }
+        let Some(line) = lines.get_mut(target.y) else {
+            continue;
+        };
+        let mut chars: Vec<char> = line.chars().collect();
+        if let Some(ch) = chars.get_mut(target.x) {
+            *ch = target.glyph;
+        }
+        *line = chars.into_iter().collect();
+    }
+    share_lines(&lines)
+}
+
+fn share_lines(lines: &[String]) -> String {
     lines
         .iter()
         .map(|l| l.trim_end())
@@ -367,5 +399,27 @@ mod tests {
     fn share_label_reflects_alive_and_dead_states() {
         assert_eq!(share_label(true, 12), "ADMIRE my tree (Day 12)");
         assert_eq!(share_label(false, 12), "ADMIRE my tree [RIP]");
+    }
+
+    #[test]
+    fn share_art_with_care_includes_uncut_branch_glyphs() {
+        let date = NaiveDate::from_ymd_opt(2026, 5, 13).unwrap();
+        let stage = Stage::Mature;
+        let seed = 42;
+        let care = BonsaiCareState::fallback(date, seed, stage);
+        let base_lines = super::super::ui::tree_ascii(stage, seed, false);
+        let targets = branch_targets_for(stage, seed, date, &base_lines, care.branch_goal);
+        let target = targets.first().expect("branch target");
+
+        let base_char = base_lines[target.y].chars().nth(target.x);
+        assert_eq!(base_char, Some(' '));
+
+        let shared = share_art_with_care(stage, seed, &care);
+        let shared_char = shared
+            .lines()
+            .nth(target.y)
+            .and_then(|line| line.chars().nth(target.x));
+
+        assert_eq!(shared_char, Some(target.glyph));
     }
 }

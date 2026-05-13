@@ -119,7 +119,7 @@ pub(crate) struct NewsModalState {
     pub article_id: Option<Uuid>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
     Feeds,
@@ -128,6 +128,37 @@ pub(crate) enum RoomSlot {
     Discover,
     Showcase,
     Work,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SelectedRoomSlotState {
+    pub selected_room_id: Option<Uuid>,
+    pub feeds_selected: bool,
+    pub news_selected: bool,
+    pub notifications_selected: bool,
+    pub discover_selected: bool,
+    pub showcase_selected: bool,
+    pub work_selected: bool,
+}
+
+pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) -> bool {
+    match slot {
+        RoomSlot::Room(room_id) => {
+            !selected.feeds_selected
+                && !selected.news_selected
+                && !selected.notifications_selected
+                && !selected.discover_selected
+                && !selected.showcase_selected
+                && !selected.work_selected
+                && selected.selected_room_id == Some(room_id)
+        }
+        RoomSlot::Feeds => selected.feeds_selected,
+        RoomSlot::News => selected.news_selected,
+        RoomSlot::Notifications => selected.notifications_selected,
+        RoomSlot::Discover => selected.discover_selected,
+        RoomSlot::Showcase => selected.showcase_selected,
+        RoomSlot::Work => selected.work_selected,
+    }
 }
 
 pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
@@ -199,6 +230,7 @@ pub struct ChatState {
     pub(crate) showcase: showcase::state::State,
     pub(crate) work_selected: bool,
     pub(crate) work: work::state::State,
+    favorite_room_ids: Vec<Uuid>,
 
     /// Pending desktop notifications drained on render. `kind` matches the
     /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
@@ -268,6 +300,7 @@ impl ChatState {
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
         let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
+        service.load_pinned_messages_task(pinned_tx.clone());
         let (room_tx, room_rx) = watch::channel(None);
         let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
@@ -333,6 +366,7 @@ impl ChatState {
             ),
             work_selected: false,
             work: work::state::State::new(work_service, user_id, permissions.is_admin()),
+            favorite_room_ids: Vec::new(),
             pending_notifications: Vec::new(),
             requested_help_topic: None,
             requested_settings_modal: false,
@@ -836,7 +870,7 @@ impl ChatState {
             return Some(Banner::error("Admin only: pin messages"));
         }
         self.service
-            .toggle_message_pin_task(message.id, self.is_admin);
+            .toggle_message_pin_task(message.id, self.is_admin, self.pinned_tx.clone());
         let label = if message.pinned {
             "Unpinning message..."
         } else {
@@ -877,47 +911,42 @@ impl ChatState {
         })
     }
 
-    /// Flatten joined rooms into the pick-list the settings modal shows in
-    /// its Favorites tab. Labels are pre-resolved here (DMs → `@peer`, rooms
-    /// → `#slug`, language rooms → `#lang-xx`) so the modal stays ignorant of
-    /// `ChatRoom` internals.
-    pub fn favorite_room_options(&self) -> Vec<crate::app::settings_modal::state::RoomOption> {
-        use crate::app::settings_modal::state::RoomOption;
-        self.rooms
-            .iter()
-            .filter(|(room, _)| is_chat_list_room(room))
-            .map(|(room, _)| {
-                let label = if room.kind == "dm" {
-                    self.dm_display_name(room)
-                } else if let Some(slug) = room.slug.as_deref().filter(|s| !s.is_empty()) {
-                    format!("#{slug}")
-                } else if let Some(code) = room.language_code.as_deref() {
-                    format!("#lang-{code}")
-                } else {
-                    format!("#{}", room.kind)
-                };
-                RoomOption { id: room.id, label }
-            })
-            .collect()
+    pub(crate) fn set_favorite_room_ids(&mut self, favorite_room_ids: Vec<Uuid>) {
+        self.favorite_room_ids = favorite_room_ids;
     }
 
-    fn dm_display_name(&self, room: &ChatRoom) -> String {
-        dm_sort_key(room, self.user_id, &self.usernames)
+    pub(crate) fn favorite_room_ids(&self) -> &[Uuid] {
+        &self.favorite_room_ids
+    }
+
+    pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
+        if self.feeds_selected
+            || self.news_selected
+            || self.notifications_selected
+            || self.discover_selected
+            || self.showcase_selected
+            || self.work_selected
+        {
+            return None;
+        }
+        let room_id = self.selected_room_id?;
+        self.rooms
+            .iter()
+            .any(|(room, _)| room.id == room_id && is_chat_list_room(room))
+            .then_some(room_id)
     }
 
     /// Build the flat visual navigation order.
-    /// Order: core (general, announcements) → news → showcases → work
-    /// → mentions → discover → public rooms (alpha) → private rooms (alpha) → DMs
+    /// Order matches the cozy rail exactly: favorites, core, mentions,
+    /// channels, feeds, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        let mut order = visual_order_for_rooms(&self.rooms, self.user_id, &self.usernames);
-        if self.feeds.has_feeds() {
-            let insert_at = order
-                .iter()
-                .position(|slot| *slot == RoomSlot::News)
-                .unwrap_or(order.len());
-            order.insert(insert_at, RoomSlot::Feeds);
-        }
-        order
+        visual_order_for_rooms(
+            &self.rooms,
+            self.user_id,
+            &self.usernames,
+            self.feeds.has_feeds(),
+            &self.favorite_room_ids,
+        )
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -2717,12 +2746,25 @@ fn inline_image_retry_delay(attempts: u8) -> Duration {
     Duration::from_secs((1_u64 << exp).min(30))
 }
 
-fn visual_order_for_rooms(
+pub(crate) fn visual_order_for_rooms(
     rooms: &[(ChatRoom, Vec<ChatMessage>)],
     user_id: Uuid,
     usernames: &HashMap<Uuid, String>,
+    feeds_available: bool,
+    favorite_room_ids: &[Uuid],
 ) -> Vec<RoomSlot> {
     let mut order = Vec::new();
+    let mut pushed_rooms = HashSet::new();
+
+    for favorite_id in favorite_room_ids {
+        if rooms
+            .iter()
+            .any(|(room, _)| room.id == *favorite_id && is_chat_list_room(room))
+            && pushed_rooms.insert(*favorite_id)
+        {
+            order.push(RoomSlot::Room(*favorite_id));
+        }
+    }
 
     // Core: permanent rooms, hardcoded order
     let core_order = ["general", "announcements", "suggestions", "bugs"];
@@ -2730,46 +2772,30 @@ fn visual_order_for_rooms(
         if let Some((room, _)) = rooms
             .iter()
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
+            && pushed_rooms.insert(room.id)
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
-    // Any other permanent rooms not in the hardcoded list
+    order.push(RoomSlot::Notifications);
+
+    // Channels: all non-DM rooms outside Core, public + private merged.
     for (room, _) in rooms {
         if is_chat_list_room(room)
             && room.kind != "dm"
-            && room.permanent
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+            && pushed_rooms.insert(room.id)
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
 
     order.push(RoomSlot::News);
+    if feeds_available {
+        order.push(RoomSlot::Feeds);
+    }
     order.push(RoomSlot::Showcase);
     order.push(RoomSlot::Work);
-    order.push(RoomSlot::Notifications);
-    order.push(RoomSlot::Discover);
-
-    // Public rooms (non-DM, non-permanent, alpha by slug)
-    let mut public: Vec<_> = rooms
-        .iter()
-        .filter(|(r, _)| {
-            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "public"
-        })
-        .collect();
-    public.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-    order.extend(public.iter().map(|(r, _)| RoomSlot::Room(r.id)));
-
-    // Private rooms (visibility=private, alpha by slug)
-    let mut private: Vec<_> = rooms
-        .iter()
-        .filter(|(r, _)| {
-            is_chat_list_room(r) && r.kind != "dm" && !r.permanent && r.visibility == "private"
-        })
-        .collect();
-    private.sort_by(|(a, _), (b, _)| a.slug.cmp(&b.slug));
-    order.extend(private.iter().map(|(r, _)| RoomSlot::Room(r.id)));
 
     // DMs (sorted by display name to match nav rendering)
     let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
@@ -2778,7 +2804,11 @@ fn visual_order_for_rooms(
         let name_b = dm_sort_key(b, user_id, usernames);
         name_a.cmp(&name_b)
     });
-    order.extend(dms.iter().map(|(r, _)| RoomSlot::Room(r.id)));
+    order.extend(
+        dms.iter()
+            .filter_map(|(r, _)| pushed_rooms.insert(r.id).then_some(RoomSlot::Room(r.id))),
+    );
+    order.push(RoomSlot::Discover);
 
     order
 }
@@ -3731,7 +3761,7 @@ mod tests {
     }
 
     #[test]
-    fn visual_order_places_work_after_showcases() {
+    fn visual_order_matches_cozy_rail_grouping() {
         let me = Uuid::from_u128(1);
         let alice = Uuid::from_u128(2);
         let bob = Uuid::from_u128(3);
@@ -3766,20 +3796,20 @@ mod tests {
         ];
 
         assert_eq!(
-            visual_order_for_rooms(&rooms, me, &usernames),
+            visual_order_for_rooms(&rooms, me, &usernames, false, &[]),
             vec![
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
+                RoomSlot::Notifications,
+                RoomSlot::Room(public_zeta),
+                RoomSlot::Room(private_beta),
+                RoomSlot::Room(public_alpha),
                 RoomSlot::News,
                 RoomSlot::Showcase,
                 RoomSlot::Work,
-                RoomSlot::Notifications,
-                RoomSlot::Discover,
-                RoomSlot::Room(public_alpha),
-                RoomSlot::Room(public_zeta),
-                RoomSlot::Room(private_beta),
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
+                RoomSlot::Discover,
             ]
         );
     }

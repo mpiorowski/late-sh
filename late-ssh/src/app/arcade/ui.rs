@@ -30,20 +30,13 @@ pub struct GameBottomBar {
 pub fn draw_game_frame(
     frame: &mut Frame,
     area: Rect,
-    title: &str,
+    _title: &str,
     bottom: GameBottomBar,
-    show_bottom: bool,
+    show_bottom_bar: bool,
 ) -> Rect {
-    let block = Block::default()
-        .title(format!(" {title} "))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     let bottom_rows: u16 = if bottom.tip.is_some() { 3 } else { 2 };
-    if !show_bottom || inner.height < bottom_rows + 3 {
-        return inner;
+    if !show_bottom_bar || area.height < bottom_rows + 3 {
+        return area;
     }
 
     let mut constraints = vec![
@@ -54,7 +47,7 @@ pub fn draw_game_frame(
     if bottom.tip.is_some() {
         constraints.push(Constraint::Length(1));
     }
-    let rows = Layout::vertical(constraints).split(inner);
+    let rows = Layout::vertical(constraints).split(area);
 
     frame.render_widget(
         Paragraph::new(bottom.status).alignment(Alignment::Center),
@@ -83,28 +76,21 @@ pub fn tip_line(text: impl Into<String>) -> Line<'static> {
 pub fn draw_game_frame_with_info_sidebar<'a>(
     frame: &mut Frame,
     area: Rect,
-    title: &str,
+    _title: &str,
     info_lines: Vec<Line<'a>>,
-    show_sidebar: bool,
+    show_info_sidebar: bool,
 ) -> Rect {
-    let block = Block::default()
-        .title(format!(" {title} "))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let (content_area, sidebar_area) = arcade_sidebar_layout(inner, show_sidebar);
+    let (content_area, sidebar_area) = info_sidebar_layout(area, show_info_sidebar);
 
     if let Some(sidebar_area) = sidebar_area {
-        draw_arcade_sidebar(frame, sidebar_area, ArcadeSidebarContent::Info(info_lines));
+        draw_info_sidebar(frame, sidebar_area, ArcadeSidebarContent::Info(info_lines));
     }
 
     content_area
 }
 
-fn arcade_sidebar_layout(area: Rect, show_sidebar: bool) -> (Rect, Option<Rect>) {
-    if show_sidebar {
+fn info_sidebar_layout(area: Rect, show_info_sidebar: bool) -> (Rect, Option<Rect>) {
+    if show_info_sidebar {
         let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(28)]).split(area);
         (cols[0], Some(cols[1]))
     } else {
@@ -112,7 +98,7 @@ fn arcade_sidebar_layout(area: Rect, show_sidebar: bool) -> (Rect, Option<Rect>)
     }
 }
 
-fn draw_arcade_sidebar(frame: &mut Frame, area: Rect, content: ArcadeSidebarContent<'_>) {
+fn draw_info_sidebar(frame: &mut Frame, area: Rect, content: ArcadeSidebarContent<'_>) {
     let block = Block::default()
         .title(" Info ")
         .borders(Borders::ALL)
@@ -236,6 +222,19 @@ pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
     Line::from(spans)
 }
 
+pub fn game_title(selection: usize) -> &'static str {
+    match selection {
+        GAME_SELECTION_2048 => "2048",
+        GAME_SELECTION_TETRIS => "Tetris",
+        GAME_SELECTION_SUDOKU => "Sudoku",
+        GAME_SELECTION_NONOGRAMS => "Nonograms",
+        GAME_SELECTION_MINESWEEPER => "Minesweeper",
+        GAME_SELECTION_SOLITAIRE => "Solitaire",
+        GAME_SELECTION_SNAKE => "Snake",
+        _ => "The Arcade",
+    }
+}
+
 pub struct ArcadeHubView<'a> {
     pub game_selection: usize,
     pub is_playing_game: bool,
@@ -246,41 +245,36 @@ pub struct ArcadeHubView<'a> {
     pub nonogram_state: &'a super::nonogram::state::State,
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
-    pub show_sidebar: bool,
 }
 
 pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
+    let show_bottom_bar = true;
     if view.is_playing_game {
         if view.game_selection == GAME_SELECTION_2048 {
             super::twenty_forty_eight::ui::draw_game(
                 frame,
                 area,
                 view.twenty_forty_eight_state,
-                view.show_sidebar,
+                show_bottom_bar,
             );
             return;
         } else if view.game_selection == GAME_SELECTION_TETRIS {
-            super::tetris::ui::draw_game(frame, area, view.tetris_state, view.show_sidebar);
+            super::tetris::ui::draw_game(frame, area, view.tetris_state, show_bottom_bar);
             return;
         } else if view.game_selection == GAME_SELECTION_SNAKE {
-            super::snake::ui::draw_game(frame, area, view.snake_state, view.show_sidebar);
+            super::snake::ui::draw_game(frame, area, view.snake_state, show_bottom_bar);
             return;
         } else if view.game_selection == GAME_SELECTION_SUDOKU {
-            super::sudoku::ui::draw_game(frame, area, view.sudoku_state, view.show_sidebar);
+            super::sudoku::ui::draw_game(frame, area, view.sudoku_state, show_bottom_bar);
             return;
         } else if view.game_selection == GAME_SELECTION_NONOGRAMS {
-            super::nonogram::ui::draw_game(frame, area, view.nonogram_state, view.show_sidebar);
+            super::nonogram::ui::draw_game(frame, area, view.nonogram_state, show_bottom_bar);
             return;
         } else if view.game_selection == GAME_SELECTION_MINESWEEPER {
-            super::minesweeper::ui::draw_game(
-                frame,
-                area,
-                view.minesweeper_state,
-                view.show_sidebar,
-            );
+            super::minesweeper::ui::draw_game(frame, area, view.minesweeper_state, show_bottom_bar);
             return;
         } else if view.game_selection == GAME_SELECTION_SOLITAIRE {
-            super::solitaire::ui::draw_game(frame, area, view.solitaire_state, view.show_sidebar);
+            super::solitaire::ui::draw_game(frame, area, view.solitaire_state, show_bottom_bar);
             return;
         }
     }
@@ -688,9 +682,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn arcade_sidebar_layout_reserves_info_panel_when_enabled() {
+    fn info_sidebar_layout_reserves_info_panel_when_enabled() {
         let area = Rect::new(2, 3, 80, 24);
-        let (content, info) = arcade_sidebar_layout(area, true);
+        let (content, info) = info_sidebar_layout(area, true);
         let info = info.expect("info panel should be present");
 
         assert_eq!(content, Rect::new(2, 3, 52, 24));
@@ -698,9 +692,9 @@ mod tests {
     }
 
     #[test]
-    fn arcade_sidebar_layout_returns_full_area_when_disabled() {
+    fn info_sidebar_layout_returns_full_area_when_disabled() {
         let area = Rect::new(2, 3, 80, 24);
-        let (content, info) = arcade_sidebar_layout(area, false);
+        let (content, info) = info_sidebar_layout(area, false);
 
         assert_eq!(content, area);
         assert!(info.is_none());

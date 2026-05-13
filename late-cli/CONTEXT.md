@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-05-12
+- Last updated: 2026-05-13
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -264,7 +264,7 @@ Pairing behavior:
 - If multiple browser/CLI clients pair with the same token, latest registration owns control/state until it disconnects.
 - CLI WebSocket reconnects up to 10 consecutive failures with a 2s delay.
 - The first `client_state` is sent immediately after connect, then sent again after any applied control message.
-- `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client state, so older CLIs and browser pairs do not receive unsupported control events.
+- `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client's `client_state.capabilities`, so older CLIs and browser pairs do not receive unsupported control events.
 - Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
 - Clipboard images are converted to PNG in the CLI before upload. The CLI rejects zero-size images, very large decoded RGBA buffers, and PNG payloads above the upload cap before sending them over the pair socket.
 
@@ -411,8 +411,7 @@ Relevant TUI controls:
 - `m`: toggle mute on paired client
 - `+` / `=`: volume up on paired client
 - `-` / `_`: volume down on paired client
-- `P`: dashboard/chat browser-pairing QR
-- `B`: dashboard/chat CLI install/build-source modal
+- `P`: Home combined install + pair modal, with curl, Nix, build-from-source options and browser pairing QR/link
 
 ---
 

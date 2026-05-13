@@ -57,7 +57,7 @@ impl App {
         self.sync_visible_chat_room();
         if self.chat.pending_chat_screen_switch {
             self.chat.pending_chat_screen_switch = false;
-            self.set_screen(Screen::Chat);
+            self.set_screen(Screen::Dashboard);
         }
         if let Some(b) = self.vote.tick() {
             self.banner = Some(b);
@@ -66,6 +66,8 @@ impl App {
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
         }
+        self.chat
+            .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
         if let Some(b) = self.settings_modal_state.tick() {
             self.banner = Some(b);
         }
@@ -77,11 +79,8 @@ impl App {
             && !self.profile_state.profile().username.is_empty()
         {
             if self.profile_state.profile().show_settings_on_connect {
-                self.settings_modal_state.open_from_profile(
-                    self.profile_state.profile(),
-                    self.chat.favorite_room_options(),
-                    crate::app::settings_modal::ui::MODAL_WIDTH,
-                );
+                self.settings_modal_state
+                    .open_from_profile(self.profile_state.profile());
             } else {
                 self.show_settings = false;
             }

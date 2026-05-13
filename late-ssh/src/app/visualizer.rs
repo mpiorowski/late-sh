@@ -3,9 +3,9 @@ use late_core::audio::VizFrame;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 pub struct Visualizer {
@@ -67,55 +67,42 @@ impl Visualizer {
         self.beat = (self.beat * 0.9).max(0.0);
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, show_audio_shortcuts: bool) {
-        let border = if self.has_viz {
-            theme::BORDER_ACTIVE()
-        } else {
-            theme::BORDER()
-        };
-
-        let block = Block::default()
-            .title(" Visualizer ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        if inner.height == 0 || inner.width == 0 {
+    /// Borderless visualizer for the merged shell. Renders bars only when
+    /// audio is paired; otherwise shows a "no audio" hint plus the `P` shortcut
+    /// for the install/pair modal. No block, no title — the rail's whitespace
+    /// owns the separation.
+    pub fn render_inline(&self, frame: &mut Frame, area: Rect) {
+        if area.height == 0 || area.width == 0 {
             return;
         }
-
         if !self.has_viz {
-            let dim = Style::default().fg(theme::TEXT_DIM());
-            let key = Style::default().fg(theme::AMBER());
-            let mut lines = vec![
-                Line::from(""),
-                Line::from(Span::styled("No audio paired", dim)),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Type ", dim),
-                    Span::styled("/music", key),
-                    Span::styled(" in chat", dim),
-                ]),
-            ];
-            if show_audio_shortcuts {
-                lines.extend([
-                    Line::from(""),
-                    Line::from(Span::styled("Dashboard/chat:", dim)),
-                    Line::from(vec![
-                        Span::styled("B", key),
-                        Span::styled(" cli  ", dim),
-                        Span::styled("P", key),
-                        Span::styled(" web", dim),
-                    ]),
-                ]);
+            let faint = Style::default().fg(theme::TEXT_FAINT());
+            let amber_italic = Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::ITALIC);
+            let amber_key = Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD);
+
+            let mut lines: Vec<Line<'static>> = Vec::with_capacity(area.height as usize);
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("no audio paired", faint)));
+            lines.push(Line::from(vec![
+                Span::styled("/music", amber_italic),
+                Span::styled(" in chat", faint),
+            ]));
+            if area.height >= 5 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("P", amber_key),
+                    Span::styled(" install · pair", faint),
+                ]));
             }
-            frame.render_widget(Paragraph::new(lines), inner);
+            frame.render_widget(Paragraph::new(lines), area);
             return;
         }
-
-        let lines = self.build_lines(inner);
-        frame.render_widget(Paragraph::new(lines), inner);
+        let lines = self.build_lines(area);
+        frame.render_widget(Paragraph::new(lines), area);
     }
 
     fn build_lines(&self, area: Rect) -> Vec<Line<'static>> {
@@ -209,15 +196,14 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
 
-    fn render_disconnected(show_audio_shortcuts: bool) -> String {
+    fn render_inline_idle(height: u16) -> String {
         let width = 24;
-        let height = 10;
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let viz = Visualizer::new();
 
         terminal
-            .draw(|frame| viz.render(frame, Rect::new(0, 0, width, height), show_audio_shortcuts))
+            .draw(|frame| viz.render_inline(frame, Rect::new(0, 0, width, height)))
             .expect("draw");
 
         let buffer = terminal.backend().buffer();
@@ -232,22 +218,21 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_visualizer_can_show_audio_shortcuts() {
-        let rendered = render_disconnected(true);
+    fn idle_inline_visualizer_shows_pair_shortcut() {
+        let rendered = render_inline_idle(6);
 
-        assert!(rendered.contains("Dashboard/chat:"));
-        assert!(rendered.contains("B cli"));
-        assert!(rendered.contains("P web"));
+        assert!(rendered.contains("no audio paired"));
+        assert!(rendered.contains("/music"));
+        assert!(rendered.contains("P"));
+        assert!(rendered.contains("install · pair"));
     }
 
     #[test]
-    fn disconnected_visualizer_can_hide_audio_shortcuts() {
-        let rendered = render_disconnected(false);
+    fn idle_inline_visualizer_drops_shortcut_when_too_short() {
+        let rendered = render_inline_idle(4);
 
-        assert!(rendered.contains("No audio paired"));
-        assert!(!rendered.contains("Dashboard/chat:"));
-        assert!(!rendered.contains("B cli"));
-        assert!(!rendered.contains("P web"));
+        assert!(rendered.contains("no audio paired"));
+        assert!(!rendered.contains("install · pair"));
     }
 
     #[test]

@@ -48,7 +48,6 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Tab::Settings => draw_settings_tab(frame, layout[3], state),
         Tab::Themes => draw_themes_tab(frame, layout[3], state),
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
-        Tab::Favorites => draw_favorites_tab(frame, layout[3], state),
         Tab::Account => draw_account_tab(frame, layout[3], state),
         Tab::Feeds => draw_feeds_tab(frame, layout[3], state),
         Tab::Special => draw_special_tab(frame, layout[3], state),
@@ -139,22 +138,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
             spans.extend([
                 Span::styled("←→ ↵", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
-            ]);
-        }
-        (Tab::Favorites, _) => {
-            spans.extend([
-                Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("J/K", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" reorder  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("d", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" remove  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" add  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
@@ -385,8 +368,9 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Appearance heading
         Constraint::Length(1), // Theme
         Constraint::Length(1), // Background
-        Constraint::Length(1), // Stream + vote
         Constraint::Length(1), // Right sidebar
+        Constraint::Length(1), // Room list
+        Constraint::Length(1), // Lounge info
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Location heading
         Constraint::Length(1), // Country
@@ -510,24 +494,34 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::DashboardHeader,
+            Row::RightSidebar,
             width,
-            "Stream + vote",
-            toggle_span(state.draft().show_dashboard_header),
+            "Right sidebar",
+            toggle_span(state.draft().show_right_sidebar),
         )),
         sections[10],
     );
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::RightSidebar,
+            Row::RoomListSidebar,
             width,
-            "Right sidebar",
-            toggle_span(state.draft().show_right_sidebar),
+            "Room list",
+            toggle_span(state.draft().show_room_list_sidebar),
         )),
         sections[11],
     );
-    frame.render_widget(Paragraph::new(section_heading("Location")), sections[13]);
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::LoungeInfo,
+            width,
+            "Lounge info",
+            toggle_span(state.draft().show_dashboard_header),
+        )),
+        sections[12],
+    );
+    frame.render_widget(Paragraph::new(section_heading("Location")), sections[14]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -536,7 +530,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Country",
             value_with_picker_hint(country_label(state.draft().country.as_deref())),
         )),
-        sections[14],
+        sections[15],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -552,12 +546,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                     .unwrap_or_else(|| "not set".to_string()),
             ),
         )),
-        sections[15],
+        sections[16],
     );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[17],
+        sections[18],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -567,7 +561,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[18],
+        sections[19],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -577,7 +571,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[19],
+        sections[20],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -587,7 +581,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[20],
+        sections[21],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -597,7 +591,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[21],
+        sections[22],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -614,7 +608,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[22],
+        sections[23],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -627,10 +621,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[23],
+        sections[24],
     );
 
-    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[25]);
+    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[26]);
 }
 
 fn shortcuts_hint_line(width: usize) -> Line<'static> {
@@ -1249,126 +1243,6 @@ fn draw_bio_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), padded);
 }
 
-fn draw_favorites_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
-    let sections = Layout::vertical([
-        Constraint::Length(1), // heading
-        Constraint::Length(1), // hint
-        Constraint::Length(1), // breathing
-        Constraint::Min(4),    // body
-    ])
-    .split(area);
-
-    frame.render_widget(
-        Paragraph::new(section_heading("Favorite rooms")),
-        sections[0],
-    );
-
-    let hint = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "Pin rooms to the dashboard quick-switch strip ([ / ]).",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(hint), sections[1]);
-
-    let body_width = sections[3].width as usize;
-    let favorites = state.favorites();
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(favorites.len() + 1);
-
-    for (idx, room_id) in favorites.iter().enumerate() {
-        let selected = state.favorites_index() == idx;
-        let label_text = state
-            .room_label(*room_id)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "(unknown room)".to_string());
-        let position_text = format!("{:>2}. ", idx + 1);
-        let label_style = if selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_BRIGHT())
-        };
-        let position_style = if selected {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_FAINT())
-        };
-        let marker = if selected { "›" } else { " " };
-        let prefix_style = if selected {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_FAINT())
-        };
-        let prefix = format!(" {marker} ");
-        let used =
-            prefix.chars().count() + position_text.chars().count() + label_text.chars().count();
-        let padding = body_width.saturating_sub(used);
-        let trailing = " ".repeat(padding);
-        let trailing_style = if selected {
-            Style::default().bg(theme::BG_SELECTION())
-        } else {
-            Style::default()
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled(prefix, prefix_style),
-            Span::styled(position_text, position_style),
-            Span::styled(label_text, label_style),
-            Span::styled(trailing, trailing_style),
-        ]));
-    }
-
-    // Trailing "Add favorite…" row. Highlighted like a favorite row when
-    // selected so the visual language is consistent.
-    let add_selected = state.favorites_index_is_add_row();
-    let add_text = if state.available_rooms().len() == favorites.len() {
-        "(no more rooms to add — join one in chat first)"
-    } else {
-        "+ Add favorite room…"
-    };
-    let add_style = if add_selected {
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::AMBER_DIM())
-    };
-    let marker = if add_selected { "›" } else { " " };
-    let prefix_style = if add_selected {
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_FAINT())
-    };
-    let prefix = format!(" {marker} ");
-    let used = prefix.chars().count() + add_text.chars().count();
-    let padding = body_width.saturating_sub(used);
-    let trailing_style = if add_selected {
-        Style::default().bg(theme::BG_SELECTION())
-    } else {
-        Style::default()
-    };
-    lines.push(Line::from(vec![
-        Span::styled(prefix, prefix_style),
-        Span::styled(add_text.to_string(), add_style),
-        Span::styled(" ".repeat(padding), trailing_style),
-    ]));
-
-    frame.render_widget(Paragraph::new(lines), sections[3]);
-}
-
 fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let popup = centered_rect(54, 20, area);
     frame.render_widget(Clear, popup);
@@ -1376,7 +1250,6 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let title = match state.picker().kind {
         Some(PickerKind::Country) => " Pick Country ",
         Some(PickerKind::Timezone) => " Pick Timezone ",
-        Some(PickerKind::Room) => " Pick Room ",
         None => " Picker ",
     };
     let block = Block::default()
@@ -1424,11 +1297,6 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             .filtered_timezones()
             .into_iter()
             .map(ToString::to_string)
-            .collect(),
-        Some(PickerKind::Room) => state
-            .filtered_rooms()
-            .into_iter()
-            .map(|room| room.label.clone())
             .collect(),
         None => Vec::new(),
     };

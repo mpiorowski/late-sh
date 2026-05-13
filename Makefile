@@ -6,6 +6,7 @@
 RUST_LOG ?= info,late_web=debug,late_ssh=debug,late_core=debug
 CARGO_TARGET_DIR ?= /app/target
 INSTANCE ?= late                                            # Prefix for container names; bump (e.g. late2) for a parallel clone
+LATE_UI_NEW_SHELL=1
 
 # --- SSH ---
 LATE_FORCE_ADMIN ?= 1
@@ -74,6 +75,7 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "RUST_LOG=$(RUST_LOG)" > .env
 	@echo "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" >> .env
 	@echo "INSTANCE=$(INSTANCE)" >> .env
+	@echo "LATE_UI_NEW_SHELL=$(LATE_UI_NEW_SHELL)" >> .env
 	@echo "LATE_FORCE_ADMIN=$(LATE_FORCE_ADMIN)" >> .env
 	@echo "LATE_SSH_PORT=$(LATE_SSH_PORT)" >> .env
 	@echo "LATE_API_PORT=$(LATE_API_PORT)" >> .env
@@ -145,7 +147,7 @@ keys:
 	@if [ ! -f server_key ]; then ssh-keygen -t ed25519 -f server_key -N "" -q; fi
 
 check:
-	cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace --all-targets
+	cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace --all-targets --no-fail-fast
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build
