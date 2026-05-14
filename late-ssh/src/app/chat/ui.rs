@@ -1428,12 +1428,7 @@ pub(crate) fn room_list_hit_test(
         return None;
     }
 
-    let inner = Rect {
-        x: rooms_area.x + 2,
-        y: rooms_area.y + 1,
-        width: rooms_area.width.saturating_sub(4),
-        height: rooms_area.height.saturating_sub(1),
-    };
+    let inner = room_rail_inner_area(rooms_area);
     let hint_rows = build_rail_nav_hint_lines().len() as u16;
     let footer_reserve = hint_rows + 2;
     let list_area = if inner.height > footer_reserve + 2 {
@@ -1481,12 +1476,7 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
 
     // Content lives inside: 2 cols left padding, 2 cols right (separator + 1).
     // Bottom slice is reserved for the pinned nav-hint footer.
-    let inner = Rect {
-        x: area.x + 2,
-        y: area.y + 1,
-        width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(1),
-    };
+    let inner = room_rail_inner_area(area);
 
     let hint_lines = build_rail_nav_hint_lines();
     let hint_rows = hint_lines.len() as u16;
@@ -1532,13 +1522,15 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
     }
 
     // Strip the sentinel marker span before rendering text.
+    let mut shifted_invite_rows = Vec::new();
     let display_lines: Vec<Line<'static>> = room_rows
         .lines
         .into_iter()
         .skip(scroll)
         .take(visible_height)
-        .map(|line| {
-            if line
+        .enumerate()
+        .map(|(idx, line)| {
+            let line = if line
                 .spans
                 .first()
                 .is_some_and(|s| s.content.as_ref() == "▌")
@@ -1546,11 +1538,28 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
                 Line::from(line.spans.into_iter().skip(1).collect::<Vec<_>>())
             } else {
                 line
+            };
+
+            if line_text(&line) == VOICE_DISCORD_INVITE {
+                shifted_invite_rows.push(idx);
+                Line::raw("")
+            } else {
+                line
             }
         })
         .collect();
 
     frame.render_widget(Paragraph::new(display_lines), list_area);
+    for idx in shifted_invite_rows {
+        let invite_area = shifted_voice_invite_area(list_area, idx as u16);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                VOICE_DISCORD_INVITE,
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            invite_area,
+        );
+    }
 
     if let Some(hint_area) = hint_area {
         let buf = frame.buffer_mut();
@@ -1574,6 +1583,31 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
         };
         frame.render_widget(Paragraph::new(hint_lines), hint_render_area);
     }
+}
+
+fn room_rail_inner_area(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(1),
+    }
+}
+
+fn shifted_voice_invite_area(list_area: Rect, row_offset: u16) -> Rect {
+    Rect {
+        x: list_area.x.saturating_sub(1),
+        y: list_area.y + row_offset,
+        width: list_area.width.saturating_add(1),
+        height: 1,
+    }
+}
+
+fn line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 /// Builds the cozy rail rows. Active rows are tagged with a sentinel `▌` span
@@ -2815,12 +2849,7 @@ mod tests {
         let area = Rect::new(1, 1, 74, 30);
         let rooms_area = room_list_area(area, chat_selection_mode(&view, area));
         let room_list_view = room_list_view_from_render_input(&view);
-        let inner = Rect {
-            x: rooms_area.x + 2,
-            y: rooms_area.y + 1,
-            width: rooms_area.width.saturating_sub(4),
-            height: rooms_area.height.saturating_sub(1),
-        };
+        let inner = room_rail_inner_area(rooms_area);
         let hint_rows = build_rail_nav_hint_lines().len() as u16;
         let footer_reserve = hint_rows + 2;
         let list_area = if inner.height > footer_reserve + 2 {
@@ -2862,5 +2891,19 @@ mod tests {
             rooms_area.right(),
             rooms_area.y
         ));
+    }
+
+    #[test]
+    fn cozy_room_rail_shifts_only_discord_invite_into_gutter() {
+        let area = Rect::new(0, 0, 24, 20);
+        let inner = room_rail_inner_area(area);
+        let invite_area = shifted_voice_invite_area(inner, 0);
+
+        assert!(UnicodeWidthStr::width(VOICE_DISCORD_INVITE) > inner.width as usize);
+        assert!(
+            UnicodeWidthStr::width(VOICE_DISCORD_INVITE) <= invite_area.width as usize,
+            "invite should fit the fixed Home rail without widening it"
+        );
+        assert_eq!(invite_area.x, inner.x - 1);
     }
 }

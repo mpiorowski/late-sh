@@ -323,10 +323,8 @@ impl Perform for VtCollector {
                 self.events.push(ParsedInput::CtrlBackspace);
             }
             // PageUp / PageDown / End (numeric form: CSI n ~). rxvt/linux
-            // console encode End as 4~; xterm uses 8~. Home is intentionally
-            // not bound — jumping to the oldest message in a long-lived room
-            // is rarely useful and the `End` / PageUp pair covers the real
-            // "scroll to a specific position" need.
+            // console encode End as 4~; xterm uses 8~. Home is parsed below
+            // for text inputs and surfaces that opt into it.
             '~' if p0 == Some(5) => self.events.push(ParsedInput::PageUp),
             '~' if p0 == Some(6) => self.events.push(ParsedInput::PageDown),
             '~' if p0 == Some(4) || p0 == Some(8) => self.events.push(ParsedInput::End),
@@ -830,11 +828,59 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             let step = (app.size.1 / 6).max(1) as isize;
             handle_scroll_for_screen(app, ctx.screen, -step);
         }
-        ParsedInput::End => {
-            if room_jump_active_on_current_screen(app, ctx.screen) {
-                return;
-            }
-            handle_scroll_for_screen(app, ctx.screen, isize::MIN)
+        ParsedInput::Home if is_chat_composer_context(ctx) => {
+            app.chat.composer_cursor_home();
+            app.chat.update_autocomplete();
+        }
+        ParsedInput::End if is_chat_composer_context(ctx) => {
+            app.chat.composer_cursor_end();
+            app.chat.update_autocomplete();
+        }
+        ParsedInput::Home if ctx.screen == Screen::Dashboard && ctx.news_composing => {
+            app.chat.news.composer_cursor_home();
+        }
+        ParsedInput::End if ctx.screen == Screen::Dashboard && ctx.news_composing => {
+            app.chat.news.composer_cursor_end();
+        }
+        ParsedInput::Home if ctx.screen == Screen::Dashboard && ctx.showcase_composing => {
+            let field = app.chat.showcase.active_field();
+            app.chat.showcase.field_input(
+                field,
+                ratatui_textarea::Input {
+                    key: ratatui_textarea::Key::Home,
+                    ..Default::default()
+                },
+            );
+        }
+        ParsedInput::End if ctx.screen == Screen::Dashboard && ctx.showcase_composing => {
+            let field = app.chat.showcase.active_field();
+            app.chat.showcase.field_input(
+                field,
+                ratatui_textarea::Input {
+                    key: ratatui_textarea::Key::End,
+                    ..Default::default()
+                },
+            );
+        }
+        ParsedInput::Home if ctx.screen == Screen::Dashboard && ctx.work_composing => {
+            let field = app.chat.work.active_field();
+            app.chat.work.field_input(
+                field,
+                ratatui_textarea::Input {
+                    key: ratatui_textarea::Key::Home,
+                    ..Default::default()
+                },
+            );
+        }
+        ParsedInput::End if ctx.screen == Screen::Dashboard && ctx.work_composing => {
+            let field = app.chat.work.active_field();
+            app.chat.work.field_input(
+                field,
+                ratatui_textarea::Input {
+                    key: ratatui_textarea::Key::End,
+                    ..Default::default()
+                },
+            );
         }
         ParsedInput::Delete if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_right();
@@ -909,7 +955,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::CtrlDelete => {}
         // Modified arrows are only bound on screens that opt in via the early
         // `handle_event` hook. Everywhere else they're inert.
-        ParsedInput::ShiftArrow(_) | ParsedInput::CtrlShiftArrow(_) | ParsedInput::Home => {}
+        ParsedInput::ShiftArrow(_)
+        | ParsedInput::CtrlShiftArrow(_)
+        | ParsedInput::Home
+        | ParsedInput::End => {}
         ParsedInput::Arrow(key) => {
             if room_jump_active_on_current_screen(app, ctx.screen) {
                 let _ = chat::input::handle_arrow(app, key);
@@ -2047,6 +2096,8 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => {
             app.icon_picker_state.search_cursor_word_left()
         }
+        ParsedInput::Home => app.icon_picker_state.search_cursor_home(),
+        ParsedInput::End => app.icon_picker_state.search_cursor_end(),
         ParsedInput::PageUp => {
             let page = app.icon_picker_state.visible_height.get().max(1) as isize;
             picker_move_selection(app, -page);

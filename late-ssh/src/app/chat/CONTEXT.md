@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-13
+- Last updated: 2026-05-14
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -138,7 +138,7 @@ Reactions:
 Notifications:
 - Mentions are stored in `notifications`.
 - Mention unread state is cursor-based through `mention_feed_reads`.
-- Mention resolution excludes the actor; DMs only notify DM participants, private rooms only members, and non-game public rooms may mention any user. Game-room chat does not create Mentions feed notifications.
+- Mention resolution excludes the actor and recipients who ignore the actor; DMs only notify DM participants, private rooms only members, and non-game public rooms may mention any user. Game-room chat does not create Mentions feed notifications.
 
 ---
 
@@ -218,8 +218,8 @@ Starting compose in a room:
 
 Submit flow in `ChatState::submit_composer`:
 - Commands are handled before normal send.
-- `/leave` and `/invite` are refused from Home contexts where the target cannot be resolved safely.
-- `/members` resolves the target before clearing the composer because clearing removes `composer_room_id`.
+- `/leave` and `/invite` resolve through the active composer room or selected real room. Synthetic entries do not fall back to stale `selected_room_id` values; `/leave` on a selected synthetic entry exits that entry back to the last real room.
+- `/members` uses the same real-room resolver as `/leave` and `/invite`.
 - Normal send calls `send_message_with_reply_task`.
 - Edit calls `edit_message_task`.
 - Enter submits and closes.
@@ -342,7 +342,7 @@ Ignores:
 - `/ignore @user` and `/unignore @user` resolve usernames at command time.
 - Ignore filtering applies to non-DM rooms only.
 - DMs intentionally bypass ignored-user filtering; leaving the DM room is the dismissal path.
-- `IgnoreListUpdated` refilters local non-DM messages in place with no DB refetch.
+- `IgnoreListUpdated` refilters local non-DM messages in place with no DB refetch, then refreshes the Mentions list/unread count.
 - `unignore` does not retroactively restore already-filtered local messages until a future tail/snapshot naturally reloads them.
 
 ---
@@ -389,6 +389,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 - Backed by `notifications` joined with actor, room, and message preview data.
 - Snapshot is user-targeted; consumers must ignore snapshots where `snapshot.user_id != current_user`.
+- List and unread queries exclude notifications whose actor is in `users.settings.ignored_user_ids`.
 - Selecting Mentions lists notifications and marks all read optimistically; re-selecting Mentions through room-jump or mouse does the same.
 - Enter jumps to the referenced room/message when possible.
 

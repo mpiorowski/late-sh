@@ -127,7 +127,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     let initial_chip_balance = match state.chip_service.ensure_chips(user_id).await {
         Ok(chips) => chips.balance,
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to grant daily chip stipend");
+            tracing::warn!(error = ?e, "failed to ensure chip balance");
             0
         }
     };
