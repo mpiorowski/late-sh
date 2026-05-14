@@ -1,4 +1,7 @@
-use late_core::models::{artboard_ban::ArtboardBan, user::User};
+use late_core::{
+    MutexRecover,
+    models::{artboard_ban::ArtboardBan, user::User},
+};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::app::activity::event::ActivityEvent;
@@ -190,6 +193,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         now_playing_rx: Some(state.now_playing_rx.clone()),
         active_users: Some(state.active_users.clone()),
         activity_feed_rx,
+        initial_activity: state.activity_history.lock_recover().clone(),
         user_id,
         permissions: Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator),
         artboard_banned: artboard_ban.is_some(),

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -9,12 +9,11 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::Context;
 use late_core::{
-    api_types::NowPlaying, db::Db, icecast, models::chat_room::ChatRoom, rate_limit::IpRateLimiter,
-    shutdown::CancellationToken,
+    MutexRecover, api_types::NowPlaying, db::Db, icecast, models::chat_room::ChatRoom,
+    rate_limit::IpRateLimiter, shutdown::CancellationToken,
 };
 use late_ssh::{
     api,
-    app::ai::{ghost::GhostService, svc::AiService},
     app::chat::feeds::svc::FeedService,
     app::chat::news::svc::ArticleService,
     app::chat::notifications::svc::NotificationService,
@@ -23,6 +22,10 @@ use late_ssh::{
     app::chat::work::svc::WorkService,
     app::profile::svc::ProfileService,
     app::vote::svc::VoteService,
+    app::{
+        activity::channel::ACTIVITY_HISTORY_MAX_EVENTS,
+        ai::{ghost::GhostService, svc::AiService},
+    },
     config::Config,
     moderation::service::ModerationInfra,
     session::SessionRegistry,
@@ -30,7 +33,7 @@ use late_ssh::{
     state::State,
 };
 use tokio::{
-    sync::{Semaphore, watch},
+    sync::{Semaphore, broadcast, watch},
     task::JoinSet,
 };
 
@@ -109,7 +112,8 @@ async fn main() -> anyhow::Result<()> {
     let conn_limit = Arc::new(Semaphore::new(config.max_conns_global));
     let conn_counts = Arc::new(Mutex::new(HashMap::new()));
     let active_users = Arc::new(Mutex::new(HashMap::new()));
-    let (activity_tx, _) = late_ssh::app::activity::channel::new(512);
+    let activity_history = Arc::new(Mutex::new(VecDeque::new()));
+    let (activity_tx, mut activity_history_rx) = late_ssh::app::activity::channel::new(512);
     let activity_publisher =
         late_ssh::app::activity::publisher::ActivityPublisher::new(db.clone(), activity_tx.clone());
     let (now_playing_tx, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
@@ -274,6 +278,7 @@ async fn main() -> anyhow::Result<()> {
         conn_counts,
         active_users,
         activity_feed: activity_tx,
+        activity_history: activity_history.clone(),
         now_playing_rx: now_playing_rx.clone(),
         session_registry,
         paired_client_registry,
@@ -288,6 +293,30 @@ async fn main() -> anyhow::Result<()> {
     let singleton_shutdown = CancellationToken::new();
 
     let mut tasks = JoinSet::new();
+    let activity_history_shutdown = singleton_shutdown.clone();
+    tasks.spawn(async move {
+        loop {
+            tokio::select! {
+                _ = activity_history_shutdown.cancelled() => break,
+                result = activity_history_rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            let mut history = activity_history.lock_recover();
+                            history.push_back(event);
+                            while history.len() > ACTIVITY_HISTORY_MAX_EVENTS {
+                                history.pop_front();
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(skipped, "activity history receiver lagged");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+        Ok(())
+    });
     let api_state = state.clone();
     let api_shutdown = session_shutdown.clone();
     tasks.spawn(async move {

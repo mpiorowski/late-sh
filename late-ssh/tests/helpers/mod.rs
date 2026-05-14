@@ -37,7 +37,7 @@ use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
 use late_ssh::session::{PairControlMessage, PairedClientRegistry, SessionRegistry};
 use late_ssh::state::State;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{Semaphore, broadcast, watch};
@@ -201,6 +201,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         leaderboard_service,
         now_playing_rx,
         activity_feed: activity_tx,
+        activity_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
         paired_client_registry: PairedClientRegistry::new(),
         web_chat_registry: late_ssh::web::WebChatRegistry::new(),
@@ -302,6 +303,7 @@ pub fn make_app_with_chat_service(
         my_vote: None,
         active_users: None,
         activity_feed_rx: None,
+        initial_activity: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
@@ -405,6 +407,7 @@ pub fn make_app_with_paired_client(
         my_vote: None,
         active_users: None,
         activity_feed_rx: None,
+        initial_activity: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),

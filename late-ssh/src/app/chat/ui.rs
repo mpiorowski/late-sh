@@ -1041,6 +1041,38 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
     }
 }
 
+pub(crate) fn home_title_room_label(view: &ChatRenderInput<'_>) -> Option<String> {
+    if view.feeds_selected {
+        return Some("rss".to_string());
+    }
+    if view.news_selected {
+        return Some("news".to_string());
+    }
+    if view.notifications_selected {
+        return Some("mentions".to_string());
+    }
+    if view.discover_selected {
+        return Some("browse rooms".to_string());
+    }
+    if view.showcase_selected {
+        return Some("showcase".to_string());
+    }
+    if view.work_selected {
+        return Some("work".to_string());
+    }
+
+    let room_id = view.selected_room_id?;
+    let (room, _) = view
+        .chat_rooms
+        .iter()
+        .find(|(room, _)| room.id == room_id)?;
+    Some(room_display_label(
+        room,
+        view.usernames,
+        view.current_user_id,
+    ))
+}
+
 #[cfg(test)]
 fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomListRows {
     let chat_rooms = view.chat_rooms;

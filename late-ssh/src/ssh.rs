@@ -864,6 +864,7 @@ impl russh::server::Handler for ClientHandler {
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
+            initial_activity: self.state.activity_history.lock_recover().clone(),
             user_id,
             permissions: AuthzPermissions::new(
                 user.is_admin || self.state.config.force_admin,
