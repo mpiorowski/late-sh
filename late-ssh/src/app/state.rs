@@ -19,7 +19,9 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::profile::Profile;
 
 use crate::{
-    app::activity::event::ActivityEvent,
+    app::activity::{
+        channel::ACTIVITY_HISTORY_MAX_EVENTS, event::ActivityEvent, filter::ActivityFilter,
+    },
     app::{
         chat,
         chat::news::svc::ArticleService,
@@ -76,6 +78,32 @@ impl NotificationMode {
             _ => Self::Both,
         }
     }
+}
+
+fn seed_activity_from_history(
+    mut activity: VecDeque<ActivityEvent>,
+    activity_feed_rx: Option<&mut broadcast::Receiver<ActivityEvent>>,
+) -> VecDeque<ActivityEvent> {
+    let Some(rx) = activity_feed_rx else {
+        return activity;
+    };
+    let newest_seed_at = activity.back().map(|event| event.at);
+    let activity_filter = ActivityFilter::dashboard();
+
+    while let Ok(event) = rx.try_recv() {
+        if newest_seed_at.is_some_and(|at| event.at <= at) {
+            continue;
+        }
+        if !activity_filter.includes(&event) {
+            continue;
+        }
+        activity.push_back(event);
+        while activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {
+            activity.pop_front();
+        }
+    }
+
+    activity
 }
 
 const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
@@ -162,6 +190,7 @@ pub struct SessionConfig {
     pub now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub active_users: Option<ActiveUsers>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    pub initial_activity: VecDeque<ActivityEvent>,
     pub user_id: Uuid,
     pub permissions: Permissions,
     pub artboard_banned: bool,
@@ -373,7 +402,7 @@ impl App {
         self.splash_hint = hint.into();
     }
 
-    pub fn new(config: SessionConfig) -> anyhow::Result<Self> {
+    pub fn new(mut config: SessionConfig) -> anyhow::Result<Self> {
         let (cols, rows) = if config.cols == 0 || config.rows == 0 {
             tracing::warn!(
                 config.cols,
@@ -385,6 +414,9 @@ impl App {
             (config.cols, config.rows)
         };
         tracing::debug!(cols, rows, "initializing app");
+
+        let activity =
+            seed_activity_from_history(config.initial_activity, config.activity_feed_rx.as_mut());
 
         let shared = SharedBuffer::default();
         let backend = CrosstermBackend::new(shared.clone());
@@ -586,7 +618,7 @@ impl App {
             now_playing_rx: config.now_playing_rx,
             active_users: active_users.clone(),
             activity_feed_rx: config.activity_feed_rx,
-            activity: VecDeque::new(),
+            activity,
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -1017,6 +1049,39 @@ mod tests {
             NotificationMode::from_format(Some("garbage")),
             NotificationMode::Both
         );
+    }
+
+    #[test]
+    fn seed_activity_from_history_drops_events_already_in_history() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+        let event = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
+        tx.send(event.clone()).expect("send activity");
+        let mut history = VecDeque::new();
+        history.push_back(event);
+
+        let activity = seed_activity_from_history(history, Some(&mut rx));
+
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].username, "alice");
+    }
+
+    #[test]
+    fn seed_activity_from_history_keeps_events_newer_than_history() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+        let old = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
+        let mut history = VecDeque::new();
+        history.push_back(old);
+        let mut fresh = ActivityEvent::joined(uuid::Uuid::from_u128(1), "bob");
+        fresh.at = history.back().map_or(fresh.at, |event| {
+            event.at + std::time::Duration::from_secs(1)
+        });
+        tx.send(fresh).expect("send activity");
+
+        let activity = seed_activity_from_history(history, Some(&mut rx));
+
+        assert_eq!(activity.len(), 2);
+        assert_eq!(activity[0].username, "alice");
+        assert_eq!(activity[1].username, "bob");
     }
 
     #[test]

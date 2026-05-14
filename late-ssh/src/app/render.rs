@@ -981,6 +981,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         append_rooms_title_extras(&mut spans, ctx);
     }
 
+    if screen == Screen::Dashboard {
+        append_home_title_extras(&mut spans, ctx);
+    }
+
     if screen == Screen::Arcade && ctx.is_playing_game {
         append_arcade_title_extras(&mut spans, ctx);
     }
@@ -1033,6 +1037,16 @@ fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<
         ),
         Style::default().fg(theme::TEXT_BRIGHT()),
     ));
+}
+
+fn append_home_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
+    if let Some(label) = chat::ui::home_title_room_label(&ctx.chat_view) {
+        spans.push(Span::styled("· ", Style::default().fg(theme::TEXT_DIM())));
+        spans.push(Span::styled(
+            format!("{label} "),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ));
+    }
 }
 
 fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {

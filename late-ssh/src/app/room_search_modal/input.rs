@@ -8,12 +8,12 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 
     match event {
         ParsedInput::Byte(0x1B) => app.room_search_modal_state.close(),
-        ParsedInput::Byte(b'\r' | b'\n') => submit(app),
+        ParsedInput::Byte(b'\r') => submit(app),
         ParsedInput::Byte(0x7F) => app.room_search_modal_state.backspace(),
         ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
             app.room_search_modal_state.delete_word_left();
         }
-        ParsedInput::Arrow(b'B') => {
+        ParsedInput::Arrow(b'B') | ParsedInput::Byte(0x0A) => {
             app.room_search_modal_state.move_selection(1, len);
         }
         ParsedInput::Arrow(b'A') | ParsedInput::Byte(0x0B) => {

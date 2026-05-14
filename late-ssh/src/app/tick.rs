@@ -3,6 +3,7 @@ use std::time::Instant;
 use late_core::audio::VizFrame;
 
 use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
+use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
 use crate::session::{BrowserVizFrame, SessionMessage};
@@ -201,7 +202,7 @@ impl App {
                     continue;
                 }
                 self.activity.push_back(event);
-                if self.activity.len() > 7 {
+                if self.activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {
                     self.activity.pop_front();
                 }
             }
