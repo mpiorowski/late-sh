@@ -41,9 +41,17 @@ impl MentionFeedRead {
             .query_one(
                 "SELECT COUNT(n.id)::bigint AS unread_count
                  FROM notifications n
+                 JOIN users recipient ON recipient.id = n.user_id
                  LEFT JOIN mention_feed_reads mfr ON mfr.user_id = $1
                  WHERE n.user_id = $1
-                   AND n.created > COALESCE(mfr.last_read_at, '-infinity'::timestamptz)",
+                   AND n.created > COALESCE(mfr.last_read_at, '-infinity'::timestamptz)
+                   AND NOT (
+                        COALESCE(recipient.settings, '{}'::jsonb)
+                        @> jsonb_build_object(
+                            'ignored_user_ids',
+                            jsonb_build_array(n.actor_id::text)
+                        )
+                   )",
                 &[&user_id],
             )
             .await?;

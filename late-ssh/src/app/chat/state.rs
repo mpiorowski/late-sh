@@ -162,6 +162,28 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
     }
 }
 
+fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
+    selected.feeds_selected
+        || selected.news_selected
+        || selected.notifications_selected
+        || selected.discover_selected
+        || selected.showcase_selected
+        || selected.work_selected
+}
+
+fn room_membership_command_target(
+    composer_room_id: Option<Uuid>,
+    selected: SelectedRoomSlotState,
+) -> Option<Uuid> {
+    composer_room_id.or_else(|| {
+        if synthetic_entry_selected(selected) {
+            None
+        } else {
+            selected.selected_room_id
+        }
+    })
+}
+
 pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
     if room.kind == "game" {
         return false;
@@ -897,16 +919,63 @@ impl ChatState {
         room_slug_for(&self.rooms, room_id)
     }
 
-    fn selected_room_slug(&self) -> Option<String> {
-        self.selected_room().and_then(|room| room.slug.clone())
+    fn room_membership_command_target(&self) -> Option<Uuid> {
+        room_membership_command_target(self.composer_room_id, self.selected_slot_state())
     }
 
-    fn selected_room(&self) -> Option<&ChatRoom> {
-        let room_id = self.selected_room_id?;
-        self.rooms
-            .iter()
-            .find(|(room, _)| room.id == room_id)
-            .map(|(room, _)| room)
+    fn selected_slot_state(&self) -> SelectedRoomSlotState {
+        SelectedRoomSlotState {
+            selected_room_id: self.selected_room_id,
+            feeds_selected: self.feeds_selected,
+            news_selected: self.news_selected,
+            notifications_selected: self.notifications_selected,
+            discover_selected: self.discover_selected,
+            showcase_selected: self.showcase_selected,
+            work_selected: self.work_selected,
+        }
+    }
+
+    fn selected_synthetic_entry_label(&self) -> Option<&'static str> {
+        if self.news_selected {
+            Some("news")
+        } else if self.feeds_selected {
+            Some("rss")
+        } else if self.notifications_selected {
+            Some("mentions")
+        } else if self.discover_selected {
+            Some("browse rooms")
+        } else if self.showcase_selected {
+            Some("showcase")
+        } else if self.work_selected {
+            Some("work")
+        } else {
+            None
+        }
+    }
+
+    fn leave_selected_synthetic_entry(&mut self) -> Option<&'static str> {
+        let label = self.selected_synthetic_entry_label()?;
+        self.feeds_selected = false;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+
+        if self.selected_room_id.is_none() {
+            self.selected_room_id = self
+                .rooms
+                .iter()
+                .find(|(room, _)| is_chat_list_room(room))
+                .map(|(room, _)| room.id);
+        }
+        if let Some(room_id) = self.selected_room_id {
+            self.visible_room_id = Some(room_id);
+            self.mark_room_read(room_id);
+            self.request_room_tail(room_id);
+        }
+
+        Some(label)
     }
 
     pub fn general_room_id(&self) -> Option<Uuid> {
@@ -1235,25 +1304,8 @@ impl ChatState {
         self.open_overlay("Active Users", self.active_user_lines());
     }
 
-    pub fn submit_composer(&mut self, keep_open: bool, from_dashboard: bool) -> Option<Banner> {
+    pub fn submit_composer(&mut self, keep_open: bool, _from_dashboard: bool) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
-
-        // Room-membership commands are intentionally chat-page-only: they
-        // operate on `selected_room_id`, which the dashboard never drives.
-        // Rather than silently target the wrong room, refuse here and point
-        // the user at page 2.
-        if from_dashboard && parse_leave_command(&body) {
-            self.clear_composer_after_submit();
-            return Some(Banner::error(
-                "open the chat page (press 2) to leave a room",
-            ));
-        }
-        if from_dashboard && parse_user_command(&body, "/invite").is_some() {
-            self.clear_composer_after_submit();
-            return Some(Banner::error(
-                "open the chat page (press 2) to invite a user",
-            ));
-        }
 
         if body.trim() == "/binds" {
             self.clear_composer_after_submit();
@@ -1347,14 +1399,13 @@ impl ChatState {
         }
 
         if body.trim() == "/members" {
-            // Resolve the target room BEFORE clearing the composer —
-            // `clear_composer_after_submit` nulls `composer_room_id`, so
-            // reading after would always fall back to the chat-page
-            // `selected_room_id` and miss the dashboard's active favorite.
-            let target = self.composer_room_id.or(self.selected_room_id);
+            // Resolve the target room BEFORE clearing the composer.
+            // Synthetic entries can retain a stale `selected_room_id`, so
+            // membership commands must go through the shared resolver.
+            let target = self.room_membership_command_target();
             self.clear_composer_after_submit();
             let Some(room_id) = target else {
-                return Some(Banner::error("no room selected"));
+                return Some(Banner::error("No member-list room selected"));
             };
             self.service.list_room_members_task(self.user_id, room_id);
             return None;
@@ -1414,9 +1465,10 @@ impl ChatState {
         }
 
         if let Some(target) = parse_user_command(&body, "/invite") {
+            let room_id = self.room_membership_command_target();
             self.clear_composer_after_submit();
-            let Some(room_id) = self.selected_room_id else {
-                return Some(Banner::error("No room selected"));
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No inviteable room selected"));
             };
             let Some(target) = target else {
                 return Some(Banner::error("Usage: /invite @user"));
@@ -1427,14 +1479,19 @@ impl ChatState {
         }
 
         if parse_leave_command(&body) {
+            let target = self.room_membership_command_target();
+            let slug = target
+                .and_then(|room_id| self.room_slug(room_id))
+                .unwrap_or_else(|| "room".to_string());
             self.clear_composer_after_submit();
-            if let Some(room_id) = self.selected_room_id {
-                let slug = self.selected_room_slug().unwrap_or_default();
+            if let Some(room_id) = target {
                 self.service
                     .leave_room_task(self.user_id, room_id, slug.clone());
                 return Some(Banner::success(&format!("Leaving #{slug}...")));
+            } else if let Some(label) = self.leave_selected_synthetic_entry() {
+                return Some(Banner::success(&format!("Left #{label}")));
             } else {
-                return Some(Banner::error("No room selected"));
+                return Some(Banner::error("No leaveable room selected"));
             }
         }
 
@@ -1556,6 +1613,14 @@ impl ChatState {
 
     pub fn composer_cursor_word_right(&mut self) {
         self.composer.move_cursor(CursorMove::WordForward);
+    }
+
+    pub fn composer_cursor_home(&mut self) {
+        self.composer.move_cursor(CursorMove::Head);
+    }
+
+    pub fn composer_cursor_end(&mut self) {
+        self.composer.move_cursor(CursorMove::End);
     }
 
     pub fn composer_cursor_up(&mut self) {
@@ -2147,7 +2212,12 @@ impl ChatState {
                     // Desktop notification queueing. target_user_ids is Some for
                     // DM/private rooms, None for public rooms. Don't notify on
                     // messages we authored ourselves.
-                    if message.user_id != self.user_id {
+                    let in_dm_room = self
+                        .rooms
+                        .iter()
+                        .any(|(room, _)| room.id == message.room_id && room.kind == "dm");
+                    let ignored_author = !in_dm_room && self.message_is_ignored(&message);
+                    if message.user_id != self.user_id && !ignored_author {
                         let nickname = self
                             .usernames
                             .get(&message.user_id)
@@ -2389,6 +2459,8 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.ignored_user_ids = ignored_user_ids.into_iter().collect();
                     self.refilter_local_messages();
+                    self.notifications.list();
+                    self.notifications.refresh_unread_count();
                     banner = Some(Banner::success(&message));
                 }
                 ChatEvent::IgnoreFailed { user_id, message } if self.user_id == user_id => {
@@ -3905,6 +3977,34 @@ mod tests {
             RoomSlot::Discover,
         ];
         assert_eq!(adjacent_composer_room(&order, None, 1), None);
+    }
+
+    #[test]
+    fn room_membership_command_target_ignores_stale_real_room_for_synthetic_entries() {
+        let stale_room = Uuid::from_u128(1);
+        let selected = SelectedRoomSlotState {
+            selected_room_id: Some(stale_room),
+            news_selected: true,
+            ..SelectedRoomSlotState::default()
+        };
+
+        assert_eq!(room_membership_command_target(None, selected), None);
+    }
+
+    #[test]
+    fn room_membership_command_target_prefers_active_composer_room() {
+        let stale_room = Uuid::from_u128(1);
+        let composer_room = Uuid::from_u128(2);
+        let selected = SelectedRoomSlotState {
+            selected_room_id: Some(stale_room),
+            news_selected: true,
+            ..SelectedRoomSlotState::default()
+        };
+
+        assert_eq!(
+            room_membership_command_target(Some(composer_room), selected),
+            Some(composer_room)
+        );
     }
 
     #[test]
