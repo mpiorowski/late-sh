@@ -1086,6 +1086,14 @@ impl SettingsModalState {
         self.bio_input.move_cursor(CursorMove::WordForward);
     }
 
+    pub fn bio_cursor_home(&mut self) {
+        self.bio_input.move_cursor(CursorMove::Head);
+    }
+
+    pub fn bio_cursor_end(&mut self) {
+        self.bio_input.move_cursor(CursorMove::End);
+    }
+
     pub fn bio_paste(&mut self) {
         let yank = self.bio_input.yank_text();
         insert_bio_text_limited(&mut self.bio_input, &yank);

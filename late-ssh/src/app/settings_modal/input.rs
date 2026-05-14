@@ -273,6 +273,8 @@ fn handle_system_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x15) => state.clear_system_field(),
         ParsedInput::Byte(0x01) => state.system_cursor_home(),
         ParsedInput::Byte(0x05) => state.system_cursor_end(),
+        ParsedInput::Home => state.system_cursor_home(),
+        ParsedInput::End => state.system_cursor_end(),
         ParsedInput::Byte(0x19) => state.system_paste(),
         ParsedInput::Byte(0x1F) => state.system_undo(),
         ParsedInput::Byte(0x7F) => state.system_backspace(),
@@ -311,6 +313,8 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x15) => state.clear_username(),
         ParsedInput::Byte(0x01) => state.username_cursor_home(),
         ParsedInput::Byte(0x05) => state.username_cursor_end(),
+        ParsedInput::Home => state.username_cursor_home(),
+        ParsedInput::End => state.username_cursor_end(),
         ParsedInput::Byte(0x19) => state.username_paste(),
         ParsedInput::Byte(0x1F) => state.username_undo(),
         ParsedInput::Byte(0x7F) => state.username_backspace(),
@@ -355,6 +359,8 @@ fn handle_delete_account_dialog_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x15) => state.clear_delete_account_confirmation(),
         ParsedInput::Byte(0x01) => state.delete_account_cursor_home(),
         ParsedInput::Byte(0x05) => state.delete_account_cursor_end(),
+        ParsedInput::Home => state.delete_account_cursor_home(),
+        ParsedInput::End => state.delete_account_cursor_end(),
         ParsedInput::Byte(0x7F) => state.delete_account_backspace(),
         ParsedInput::Delete => state.delete_account_delete_right(),
         ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
@@ -393,6 +399,8 @@ fn handle_feed_url_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x15) => state.feed_clear(),
         ParsedInput::Byte(0x01) => state.feed_cursor_home(),
         ParsedInput::Byte(0x05) => state.feed_cursor_end(),
+        ParsedInput::Home => state.feed_cursor_home(),
+        ParsedInput::End => state.feed_cursor_end(),
         ParsedInput::Byte(0x19) => state.feed_paste(),
         ParsedInput::Byte(0x1F) => state.feed_undo(),
         ParsedInput::Byte(0x7F) => state.feed_backspace(),
@@ -439,6 +447,8 @@ fn handle_bio_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Arrow(b'D') => state.bio_cursor_left(),
         ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => state.bio_cursor_word_right(),
         ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => state.bio_cursor_word_left(),
+        ParsedInput::Home => state.bio_cursor_home(),
+        ParsedInput::End => state.bio_cursor_end(),
         ParsedInput::Paste(pasted) => {
             let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
             let normalized = cleaned.replace("\r\n", "\n").replace('\r', "\n");

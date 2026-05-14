@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-05-13
+- Last updated: 2026-05-14
 - Purpose: local working context for The Arcade screen, single-player terminal games, and shared card/chip helpers.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -14,7 +14,7 @@ Hub/leaderboard surfaces are separate and live under `late-ssh/src/app/hub`. Arc
 
 Rooms/table games are separate and live under `late-ssh/src/app/rooms`, but they intentionally reuse shared Arcade support modules:
 - `cards.rs` for card ranks/suits/rendering.
-- `chips/svc.rs` for Late Chips balances, stipends, debits, payouts, floors, and daily bonuses.
+- `chips/svc.rs` for Late Chips balances, initial grants, debits, payouts, floors, and daily bonuses.
 - `ui.rs` for shared framed game drawing helpers.
 
 Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
@@ -111,7 +111,7 @@ Testing guidance:
 - High-score services keep SQL inside `late-core` models. `late-ssh` services call model methods such as `HighScore::update_score_if_higher` and `HighScore::record_score_event`; do not insert score-event SQL directly from Arcade services.
 - Daily puzzle services store board progress by `(user_id, difficulty_key, mode)`.
 - Daily win tables record one completion fact per user/date/difficulty, separate from board state.
-- `ChipService::ensure_chips(user_id)` grants the daily 500-chip stipend on login.
+- `ChipService::ensure_chips(user_id)` creates new chip rows with 1000 chips.
 - `ChipService::grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips for daily puzzle completions.
 - Daily services call `record_win_task()` on completion. That records the daily win, grants chips, and publishes a structured Activity event.
 - `hub::svc::LeaderboardService` refreshes from DB every 30s. Immediate win callouts come from Activity; Hub leaderboard surfaces lag until the next refresh.
