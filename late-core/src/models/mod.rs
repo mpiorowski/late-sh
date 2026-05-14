@@ -11,6 +11,7 @@ pub mod chat_room_member;
 pub mod chips;
 pub mod game_room;
 pub mod leaderboard;
+pub mod media_queue_item;
 pub mod mention_feed_read;
 pub mod minesweeper;
 pub mod moderation_audit_log;

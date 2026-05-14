@@ -240,6 +240,7 @@ pub struct ChatState {
     requested_settings_modal: bool,
     requested_mod_modal: bool,
     requested_quit: bool,
+    requested_audio_url: Option<String>,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
     // image upload
@@ -373,6 +374,7 @@ impl ChatState {
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_quit: false,
+            requested_audio_url: None,
             pending_mod_outputs: VecDeque::new(),
             image_upload_rx: None,
             image_upload_pending: false,
@@ -579,6 +581,10 @@ impl ChatState {
 
     pub fn take_requested_quit(&mut self) -> bool {
         std::mem::take(&mut self.requested_quit)
+    }
+
+    pub fn take_requested_audio_url(&mut self) -> Option<String> {
+        self.requested_audio_url.take()
     }
 
     pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
@@ -1283,6 +1289,19 @@ impl ChatState {
         if body.trim() == "/exit" {
             self.clear_composer_after_submit();
             self.requested_quit = true;
+            return None;
+        }
+
+        if let Some(url) = body.trim().strip_prefix("/audio ") {
+            let url = url.trim().to_string();
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("/audio is admin-only"));
+            }
+            if url.is_empty() {
+                return Some(Banner::error("Usage: /audio <youtube-url>"));
+            }
+            self.requested_audio_url = Some(url);
             return None;
         }
 

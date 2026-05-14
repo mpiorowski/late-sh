@@ -128,6 +128,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
     }
+    if let Some(url) = app.chat.take_requested_audio_url() {
+        app.submit_trusted_audio_url(url);
+    }
     if let Some(topic) = app.chat.take_requested_help_topic() {
         open_help_modal(app, topic);
     }

@@ -814,6 +814,7 @@ impl russh::server::Handler for ClientHandler {
             rows: row_height as u16,
 
             // Services / data sources
+            audio_service: self.state.audio_service.clone(),
             vote_service,
             chat_service,
             notification_service: self.state.notification_service.clone(),

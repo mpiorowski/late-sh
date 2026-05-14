@@ -65,10 +65,17 @@
 </style>
 
 <script>
+    window.lateYoutubeApiReady = false;
+    window.onYouTubeIframeAPIReady = function () {
+        window.lateYoutubeApiReady = true;
+        window.dispatchEvent(new Event('late-youtube-ready'));
+    };
+
     function player() {
         return {
             ws: null,
             status: 'connecting',
+            audioMode: 'icecast',
             token: '{{ token }}',
             apiUrl: '{{ api_url }}',
             audioUrl: '{{ audio_url }}',
@@ -80,6 +87,11 @@
             bandBins: null,
             vizInterval: null,
             heartbeatInterval: null,
+            ytPlayer: null,
+            ytReady: false,
+            pendingYoutubeItem: null,
+            currentYoutubeItem: null,
+            playerStateInterval: null,
             copied: null,
             volumePercent: 30,
             wsRetries: 0,
@@ -103,6 +115,14 @@
 
                 if (this.token) {
                     this.connectWs();
+                }
+
+                window.addEventListener('late-youtube-ready', () => {
+                    this.ytReady = true;
+                    this.ensureYoutubePlayer();
+                });
+                if (window.lateYoutubeApiReady) {
+                    this.ytReady = true;
                 }
             },
 
@@ -180,6 +200,17 @@
                         case 'volume_down':
                             this.adjustLocalVolume(-5);
                             break;
+                        case 'source_changed':
+                            this.applySourceMode(payload.audio_mode);
+                            break;
+                        case 'load_video':
+                            this.loadYoutubeVideo(payload);
+                            break;
+                        case 'seek':
+                            this.seekYoutube(payload.offset_ms || 0);
+                            break;
+                        case 'queue_update':
+                            break;
                     }
                 };
 
@@ -212,6 +243,14 @@
                 if (this.token && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) {
                     this.wsRetries = 0;
                     this.connectWs();
+                }
+
+                if (this.audioMode === 'youtube') {
+                    this.ensureYoutubePlayer();
+                    if (this.pendingYoutubeItem) {
+                        this.playYoutubeItem(this.pendingYoutubeItem);
+                    }
+                    return;
                 }
 
                 // Apple requires AudioContext creation/resume to be synchronous to user interaction
@@ -266,6 +305,13 @@
                     clearInterval(this.heartbeatInterval);
                     this.heartbeatInterval = null;
                 }
+                if (this.playerStateInterval) {
+                    clearInterval(this.playerStateInterval);
+                    this.playerStateInterval = null;
+                }
+                if (this.ytPlayer && this.ytPlayer.stopVideo) {
+                    this.ytPlayer.stopVideo();
+                }
 
                 if (this.audioCtx && this.audioCtx.state === 'running') {
                     this.audioCtx.suspend();
@@ -287,6 +333,9 @@
             adjustLocalVolume(delta) {
                 this.volumePercent = Math.max(0, Math.min(100, this.volumePercent + delta));
                 this.$refs.audio.volume = this.volumePercent / 100;
+                if (this.ytPlayer && this.ytPlayer.setVolume) {
+                    this.ytPlayer.setVolume(this.volumePercent);
+                }
                 this.sendClientState();
             },
 
@@ -303,6 +352,9 @@
             },
 
             startAnalyzer() {
+                if (this.audioMode !== 'icecast') {
+                    return;
+                }
                 // Resume existing AudioContext if suspended
                 if (this.audioCtx) {
                     if (this.audioCtx.state === 'suspended') {
@@ -404,10 +456,150 @@
                 }
                 const rms = Math.sqrt(sum / this.timeData.length);
                 return Math.min(1.0, this.softCompress(rms * 3.0));
+            },
+
+            applySourceMode(mode) {
+                if (mode !== 'youtube' && mode !== 'icecast') {
+                    return;
+                }
+                this.audioMode = mode;
+                if (mode === 'youtube') {
+                    const audio = this.$refs.audio;
+                    audio.pause();
+                    this.status = this.currentYoutubeItem ? 'playing' : 'ready';
+                    this.ensureYoutubePlayer();
+                    if (this.pendingYoutubeItem) {
+                        this.playYoutubeItem(this.pendingYoutubeItem);
+                    }
+                } else {
+                    if (this.ytPlayer && this.ytPlayer.stopVideo) {
+                        this.ytPlayer.stopVideo();
+                    }
+                    this.currentYoutubeItem = null;
+                    this.pendingYoutubeItem = null;
+                    if (this.status === 'playing' || this.status === 'buffering') {
+                        this.startPlayback();
+                    } else {
+                        this.status = 'ready';
+                    }
+                }
+                this.sendClientState();
+            },
+
+            ensureYoutubePlayer() {
+                if (this.ytPlayer || !window.YT || !window.YT.Player) {
+                    return;
+                }
+                this.ytPlayer = new window.YT.Player('yt-player', {
+                    height: '180',
+                    width: '320',
+                    playerVars: {
+                        playsinline: 1,
+                        rel: 0,
+                    },
+                    events: {
+                        onReady: () => {
+                            this.ytReady = true;
+                            this.ytPlayer.setVolume(this.volumePercent);
+                            if (this.pendingYoutubeItem) {
+                                this.playYoutubeItem(this.pendingYoutubeItem);
+                            }
+                        },
+                        onStateChange: (event) => this.handleYoutubeStateChange(event.data),
+                        onError: (event) => this.sendYoutubeState('error', String(event.data || 'youtube error')),
+                    }
+                });
+            },
+
+            loadYoutubeVideo(payload) {
+                this.audioMode = 'youtube';
+                const item = {
+                    itemId: payload.item_id,
+                    videoId: payload.video_id,
+                    startedAtMs: payload.started_at_ms,
+                    isStream: !!payload.is_stream,
+                };
+                this.pendingYoutubeItem = item;
+                this.ensureYoutubePlayer();
+                if (this.status === 'playing' || this.status === 'buffering') {
+                    this.playYoutubeItem(item);
+                } else {
+                    this.status = 'ready';
+                }
+            },
+
+            playYoutubeItem(item) {
+                if (!this.ytPlayer || !this.ytReady || !this.ytPlayer.loadVideoById) {
+                    return;
+                }
+                this.pendingYoutubeItem = null;
+                this.currentYoutubeItem = item;
+                this.status = 'buffering';
+                const offsetMs = item.isStream ? 0 : Math.max(0, Date.now() - item.startedAtMs);
+                this.ytPlayer.loadVideoById({
+                    videoId: item.videoId,
+                    startSeconds: Math.floor(offsetMs / 1000),
+                });
+                this.ytPlayer.setVolume(this.volumePercent);
+                this.startPlayerStateLoop();
+            },
+
+            seekYoutube(offsetMs) {
+                if (this.ytPlayer && this.ytPlayer.seekTo) {
+                    this.ytPlayer.seekTo(Math.max(0, offsetMs / 1000), true);
+                }
+            },
+
+            handleYoutubeStateChange(state) {
+                if (!window.YT || !this.currentYoutubeItem) {
+                    return;
+                }
+                if (state === window.YT.PlayerState.PLAYING) {
+                    this.status = 'playing';
+                    this.sendYoutubeState('playing');
+                } else if (state === window.YT.PlayerState.PAUSED) {
+                    this.sendYoutubeState('paused');
+                } else if (state === window.YT.PlayerState.BUFFERING) {
+                    this.status = 'buffering';
+                    this.sendYoutubeState('buffering');
+                } else if (state === window.YT.PlayerState.ENDED) {
+                    this.sendYoutubeState('ended');
+                }
+            },
+
+            startPlayerStateLoop() {
+                if (this.playerStateInterval) {
+                    return;
+                }
+                this.playerStateInterval = setInterval(() => {
+                    if (this.audioMode === 'youtube' && this.currentYoutubeItem) {
+                        this.sendYoutubeState('playing');
+                    }
+                }, 10000);
+            },
+
+            sendYoutubeState(state, error = null) {
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.currentYoutubeItem) {
+                    return;
+                }
+                let offsetMs = 0;
+                if (this.ytPlayer && this.ytPlayer.getCurrentTime) {
+                    offsetMs = Math.floor(this.ytPlayer.getCurrentTime() * 1000);
+                }
+                this.ws.send(JSON.stringify({
+                    event: 'player_state',
+                    item_id: this.currentYoutubeItem.itemId,
+                    state,
+                    offset_ms: offsetMs,
+                    autoplay_blocked: false,
+                    error,
+                }));
             }
         }
     }
 </script>
+
+<script src="https://www.youtube.com/iframe_api"></script>
 
 <div x-data="player()" class="max-w-lg mx-auto pt-8 sm:pt-16">
 
@@ -655,7 +847,7 @@
         <template x-if="status === 'playing'">
             <div class="flex items-center gap-2.5 text-green-500">
                 <span class="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
-                streaming
+                <span x-text="audioMode === 'youtube' ? 'playing YouTube' : 'streaming'"></span>
             </div>
         </template>
         <template x-if="status === 'disconnected'">
@@ -668,6 +860,10 @@
 
     <div class="mb-10 border-l-2 border-gray-800 pl-4"
         hx-get="/status?pairing=true" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    </div>
+
+    <div x-cloak x-show="audioMode === 'youtube'" class="mb-8">
+        <div id="yt-player" class="w-[320px] max-w-full aspect-video bg-black"></div>
     </div>
 
     <div class="space-y-3" x-cloak>

@@ -137,7 +137,13 @@ async fn handle_pair_control(
     muted: &AtomicBool,
     volume_percent: &AtomicU8,
 ) -> Result<bool> {
-    let control = serde_json::from_str::<PairControlMessage>(text)?;
+    let control = match serde_json::from_str::<PairControlMessage>(text) {
+        Ok(control) => control,
+        Err(_) => {
+            debug!(payload = %text, "ignoring unsupported pair websocket event");
+            return Ok(false);
+        }
+    };
     match control {
         audio_control @ (PairControlMessage::ToggleMute
         | PairControlMessage::VolumeUp

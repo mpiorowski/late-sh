@@ -1831,7 +1831,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             let label = app
                 .paired_client_state()
                 .map(|state| match state.client_kind {
-                    crate::session::ClientKind::Unknown => "client".to_string(),
+                    crate::app::audio::client_state::ClientKind::Unknown => "client".to_string(),
                     _ => state.client_kind.label().to_string(),
                 })
                 .unwrap_or_else(|| "client".to_string());
@@ -1850,7 +1850,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             let label = app
                 .paired_client_state()
                 .map(|state| match state.client_kind {
-                    crate::session::ClientKind::Unknown => "client".to_string(),
+                    crate::app::audio::client_state::ClientKind::Unknown => "client".to_string(),
                     _ => state.client_kind.label().to_string(),
                 })
                 .unwrap_or_else(|| "client".to_string());
@@ -1869,7 +1869,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             let label = app
                 .paired_client_state()
                 .map(|state| match state.client_kind {
-                    crate::session::ClientKind::Unknown => "client".to_string(),
+                    crate::app::audio::client_state::ClientKind::Unknown => "client".to_string(),
                     _ => state.client_kind.label().to_string(),
                 })
                 .unwrap_or_else(|| "client".to_string());

@@ -22,6 +22,7 @@ use crate::{
     app::activity::{
         channel::ACTIVITY_HISTORY_MAX_EVENTS, event::ActivityEvent, filter::ActivityFilter,
     },
+    app::audio::{client_state::ClientAudioState, viz::Visualizer},
     app::{
         chat,
         chat::news::svc::ArticleService,
@@ -30,15 +31,11 @@ use crate::{
         common::primitives::{Banner, Screen},
         help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
-        profile_modal, settings_modal,
-        visualizer::Visualizer,
-        vote,
+        profile_modal, settings_modal, vote,
         vote::svc::{Genre, VoteService},
     },
     authz::Permissions,
-    session::{
-        ClientAudioState, PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry,
-    },
+    session::{PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry},
     state::ActiveUsers,
     web::WebChatRegistry,
 };
@@ -139,6 +136,7 @@ pub struct SessionConfig {
     pub rows: u16,
 
     /// Services / data sources
+    pub audio_service: crate::app::audio::svc::AudioService,
     pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
@@ -262,6 +260,7 @@ pub struct App {
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) activity: VecDeque<ActivityEvent>,
+    pub(super) audio_service: crate::app::audio::svc::AudioService,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
@@ -619,6 +618,7 @@ impl App {
             active_users: active_users.clone(),
             activity_feed_rx: config.activity_feed_rx,
             activity,
+            audio_service: config.audio_service,
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -907,6 +907,37 @@ impl App {
             return true;
         }
         false
+    }
+
+    pub fn submit_trusted_audio_url(&mut self, url: String) {
+        if let Err(err) = crate::app::audio::youtube::extract_video_id(&url) {
+            tracing::warn!(error = ?err, "rejected trusted audio URL");
+            self.banner = Some(Banner::error("Invalid YouTube URL"));
+            return;
+        }
+
+        let service = self.audio_service.clone();
+        let user_id = self.user_id;
+        tokio::spawn(async move {
+            match service.submit_trusted_url(user_id, &url).await {
+                Ok(response) => {
+                    tracing::info!(
+                        item_id = %response.id,
+                        position = response.position_in_queue,
+                        "queued trusted audio URL"
+                    );
+                }
+                Err(err) => {
+                    late_core::error_span!(
+                        "audio_trusted_submit_failed",
+                        error = ?err,
+                        user_id = %user_id,
+                        "failed to queue trusted audio URL"
+                    );
+                }
+            }
+        });
+        self.banner = Some(Banner::success("Queued audio"));
     }
 
     pub fn paired_client_state(&self) -> Option<ClientAudioState> {

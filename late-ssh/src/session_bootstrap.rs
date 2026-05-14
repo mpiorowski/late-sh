@@ -148,6 +148,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     SessionConfig {
         cols,
         rows,
+        audio_service: state.audio_service.clone(),
         vote_service: state.vote_service.clone(),
         chat_service: state.chat_service.clone(),
         notification_service: state.notification_service.clone(),

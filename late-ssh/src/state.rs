@@ -10,6 +10,7 @@ use crate::app::arcade::sudoku::svc::SudokuService;
 use crate::app::arcade::tetris::svc::TetrisService;
 use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
+use crate::app::audio::svc::AudioService;
 use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::feeds::svc::FeedService;
 use crate::app::chat::news::svc::ArticleService;
@@ -61,6 +62,7 @@ pub struct State {
     pub config: Config,
     pub db: Db,
     pub ai_service: AiService,
+    pub audio_service: AudioService,
     pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,

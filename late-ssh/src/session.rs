@@ -1,6 +1,6 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use late_core::MutexRecover;
-use serde::{Deserialize, Serialize};
+use late_core::{MutexRecover, audio::VizFrame};
+use serde::Serialize;
 use std::{
     collections::HashMap,
     sync::{
@@ -11,6 +11,7 @@ use std::{
 use tokio::sync::{RwLock, mpsc::Sender, mpsc::UnboundedSender};
 use uuid::Uuid;
 
+use crate::app::audio::client_state::ClientAudioState;
 use crate::authz::Permissions;
 use crate::metrics;
 
@@ -24,16 +25,9 @@ use crate::metrics;
 //           → App updates visualizer buffer used by TUI render
 
 #[derive(Debug, Clone)]
-pub struct BrowserVizFrame {
-    pub bands: [f32; 8],
-    pub rms: f32,
-    pub position_ms: u64,
-}
-
-#[derive(Debug, Clone)]
 pub enum SessionMessage {
     Heartbeat,
-    Viz(BrowserVizFrame),
+    Viz(VizFrame),
     ClipboardImage {
         data: Vec<u8>,
     },
@@ -55,114 +49,6 @@ pub enum SessionMessage {
         slug: String,
         message: String,
     },
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ClientKind {
-    Browser,
-    Cli,
-    #[default]
-    Unknown,
-}
-
-impl ClientKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            ClientKind::Browser => "Browser",
-            ClientKind::Cli => "CLI",
-            ClientKind::Unknown => "Unknown",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ClientSshMode {
-    Native,
-    #[serde(rename = "openssh")]
-    OpenSsh,
-    Old,
-    #[default]
-    Unknown,
-}
-
-impl ClientSshMode {
-    fn metric_label(self) -> Option<&'static str> {
-        match self {
-            Self::Native => Some("native"),
-            Self::OpenSsh => Some("openssh"),
-            Self::Old => Some("old"),
-            Self::Unknown => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ClientPlatform {
-    Android,
-    Linux,
-    Macos,
-    Windows,
-    #[default]
-    Unknown,
-}
-
-impl ClientPlatform {
-    fn metric_label(self) -> Option<&'static str> {
-        match self {
-            Self::Android => Some("android"),
-            Self::Linux => Some("linux"),
-            Self::Macos => Some("macos"),
-            Self::Windows => Some("windows"),
-            Self::Unknown => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ClientAudioState {
-    pub client_kind: ClientKind,
-    #[serde(default)]
-    pub ssh_mode: ClientSshMode,
-    #[serde(default)]
-    pub platform: ClientPlatform,
-    #[serde(default)]
-    pub capabilities: Vec<String>,
-    pub muted: bool,
-    pub volume_percent: u8,
-}
-
-impl Default for ClientAudioState {
-    fn default() -> Self {
-        Self {
-            client_kind: ClientKind::Unknown,
-            ssh_mode: ClientSshMode::Unknown,
-            platform: ClientPlatform::Unknown,
-            capabilities: Vec::new(),
-            muted: false,
-            volume_percent: 30,
-        }
-    }
-}
-
-impl ClientAudioState {
-    pub fn supports_clipboard_image(&self) -> bool {
-        self.client_kind == ClientKind::Cli
-            && self
-                .capabilities
-                .iter()
-                .any(|capability| capability == "clipboard_image")
-    }
-
-    fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {
-        if self.client_kind != ClientKind::Cli {
-            return None;
-        }
-
-        Some((self.ssh_mode.metric_label()?, self.platform.metric_label()?))
-    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -378,6 +264,7 @@ fn token_hint(token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::audio::client_state::{ClientKind, ClientPlatform, ClientSshMode};
 
     #[tokio::test]
     async fn register_and_send() {
@@ -451,10 +338,10 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         registry.register("tok1".to_string(), tx).await;
 
-        let frame = BrowserVizFrame {
+        let frame = VizFrame {
             bands: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
             rms: 0.5,
-            position_ms: 1000,
+            track_pos_ms: 1000,
         };
         let sent = registry
             .send_message("tok1", SessionMessage::Viz(frame))
@@ -464,7 +351,7 @@ mod tests {
         match rx.recv().await.unwrap() {
             SessionMessage::Viz(f) => {
                 assert_eq!(f.rms, 0.5);
-                assert_eq!(f.position_ms, 1000);
+                assert_eq!(f.track_pos_ms, 1000);
             }
             _ => panic!("expected Viz message"),
         }
@@ -501,13 +388,6 @@ mod tests {
 
         let decoded = URL_SAFE_NO_PAD.decode(token.as_bytes()).unwrap();
         assert_eq!(decoded.len(), 16);
-    }
-
-    #[test]
-    fn client_ssh_mode_parses_openssh() {
-        let mode: ClientSshMode = serde_json::from_str(r#""openssh""#).unwrap();
-        assert_eq!(mode, ClientSshMode::OpenSsh);
-        assert_eq!(mode.metric_label(), Some("openssh"));
     }
 
     #[test]

@@ -22,6 +22,11 @@ consumer services must not be piped into Icecast.
 
 ## Hard Rules
 
+These rules apply to audio that late.sh hosts or rebroadcasts. The YouTube
+media-room path described in `AUDIO.md` is out of scope of these rules; in that
+path, late.sh sends only metadata and the official YouTube iframe player
+delivers audio directly to each listener's browser.
+
 Never allow these as DJ Booth source audio:
 
 - Spotify, Apple Music, Tidal, Deezer, YouTube, or other consumer service audio.
