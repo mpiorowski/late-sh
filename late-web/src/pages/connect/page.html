@@ -79,6 +79,7 @@
             token: '{{ token }}',
             apiUrl: '{{ api_url }}',
             audioUrl: '{{ audio_url }}',
+            youtubeEnabled: {{ youtube_enabled }},
             audioCtx: null,
             analyser: null,
             sourceNode: null,
@@ -482,6 +483,11 @@
                 if (mode !== 'youtube' && mode !== 'icecast') {
                     return;
                 }
+                // Hard gate: without the ?youtube=true flag this page never
+                // leaves Icecast, regardless of what the server broadcasts.
+                if (mode === 'youtube' && !this.youtubeEnabled) {
+                    return;
+                }
                 this.audioMode = mode;
                 if (mode === 'youtube') {
                     const audio = this.$refs.audio;
@@ -535,6 +541,9 @@
             },
 
             loadYoutubeVideo(payload) {
+                if (!this.youtubeEnabled) {
+                    return;
+                }
                 this.audioMode = 'youtube';
                 const item = {
                     itemId: payload.item_id,
@@ -590,6 +599,9 @@
             },
 
             seekYoutube(offsetMs) {
+                if (!this.youtubeEnabled) {
+                    return;
+                }
                 this.correctYoutubeDriftTo(offsetMs || 0);
             },
 
@@ -771,7 +783,9 @@
     }
 </script>
 
+{% if youtube_enabled %}
 <script src="https://www.youtube.com/iframe_api"></script>
+{% endif %}
 
 <div x-data="player()" class="max-w-lg mx-auto pt-8 sm:pt-16">
 
@@ -1034,9 +1048,11 @@
         hx-get="/status?pairing=true" hx-trigger="load, every 5s" hx-swap="innerHTML">
     </div>
 
+    {% if youtube_enabled %}
     <div x-cloak x-show="audioMode === 'youtube'" class="mb-8">
         <div id="yt-player" class="w-[320px] max-w-full aspect-video bg-black"></div>
     </div>
+    {% endif %}
 
     <div class="space-y-3" x-cloak>
         <button @click="startPlayback"

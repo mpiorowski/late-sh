@@ -11,7 +11,7 @@ use std::{
 use tokio::sync::{RwLock, mpsc::Sender, mpsc::UnboundedSender};
 use uuid::Uuid;
 
-use crate::app::audio::client_state::ClientAudioState;
+use crate::app::audio::client_state::{ClientAudioState, ClientKind};
 use crate::authz::Permissions;
 use crate::metrics;
 
@@ -58,6 +58,7 @@ pub enum PairControlMessage {
     VolumeUp,
     VolumeDown,
     RequestClipboardImage,
+    ForceMute { mute: bool },
 }
 
 #[derive(Clone, Default)]
@@ -67,7 +68,7 @@ pub struct SessionRegistry {
 
 #[derive(Clone, Default)]
 pub struct PairedClientRegistry {
-    clients: Arc<Mutex<HashMap<String, PairControlEntry>>>,
+    clients: Arc<Mutex<HashMap<String, Vec<PairControlEntry>>>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -143,117 +144,198 @@ impl PairedClientRegistry {
     pub fn register(&self, token: String, tx: UnboundedSender<PairControlMessage>) -> u64 {
         let registration_id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let mut clients = self.clients.lock_recover();
-        if let Some(previous) = clients.get(&token) {
-            if let Some((ssh_mode, platform)) = previous.state.cli_usage_labels() {
-                metrics::add_cli_pair_active(-1, ssh_mode, platform);
-            }
-            // Legitimate reconnects hit this path; a surprise overwrite with an
-            // unknown peer would indicate token takeover, so surface it loudly.
-            tracing::warn!(
-                token_hint = %token_hint(&token),
-                previous_registration_id = previous.registration_id,
-                registration_id,
-                "paired client registration replaced existing entry"
-            );
-        } else {
-            tracing::info!(
-                token_hint = %token_hint(&token),
-                registration_id,
-                "registered paired client session"
-            );
-        }
-        clients.insert(
-            token,
-            PairControlEntry {
-                registration_id,
-                tx,
-                state: ClientAudioState::default(),
-                usage_total_recorded: false,
-            },
+        let entries = clients.entry(token.clone()).or_default();
+        tracing::info!(
+            token_hint = %token_hint(&token),
+            registration_id,
+            prior_entries = entries.len(),
+            "registered paired client session"
         );
+        entries.push(PairControlEntry {
+            registration_id,
+            tx,
+            state: ClientAudioState::default(),
+            usage_total_recorded: false,
+        });
         registration_id
     }
 
-    pub fn unregister_if_match(&self, token: &str, registration_id: u64) {
+    /// Remove the matching entry. Returns the removed entry's `client_kind` and
+    /// the number of browser entries remaining on the token afterward, so the
+    /// caller can decide whether to relax a server-imposed CLI mute.
+    pub fn unregister_if_match(
+        &self,
+        token: &str,
+        registration_id: u64,
+    ) -> Option<UnregisterResult> {
         let mut clients = self.clients.lock_recover();
-        let should_remove = clients
-            .get(token)
-            .map(|entry| entry.registration_id == registration_id)
-            .unwrap_or(false);
-        if should_remove {
-            if let Some(entry) = clients.get(token)
-                && let Some((ssh_mode, platform)) = entry.state.cli_usage_labels()
-            {
-                metrics::add_cli_pair_active(-1, ssh_mode, platform);
-            }
-            tracing::info!(
-                token_hint = %token_hint(token),
-                registration_id,
-                "unregistered paired client session"
-            );
+        let entries = clients.get_mut(token)?;
+        let position = entries
+            .iter()
+            .position(|entry| entry.registration_id == registration_id)?;
+        let removed = entries.remove(position);
+        if let Some((ssh_mode, platform)) = removed.state.cli_usage_labels() {
+            metrics::add_cli_pair_active(-1, ssh_mode, platform);
+        }
+        let removed_kind = removed.state.client_kind;
+        let browsers_remaining = entries
+            .iter()
+            .filter(|entry| entry.state.client_kind == ClientKind::Browser)
+            .count();
+        tracing::info!(
+            token_hint = %token_hint(token),
+            registration_id,
+            ?removed_kind,
+            browsers_remaining,
+            "unregistered paired client session"
+        );
+        if entries.is_empty() {
             clients.remove(token);
         }
+        Some(UnregisterResult {
+            removed_kind,
+            browsers_remaining,
+        })
     }
 
+    /// Broadcast a control message to every paired client of `token`. Returns
+    /// the number of entries that accepted the message.
     pub fn send_control(&self, token: &str, msg: PairControlMessage) -> bool {
-        let tx = {
-            let clients = self.clients.lock().unwrap_or_else(|e| {
-                tracing::warn!("paired client registry mutex poisoned, recovering");
-                e.into_inner()
-            });
-            clients.get(token).map(|entry| entry.tx.clone())
+        self.send_control_filter(token, msg, |_| true) > 0
+    }
+
+    /// Send a control message to paired entries whose `client_kind` matches the
+    /// predicate. Used to target CLI-only force-mute or browser-only controls.
+    /// Returns the number of entries that accepted the message.
+    pub fn send_control_filter<F>(
+        &self,
+        token: &str,
+        msg: PairControlMessage,
+        mut matches: F,
+    ) -> usize
+    where
+        F: FnMut(ClientKind) -> bool,
+    {
+        let targets: Vec<UnboundedSender<PairControlMessage>> = {
+            let clients = self.clients.lock_recover();
+            clients
+                .get(token)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter(|entry| matches(entry.state.client_kind))
+                        .map(|entry| entry.tx.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
         };
 
-        if let Some(tx) = tx {
-            if tx.send(msg).is_ok() {
-                return true;
-            }
-            tracing::warn!(
-                token_hint = %token_hint(token),
-                "failed to send paired client control message"
-            );
-            return false;
+        if targets.is_empty() {
+            return 0;
         }
 
-        tracing::warn!(
-            token_hint = %token_hint(token),
-            "no paired client found for control message"
-        );
-        false
+        let mut delivered = 0;
+        for tx in targets {
+            if tx.send(msg.clone()).is_ok() {
+                delivered += 1;
+            } else {
+                tracing::warn!(
+                    token_hint = %token_hint(token),
+                    "failed to send paired client control message"
+                );
+            }
+        }
+        delivered
     }
 
-    pub fn update_state(&self, token: &str, registration_id: u64, state: ClientAudioState) {
+    /// Update the audio state of a single entry. Returns the state of the entry
+    /// *after* the update plus the count of browser entries currently paired on
+    /// this token, so the caller can decide whether to push ForceMute.
+    pub fn update_state(
+        &self,
+        token: &str,
+        registration_id: u64,
+        state: ClientAudioState,
+    ) -> Option<UpdateStateResult> {
         let mut clients = self.clients.lock_recover();
-        if let Some(entry) = clients.get_mut(token)
-            && entry.registration_id == registration_id
-        {
-            let previous_labels = entry.state.cli_usage_labels();
-            let new_labels = state.cli_usage_labels();
+        let entries = clients.get_mut(token)?;
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.registration_id == registration_id)?;
 
-            if previous_labels != new_labels {
-                if let Some((ssh_mode, platform)) = previous_labels {
-                    metrics::add_cli_pair_active(-1, ssh_mode, platform);
-                }
-                if let Some((ssh_mode, platform)) = new_labels {
-                    metrics::add_cli_pair_active(1, ssh_mode, platform);
-                }
+        let previous_kind = entry.state.client_kind;
+        let previous_labels = entry.state.cli_usage_labels();
+        let new_labels = state.cli_usage_labels();
+
+        if previous_labels != new_labels {
+            if let Some((ssh_mode, platform)) = previous_labels {
+                metrics::add_cli_pair_active(-1, ssh_mode, platform);
             }
-
-            if !entry.usage_total_recorded
-                && let Some((ssh_mode, platform)) = new_labels
-            {
-                metrics::record_cli_pair_usage(ssh_mode, platform);
-                entry.usage_total_recorded = true;
+            if let Some((ssh_mode, platform)) = new_labels {
+                metrics::add_cli_pair_active(1, ssh_mode, platform);
             }
-
-            entry.state = state;
         }
+
+        if !entry.usage_total_recorded
+            && let Some((ssh_mode, platform)) = new_labels
+        {
+            metrics::record_cli_pair_usage(ssh_mode, platform);
+            entry.usage_total_recorded = true;
+        }
+
+        entry.state = state;
+        let new_kind = entry.state.client_kind;
+
+        let browsers_total = entries
+            .iter()
+            .filter(|entry| entry.state.client_kind == ClientKind::Browser)
+            .count();
+
+        Some(UpdateStateResult {
+            previous_kind,
+            new_kind,
+            browsers_total,
+        })
     }
 
+    /// Snapshot the state of the most recently registered entry, preferring a
+    /// browser if one is present. Callers that need the SSH user's own paired
+    /// client (typically a browser) use this to inspect mute/volume state.
     pub fn snapshot(&self, token: &str) -> Option<ClientAudioState> {
         let clients = self.clients.lock_recover();
-        clients.get(token).map(|entry| entry.state.clone())
+        let entries = clients.get(token)?;
+        entries
+            .iter()
+            .rev()
+            .find(|entry| entry.state.client_kind == ClientKind::Browser)
+            .or_else(|| entries.last())
+            .map(|entry| entry.state.clone())
     }
+
+    pub fn has_browser(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .any(|entry| entry.state.client_kind == ClientKind::Browser)
+            })
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UnregisterResult {
+    pub removed_kind: ClientKind,
+    pub browsers_remaining: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UpdateStateResult {
+    pub previous_kind: ClientKind,
+    pub new_kind: ClientKind,
+    pub browsers_total: usize,
 }
 
 fn token_hint(token: &str) -> String {
@@ -401,17 +483,20 @@ mod tests {
     }
 
     #[test]
-    fn paired_client_unregister_if_match_respects_latest_registration() {
+    fn paired_client_unregister_if_match_removes_only_matching_entry() {
         let registry = PairedClientRegistry::new();
-        let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel();
+        let (tx1, mut rx1) = tokio::sync::mpsc::unbounded_channel();
         let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel();
         let first = registry.register("tok1".to_string(), tx1);
         let second = registry.register("tok1".to_string(), tx2);
 
         registry.unregister_if_match("tok1", first);
 
+        // Only the surviving entry should receive subsequent broadcasts.
         assert!(registry.send_control("tok1", PairControlMessage::ToggleMute));
+        assert!(rx1.try_recv().is_err());
         assert_eq!(rx2.try_recv().unwrap(), PairControlMessage::ToggleMute);
+
         registry.unregister_if_match("tok1", second);
         assert!(!registry.send_control("tok1", PairControlMessage::ToggleMute));
     }

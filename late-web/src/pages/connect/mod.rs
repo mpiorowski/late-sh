@@ -28,6 +28,10 @@ struct Page {
     token: String,
     api_url: String,
     audio_url: String,
+    /// Mod/admin gate for the YouTube playback path. When false the page stays
+    /// on Icecast and ignores YouTube events from the server. The end-state UI
+    /// is an in-page switch; for now it is hidden behind `?youtube=true`.
+    youtube_enabled: bool,
 }
 
 #[derive(Template)]
@@ -45,26 +49,41 @@ struct StatusParams {
     pairing: bool,
 }
 
-fn build_page(state: &AppState, token: String) -> Result<Html<String>, AppError> {
+#[derive(Deserialize, Default)]
+pub(crate) struct ConnectParams {
+    #[serde(default)]
+    youtube: bool,
+}
+
+fn build_page(
+    state: &AppState,
+    token: String,
+    params: ConnectParams,
+) -> Result<Html<String>, AppError> {
     let page = Page {
         token,
         api_url: state.config.ssh_public_url.clone(),
         audio_url: "/stream".to_string(),
+        youtube_enabled: params.youtube,
     };
     Ok(Html(page.render()?))
 }
 
-pub async fn root_handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+pub async fn root_handler(
+    State(state): State<AppState>,
+    Query(params): Query<ConnectParams>,
+) -> Result<impl IntoResponse, AppError> {
     metrics::record_page_view("connect", false);
-    build_page(&state, String::new())
+    build_page(&state, String::new(), params)
 }
 
 pub async fn token_handler(
     State(state): State<AppState>,
     Path(token): Path<String>,
+    Query(params): Query<ConnectParams>,
 ) -> Result<impl IntoResponse, AppError> {
     metrics::record_page_view("connect", !token.is_empty());
-    build_page(&state, token)
+    build_page(&state, token, params)
 }
 
 async fn status_handler(

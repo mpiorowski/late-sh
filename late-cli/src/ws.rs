@@ -32,6 +32,7 @@ enum PairControlMessage {
     VolumeUp,
     VolumeDown,
     RequestClipboardImage,
+    ForceMute { mute: bool },
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -151,10 +152,21 @@ async fn handle_pair_control(
             apply_audio_pair_control(audio_control, muted, volume_percent);
             Ok(true)
         }
+        PairControlMessage::ForceMute { mute } => {
+            apply_force_mute(muted, mute);
+            Ok(true)
+        }
         PairControlMessage::RequestClipboardImage => {
             send_clipboard_image(ws).await?;
             Ok(false)
         }
+    }
+}
+
+fn apply_force_mute(muted: &AtomicBool, mute: bool) {
+    let previous = muted.swap(mute, Ordering::Relaxed);
+    if previous != mute {
+        info!(muted = mute, "applied server-forced mute");
     }
 }
 
@@ -176,7 +188,7 @@ fn apply_audio_pair_control(
             let new_volume = bump_volume(volume_percent, -5);
             info!(volume_percent = new_volume, "applied paired volume down");
         }
-        PairControlMessage::RequestClipboardImage => {}
+        PairControlMessage::ForceMute { .. } | PairControlMessage::RequestClipboardImage => {}
     }
 }
 

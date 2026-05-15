@@ -28,7 +28,7 @@ use crate::{
         svc::PlayerStateReport,
     },
     metrics,
-    session::SessionMessage,
+    session::{PairControlMessage, SessionMessage},
     state::{ActiveUsers, State},
 };
 
@@ -261,9 +261,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                     .await
                     .is_err()
                 {
-                    state
-                        .paired_client_registry
-                        .unregister_if_match(&token, registration_id);
+                    release_pair_registration(&state, &token, registration_id);
                     return;
                 }
             }
@@ -321,7 +319,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 muted,
                                 volume_percent,
                             } => {
-                                state.paired_client_registry.update_state(
+                                let result = state.paired_client_registry.update_state(
                                     &token,
                                     registration_id,
                                     ClientAudioState {
@@ -333,6 +331,31 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         volume_percent,
                                     },
                                 );
+                                if let Some(result) = result {
+                                    // Browser just joined (or was just identified): any
+                                    // CLI paired on this token must mute itself so the
+                                    // user does not hear double audio from both sides.
+                                    if result.new_kind == ClientKind::Browser
+                                        && result.previous_kind != ClientKind::Browser
+                                    {
+                                        state.paired_client_registry.send_control_filter(
+                                            &token,
+                                            PairControlMessage::ForceMute { mute: true },
+                                            |kind| kind == ClientKind::Cli,
+                                        );
+                                    }
+                                    // CLI just identified itself while a browser is
+                                    // already paired: mute it immediately.
+                                    if result.new_kind == ClientKind::Cli
+                                        && result.browsers_total > 0
+                                    {
+                                        state.paired_client_registry.send_control_filter(
+                                            &token,
+                                            PairControlMessage::ForceMute { mute: true },
+                                            |kind| kind == ClientKind::Cli,
+                                        );
+                                    }
+                                }
                                 continue;
                             }
                             WsPayload::ClipboardImage { data_base64 } => {
@@ -395,10 +418,28 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         }
     }
 
-    state
-        .paired_client_registry
-        .unregister_if_match(&token, registration_id);
+    release_pair_registration(&state, &token, registration_id);
     tracing::info!(token_hint = %token_hint, "websocket connection closed");
+}
+
+/// Drop a paired-client registration and, when that drop removes the last
+/// browser from the token, release the server-imposed CLI mute. Without this
+/// the CLI would stay muted forever after the browser tab closes.
+fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
+    let Some(result) = state
+        .paired_client_registry
+        .unregister_if_match(token, registration_id)
+    else {
+        return;
+    };
+
+    if result.removed_kind == ClientKind::Browser && result.browsers_remaining == 0 {
+        state.paired_client_registry.send_control_filter(
+            token,
+            PairControlMessage::ForceMute { mute: false },
+            |kind| kind == ClientKind::Cli,
+        );
+    }
 }
 
 async fn send_json_ws<T: serde::Serialize>(

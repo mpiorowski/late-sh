@@ -398,34 +398,42 @@ via `oneshot` if a submission arrives.
 
 ### 7.3 Per-client behavior
 
-| audio_mode | CLI paired | browser paired | result                                          |
-|------------|-----------|----------------|-------------------------------------------------|
-| icecast    | yes       | no             | CLI plays Icecast (today's flow)                |
-| icecast    | yes       | yes            | CLI mutes, browser plays Icecast                |
-| icecast    | no        | yes            | browser plays Icecast                           |
-| icecast    | no        | no             | silent                                          |
-| youtube    | yes       | yes            | browser plays YouTube via iframe, CLI silent    |
-| youtube    | yes       | no             | CLI plays Icecast as a personal fallback        |
-| youtube    | no        | yes            | browser plays YouTube via iframe                |
-| youtube    | no        | no             | silent                                          |
+The rule is intentionally simple: **if any browser is paired on a token, the
+CLI on that same token mutes its local audio.** No "personal fallback" mode,
+no per-mode special casing. The browser is the active surface whenever it is
+present; the CLI is the active surface only when it is alone.
 
-The CLI-only + youtube case is the trickiest. Two options:
+| CLI paired | browser paired | audio source                  | CLI audio                              |
+|------------|----------------|-------------------------------|----------------------------------------|
+| yes        | no             | Icecast                       | CLI plays Icecast (today's flow)       |
+| yes        | yes            | Icecast or YouTube (browser)  | CLI muted via ForceMute                |
+| no         | yes            | Icecast or YouTube (browser)  | n/a                                    |
+| no         | no             | silent                        | n/a                                    |
 
-- **(a) Personal fallback to Icecast for CLI-only users.** They hear lofi
-  while everyone with a browser hears the YouTube. Sync breaks but audio
-  continues. Recommended for MVP.
-- **(b) Silence with no fallback.** Strict but disruptive.
+The audio_mode column from earlier drafts has been folded away: it only
+controls *what the browser plays*. The CLI's behavior depends purely on
+whether a browser is paired alongside it.
 
-Choosing (a) for MVP because the global "everyone listening together"
-guarantee is not promised at MVP scope. We can revisit if/when product
-positioning calls for strict sync.
+### 7.4 CLI mute coordination
 
-### 7.4 CLI mute coordination (deferred)
+Implemented via the `PairedClientRegistry` and a new `force_mute`
+`PairControlMessage`:
 
-The CLI mute-when-browser-is-active rule (case 2 in the table above) is
-needed only when both CLI and browser are paired and audio_mode is icecast.
-This is the same edge case that exists today even without the queue feature.
-It remains deferred; the MVP slice does not need to solve it.
+- The registry tracks every paired client per token (CLI + browser
+  coexist) keyed by registration id.
+- When a browser's `client_state` first identifies it as `client_kind:
+  browser`, the server broadcasts `force_mute { mute: true }` to every CLI
+  entry on the same token. Same path runs if a CLI joins a token that
+  already has a browser paired.
+- When the last browser entry on a token disconnects, the server
+  broadcasts `force_mute { mute: false }` so the CLI's Icecast audio
+  resumes immediately.
+
+The CLI applies `force_mute` to the same `muted` atomic that the local
+mute keybind uses. If a user manually un-mutes via their CLI hotkey while a
+browser is still paired, the server does not re-impose mute — the user has
+explicitly opted into double audio. The next browser pair/unpair transition
+overrides them.
 
 ---
 
@@ -575,6 +583,25 @@ are still captured so future-you does not relitigate.
 - Multi-tab dedupe.
 - Region-lock partial failure UX.
 - Better admin feedback if DB insert fails after local URL validation.
+
+---
+
+## 10b. Browser-side YouTube gate (`?youtube=true`)
+
+The connect page (`/` and `/{token}`) accepts an optional `?youtube=true`
+query parameter. Without it, the page never leaves Icecast: it ignores
+`source_changed: youtube`, `load_video`, and `seek` events, and the
+YouTube IFrame API script is not loaded. With it, the full YouTube path
+runs.
+
+This is a temporary admin/mod-only toggle so the v1 push can land with
+the YouTube path dark for general visitors while still being testable by
+copying a link with the flag. The end-state UX is an in-page Icecast /
+YouTube switch; the query gate will be replaced when that ships.
+
+The gate applies to both queue items and the YouTube fallback stream:
+if the flag is absent, the page stays on Icecast even when a fallback is
+configured server-side.
 
 ---
 
