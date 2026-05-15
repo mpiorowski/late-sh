@@ -170,7 +170,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
         config,
-        db,
+        db: db.clone(),
         audio_service: late_ssh::app::audio::svc::AudioService::new(db.clone(), None),
         vote_service,
         chat_service,

@@ -82,16 +82,16 @@ State that MAY be lost on restart (in-memory):
   ends at Y." If X+duration is in the past, mark it `played` and advance.
 - WebSocket subscriptions to paired clients. They reconnect on their own.
 - Drift correction state on each browser. Each browser resyncs from
-  `started_at_ms` on reconnect.
+  server-computed `offset_ms` on reconnect.
 
 Restart algorithm (on pod start, in `AudioService::start`):
 
 1. Read `media_queue_items WHERE status IN ('queued', 'playing') ORDER BY created`.
 2. If any item is `status='playing'`:
    - If `started_at + playback_duration > now()`, resume it: keep status,
-     broadcast `load_video` with the original `started_at_ms` so browsers
-     seek to the correct offset. `playback_duration` is the known duration
-     when present, otherwise the 1h fallback cap.
+     broadcast `load_video` with the current `offset_ms` so browsers seek to
+     the correct offset. `playback_duration` is the known duration when
+     present, otherwise the 1h fallback cap.
    - Else mark it `played`, advance to the next queued item.
 3. If only `queued` items remain, mark the first one `playing` with
    `started_at = now()`, broadcast `load_video`.
@@ -291,6 +291,7 @@ fan out to every paired client globally.
   "item_id": "<uuid>",
   "video_id": "abc123",
   "started_at_ms": 1770000000000,
+  "offset_ms": 90000,
   "is_stream": false }
 
 { "event": "seek", "offset_ms": 90000 }
@@ -395,11 +396,12 @@ It remains deferred; the MVP slice does not need to solve it.
 
 ## 8. Sync algorithm
 
-Server is authoritative. Each `load_video` carries `started_at_ms` (server
-epoch). Browser computes:
+Server is authoritative. Each `load_video` carries both `started_at_ms`
+(server epoch, for observability/resume state) and the server-computed
+`offset_ms`. Browser uses `offset_ms` for initial playback and advances that
+value with a monotonic local timer:
 
 ```
-offset_ms = server_now_ms - started_at_ms
 player.loadVideoById({ videoId, startSeconds: offset_ms / 1000 })
 ```
 
@@ -454,7 +456,9 @@ are still captured so future-you does not relitigate.
 7. **Browser reports `ended`.** Audio service validates the report against
    server elapsed time and known/reported duration. If it is early, ignore
    it and broadcast an authoritative seek. If it is near the server-side end,
-   mark item `played`, set `ended_at = now()`, and advance queue.
+   mark item `played`, set `ended_at = now()`, and advance queue. If no
+   duration is known, accept `ended` only after a server-side 30s floor so
+   short/metadata-weird MVP tracks do not get stuck forever.
 
 8. **Browser reports `error`.** Mark item `failed`, store error message,
    advance queue. The current implementation treats the first matching
@@ -476,7 +480,7 @@ are still captured so future-you does not relitigate.
 
 13. **Late browser join during a `playing` item.** Browser pairs, server
     immediately sends `queue_update` and `load_video` with current
-    `started_at_ms`. Browser seeks to correct offset on the autoplay
+    `offset_ms`. Browser seeks to correct offset on the autoplay
     gesture. No special-casing needed beyond the standard `load_video`
     flow.
 

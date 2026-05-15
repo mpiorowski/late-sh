@@ -93,6 +93,7 @@
             currentYoutubeItem: null,
             playerStateInterval: null,
             lastYoutubeSeekAt: 0,
+            lastYoutubeReloadAt: 0,
             copied: null,
             volumePercent: 30,
             muted: false,
@@ -392,7 +393,7 @@
                     return;
                 }
                 this.vizInterval = setInterval(() => {
-                    if (this.status !== 'playing' || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                    if (this.audioMode !== 'icecast' || this.status !== 'playing' || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
                         return;
                     }
                     const audio = this.$refs.audio;
@@ -496,6 +497,8 @@
                     }
                     this.currentYoutubeItem = null;
                     this.pendingYoutubeItem = null;
+                    this.lastYoutubeSeekAt = 0;
+                    this.stopPlayerStateLoop();
                     if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
                         this.startPlayback();
                     } else {
@@ -537,8 +540,19 @@
                     itemId: payload.item_id,
                     videoId: payload.video_id,
                     startedAtMs: payload.started_at_ms,
+                    offsetMs: this.loadVideoOffsetMs(payload),
+                    receivedAtMs: performance.now(),
                     isStream: !!payload.is_stream,
                 };
+
+                if (this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                    this.currentYoutubeItem = item;
+                    this.pendingYoutubeItem = null;
+                    this.seekYoutube(this.expectedYoutubeOffsetMs(item));
+                    this.startPlayerStateLoop();
+                    return;
+                }
+
                 this.pendingYoutubeItem = item;
                 this.ensureYoutubePlayer();
                 if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
@@ -548,18 +562,28 @@
                 }
             },
 
+            isSameYoutubeItem(a, b) {
+                return !!a && !!b && a.itemId === b.itemId && a.videoId === b.videoId;
+            },
+
             playYoutubeItem(item) {
                 if (!this.ytPlayer || !this.ytReady || !this.ytPlayer.loadVideoById) {
                     return;
                 }
+                const switchingItems = this.currentYoutubeItem && !this.isSameYoutubeItem(this.currentYoutubeItem, item);
+                if (switchingItems && this.ytPlayer.stopVideo) {
+                    this.ytPlayer.stopVideo();
+                }
                 this.pendingYoutubeItem = null;
                 this.currentYoutubeItem = item;
                 this.status = 'buffering';
+                this.lastYoutubeSeekAt = 0;
                 const offsetMs = this.expectedYoutubeOffsetMs(item);
                 this.ytPlayer.loadVideoById({
                     videoId: item.videoId,
                     startSeconds: Math.floor(offsetMs / 1000),
                 });
+                this.verifyYoutubeLoad(item);
                 this.ytPlayer.setVolume(this.volumePercent);
                 this.applyMuteState(this.muted);
                 this.startPlayerStateLoop();
@@ -573,6 +597,10 @@
                 if (!window.YT || !this.currentYoutubeItem) {
                     return;
                 }
+                if (!this.youtubePlayerMatchesCurrent()) {
+                    this.reloadCurrentYoutubeItem();
+                    return;
+                }
                 if (state === window.YT.PlayerState.PLAYING) {
                     this.status = 'playing';
                     this.correctYoutubeDrift();
@@ -584,7 +612,56 @@
                     this.sendYoutubeState('buffering');
                 } else if (state === window.YT.PlayerState.ENDED) {
                     this.sendYoutubeState('ended');
+                    this.status = 'buffering';
+                    this.stopPlayerStateLoop();
                 }
+            },
+
+            loadedYoutubeVideoId() {
+                if (!this.ytPlayer || !this.ytPlayer.getVideoData) {
+                    return null;
+                }
+                const data = this.ytPlayer.getVideoData();
+                if (!data || !data.video_id) {
+                    return null;
+                }
+                return data.video_id;
+            },
+
+            youtubePlayerMatchesCurrent() {
+                const loadedVideoId = this.loadedYoutubeVideoId();
+                return !loadedVideoId || !this.currentYoutubeItem || loadedVideoId === this.currentYoutubeItem.videoId;
+            },
+
+            reloadCurrentYoutubeItem() {
+                if (!this.currentYoutubeItem || !this.ytPlayer || !this.ytPlayer.loadVideoById) {
+                    return;
+                }
+                const now = Date.now();
+                if (now - this.lastYoutubeReloadAt < 1000) {
+                    return;
+                }
+                this.lastYoutubeReloadAt = now;
+                const item = this.currentYoutubeItem;
+                if (this.ytPlayer.stopVideo) {
+                    this.ytPlayer.stopVideo();
+                }
+                const offsetMs = this.expectedYoutubeOffsetMs(item);
+                this.ytPlayer.loadVideoById({
+                    videoId: item.videoId,
+                    startSeconds: Math.floor(offsetMs / 1000),
+                });
+            },
+
+            verifyYoutubeLoad(item) {
+                window.setTimeout(() => {
+                    if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                        return;
+                    }
+                    if (!this.youtubePlayerMatchesCurrent()) {
+                        this.reloadCurrentYoutubeItem();
+                    }
+                }, 1000);
             },
 
             startPlayerStateLoop() {
@@ -599,11 +676,26 @@
                 }, 10000);
             },
 
+            stopPlayerStateLoop() {
+                if (this.playerStateInterval) {
+                    clearInterval(this.playerStateInterval);
+                    this.playerStateInterval = null;
+                }
+            },
+
+            loadVideoOffsetMs(payload) {
+                const offsetMs = Number(payload.offset_ms);
+                if (Number.isFinite(offsetMs) && offsetMs >= 0) {
+                    return offsetMs;
+                }
+                return Math.max(0, Date.now() - payload.started_at_ms);
+            },
+
             expectedYoutubeOffsetMs(item) {
                 if (!item || item.isStream) {
                     return 0;
                 }
-                return Math.max(0, Date.now() - item.startedAtMs);
+                return Math.max(0, item.offsetMs + (performance.now() - item.receivedAtMs));
             },
 
             correctYoutubeDrift() {
@@ -648,6 +740,10 @@
 
             sendYoutubeState(state, error = null) {
                 if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.currentYoutubeItem) {
+                    return;
+                }
+                if (!this.youtubePlayerMatchesCurrent()) {
+                    this.reloadCurrentYoutubeItem();
                     return;
                 }
                 let offsetMs = 0;

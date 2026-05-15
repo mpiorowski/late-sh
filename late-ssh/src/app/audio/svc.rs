@@ -18,6 +18,7 @@ const SUBMISSION_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
 const FALLBACK_DEBOUNCE: Duration = Duration::from_secs(10);
 const PLAYBACK_SYNC_INTERVAL: Duration = Duration::from_secs(10);
 const PLAYBACK_END_GRACE: Duration = Duration::from_secs(5);
+const UNKNOWN_DURATION_ENDED_FLOOR: Duration = Duration::from_secs(30);
 const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
@@ -61,6 +62,7 @@ pub enum AudioEvent {
         item_id: Uuid,
         video_id: String,
         started_at_ms: i64,
+        offset_ms: u64,
         is_stream: bool,
     },
     Seek {
@@ -299,6 +301,7 @@ impl AudioService {
                 item_id: current.id,
                 video_id: current.video_id.clone(),
                 started_at_ms,
+                offset_ms: offset_from_started_at_ms(started_at_ms),
                 is_stream: current.is_stream,
             });
         }
@@ -333,6 +336,9 @@ impl AudioService {
     }
 
     async fn finish_item_from_player(&self, report: PlayerStateReport) -> Result<()> {
+        self.record_browser_duration(report.item_id, report.duration_ms)
+            .await?;
+
         let state = self.state.lock().await;
         if state.current_item_id != Some(report.item_id) {
             return Ok(());
@@ -346,23 +352,35 @@ impl AudioService {
             return Ok(());
         };
 
-        let duration = report
-            .duration_ms
-            .and_then(|value| duration_from_report_ms(value))
-            .or_else(|| playback_known_duration(&item));
-        let Some(duration) = duration else {
-            tracing::debug!(
-                item_id = %report.item_id,
-                offset_ms = ?report.offset_ms,
-                "ignoring browser ended report without known duration"
-            );
-            return Ok(());
-        };
-
         let elapsed = Utc::now()
             .signed_duration_since(started_at)
             .to_std()
             .unwrap_or_default();
+        let duration = playback_known_duration(&item)
+            .or_else(|| report.duration_ms.and_then(duration_from_report_ms));
+
+        let Some(duration) = duration else {
+            if elapsed >= UNKNOWN_DURATION_ENDED_FLOOR {
+                tracing::info!(
+                    item_id = %report.item_id,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    offset_ms = ?report.offset_ms,
+                    "accepting browser ended report after unknown-duration floor"
+                );
+                drop(state);
+                return self.finish_item(report.item_id).await;
+            }
+
+            tracing::debug!(
+                item_id = %report.item_id,
+                elapsed_ms = elapsed.as_millis() as u64,
+                offset_ms = ?report.offset_ms,
+                "ignoring early browser ended report without known duration"
+            );
+            self.publish_seek_for_started_at(started_at);
+            return Ok(());
+        };
+
         if elapsed.saturating_add(PLAYBACK_END_GRACE) < duration {
             tracing::debug!(
                 item_id = %report.item_id,
@@ -376,8 +394,6 @@ impl AudioService {
         }
 
         drop(state);
-        self.record_browser_duration(report.item_id, report.duration_ms)
-            .await?;
         self.finish_item(report.item_id).await
     }
 
@@ -420,7 +436,6 @@ impl AudioService {
             let item = MediaQueueItem::mark_playing(&client, next.id, Utc::now()).await?;
             state.current_item_id = Some(item.id);
             state.mode = AudioMode::Youtube;
-            state.sequence = state.sequence.saturating_add(1);
             self.schedule_playback_timer(state, &item);
             self.publish_source_change(AudioMode::Youtube);
             self.publish_load_video(&item);
@@ -487,18 +502,15 @@ impl AudioService {
             item_id: item.id,
             video_id: item.external_id.clone(),
             started_at_ms: started_at.timestamp_millis(),
+            offset_ms: offset_for_started_at(started_at),
             is_stream: item.is_stream,
         });
     }
 
     fn publish_seek_for_started_at(&self, started_at: DateTime<Utc>) {
-        let offset_ms = Utc::now()
-            .signed_duration_since(started_at)
-            .to_std()
-            .unwrap_or_default()
-            .as_millis()
-            .min(u128::from(u64::MAX)) as u64;
-        let _ = self.event_tx.send(AudioEvent::Seek { offset_ms });
+        let _ = self.event_tx.send(AudioEvent::Seek {
+            offset_ms: offset_for_started_at(started_at),
+        });
     }
 
     fn schedule_playback_timer(&self, state: &mut QueueState, item: &MediaQueueItem) {
@@ -523,6 +535,7 @@ impl AudioService {
         state.playback_cancel = Some(tx);
         tokio::spawn(async move {
             let mut sync = tokio::time::interval(PLAYBACK_SYNC_INTERVAL);
+            sync.tick().await;
             tokio::select! {
                 _ = tokio::time::sleep(sleep_for) => {
                     if let Err(err) = service.finish_item_due_to_timer(item_id).await {
@@ -595,7 +608,6 @@ impl AudioService {
             return;
         }
         state.mode = AudioMode::Icecast;
-        state.sequence = state.sequence.saturating_add(1);
         self.publish_source_change(AudioMode::Icecast);
         if let Err(err) = self.publish_queue_update_with_guard(&mut state).await {
             late_core::error_span!(
@@ -654,6 +666,23 @@ fn duration_from_report_ms(duration_ms: u64) -> Option<Duration> {
         return None;
     }
     Some(Duration::from_millis(duration_ms))
+}
+
+fn offset_for_started_at(started_at: DateTime<Utc>) -> u64 {
+    Utc::now()
+        .signed_duration_since(started_at)
+        .to_std()
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn offset_from_started_at_ms(started_at_ms: i64) -> u64 {
+    Utc::now()
+        .timestamp_millis()
+        .saturating_sub(started_at_ms)
+        .try_into()
+        .unwrap_or_default()
 }
 
 fn queue_item_view(item: MediaQueueItem, usernames: &HashMap<Uuid, String>) -> QueueItemView {
