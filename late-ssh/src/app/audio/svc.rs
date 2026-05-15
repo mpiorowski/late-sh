@@ -4,7 +4,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use late_core::{
     db::Db,
-    models::{media_queue_item::MediaQueueItem, user::User},
+    models::{media_queue_item::MediaQueueItem, media_source::MediaSource, user::User},
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast, oneshot};
@@ -172,6 +172,32 @@ impl AudioService {
         self.submit_video(user_id, video, false).await
     }
 
+    pub async fn set_trusted_youtube_fallback(&self, user_id: Uuid, url: &str) -> Result<()> {
+        let video = super::youtube::trusted_video_from_url(url)?;
+        let mut state = self.state.lock().await;
+        let client = self.db.get().await?;
+        let source = MediaSource::upsert_youtube_fallback(
+            &client,
+            &video.video_id,
+            video.title.as_deref(),
+            video.channel.as_deref(),
+            user_id,
+        )
+        .await?;
+
+        if state.current_item_id.is_none() && MediaQueueItem::first_queued(&client).await?.is_none()
+        {
+            self.cancel_playback(&mut state);
+            self.cancel_fallback(&mut state);
+            state.mode = AudioMode::Youtube;
+            self.publish_source_change(AudioMode::Youtube);
+            self.publish_load_fallback(&source);
+            self.publish_queue_update_with_guard(&mut state).await?;
+        }
+
+        Ok(())
+    }
+
     async fn submit_video(
         &self,
         user_id: Uuid,
@@ -304,6 +330,11 @@ impl AudioService {
                 offset_ms: offset_from_started_at_ms(started_at_ms),
                 is_stream: current.is_stream,
             });
+        } else if snapshot.audio_mode == AudioMode::Youtube {
+            let client = self.db.get().await?;
+            if let Some(source) = MediaSource::youtube_fallback(&client).await? {
+                events.push(fallback_load_event(&source));
+            }
         }
         Ok(events)
     }
@@ -445,8 +476,10 @@ impl AudioService {
 
         state.current_item_id = None;
         self.cancel_playback(state);
-        self.schedule_fallback(state);
-        self.publish_queue_update_with_guard(state).await?;
+        if !self.publish_youtube_fallback_with_guard(state).await? {
+            self.schedule_fallback(state);
+            self.publish_queue_update_with_guard(state).await?;
+        }
         Ok(())
     }
 
@@ -507,10 +540,29 @@ impl AudioService {
         });
     }
 
+    fn publish_load_fallback(&self, source: &MediaSource) {
+        let _ = self.event_tx.send(fallback_load_event(source));
+    }
+
     fn publish_seek_for_started_at(&self, started_at: DateTime<Utc>) {
         let _ = self.event_tx.send(AudioEvent::Seek {
             offset_ms: offset_for_started_at(started_at),
         });
+    }
+
+    async fn publish_youtube_fallback_with_guard(&self, state: &mut QueueState) -> Result<bool> {
+        let client = self.db.get().await?;
+        let Some(source) = MediaSource::youtube_fallback(&client).await? else {
+            return Ok(false);
+        };
+
+        self.cancel_playback(state);
+        self.cancel_fallback(state);
+        state.mode = AudioMode::Youtube;
+        self.publish_source_change(AudioMode::Youtube);
+        self.publish_load_fallback(&source);
+        self.publish_queue_update_with_guard(state).await?;
+        Ok(true)
     }
 
     fn schedule_playback_timer(&self, state: &mut QueueState, item: &MediaQueueItem) {
@@ -607,6 +659,17 @@ impl AudioService {
         if state.current_item_id.is_some() {
             return;
         }
+        match self.publish_youtube_fallback_with_guard(&mut state).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(err) => {
+                late_core::error_span!(
+                    "audio_youtube_fallback_failed",
+                    error = ?err,
+                    "failed to publish YouTube fallback"
+                );
+            }
+        }
         state.mode = AudioMode::Icecast;
         self.publish_source_change(AudioMode::Icecast);
         if let Err(err) = self.publish_queue_update_with_guard(&mut state).await {
@@ -683,6 +746,16 @@ fn offset_from_started_at_ms(started_at_ms: i64) -> u64 {
         .saturating_sub(started_at_ms)
         .try_into()
         .unwrap_or_default()
+}
+
+fn fallback_load_event(source: &MediaSource) -> AudioEvent {
+    AudioEvent::LoadVideo {
+        item_id: source.id,
+        video_id: source.external_id.clone(),
+        started_at_ms: Utc::now().timestamp_millis(),
+        offset_ms: 0,
+        is_stream: source.is_stream,
+    }
 }
 
 fn queue_item_view(item: MediaQueueItem, usernames: &HashMap<Uuid, String>) -> QueueItemView {

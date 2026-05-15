@@ -940,6 +940,28 @@ impl App {
         self.banner = Some(Banner::success("Queued audio"));
     }
 
+    pub fn set_trusted_youtube_fallback(&mut self, url: String) {
+        if let Err(err) = crate::app::audio::youtube::extract_video_id(&url) {
+            tracing::warn!(error = ?err, "rejected trusted YouTube fallback URL");
+            self.banner = Some(Banner::error("Invalid YouTube URL"));
+            return;
+        }
+
+        let service = self.audio_service.clone();
+        let user_id = self.user_id;
+        tokio::spawn(async move {
+            if let Err(err) = service.set_trusted_youtube_fallback(user_id, &url).await {
+                late_core::error_span!(
+                    "audio_youtube_fallback_set_failed",
+                    error = ?err,
+                    user_id = %user_id,
+                    "failed to set YouTube fallback"
+                );
+            }
+        });
+        self.banner = Some(Banner::success("Set YouTube fallback"));
+    }
+
     pub fn paired_client_state(&self) -> Option<ClientAudioState> {
         self.paired_client_registry
             .as_ref()

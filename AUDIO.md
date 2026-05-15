@@ -33,8 +33,9 @@ iframe queue path.
   the official YouTube iframe player.
 - When the current video ends, reports an error, or hits the 1h fallback cap,
   the server advances to the next item.
-- When the queue empties, the server emits `source_changed: icecast` and
-  browsers fall back to the existing Icecast pipeline.
+- When the queue empties and an admin-configured YouTube fallback exists,
+  browsers stay in the iframe and play that fallback stream. Otherwise the
+  server emits `source_changed: icecast`.
 - CLI clients continue playing Icecast regardless of queue state. They cannot
   decode YouTube, so they ignore queue events (with an internal mute when the
   server says a paired browser is the active source).
@@ -202,6 +203,26 @@ CREATE UNIQUE INDEX idx_media_queue_single_playing
     WHERE status = 'playing';
 ```
 
+YouTube fallback is stored outside FIFO queue state:
+
+```sql
+CREATE TABLE media_sources (
+    id              UUID PRIMARY KEY DEFAULT uuidv7(),
+    created         TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated         TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    source_kind     TEXT NOT NULL CHECK (source_kind IN ('youtube_fallback')),
+    media_kind      TEXT NOT NULL DEFAULT 'youtube',
+    external_id     TEXT NOT NULL,
+    title           TEXT,
+    channel         TEXT,
+    is_stream       BOOLEAN NOT NULL DEFAULT true,
+    updated_by      UUID REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX idx_media_sources_source_kind
+    ON media_sources (source_kind);
+```
+
 All PKs use DB-side `uuidv7()` per project convention.
 
 Why no `media_rooms` table: scoping was decided as fully global. There is no
@@ -215,6 +236,9 @@ Why `media_kind` is a CHECK constraint with only `'youtube'`: makes it
 explicit this is the YouTube-only world for now, but the column is in place
 so future Spotify/SoundCloud/etc. additions are a constraint relaxation,
 not a schema migration.
+
+Why fallback is not a queue item: it should not be FIFO, should not be marked
+`played`, and should be replaced in place by admin command.
 
 ---
 
@@ -241,7 +265,18 @@ Server steps:
    start playback immediately (if queue was empty) or just append.
 5. Show a local "Queued audio" banner to the admin.
 
-### 5.2 HTTP submit (deferred)
+### 5.2 Set YouTube fallback stream
+
+```
+/audio fallback https://www.youtube.com/watch?v=abc123
+```
+
+Admin-only. The command extracts the video id and upserts the singleton
+`media_sources.source_kind = 'youtube_fallback'` row. If no queue item is
+playing or queued, the service immediately broadcasts `source_changed:
+youtube` and `load_video` for the fallback stream.
+
+### 5.3 HTTP submit (deferred)
 
 `POST /api/queue/submit` is not exposed for the MVP. The optional YouTube
 Data API validation path still exists in code for a future public or
@@ -250,7 +285,7 @@ non-admin flow, but the working MVP path is `/audio`.
 When revived later, HTTP submit should validate embeddability/public status,
 duration, quota failure, and rate limits before inserting queue items.
 
-### 5.3 Read the queue (implemented)
+### 5.4 Read the queue (implemented)
 
 ```
 GET /api/queue
@@ -505,12 +540,15 @@ are still captured so future-you does not relitigate.
   playback timer, server-authoritative sync seeks, browser state reports,
   and global broadcast events.
 - Admin-only `/audio <youtube-link>` chat command.
+- Admin-only `/audio fallback <youtube-link>` command for the singleton
+  YouTube fallback stream.
 - `GET /api/queue`.
 - Existing `/api/ws/pair` multiplexes audio events and accepts
   `player_state`.
 - Browser connect page loads the YouTube IFrame API, switches between
   Icecast and YouTube, sends state/duration observations back to the server,
-  corrects drift from server sync seeks, and resumes Icecast on fallback.
+  corrects drift from server sync seeks, and stays in YouTube on fallback
+  when a fallback stream is configured.
 - CLI tolerates audio events and keeps its Icecast path.
 - Audio code consolidation into `late-ssh/src/app/audio/`.
 
