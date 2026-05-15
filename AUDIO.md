@@ -316,12 +316,16 @@ but it's in the protocol so future TUI / browser UI can subscribe.
   "item_id": "<uuid>",
   "state": "playing" | "paused" | "buffering" | "ended" | "error",
   "offset_ms": 12345,
+  "duration_ms": 212000,
   "autoplay_blocked": false,
   "error": "<reason>" }
 ```
 
-The browser reports playback state for each loaded item. The server uses
-`ended` to advance the queue and `error` to mark items failed.
+The browser reports playback state for each loaded item. The server treats
+`offset_ms` and `duration_ms` as client observations. It uses `error` to
+mark items failed. It only accepts `ended` when the server timeline says the
+item is actually at the end; an early browser `ended` report is ignored and
+the server sends a sync seek back to the authoritative offset.
 
 ### 6.3 Fan-out implementation
 
@@ -399,18 +403,19 @@ offset_ms = server_now_ms - started_at_ms
 player.loadVideoById({ videoId, startSeconds: offset_ms / 1000 })
 ```
 
-`server_now_ms` is approximated client-side from the existing heartbeat
-round trip. A new round adds a server timestamp echo so clock skew is
-correctable; not strictly needed for MVP (initial join sync within ~1s is
-acceptable).
+The server also broadcasts periodic `seek` sync events with the current
+authoritative offset. Browsers compare that offset to their iframe position
+and seek only when drift crosses the correction threshold. This lets users
+catch up after ads/buffering without letting a local iframe control the
+global queue timeline.
 
-Drift correction (deferred, not needed for two-link MVP test):
+Drift correction:
 
 - Every 10s, browser compares `player.getCurrentTime() * 1000` against
   expected offset.
-- `|drift| < 500ms`: ignore.
-- `|drift| > 2000ms`: hard seek.
-- Between: nudge playback rate `0.98x` or `1.02x` for up to 5s.
+- `|drift| < 2500ms`: ignore.
+- `|drift| >= 2500ms`: hard seek.
+- Hard seek cooldown: 5s.
 
 Live streams skip drift correction entirely; the 1h cap governs the
 lifecycle.
@@ -435,8 +440,9 @@ are still captured so future-you does not relitigate.
 
 4. **1h stream/unknown-duration cap.** On `load_video` for an item with
    `is_stream=true` or unknown duration, schedule a forced-skip task at
-   `started_at + 3600s`. If the browser reports `ended` earlier, the queue
-   advances normally.
+   `started_at + 3600s`. If browsers later report a real duration, persist
+   it and reschedule the server timer to the actual server-side end time.
+   The server timeline remains authoritative.
 
 5. **Min duration on submission.** Deferred for the trusted admin MVP path
    because `/audio` does not call the YouTube Data API. Add it back with
@@ -445,8 +451,10 @@ are still captured so future-you does not relitigate.
 6. **Per-user submission rate limit.** Deferred for the trusted admin MVP
    path. Admin `/audio` bypasses the limiter.
 
-7. **Browser reports `ended`.** Audio service marks item `played`,
-   `ended_at = now()`, advances queue.
+7. **Browser reports `ended`.** Audio service validates the report against
+   server elapsed time and known/reported duration. If it is early, ignore
+   it and broadcast an authoritative seek. If it is near the server-side end,
+   mark item `played`, set `ended_at = now()`, and advance queue.
 
 8. **Browser reports `error`.** Mark item `failed`, store error message,
    advance queue. The current implementation treats the first matching
@@ -490,14 +498,15 @@ are still captured so future-you does not relitigate.
 - `CONTEXT.md` updated to mention the audio domain.
 - Global `media_queue_items` migration and model.
 - `AudioService` with queue state machine, DB resume, fallback debounce,
-  playback timer, browser state reports, and global broadcast events.
+  playback timer, server-authoritative sync seeks, browser state reports,
+  and global broadcast events.
 - Admin-only `/audio <youtube-link>` chat command.
 - `GET /api/queue`.
 - Existing `/api/ws/pair` multiplexes audio events and accepts
   `player_state`.
 - Browser connect page loads the YouTube IFrame API, switches between
-  Icecast and YouTube, sends ended/error state back to the server, and
-  resumes Icecast on fallback.
+  Icecast and YouTube, sends state/duration observations back to the server,
+  corrects drift from server sync seeks, and resumes Icecast on fallback.
 - CLI tolerates audio events and keeps its Icecast path.
 - Audio code consolidation into `late-ssh/src/app/audio/`.
 
@@ -508,8 +517,9 @@ are still captured so future-you does not relitigate.
 3. Server inserts a global queued item and starts it if nothing is playing.
 4. Paired browser receives `source_changed: youtube` and `load_video`.
 5. Browser plays through the official iframe.
-6. Browser sends `player_state: ended` or `error`.
-7. Server marks played/failed and advances to the next queued item.
+6. Browser sends `player_state` observations.
+7. Server advances only when its own timeline says the item is done, or
+   marks failed on playback error.
 8. Empty queue falls back to Icecast after the debounce.
 
 ### Not done / intentionally deferred

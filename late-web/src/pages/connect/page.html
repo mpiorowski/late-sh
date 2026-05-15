@@ -92,14 +92,18 @@
             pendingYoutubeItem: null,
             currentYoutubeItem: null,
             playerStateInterval: null,
+            lastYoutubeSeekAt: 0,
             copied: null,
             volumePercent: 30,
+            muted: false,
+            audioEnabled: false,
             wsRetries: 0,
             audioRetries: 0,
 
             init() {
                 this.$refs.audio.src = this.audioUrl;
                 this.$refs.audio.volume = this.volumePercent / 100;
+                this.$refs.audio.muted = this.muted;
 
                 this.$refs.audio.addEventListener('error', (e) => {
                     if (this.status === 'disconnected') return;
@@ -237,6 +241,7 @@
             },
 
             startPlayback() {
+                this.audioEnabled = true;
                 this.status = 'buffering';
 
                 // Reconnect WS if it was closed during disconnect
@@ -325,8 +330,22 @@
             },
 
             toggleLocalMute() {
+                this.applyMuteState(!this.muted);
+            },
+
+            applyMuteState(muted) {
+                this.muted = !!muted;
                 const audio = this.$refs.audio;
-                audio.muted = !audio.muted;
+                if (audio) {
+                    audio.muted = this.muted;
+                }
+                if (this.ytPlayer) {
+                    if (this.muted && this.ytPlayer.mute) {
+                        this.ytPlayer.mute();
+                    } else if (!this.muted && this.ytPlayer.unMute) {
+                        this.ytPlayer.unMute();
+                    }
+                }
                 this.sendClientState();
             },
 
@@ -346,7 +365,7 @@
                 this.ws.send(JSON.stringify({
                     event: 'client_state',
                     client_kind: 'browser',
-                    muted: this.$refs.audio ? this.$refs.audio.muted : false,
+                    muted: this.muted,
                     volume_percent: this.volumePercent,
                 }));
             },
@@ -466,7 +485,7 @@
                 if (mode === 'youtube') {
                     const audio = this.$refs.audio;
                     audio.pause();
-                    this.status = this.currentYoutubeItem ? 'playing' : 'ready';
+                    this.status = this.audioEnabled ? 'buffering' : 'ready';
                     this.ensureYoutubePlayer();
                     if (this.pendingYoutubeItem) {
                         this.playYoutubeItem(this.pendingYoutubeItem);
@@ -477,7 +496,7 @@
                     }
                     this.currentYoutubeItem = null;
                     this.pendingYoutubeItem = null;
-                    if (this.status === 'playing' || this.status === 'buffering') {
+                    if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
                         this.startPlayback();
                     } else {
                         this.status = 'ready';
@@ -501,6 +520,7 @@
                         onReady: () => {
                             this.ytReady = true;
                             this.ytPlayer.setVolume(this.volumePercent);
+                            this.applyMuteState(this.muted);
                             if (this.pendingYoutubeItem) {
                                 this.playYoutubeItem(this.pendingYoutubeItem);
                             }
@@ -521,7 +541,7 @@
                 };
                 this.pendingYoutubeItem = item;
                 this.ensureYoutubePlayer();
-                if (this.status === 'playing' || this.status === 'buffering') {
+                if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
                     this.playYoutubeItem(item);
                 } else {
                     this.status = 'ready';
@@ -535,19 +555,18 @@
                 this.pendingYoutubeItem = null;
                 this.currentYoutubeItem = item;
                 this.status = 'buffering';
-                const offsetMs = item.isStream ? 0 : Math.max(0, Date.now() - item.startedAtMs);
+                const offsetMs = this.expectedYoutubeOffsetMs(item);
                 this.ytPlayer.loadVideoById({
                     videoId: item.videoId,
                     startSeconds: Math.floor(offsetMs / 1000),
                 });
                 this.ytPlayer.setVolume(this.volumePercent);
+                this.applyMuteState(this.muted);
                 this.startPlayerStateLoop();
             },
 
             seekYoutube(offsetMs) {
-                if (this.ytPlayer && this.ytPlayer.seekTo) {
-                    this.ytPlayer.seekTo(Math.max(0, offsetMs / 1000), true);
-                }
+                this.correctYoutubeDriftTo(offsetMs || 0);
             },
 
             handleYoutubeStateChange(state) {
@@ -556,6 +575,7 @@
                 }
                 if (state === window.YT.PlayerState.PLAYING) {
                     this.status = 'playing';
+                    this.correctYoutubeDrift();
                     this.sendYoutubeState('playing');
                 } else if (state === window.YT.PlayerState.PAUSED) {
                     this.sendYoutubeState('paused');
@@ -573,9 +593,57 @@
                 }
                 this.playerStateInterval = setInterval(() => {
                     if (this.audioMode === 'youtube' && this.currentYoutubeItem) {
+                        this.correctYoutubeDrift();
                         this.sendYoutubeState('playing');
                     }
                 }, 10000);
+            },
+
+            expectedYoutubeOffsetMs(item) {
+                if (!item || item.isStream) {
+                    return 0;
+                }
+                return Math.max(0, Date.now() - item.startedAtMs);
+            },
+
+            correctYoutubeDrift() {
+                if (!this.currentYoutubeItem || this.currentYoutubeItem.isStream) {
+                    return;
+                }
+                if (!this.ytPlayer || !this.ytPlayer.getCurrentTime || !this.ytPlayer.seekTo) {
+                    return;
+                }
+
+                const now = Date.now();
+                if (now - this.lastYoutubeSeekAt < 5000) {
+                    return;
+                }
+
+                const expectedMs = this.expectedYoutubeOffsetMs(this.currentYoutubeItem);
+                this.correctYoutubeDriftTo(expectedMs);
+            },
+
+            correctYoutubeDriftTo(expectedMs) {
+                if (!this.currentYoutubeItem || this.currentYoutubeItem.isStream) {
+                    return;
+                }
+                if (!this.ytPlayer || !this.ytPlayer.getCurrentTime || !this.ytPlayer.seekTo) {
+                    return;
+                }
+
+                const now = Date.now();
+                if (now - this.lastYoutubeSeekAt < 5000) {
+                    return;
+                }
+
+                const actualMs = Math.floor(this.ytPlayer.getCurrentTime() * 1000);
+                const driftMs = expectedMs - actualMs;
+                if (Math.abs(driftMs) < 2500) {
+                    return;
+                }
+
+                this.lastYoutubeSeekAt = now;
+                this.ytPlayer.seekTo(Math.max(0, expectedMs / 1000), true);
             },
 
             sendYoutubeState(state, error = null) {
@@ -583,14 +651,22 @@
                     return;
                 }
                 let offsetMs = 0;
+                let durationMs = null;
                 if (this.ytPlayer && this.ytPlayer.getCurrentTime) {
                     offsetMs = Math.floor(this.ytPlayer.getCurrentTime() * 1000);
+                }
+                if (this.ytPlayer && this.ytPlayer.getDuration) {
+                    const durationSeconds = this.ytPlayer.getDuration();
+                    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+                        durationMs = Math.floor(durationSeconds * 1000);
+                    }
                 }
                 this.ws.send(JSON.stringify({
                     event: 'player_state',
                     item_id: this.currentYoutubeItem.itemId,
                     state,
                     offset_ms: offsetMs,
+                    duration_ms: durationMs,
                     autoplay_blocked: false,
                     error,
                 }));

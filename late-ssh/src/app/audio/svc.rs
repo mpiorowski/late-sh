@@ -16,6 +16,8 @@ const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 3;
 const SUBMISSION_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
 const FALLBACK_DEBOUNCE: Duration = Duration::from_secs(10);
+const PLAYBACK_SYNC_INTERVAL: Duration = Duration::from_secs(10);
+const PLAYBACK_END_GRACE: Duration = Duration::from_secs(5);
 const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
@@ -117,6 +119,8 @@ pub struct PlayerStateReport {
     pub state: PlayerPlaybackState,
     #[serde(default)]
     pub offset_ms: Option<u64>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
     #[serde(default)]
     pub autoplay_blocked: bool,
     #[serde(default)]
@@ -231,7 +235,7 @@ impl AudioService {
 
     pub async fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
         match report.state {
-            PlayerPlaybackState::Ended => self.finish_item(report.item_id).await,
+            PlayerPlaybackState::Ended => self.finish_item_from_player(report).await,
             PlayerPlaybackState::Error => {
                 let reason = report
                     .error
@@ -250,6 +254,8 @@ impl AudioService {
                         "browser reported autoplay blocked"
                     );
                 }
+                self.record_browser_duration(report.item_id, report.duration_ms)
+                    .await?;
                 Ok(())
             }
         }
@@ -324,6 +330,55 @@ impl AudioService {
     async fn finish_item_due_to_timer(&self, item_id: Uuid) -> Result<()> {
         tracing::info!(%item_id, "media queue item reached playback limit");
         self.finish_item(item_id).await
+    }
+
+    async fn finish_item_from_player(&self, report: PlayerStateReport) -> Result<()> {
+        let state = self.state.lock().await;
+        if state.current_item_id != Some(report.item_id) {
+            return Ok(());
+        }
+
+        let client = self.db.get().await?;
+        let Some(item) = MediaQueueItem::find_by_id(&client, report.item_id).await? else {
+            return Ok(());
+        };
+        let Some(started_at) = item.started_at else {
+            return Ok(());
+        };
+
+        let duration = report
+            .duration_ms
+            .and_then(|value| duration_from_report_ms(value))
+            .or_else(|| playback_known_duration(&item));
+        let Some(duration) = duration else {
+            tracing::debug!(
+                item_id = %report.item_id,
+                offset_ms = ?report.offset_ms,
+                "ignoring browser ended report without known duration"
+            );
+            return Ok(());
+        };
+
+        let elapsed = Utc::now()
+            .signed_duration_since(started_at)
+            .to_std()
+            .unwrap_or_default();
+        if elapsed.saturating_add(PLAYBACK_END_GRACE) < duration {
+            tracing::debug!(
+                item_id = %report.item_id,
+                elapsed_ms = elapsed.as_millis() as u64,
+                duration_ms = duration.as_millis() as u64,
+                offset_ms = ?report.offset_ms,
+                "ignoring early browser ended report"
+            );
+            self.publish_seek_for_started_at(started_at);
+            return Ok(());
+        }
+
+        drop(state);
+        self.record_browser_duration(report.item_id, report.duration_ms)
+            .await?;
+        self.finish_item(report.item_id).await
     }
 
     async fn finish_item(&self, item_id: Uuid) -> Result<()> {
@@ -436,6 +491,16 @@ impl AudioService {
         });
     }
 
+    fn publish_seek_for_started_at(&self, started_at: DateTime<Utc>) {
+        let offset_ms = Utc::now()
+            .signed_duration_since(started_at)
+            .to_std()
+            .unwrap_or_default()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
+        let _ = self.event_tx.send(AudioEvent::Seek { offset_ms });
+    }
+
     fn schedule_playback_timer(&self, state: &mut QueueState, item: &MediaQueueItem) {
         self.cancel_playback(state);
         let Some(started_at) = item.started_at else {
@@ -457,6 +522,7 @@ impl AudioService {
         let (tx, rx) = oneshot::channel();
         state.playback_cancel = Some(tx);
         tokio::spawn(async move {
+            let mut sync = tokio::time::interval(PLAYBACK_SYNC_INTERVAL);
             tokio::select! {
                 _ = tokio::time::sleep(sleep_for) => {
                     if let Err(err) = service.finish_item_due_to_timer(item_id).await {
@@ -468,9 +534,40 @@ impl AudioService {
                         );
                     }
                 }
+                _ = async {
+                    loop {
+                        sync.tick().await;
+                        service.publish_seek_for_started_at(started_at);
+                    }
+                } => {}
                 _ = rx => {}
             }
         });
+    }
+
+    async fn record_browser_duration(&self, item_id: Uuid, duration_ms: Option<u64>) -> Result<()> {
+        let Some(duration_ms) = duration_ms.and_then(|value| i32::try_from(value).ok()) else {
+            return Ok(());
+        };
+        if duration_ms <= 0 {
+            return Ok(());
+        }
+
+        let client = self.db.get().await?;
+        if let Some(item) = MediaQueueItem::find_by_id(&client, item_id).await?
+            && item.duration_ms.is_none()
+            && item.status == MediaQueueItem::STATUS_PLAYING
+        {
+            if let Some(updated) =
+                MediaQueueItem::set_duration_if_missing(&client, item_id, duration_ms).await?
+            {
+                let mut state = self.state.lock().await;
+                if state.current_item_id == Some(item_id) {
+                    self.schedule_playback_timer(&mut state, &updated);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn schedule_fallback(&self, state: &mut QueueState) {
@@ -542,11 +639,21 @@ fn playback_duration(item: &MediaQueueItem) -> Duration {
         return STREAM_CAP;
     }
 
+    playback_known_duration(item).unwrap_or(STREAM_CAP)
+}
+
+fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
     item.duration_ms
         .and_then(|duration_ms| u64::try_from(duration_ms).ok())
         .map(Duration::from_millis)
         .filter(|duration| !duration.is_zero())
-        .unwrap_or(STREAM_CAP)
+}
+
+fn duration_from_report_ms(duration_ms: u64) -> Option<Duration> {
+    if duration_ms == 0 || duration_ms > STREAM_CAP.as_millis() as u64 {
+        return None;
+    }
+    Some(Duration::from_millis(duration_ms))
 }
 
 fn queue_item_view(item: MediaQueueItem, usernames: &HashMap<Uuid, String>) -> QueueItemView {

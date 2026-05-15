@@ -178,6 +178,25 @@ impl MediaQueueItem {
         Ok(row.map(Self::from))
     }
 
+    pub async fn set_duration_if_missing(
+        client: &Client,
+        id: Uuid,
+        duration_ms: i32,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "UPDATE media_queue_items
+                 SET duration_ms = $2,
+                     updated = current_timestamp
+                 WHERE id = $1
+                   AND duration_ms IS NULL
+                 RETURNING *",
+                &[&id, &duration_ms],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     pub async fn mark_played(client: &Client, id: Uuid, ended_at: DateTime<Utc>) -> Result<u64> {
         let count = client
             .execute(
