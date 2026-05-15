@@ -205,26 +205,29 @@ impl AudioService {
         enforce_rate_limit: bool,
     ) -> Result<SubmitQueueResponse> {
         let mut state = self.state.lock().await;
-        let client = self.db.get().await?;
 
-        if enforce_rate_limit {
-            let since = Utc::now() - SUBMISSION_WINDOW;
-            let recent = MediaQueueItem::recent_submission_count(&client, user_id, since).await?;
-            if recent >= MAX_SUBMISSIONS_PER_WINDOW {
-                anyhow::bail!("submission rate limit exceeded");
+        let item = {
+            let client = self.db.get().await?;
+            if enforce_rate_limit {
+                let since = Utc::now() - SUBMISSION_WINDOW;
+                let recent =
+                    MediaQueueItem::recent_submission_count(&client, user_id, since).await?;
+                if recent >= MAX_SUBMISSIONS_PER_WINDOW {
+                    anyhow::bail!("submission rate limit exceeded");
+                }
             }
-        }
 
-        let item = MediaQueueItem::insert_youtube(
-            &client,
-            user_id,
-            &video.video_id,
-            video.title.as_deref(),
-            video.channel.as_deref(),
-            video.duration_ms,
-            video.is_stream,
-        )
-        .await?;
+            MediaQueueItem::insert_youtube(
+                &client,
+                user_id,
+                &video.video_id,
+                video.title.as_deref(),
+                video.channel.as_deref(),
+                video.duration_ms,
+                video.is_stream,
+            )
+            .await?
+        };
 
         self.cancel_fallback(&mut state);
         if state.current_item_id.is_none() {
@@ -236,6 +239,7 @@ impl AudioService {
         let position_in_queue = if state.current_item_id == Some(item.id) {
             0
         } else {
+            let client = self.db.get().await?;
             MediaQueueItem::queued_before_count(&client, item.created).await? + 1
         };
 

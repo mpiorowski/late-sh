@@ -63,20 +63,6 @@ impl MediaQueueItem {
         Self::get(client, id).await
     }
 
-    pub async fn list_active(client: &Client) -> Result<Vec<Self>> {
-        let rows = client
-            .query(
-                "SELECT * FROM media_queue_items
-                 WHERE status IN ('queued', 'playing')
-                 ORDER BY
-                    CASE status WHEN 'playing' THEN 0 ELSE 1 END,
-                    created",
-                &[],
-            )
-            .await?;
-        Ok(rows.into_iter().map(Self::from).collect())
-    }
-
     pub async fn list_snapshot(client: &Client, limit: i64) -> Result<Vec<Self>> {
         let rows = client
             .query(
