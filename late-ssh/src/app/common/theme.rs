@@ -68,6 +68,7 @@ pub enum ThemeKind {
     Monokai = 62,
     SolarizedLight = 63,
     SolarizedDark = 64,
+    Pantera = 65,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -573,6 +574,12 @@ pub const OPTIONS: &[ThemeOption] = &[
         group: ThemeGroup::Ports,
         id: "solarized_dark",
         label: "Solarized Dark",
+    },
+    ThemeOption {
+        kind: ThemeKind::Pantera,
+        group: ThemeGroup::Ports,
+        id: "pantera",
+        label: "Charmtone Pantera",
     },
 ];
 
@@ -2528,6 +2535,38 @@ const PALETTE_SOLARIZED_DARK: Palette = Palette {
     badge_gold: Color::Rgb(181, 137, 0),
 };
 
+// Ported from Charmbracelet Crush's default Charmtone Pantera theme.
+// Credit: Charmbracelet — https://github.com/charmbracelet/crush/blob/main/internal/ui/styles/themes.go
+const PALETTE_PANTERA: Palette = Palette {
+    bg_canvas: Color::Rgb(32, 31, 38),
+    bg_selection: Color::Rgb(45, 44, 53),
+    bg_highlight: Color::Rgb(58, 57, 67),
+    border_dim: Color::Rgb(58, 57, 67),
+    border: Color::Rgb(77, 76, 87),
+    border_active: Color::Rgb(107, 80, 255),
+    text_faint: Color::Rgb(96, 95, 107),
+    text_dim: Color::Rgb(133, 131, 146),
+    text_muted: Color::Rgb(191, 188, 200),
+    text: Color::Rgb(223, 219, 221),
+    text_bright: Color::Rgb(255, 250, 241),
+    amber: Color::Rgb(245, 239, 52),
+    amber_dim: Color::Rgb(191, 151, 111),
+    amber_glow: Color::Rgb(232, 255, 39),
+    chat_body: Color::Rgb(223, 219, 221),
+    chat_author: Color::Rgb(104, 255, 214),
+    mention: Color::Rgb(232, 255, 39),
+    success: Color::Rgb(0, 255, 178),
+    error: Color::Rgb(235, 66, 104),
+    bot: Color::Rgb(255, 96, 255),
+    bonsai_sprout: Color::Rgb(18, 199, 143),
+    bonsai_leaf: Color::Rgb(0, 255, 178),
+    bonsai_canopy: Color::Rgb(104, 255, 214),
+    bonsai_bloom: Color::Rgb(255, 132, 255),
+    badge_bronze: Color::Rgb(191, 151, 111),
+    badge_silver: Color::Rgb(191, 188, 200),
+    badge_gold: Color::Rgb(245, 239, 52),
+};
+
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Contrast) };
 }
@@ -2655,6 +2694,7 @@ fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
         ThemeKind::Late => &PALETTE_LATE,
         ThemeKind::SolarizedLight => &PALETTE_SOLARIZED_LIGHT,
         ThemeKind::SolarizedDark => &PALETTE_SOLARIZED_DARK,
+        ThemeKind::Pantera => &PALETTE_PANTERA,
     }
 }
 
