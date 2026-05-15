@@ -68,7 +68,7 @@ pub enum ThemeKind {
     Monokai = 62,
     SolarizedLight = 63,
     SolarizedDark = 64,
-    Pantera = 65,
+    Crush = 65,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -576,7 +576,7 @@ pub const OPTIONS: &[ThemeOption] = &[
         label: "Solarized Dark",
     },
     ThemeOption {
-        kind: ThemeKind::Pantera,
+        kind: ThemeKind::Crush,
         group: ThemeGroup::Ports,
         id: "pantera",
         label: "Charmtone Pantera",
@@ -2694,7 +2694,7 @@ fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
         ThemeKind::Late => &PALETTE_LATE,
         ThemeKind::SolarizedLight => &PALETTE_SOLARIZED_LIGHT,
         ThemeKind::SolarizedDark => &PALETTE_SOLARIZED_DARK,
-        ThemeKind::Pantera => &PALETTE_PANTERA,
+        ThemeKind::Crush => &PALETTE_PANTERA,
     }
 }
 
