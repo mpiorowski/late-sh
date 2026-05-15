@@ -701,11 +701,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     let ctx = InputContext::from_app(app);
 
-    if handle_view_vote_prefix_input(app, ctx, &event) {
-        app.chat.clear_message_selection();
-        return;
-    }
-
     if handle_dedicated_screen_input(app, ctx, &event) {
         return;
     }
@@ -1058,52 +1053,6 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     false
-}
-
-fn handle_view_vote_prefix_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
-    let Some(byte) = event_ascii_byte(event) else {
-        return false;
-    };
-
-    if prefix_blocked(app, ctx) {
-        return false;
-    }
-
-    if app.vote_prefix_armed {
-        app.vote_prefix_armed = false;
-        if matches!(byte, b'v' | b'V') {
-            return true;
-        }
-        if crate::app::vote::input::handle_vote_suffix(app, byte) {
-            return true;
-        }
-    }
-
-    if matches!(byte, b'v' | b'V') {
-        app.vote_prefix_armed = true;
-        return true;
-    }
-
-    false
-}
-
-fn event_ascii_byte(event: &ParsedInput) -> Option<u8> {
-    match event {
-        ParsedInput::Byte(byte) => Some(*byte),
-        ParsedInput::Char(ch) if ch.is_ascii() => Some(*ch as u8),
-        _ => None,
-    }
-}
-
-fn prefix_blocked(app: &App, ctx: InputContext) -> bool {
-    ctx.chat_composing
-        || ctx.feeds_processing
-        || ctx.news_composing
-        || ctx.showcase_composing
-        || ctx.work_composing
-        || (ctx.screen == Screen::Arcade && app.is_playing_game)
-        || (ctx.screen == Screen::Artboard && app.artboard_interacting)
-        || (matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && app.chat.has_overlay())
 }
 
 fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
