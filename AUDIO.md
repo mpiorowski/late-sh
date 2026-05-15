@@ -24,16 +24,16 @@ iframe queue path.
 ### MVP (functional only)
 
 - Always-on Icecast house radio keeps working exactly as today.
-- An admin-only `/audio <youtube-link>` SSH chat command accepts a YouTube
-  URL.
-- The admin command is trusted for MVP: it extracts the video id locally and
+- A staff-only `/audio <youtube-link>` SSH chat command (admin or moderator)
+  accepts a YouTube URL.
+- The command is trusted for MVP: it extracts the video id locally and
   does not require `LATE_YOUTUBE_API_KEY`.
 - The URL is persisted in a DB table that survives pod restarts.
 - When the queue has items, every paired browser plays the current video via
   the official YouTube iframe player.
 - When the current video ends, reports an error, or hits the 1h fallback cap,
   the server advances to the next item.
-- When the queue empties and an admin-configured YouTube fallback exists,
+- When the queue empties and a staff-configured YouTube fallback exists,
   browsers stay in the iframe and play that fallback stream. Otherwise the
   server emits `source_changed: icecast`.
 - CLI clients continue playing Icecast regardless of queue state. They cannot
@@ -47,7 +47,7 @@ iframe queue path.
 - **DB-backed.** Queue items live in Postgres. Pod restart loses runtime
   state (the per-track timer) but not the queue itself. The current playing
   item is restorable from `status='playing'` rows.
-- **No submission UI in this iteration.** Submission is via the admin-only
+- **No submission UI in this iteration.** Submission is via the staff-only
   `/audio` command. The web connect page has the required playback iframe
   plumbing but no queue controls. Visibility is via DB or `GET /api/queue`.
   TUI surfacing comes later.
@@ -117,7 +117,7 @@ late-ssh/
     ├── api.rs                      # MODIFIED: GET /api/queue, WS audio fan-out
     ├── main.rs                     # MODIFIED: spawn AudioService
     ├── state.rs                    # MODIFIED: add audio_service handle
-    ├── app/chat/state.rs           # MODIFIED: admin-only /audio command
+    ├── app/chat/state.rs           # MODIFIED: staff-only /audio command
     ├── app/chat/input.rs           # MODIFIED: dispatch /audio request
     └── app/
         └── audio/                  # NEW domain folder
@@ -271,7 +271,7 @@ Server steps:
 /audio fallback https://www.youtube.com/watch?v=abc123
 ```
 
-Admin-only. The command extracts the video id and upserts the singleton
+Staff-only (admin or moderator). The command extracts the video id and upserts the singleton
 `media_sources.source_kind = 'youtube_fallback'` row. If no queue item is
 playing or queued, the service immediately broadcasts `source_changed:
 youtube` and `load_video` for the fallback stream.
@@ -547,8 +547,8 @@ are still captured so future-you does not relitigate.
 - `AudioService` with queue state machine, DB resume, fallback debounce,
   playback timer, server-authoritative sync seeks, browser state reports,
   and global broadcast events.
-- Admin-only `/audio <youtube-link>` chat command.
-- Admin-only `/audio fallback <youtube-link>` command for the singleton
+- Staff-only `/audio <youtube-link>` chat command (admin or moderator).
+- Staff-only `/audio fallback <youtube-link>` command for the singleton
   YouTube fallback stream.
 - `GET /api/queue`.
 - Existing `/api/ws/pair` multiplexes audio events and accepts
@@ -631,7 +631,7 @@ Out of scope for MVP. Recorded here so the constraint is not forgotten:
 - **Lyrics, album art, fancy metadata.** Title + channel is enough.
 - **Custom genre control per submission.** Fallback uses the global vote
   winner just like everywhere else.
-- **Submission UI in MVP.** Admin-only `/audio` is sufficient for the
+- **Submission UI in MVP.** Staff-only `/audio` is sufficient for the
   two-link smoke test.
 
 ---

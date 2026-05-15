@@ -488,11 +488,19 @@
                 if (mode === 'youtube' && !this.youtubeEnabled) {
                     return;
                 }
+                const modeChanged = this.audioMode !== mode;
                 this.audioMode = mode;
                 if (mode === 'youtube') {
-                    const audio = this.$refs.audio;
-                    audio.pause();
-                    this.status = this.audioEnabled ? 'buffering' : 'ready';
+                    if (modeChanged) {
+                        // Only tear down the Icecast audio element when actually
+                        // switching INTO youtube. Re-broadcasts of the same mode
+                        // (queue transitions) must not reset status — the iframe
+                        // is already showing/playing and we want loadYoutubeVideo
+                        // to take it from there.
+                        const audio = this.$refs.audio;
+                        audio.pause();
+                        this.status = this.audioEnabled ? 'buffering' : 'ready';
+                    }
                     this.ensureYoutubePlayer();
                     if (this.pendingYoutubeItem) {
                         this.playYoutubeItem(this.pendingYoutubeItem);
@@ -564,7 +572,13 @@
 
                 this.pendingYoutubeItem = item;
                 this.ensureYoutubePlayer();
-                if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
+                // Once any youtube item is mounted in the iframe (fallback or
+                // a queue item) the player has the autoplay gesture it needs to
+                // load subsequent items. Don't gate switching on audioEnabled
+                // in that case — otherwise queue transitions get stuck as
+                // pending while the previous video keeps playing.
+                const youtubeActive = !!(this.ytPlayer && this.ytReady && this.currentYoutubeItem);
+                if (this.audioEnabled || youtubeActive || this.status === 'playing' || this.status === 'buffering') {
                     this.playYoutubeItem(item);
                 } else {
                     this.status = 'ready';
