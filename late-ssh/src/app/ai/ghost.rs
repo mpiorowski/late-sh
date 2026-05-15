@@ -1411,12 +1411,24 @@ fn short_user_id(user_id: Uuid) -> String {
     id[..id.len().min(8)].to_string()
 }
 
+fn text_for_mention_detection(text: &str) -> &str {
+    match text.split_once('\n') {
+        Some((first_line, rest))
+            if first_line.trim().starts_with("> ") && !rest.trim().is_empty() =>
+        {
+            rest
+        }
+        _ => text,
+    }
+}
+
 fn contains_mention(text: &str, target_handle: &str) -> bool {
     let target = target_handle.trim().trim_start_matches('@');
     if target.is_empty() {
         return false;
     }
 
+    let text = text_for_mention_detection(text);
     let mut idx = 0;
     while idx < text.len() {
         let Some(ch) = text[idx..].chars().next() else {
@@ -1629,6 +1641,20 @@ mod tests {
     #[test]
     fn contains_mention_ignores_email_like_tokens() {
         assert!(!contains_mention("mail me at hi@bot.dev", "bot"));
+    }
+
+    #[test]
+    fn contains_mention_ignores_reply_quote_prefix() {
+        assert!(!contains_mention(
+            "> @bot: earlier message
+thanks",
+            "bot"
+        ));
+        assert!(contains_mention(
+            "> @bot: earlier message
+thanks @bot",
+            "bot"
+        ));
     }
 
     #[test]
