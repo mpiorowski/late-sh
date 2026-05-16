@@ -5,6 +5,7 @@ pub mod config;
 pub mod dartboard;
 pub mod metrics;
 pub mod moderation;
+pub mod paired_clients;
 pub mod session;
 pub mod session_bootstrap;
 pub mod ssh;

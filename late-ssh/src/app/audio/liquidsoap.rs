@@ -4,6 +4,25 @@ use tokio::{
     net::TcpStream,
 };
 
+#[derive(Clone, Debug)]
+pub struct LiquidsoapController {
+    addr: String,
+}
+
+impl LiquidsoapController {
+    pub fn new(addr: String) -> Self {
+        Self { addr }
+    }
+
+    pub async fn send_command(&self, command: &str) -> Result<()> {
+        send_command(&self.addr, command).await
+    }
+
+    pub fn addr(&self) -> &str {
+        &self.addr
+    }
+}
+
 pub async fn send_command(addr: &str, command: &str) -> Result<()> {
     tracing::debug!(addr, command, "sending liquidsoap command");
     let connect = TcpStream::connect(addr);

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-14 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
+- Last updated: 2026-05-14 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`; Audio plan lives in `AUDIO.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -327,6 +327,10 @@ The stored-permit regression is locked down by `ssh::tests::stale_permit_does_no
 
 ### 2.7 Audio infrastructure
 
+`AUDIO.md` owns the current audio-domain plan: existing Icecast house radio,
+browser/CLI source priority, visualizer behavior, and future browser-hosted
+YouTube media rooms.
+
 ```mermaid
 flowchart LR
     LOCAL["Local .m3u<br/>CC0/CC-BY music"] -->|"playlist"| LS
@@ -513,7 +517,8 @@ late-sh/
 **Web routes (late-web, port 3000):**
 - `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA, CLI install/build copy actions, and links to gallery/play/profiles
 - `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume control, Web Audio analyzer for TUI visualizer
-- `GET /status?pairing={bool}` - HTMX fragment: now-playing track + listener count (fetched from SSH API internally). `pairing=false` for landing footer, `pairing=true` for pairing detail view. Polled every 5s.
+- `GET /status` - HTMX fragment: now-playing track + listener count for the landing footer. Polled every 5s.
+- `GET /pair/status` - HTMX fragment: now-playing track + artist + listener count for the audio pairing page. Polled every 5s.
 - `GET /chat/{token}` - Browser chat page; connects to `late-ssh` `/api/ws/chat`
 - `GET /dashboard`, `/dashboard/now-playing`, `/dashboard/status` - Internal/demo dashboard and HTMX partials
 - `GET /gallery?key=...` - Read-only Artboard snapshot gallery backed by saved DB snapshots
