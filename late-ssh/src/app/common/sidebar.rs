@@ -224,12 +224,7 @@ fn draw_empty_active_tables(frame: &mut Frame, area: Rect) {
         )
     };
 
-    let lines = vec![
-        Line::from(faint("no active tables")),
-        Line::from(vec![key("b1"), dim("/"), key("b2"), dim("/"), key("b3")]),
-        Line::from(vec![key("n"), dim(" create table")]),
-        Line::from(vec![key("Enter"), dim(" join")]),
-    ];
+    let lines = vec![Line::from(faint("no active tables"))];
     frame.render_widget(Paragraph::new(lines), area);
 }
 
