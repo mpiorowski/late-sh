@@ -210,13 +210,13 @@ The unrelated bare `/music` command (`state.rs:1325`) opens a help topic, not a 
 1. `youtube::trusted_video_from_url(url)` extracts the 11-char ID. Accepted forms: `youtube.com/watch?v=…`, `youtu.be/…`, `youtube.com/embed/…`, `youtube.com/shorts/…`, `youtube.com/live/…`, subdomains via `host.ends_with(".youtube.com")`. Anything else returns an `anyhow` error (lowercase, per repo style).
 2. `MediaQueueItem::insert_youtube` writes the row with `status='queued'`, `media_kind='youtube'`, title/channel/duration as NULL, `is_stream=false`.
 3. If nothing is currently playing, `advance_to_next_with_guard` immediately flips it to `playing` and broadcasts.
-4. Banner via `AudioEvent::TrustedSubmitQueued` — "Queued audio — up next" or "Queued audio — #N in line" depending on position.
+4. On success, banner via `AudioEvent::TrustedSubmitQueued` — "Queued audio — up next" or "Queued audio — #N in line" depending on position. On failure (URL parse, rate limit, DB), banner via `AudioEvent::TrustedSubmitFailed` carrying a classified message from `trusted_submit_error_message` (svc.rs:835) — one of "Invalid YouTube URL", "Slow down — too many submissions", or "Failed to queue audio".
 
 `/audio fallback` flow:
 1. `youtube::trusted_video_from_url(url)` (same parser).
 2. `MediaSource::upsert_youtube_fallback` — `ON CONFLICT (source_kind) DO UPDATE`, always sets `is_stream=true`.
 3. If the queue is empty *and* no item is playing, immediately broadcasts `SourceChanged: youtube` + `LoadVideo` for the fallback so paired browsers start it without waiting.
-4. Banner via `AudioEvent::FallbackUpdated`.
+4. On success, banner via `AudioEvent::YoutubeFallbackSet` — "Set YouTube fallback". On failure, banner via `AudioEvent::YoutubeFallbackFailed` carrying the classified message from `trusted_submit_error_message`.
 
 ---
 
@@ -293,7 +293,6 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 ## 13. Known Gaps and Things to Watch
 
 - **`GET /api/queue` is not registered.** `AudioService::snapshot()` and `QueueSnapshot` exist but no Axum route exposes them. AUDIO.md §5.4 and §10 list this as done — it is not. Add a route in `api.rs` if a TUI or external probe needs the queue.
-- **`AudioEvent::TrustedSubmitFailed` is declared but never published.** `submit_trusted_url_task` (`svc.rs:289-318`) only emits `TrustedSubmitQueued` on success and logs failures at `error_span!` — the user sees no banner if a `/audio` URL is malformed once it reaches the service layer. URL parse errors before the spawn are surfaced; everything inside is silent. Worth fixing.
 - **`room/` is an empty directory.** No `mod.rs`, not referenced from `mod.rs`, no git history. Either a stale scaffold or intent marker. Safe to delete; if kept, leave it as-is — adding files would require wiring through `mod.rs`.
 - **`liquidsoap.rs` lives here but is only used by `app/vote/svc.rs`.** AudioService does *not* drive Liquidsoap. Treat `AudioMode::Icecast` as a hint to the browser/CLI, not a Liquidsoap state change.
 - **`/music` ≠ `/audio`.** `/music` is a help-topic command. `/audio` (and `/audio fallback`) are the submit commands. Don't conflate.

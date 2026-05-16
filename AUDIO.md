@@ -582,7 +582,7 @@ are still captured so future-you does not relitigate.
 
 ## 10b. Browser-side YouTube gate (`?youtube=true`)
 
-The connect page (`/` and `/{token}`) accepts an optional `?youtube=true`
+The connect page (`/{token}`) accepts an optional `?youtube=true`
 query parameter. Without it, the page never leaves Icecast: it ignores
 `source_changed: youtube`, `load_video`, and `seek` events, and the
 YouTube IFrame API script is not loaded. With it, the full YouTube path
