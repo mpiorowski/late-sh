@@ -158,12 +158,7 @@ impl PairedClientRegistry {
     /// Send a control message to paired entries whose `client_kind` matches the
     /// predicate. Used to target CLI-only force-mute or browser-only controls.
     /// Returns the number of entries that accepted the message.
-    fn send_control_filter<F>(
-        &self,
-        token: &str,
-        msg: PairControlMessage,
-        mut matches: F,
-    ) -> usize
+    fn send_control_filter<F>(&self, token: &str, msg: PairControlMessage, mut matches: F) -> usize
     where
         F: FnMut(ClientKind) -> bool,
     {
