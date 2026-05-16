@@ -204,17 +204,6 @@ fn active_tables_room_hint(idx: usize) -> Vec<Span<'static>> {
 }
 
 fn draw_empty_active_tables(frame: &mut Frame, area: Rect) {
-    let key = |text: &str| -> Span<'static> {
-        Span::styled(
-            text.to_string(),
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        )
-    };
-    let dim = |text: &str| -> Span<'static> {
-        Span::styled(text.to_string(), Style::default().fg(theme::TEXT_DIM()))
-    };
     let faint = |text: &str| -> Span<'static> {
         Span::styled(
             text.to_string(),

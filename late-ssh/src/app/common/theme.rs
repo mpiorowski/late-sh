@@ -315,7 +315,7 @@ pub const OPTIONS: &[ThemeOption] = &[
         id: "monokai",
         label: "Monokai",
     },
-        ThemeOption {
+    ThemeOption {
         kind: ThemeKind::SolarizedLight,
         group: ThemeGroup::Ports,
         id: "solarized-light",
@@ -596,13 +596,13 @@ pub const OPTIONS: &[ThemeOption] = &[
         group: ThemeGroup::Monochrome,
         id: "mono-ink",
         label: "Mono Ink",
-    },    
+    },
     ThemeOption {
         kind: ThemeKind::MonoDim,
         group: ThemeGroup::Monochrome,
         id: "mono-dim",
         label: "Mono Dim",
-    },    
+    },
     ThemeOption {
         kind: ThemeKind::MonoFog,
         group: ThemeGroup::Monochrome,
@@ -2795,6 +2795,8 @@ const PALETTE_DEEP_SEA: Palette = Palette {
     badge_bronze: Color::Rgb(247, 140, 108),
     badge_silver: Color::Rgb(200, 220, 240),
     badge_gold: Color::Rgb(137, 221, 255),
+};
+
 // Ported from Charmbracelet Crush's default Charmtone Pantera theme.
 // Credit: Charmbracelet — https://github.com/charmbracelet/crush/blob/main/internal/ui/styles/themes.go
 const PALETTE_PANTERA: Palette = Palette {
@@ -2961,8 +2963,6 @@ fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
         ThemeKind::MonoInkSemantic => &PALETTE_MONO_INK_SEMANTIC,
         ThemeKind::MonoDimSemantic => &PALETTE_MONO_DIM_SEMANTIC,
         ThemeKind::MonoFogSemantic => &PALETTE_MONO_FOG_SEMANTIC,
-        ThemeKind::SolarizedLight => &PALETTE_SOLARIZED_LIGHT,
-        ThemeKind::SolarizedDark => &PALETTE_SOLARIZED_DARK,
         ThemeKind::Crush => &PALETTE_PANTERA,
     }
 }
