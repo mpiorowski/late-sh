@@ -9,7 +9,7 @@ use std::{
 };
 use tokio::{sync::broadcast, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::{audio::VizSample, clipboard};
 
@@ -141,7 +141,7 @@ async fn handle_pair_control(
     let control = match serde_json::from_str::<PairControlMessage>(text) {
         Ok(control) => control,
         Err(_) => {
-            debug!(payload = %text, "ignoring unsupported pair websocket event");
+            warn!(payload = %text, "ignoring unsupported pair websocket event");
             return Ok(false);
         }
     };

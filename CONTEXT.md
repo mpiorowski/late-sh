@@ -329,8 +329,7 @@ The stored-permit regression is locked down by `ssh::tests::stale_permit_does_no
 
 `AUDIO.md` owns the current audio-domain plan: existing Icecast house radio,
 browser/CLI source priority, visualizer behavior, and future browser-hosted
-YouTube media rooms. `DJ.md` still owns rights rules for audio that late.sh
-hosts or rebroadcasts through Icecast.
+YouTube media rooms.
 
 ```mermaid
 flowchart LR

@@ -13,10 +13,6 @@ iframe player, and the system falls back to Icecast when the queue is empty.
 TUI surfaces, voting, keybindings, sidebar widgets, and public submission
 flows all come later.
 
-`DJ.md` captures original brainstorming and the hard ToS rules; this file
-now supersedes the YouTube-related sections of `DJ.md` for the browser
-iframe queue path.
-
 ---
 
 ## 1. Goals
@@ -540,8 +536,6 @@ are still captured so future-you does not relitigate.
 
 ### Done
 
-- `DJ.md` scoped to server-hosted/rebroadcast audio; browser YouTube iframe
-  playback is documented as a separate path.
 - `CONTEXT.md` updated to mention the audio domain.
 - Global `media_queue_items` migration and model.
 - `AudioService` with queue state machine, DB resume, fallback debounce,
@@ -727,13 +721,13 @@ argue the CLI is "designed to facilitate" ToS-violating playback; the
 argument weakens dramatically when the CLI is broadly an external-player
 runner with no player named in code or docs.
 
-### Conflict with `DJ.md` hard rules
+### ToS posture
 
-`DJ.md` lines 25 to 32 forbid `yt-dlp`, restreaming, ad-stripping, and
-extracting platform audio. A user-side mpv-with-yt-dlp setup violates both
-clauses on the user's machine. The `DJ.md` update for the active browser
-plan does not solve this; if the parked plan is ever activated, `DJ.md`
-needs a second, separate update to allow CLI handoffs explicitly.
+A user-side mpv-with-yt-dlp setup still violates YouTube ToS on the user's
+machine (yt-dlp strips ads, branding, and controls). If this plan is ever
+activated, late.sh would need to be explicit that the CLI is a generic
+external-player runner and that the user, not late.sh, is responsible for
+what their configured player does.
 
 ### Reactivation criteria
 
