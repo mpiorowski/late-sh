@@ -237,7 +237,7 @@ async fn main() -> anyhow::Result<()> {
         active_users.clone(),
         activity_tx.clone(),
     );
-    let paired_client_registry = late_ssh::session::PairedClientRegistry::new();
+    let paired_client_registry = late_ssh::paired_clients::PairedClientRegistry::new();
     let web_chat_registry = late_ssh::web::WebChatRegistry::new();
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,

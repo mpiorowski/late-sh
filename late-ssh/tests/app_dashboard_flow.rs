@@ -13,7 +13,7 @@ use late_core::models::{
     vote::Vote,
 };
 use late_core::test_utils::create_test_user;
-use late_ssh::session::PairControlMessage;
+use late_ssh::paired_clients::PairControlMessage;
 use tokio::time::{Duration, Instant, sleep};
 
 async fn make_app_harness() -> (late_core::test_utils::TestDb, late_ssh::app::state::App) {

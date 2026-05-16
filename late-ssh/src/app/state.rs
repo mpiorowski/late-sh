@@ -35,7 +35,8 @@ use crate::{
         vote::svc::{Genre, VoteService},
     },
     authz::Permissions,
-    session::{PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry},
+    paired_clients::{PairControlMessage, PairedClientRegistry},
+    session::{SessionMessage, SessionRegistry},
     state::ActiveUsers,
     web::WebChatRegistry,
 };

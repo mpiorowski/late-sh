@@ -25,7 +25,8 @@ use crate::app::rooms::registry::RoomGameRegistry;
 use crate::app::rooms::svc::RoomsService;
 use crate::app::vote::svc::VoteService;
 use crate::config::Config;
-use crate::session::{PairedClientRegistry, SessionRegistry};
+use crate::paired_clients::PairedClientRegistry;
+use crate::session::SessionRegistry;
 use crate::web::WebChatRegistry;
 use late_core::{api_types::NowPlaying, db::Db, rate_limit::IpRateLimiter};
 use std::{
