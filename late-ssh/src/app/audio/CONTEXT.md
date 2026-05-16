@@ -292,7 +292,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 
 ## 13. Known Gaps and Things to Watch
 
-- **`GET /api/queue` is not registered.** `AudioService::snapshot()` and `QueueSnapshot` exist but no Axum route exposes them. AUDIO.md §5.4 and §10 list this as done — it is not. Add a route in `api.rs` if a TUI or external probe needs the queue.
+- **`GET /api/queue` is intentionally not exposed.** `AudioService::snapshot()` and `QueueSnapshot` exist for in-process use only. The TUI reads the queue via direct DB queries through `MediaQueueItem` (`list_snapshot`, `first_queued`); browsers receive state via the `initial_ws_messages` catch-up burst and live `queue_update` events. An external route would only matter for non-paired observers, which we do not have today. See AUDIO.md §5.4.
 - **`room/` is an empty directory.** No `mod.rs`, not referenced from `mod.rs`, no git history. Either a stale scaffold or intent marker. Safe to delete; if kept, leave it as-is — adding files would require wiring through `mod.rs`.
 - **`liquidsoap.rs` lives here but is only used by `app/vote/svc.rs`.** AudioService does *not* drive Liquidsoap. Treat `AudioMode::Icecast` as a hint to the browser/CLI, not a Liquidsoap state change.
 - **`/music` ≠ `/audio`.** `/music` is a help-topic command. `/audio` (and `/audio fallback`) are the submit commands. Don't conflate.

@@ -281,31 +281,15 @@ non-admin flow, but the working MVP path is `/audio`.
 When revived later, HTTP submit should validate embeddability/public status,
 duration, quota failure, and rate limits before inserting queue items.
 
-### 5.4 Read the queue (implemented)
+### 5.4 Read the queue (deferred)
 
-```
-GET /api/queue
-```
-
-Returns:
-
-```json
-{
-  "audio_mode": "icecast" | "youtube",
-  "current": {
-    "id": "...", "video_id": "...", "title": "...",
-    "duration_ms": 212000, "started_at_ms": 1770000000000,
-    "is_stream": false, "submitter": "<username>"
-  } | null,
-  "queue": [
-    { "id": "...", "video_id": "...", "title": "...",
-      "submitter": "<username>", "is_stream": false }
-  ]
-}
-```
-
-Plain JSON. No HTMX, no SSE. Polled by curl or inspected during MVP testing.
-Later the TUI can use this same shape.
+No HTTP route is exposed. `AudioService::snapshot()` returns a
+`QueueSnapshot { mode, current, queue }` for in-process callers. The TUI
+reads the queue via direct DB queries through `MediaQueueItem`
+(`list_snapshot`, `first_queued`); the browser receives queue state via the
+existing pair-WS catch-up burst (`initial_ws_messages`) and live
+`queue_update` events. An external `GET /api/queue` would only matter for
+non-paired observers, which we do not have. Revisit if that changes.
 
 ---
 
@@ -544,7 +528,6 @@ are still captured so future-you does not relitigate.
 - Staff-only `/audio <youtube-link>` chat command (admin or moderator).
 - Staff-only `/audio fallback <youtube-link>` command for the singleton
   YouTube fallback stream.
-- `GET /api/queue`.
 - Existing `/api/ws/pair` multiplexes audio events and accepts
   `player_state`.
 - Browser connect page loads the YouTube IFrame API, switches between
@@ -743,7 +726,130 @@ in §3-§8.
 
 ---
 
-## 14. References
+## 14. Music Booth (planned)
+
+Adds public YouTube submissions, per-track up/down voting, and democratic
+skip on the existing global YouTube queue (§1-§13). Icecast and the genre
+vote system in `app/vote/` are unchanged — this is purely additive on the
+YouTube path.
+
+### 14.1 Surface
+- `v+v` in TUI chat: opens the booth modal (submit + queue + vote controls).
+- `v+s` in TUI chat: casts a skip vote on the currently-playing item.
+- No web UI in this iteration.
+
+### 14.2 Voting model
+- New table `media_queue_votes (user_id, item_id, value ∈ {-1,+1})`, unique
+  on `(user_id, item_id)`. Removing a vote = row delete.
+- Queue order: `ORDER BY (vote_score DESC, created ASC)` over
+  `status='queued'`. FIFO is the tiebreaker.
+- Currently-playing track is unvotable. Modal hides up/down for it; votes
+  against `status='playing'` rejected with banner "voting closed — track
+  started."
+- Each vote bumps the queue sequence and broadcasts a fresh `queue_update`.
+
+### 14.3 Skip-vote model
+- In-memory `HashSet<UserId>` on `QueueState`, scoped to the current
+  `item_id`. Cleared on every track change.
+- Threshold: `ceil(0.1 × paired_clients)`, min 1. Counts both CLI and
+  browser via `PairedClientRegistry`.
+- On threshold, advance current item to `status='skipped'` (the enum value
+  that was reserved but never written) and broadcast the next track.
+- Not persisted across restart — by design. The listener set has changed.
+
+### 14.4 Submission
+- Revives `AudioService::submit_url_task` (the un-trusted path that exists
+  but has no caller today). Validates via YouTube Data API: embeddable,
+  public, region-allowed, min duration.
+- `LATE_YOUTUBE_API_KEY` becomes effectively required for the booth. If
+  missing, the booth submit field is disabled with a banner; staff
+  `/audio` continues to work.
+- Existing per-user rate limit (3 per 5 min) carries over.
+- Staff `/audio` keeps the trusted bypass — no API, no rate limit. Ops
+  escape hatch when YouTube API quota/availability is bad.
+
+### 14.5 Eligibility
+- Submit, vote, skip-vote: any authenticated SSH user. No pairing
+  requirement — you can vote without listening.
+- Threshold denominator counts paired clients only (CLI + browser).
+  Intentional: the threshold reflects active listeners, not total
+  participants.
+
+### 14.6 Schema
+
+Migration `049_create_media_queue_votes.sql`:
+
+```sql
+CREATE TABLE media_queue_votes (
+    id        UUID PRIMARY KEY DEFAULT uuidv7(),
+    created   TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated   TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    item_id   UUID NOT NULL REFERENCES media_queue_items(id) ON DELETE CASCADE,
+    user_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    value     SMALLINT NOT NULL CHECK (value IN (-1, 1))
+);
+
+CREATE UNIQUE INDEX idx_media_queue_votes_user_item
+    ON media_queue_votes (user_id, item_id);
+
+CREATE INDEX idx_media_queue_votes_item
+    ON media_queue_votes (item_id);
+```
+
+`media_queue_items` is unchanged. Vote score is computed via LEFT JOIN +
+SUM in `MediaQueueItem::first_queued` and `MediaQueueItem::list_snapshot`.
+
+### 14.7 Service surface
+
+`AudioService` gains:
+- `cast_vote(user_id, item_id, value)` — upsert, returns new score,
+  rejects non-queued items, broadcasts `queue_update`.
+- `clear_vote(user_id, item_id)` — delete, returns new score, broadcasts.
+- `cast_skip_vote(user_id)` — adds to in-memory set for current item,
+  returns `{ votes, threshold }`. Advances queue when threshold is hit.
+
+`QueueState` gains:
+- `skip_votes: HashSet<UserId>` keyed implicitly to `current_item_id`;
+  cleared on every transition that changes `current_item_id`.
+
+`AudioState` (per-session shim) proxies these and surfaces banners.
+
+### 14.8 Modal placement
+New module `app/audio/booth/` keeps `app/chat/state.rs` from growing.
+Chat opens the modal via the existing modal-stack mechanism. v+v / v+s
+keybinds registered in chat's keybind table.
+
+### 14.9 Browser WS additions
+Browser doesn't vote in this iteration but should reflect reorders.
+Extend the existing `queue_update` payload:
+- Each item gains `vote_score: i32`.
+- Current item gains `skip_progress: { votes: u32, threshold: u32 }`.
+
+No new events. No new client→server messages.
+
+### 14.10 Edge cases
+- **Vote race with track advance.** Conditional update against
+  `status='queued'`; zero rows affected → banner.
+- **Threshold drops mid-track.** Re-evaluate skip threshold on every
+  paired-client disconnect; fire skip if count now meets threshold.
+- **Multi-tab.** Same `user_id` — votes and skip-votes dedupe.
+- **Submitter votes own track.** Allowed.
+- **All-negative track.** Still plays (ranks last). Skip vote is the only
+  removal mechanism.
+- **API key missing.** Booth submit disabled with banner; staff `/audio`
+  path intact.
+
+### 14.11 Still out of scope
+- Browser-side voting UI.
+- Weighted votes by role (admin/mod vote ≠ user vote).
+- Vote history / reputation.
+- Public `POST /api/queue/submit` HTTP route — booth uses in-process
+  service calls.
+- `GET /api/queue` HTTP route — see §5.4.
+
+---
+
+## 15. References
 
 - Existing audio infra: root `CONTEXT.md` §2.7.
 - Vote domain (closest analogue for services + channels):
