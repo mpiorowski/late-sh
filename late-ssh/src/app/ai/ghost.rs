@@ -1655,6 +1655,11 @@ thanks",
 thanks @bot",
             "bot"
         ));
+        assert!(contains_mention(
+            "> @alice: earlier message
+hey @bot what do you think",
+            "bot"
+        ));
     }
 
     #[test]
