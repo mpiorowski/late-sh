@@ -99,6 +99,7 @@
             volumePercent: 30,
             muted: false,
             audioEnabled: false,
+            autoplayBlocked: false,
             wsRetries: 0,
             audioRetries: 0,
 
@@ -256,6 +257,10 @@
                     this.ensureYoutubePlayer();
                     if (this.pendingYoutubeItem) {
                         this.playYoutubeItem(this.pendingYoutubeItem);
+                    } else if (this.autoplayBlocked && this.ytPlayer && this.ytPlayer.playVideo) {
+                        this.autoplayBlocked = false;
+                        this.status = 'buffering';
+                        this.ytPlayer.playVideo();
                     }
                     return;
                 }
@@ -607,9 +612,29 @@
                     startSeconds: Math.floor(offsetMs / 1000),
                 });
                 this.verifyYoutubeLoad(item);
+                this.detectAutoplayBlocked(item);
                 this.ytPlayer.setVolume(this.volumePercent);
                 this.applyMuteState(this.muted);
                 this.startPlayerStateLoop();
+            },
+
+            detectAutoplayBlocked(item) {
+                window.setTimeout(() => {
+                    if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                        return;
+                    }
+                    if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
+                        return;
+                    }
+                    const state = this.ytPlayer.getPlayerState();
+                    const cued = window.YT.PlayerState.CUED;
+                    const unstarted = window.YT.PlayerState.UNSTARTED;
+                    if (state === cued || state === unstarted) {
+                        this.autoplayBlocked = true;
+                        this.status = 'ready';
+                        this.sendYoutubeState('buffering');
+                    }
+                }, 1500);
             },
 
             seekYoutube(offsetMs) {
@@ -628,6 +653,7 @@
                     return;
                 }
                 if (state === window.YT.PlayerState.PLAYING) {
+                    this.autoplayBlocked = false;
                     this.status = 'playing';
                     this.correctYoutubeDrift();
                     this.sendYoutubeState('playing');
@@ -789,7 +815,7 @@
                     state,
                     offset_ms: offsetMs,
                     duration_ms: durationMs,
-                    autoplay_blocked: false,
+                    autoplay_blocked: this.autoplayBlocked,
                     error,
                 }));
             }
@@ -1070,12 +1096,12 @@
 
     <div class="space-y-3" x-cloak>
         <button @click="startPlayback"
-            x-show="status === 'ready' || status === 'disconnected' || status === 'buffering'"
-            :disabled="status === 'buffering'"
-            class="w-full text-left border px-4 py-3 text-sm transition-colors duration-200" :class="status === 'buffering'
+            x-show="status === 'ready' || status === 'disconnected' || status === 'buffering' || autoplayBlocked"
+            :disabled="status === 'buffering' && !autoplayBlocked"
+            class="w-full text-left border px-4 py-3 text-sm transition-colors duration-200" :class="(status === 'buffering' && !autoplayBlocked)
                     ? 'border-gray-800 text-gray-600 cursor-wait'
                     : 'border-gray-700 hover:border-green-900 text-gray-300 hover:text-green-500 bg-gray-900/40'"
-            x-text="status === 'buffering' ? '[ buffering... ]' : '[ start audio ]'">
+            x-text="autoplayBlocked ? '[ tap to play ]' : (status === 'buffering' ? '[ buffering... ]' : '[ start audio ]')">
         </button>
 
         <button @click="disconnect" x-show="status === 'playing'"

@@ -18,13 +18,13 @@ const SUBMISSION_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
 const FALLBACK_DEBOUNCE: Duration = Duration::from_secs(10);
 const PLAYBACK_SYNC_INTERVAL: Duration = Duration::from_secs(10);
 const PLAYBACK_END_GRACE: Duration = Duration::from_secs(5);
-const UNKNOWN_DURATION_ENDED_FLOOR: Duration = Duration::from_secs(30);
 const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
 pub struct AudioService {
     db: Db,
     youtube: YoutubeClient,
+    ws_tx: broadcast::Sender<AudioWsMessage>,
     event_tx: broadcast::Sender<AudioEvent>,
     state: Arc<Mutex<QueueState>>,
 }
@@ -57,7 +57,7 @@ impl AudioMode {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
-pub enum AudioEvent {
+pub enum AudioWsMessage {
     LoadVideo {
         item_id: Uuid,
         video_id: String,
@@ -76,6 +76,14 @@ pub enum AudioEvent {
         queue: Vec<QueueItemView>,
         sequence: u64,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum AudioEvent {
+    TrustedSubmitQueued { user_id: Uuid, position: i64 },
+    TrustedSubmitFailed { user_id: Uuid, message: String },
+    YoutubeFallbackSet { user_id: Uuid },
+    YoutubeFallbackFailed { user_id: Uuid, message: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -131,20 +139,33 @@ pub struct PlayerStateReport {
 
 impl AudioService {
     pub fn new(db: Db, youtube_api_key: Option<String>) -> Self {
-        let (event_tx, _) = broadcast::channel(512);
+        let (ws_tx, _) = broadcast::channel(512);
+        let (event_tx, _) = broadcast::channel(256);
         Self {
             db,
             youtube: YoutubeClient::new(youtube_api_key),
+            ws_tx,
             event_tx,
             state: Arc::new(Mutex::new(QueueState::default())),
         }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<AudioEvent> {
+    pub fn subscribe_ws(&self) -> broadcast::Receiver<AudioWsMessage> {
+        self.ws_tx.subscribe()
+    }
+
+    pub fn subscribe_events(&self) -> broadcast::Receiver<AudioEvent> {
         self.event_tx.subscribe()
     }
 
     pub async fn start_background_task(self, shutdown: late_core::shutdown::CancellationToken) {
+        if let Err(err) = self.sweep_orphan_playing().await {
+            late_core::error_span!(
+                "audio_orphan_sweep_failed",
+                error = ?err,
+                "failed to sweep orphan playing rows"
+            );
+        }
         if let Err(err) = self.resume_from_db().await {
             late_core::error_span!(
                 "audio_resume_failed",
@@ -265,6 +286,64 @@ impl AudioService {
         });
     }
 
+    pub fn submit_trusted_url_task(&self, user_id: Uuid, url: String) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.submit_trusted_url(user_id, &url).await {
+                Ok(response) => {
+                    tracing::info!(
+                        item_id = %response.id,
+                        position = response.position_in_queue,
+                        "queued trusted audio URL"
+                    );
+                    service.publish_event(AudioEvent::TrustedSubmitQueued {
+                        user_id,
+                        position: response.position_in_queue,
+                    });
+                }
+                Err(err) => {
+                    late_core::error_span!(
+                        "audio_trusted_submit_failed",
+                        error = ?err,
+                        user_id = %user_id,
+                        "failed to queue trusted audio URL"
+                    );
+                    service.publish_event(AudioEvent::TrustedSubmitFailed {
+                        user_id,
+                        message: trusted_submit_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn set_trusted_youtube_fallback_task(&self, user_id: Uuid, url: String) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.set_trusted_youtube_fallback(user_id, &url).await {
+                Ok(()) => {
+                    service.publish_event(AudioEvent::YoutubeFallbackSet { user_id });
+                }
+                Err(err) => {
+                    late_core::error_span!(
+                        "audio_youtube_fallback_set_failed",
+                        error = ?err,
+                        user_id = %user_id,
+                        "failed to set YouTube fallback"
+                    );
+                    service.publish_event(AudioEvent::YoutubeFallbackFailed {
+                        user_id,
+                        message: trusted_submit_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
+    fn publish_event(&self, event: AudioEvent) {
+        let _ = self.event_tx.send(event);
+    }
+
     pub async fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
         match report.state {
             PlayerPlaybackState::Ended => self.finish_item_from_player(report).await,
@@ -311,14 +390,14 @@ impl AudioService {
         self.load_snapshot(mode).await
     }
 
-    pub async fn initial_events(&self) -> Result<Vec<AudioEvent>> {
+    pub async fn initial_ws_messages(&self) -> Result<Vec<AudioWsMessage>> {
         let state = self.state.lock().await;
         let snapshot = self.load_snapshot(state.mode).await?;
         let mut events = vec![
-            AudioEvent::SourceChanged {
+            AudioWsMessage::SourceChanged {
                 audio_mode: snapshot.audio_mode,
             },
-            AudioEvent::QueueUpdate {
+            AudioWsMessage::QueueUpdate {
                 current: snapshot.current.clone(),
                 queue: snapshot.queue.clone(),
                 sequence: state.sequence,
@@ -327,7 +406,7 @@ impl AudioService {
         if let Some(current) = &snapshot.current
             && let Some(started_at_ms) = current.started_at_ms
         {
-            events.push(AudioEvent::LoadVideo {
+            events.push(AudioWsMessage::LoadVideo {
                 item_id: current.id,
                 video_id: current.video_id.clone(),
                 started_at_ms,
@@ -341,6 +420,21 @@ impl AudioService {
             }
         }
         Ok(events)
+    }
+
+    async fn sweep_orphan_playing(&self) -> Result<()> {
+        let client = self.db.get().await?;
+        let cutoff = Utc::now()
+            - chrono::Duration::from_std(STREAM_CAP).unwrap_or_else(|_| chrono::Duration::hours(1));
+        let swept = MediaQueueItem::sweep_orphan_playing(&client, cutoff).await?;
+        if swept > 0 {
+            tracing::warn!(
+                swept,
+                cutoff = %cutoff,
+                "swept orphan playing media_queue_items at startup"
+            );
+        }
+        Ok(())
     }
 
     async fn resume_from_db(&self) -> Result<()> {
@@ -391,26 +485,12 @@ impl AudioService {
             .signed_duration_since(started_at)
             .to_std()
             .unwrap_or_default();
-        let duration = playback_known_duration(&item)
-            .or_else(|| report.duration_ms.and_then(duration_from_report_ms));
-
-        let Some(duration) = duration else {
-            if elapsed >= UNKNOWN_DURATION_ENDED_FLOOR {
-                tracing::info!(
-                    item_id = %report.item_id,
-                    elapsed_ms = elapsed.as_millis() as u64,
-                    offset_ms = ?report.offset_ms,
-                    "accepting browser ended report after unknown-duration floor"
-                );
-                drop(state);
-                return self.finish_item(report.item_id).await;
-            }
-
+        let Some(duration) = playback_known_duration(&item) else {
             tracing::debug!(
                 item_id = %report.item_id,
                 elapsed_ms = elapsed.as_millis() as u64,
                 offset_ms = ?report.offset_ms,
-                "ignoring early browser ended report without known duration"
+                "ignoring browser ended report; server-known duration missing - server timer is authoritative"
             );
             self.publish_seek_for_started_at(started_at);
             return Ok(());
@@ -468,7 +548,16 @@ impl AudioService {
         let client = self.db.get().await?;
         if let Some(next) = MediaQueueItem::first_queued(&client).await? {
             self.cancel_fallback(state);
-            let item = MediaQueueItem::mark_playing(&client, next.id, Utc::now()).await?;
+            let Some(item) = MediaQueueItem::mark_playing(&client, next.id, Utc::now()).await?
+            else {
+                tracing::warn!(
+                    item_id = %next.id,
+                    "mark_playing returned no row; another playing row likely holds the slot - skipping advance"
+                );
+                self.schedule_fallback(state);
+                self.publish_queue_update_with_guard(state).await?;
+                return Ok(());
+            };
             state.current_item_id = Some(item.id);
             state.mode = AudioMode::Youtube;
             self.schedule_playback_timer(state, &item);
@@ -490,7 +579,7 @@ impl AudioService {
     async fn publish_queue_update_with_guard(&self, state: &mut QueueState) -> Result<()> {
         state.sequence = state.sequence.saturating_add(1);
         let snapshot = self.load_snapshot(state.mode).await?;
-        let _ = self.event_tx.send(AudioEvent::QueueUpdate {
+        let _ = self.ws_tx.send(AudioWsMessage::QueueUpdate {
             current: snapshot.current,
             queue: snapshot.queue,
             sequence: state.sequence,
@@ -527,15 +616,15 @@ impl AudioService {
 
     fn publish_source_change(&self, mode: AudioMode) {
         let _ = self
-            .event_tx
-            .send(AudioEvent::SourceChanged { audio_mode: mode });
+            .ws_tx
+            .send(AudioWsMessage::SourceChanged { audio_mode: mode });
     }
 
     fn publish_load_video(&self, item: &MediaQueueItem) {
         let Some(started_at) = item.started_at else {
             return;
         };
-        let _ = self.event_tx.send(AudioEvent::LoadVideo {
+        let _ = self.ws_tx.send(AudioWsMessage::LoadVideo {
             item_id: item.id,
             video_id: item.external_id.clone(),
             started_at_ms: started_at.timestamp_millis(),
@@ -545,11 +634,11 @@ impl AudioService {
     }
 
     fn publish_load_fallback(&self, source: &MediaSource) {
-        let _ = self.event_tx.send(fallback_load_event(source));
+        let _ = self.ws_tx.send(fallback_load_event(source));
     }
 
     fn publish_seek_for_started_at(&self, started_at: DateTime<Utc>) {
-        let _ = self.event_tx.send(AudioEvent::Seek {
+        let _ = self.ws_tx.send(AudioWsMessage::Seek {
             offset_ms: offset_for_started_at(started_at),
         });
     }
@@ -728,13 +817,6 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
-fn duration_from_report_ms(duration_ms: u64) -> Option<Duration> {
-    if duration_ms == 0 || duration_ms > STREAM_CAP.as_millis() as u64 {
-        return None;
-    }
-    Some(Duration::from_millis(duration_ms))
-}
-
 fn offset_for_started_at(started_at: DateTime<Utc>) -> u64 {
     Utc::now()
         .signed_duration_since(started_at)
@@ -752,8 +834,22 @@ fn offset_from_started_at_ms(started_at_ms: i64) -> u64 {
         .unwrap_or_default()
 }
 
-fn fallback_load_event(source: &MediaSource) -> AudioEvent {
-    AudioEvent::LoadVideo {
+fn trusted_submit_error_message(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if text.contains("invalid url")
+        || text.contains("unsupported youtube url")
+        || text.contains("invalid youtube video id")
+    {
+        "Invalid YouTube URL".to_string()
+    } else if text.contains("rate limit") {
+        "Slow down — too many submissions".to_string()
+    } else {
+        "Failed to queue audio".to_string()
+    }
+}
+
+fn fallback_load_event(source: &MediaSource) -> AudioWsMessage {
+    AudioWsMessage::LoadVideo {
         item_id: source.id,
         video_id: source.external_id.clone(),
         started_at_ms: Utc::now().timestamp_millis(),

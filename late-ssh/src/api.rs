@@ -16,7 +16,6 @@ use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::{MutexRecover, audio::VizFrame};
 use serde::Deserialize;
-use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::Any;
@@ -101,7 +100,6 @@ pub async fn run_api_server_with_listener(
     let app = Router::new()
         .route("/api/health", get(get_health))
         .route("/api/now-playing", get(get_now_playing))
-        .route("/api/queue", get(get_queue))
         .route("/api/status", get(get_status))
         .route("/api/ws/pair", get(ws_handler))
         .route("/api/ws/tunnel", get(crate::web_tunnel::ws_handler))
@@ -156,20 +154,6 @@ async fn get_now_playing(AxumState(state): AxumState<State>) -> Json<NowPlayingR
         listeners_count,
         started_at_ts,
     })
-}
-
-async fn get_queue(AxumState(state): AxumState<State>) -> impl IntoResponse {
-    match state.audio_service.snapshot().await {
-        Ok(snapshot) => (StatusCode::OK, Json(json!(snapshot))).into_response(),
-        Err(err) => {
-            tracing::error!(error = ?err, "failed to load media queue snapshot");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "failed to load queue" })),
-            )
-                .into_response()
-        }
-    }
 }
 
 async fn get_health(AxumState(state): AxumState<State>) -> (StatusCode, &'static str) {
@@ -250,14 +234,14 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     let registration_id = state
         .paired_client_registry
         .register(token.clone(), control_tx);
-    let mut audio_rx = state.audio_service.subscribe();
+    let mut audio_rx = state.audio_service.subscribe_ws();
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");
 
-    match state.audio_service.initial_events().await {
-        Ok(events) => {
-            for event in events {
-                if send_json_ws(&mut socket, &event, &token_hint, "audio initial event")
+    match state.audio_service.initial_ws_messages().await {
+        Ok(messages) => {
+            for msg in messages {
+                if send_json_ws(&mut socket, &msg, &token_hint, "audio initial message")
                     .await
                     .is_err()
                 {
@@ -267,7 +251,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
             }
         }
         Err(err) => {
-            tracing::warn!(token_hint = %token_hint, error = ?err, "failed to load initial audio events");
+            tracing::warn!(token_hint = %token_hint, error = ?err, "failed to load initial audio messages");
         }
     }
 
@@ -345,9 +329,13 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         );
                                     }
                                     // CLI just identified itself while a browser is
-                                    // already paired: mute it immediately.
+                                    // already paired: mute it immediately. Skip when
+                                    // the CLI already reports muted=true so a WS
+                                    // reconnect doesn't override a state the CLI is
+                                    // already in.
                                     if result.new_kind == ClientKind::Cli
                                         && result.browsers_total > 0
+                                        && !muted
                                     {
                                         state.paired_client_registry.send_control_filter(
                                             &token,
@@ -422,24 +410,13 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     tracing::info!(token_hint = %token_hint, "websocket connection closed");
 }
 
-/// Drop a paired-client registration and, when that drop removes the last
-/// browser from the token, release the server-imposed CLI mute. Without this
-/// the CLI would stay muted forever after the browser tab closes.
+/// Drop a paired-client registration. The registry atomically relaxes any
+/// server-imposed CLI mute when this removal leaves the token with zero
+/// browsers, so callers don't need to manage that follow-up themselves.
 fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
-    let Some(result) = state
+    state
         .paired_client_registry
-        .unregister_if_match(token, registration_id)
-    else {
-        return;
-    };
-
-    if result.removed_kind == ClientKind::Browser && result.browsers_remaining == 0 {
-        state.paired_client_registry.send_control_filter(
-            token,
-            PairControlMessage::ForceMute { mute: false },
-            |kind| kind == ClientKind::Cli,
-        );
-    }
+        .unregister_if_match(token, registration_id);
 }
 
 async fn send_json_ws<T: serde::Serialize>(

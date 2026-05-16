@@ -351,7 +351,11 @@ async fn main() -> anyhow::Result<()> {
         Ok(())
     });
 
-    let audio_shutdown = singleton_shutdown.clone();
+    // Audio rides session_shutdown (fires after ssh drain) rather than
+    // singleton_shutdown (fires at drain begin) so paired browsers keep
+    // hearing music through the entire drain window. Liquidsoap/Icecast
+    // streams from a separate process and is unaffected either way.
+    let audio_shutdown = session_shutdown.clone();
     tasks.spawn(async move {
         audio_service.start_background_task(audio_shutdown).await;
         Ok(())

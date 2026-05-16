@@ -160,42 +160,73 @@ impl PairedClientRegistry {
         registration_id
     }
 
-    /// Remove the matching entry. Returns the removed entry's `client_kind` and
-    /// the number of browser entries remaining on the token afterward, so the
-    /// caller can decide whether to relax a server-imposed CLI mute.
+    /// Remove the matching entry and, if doing so leaves the token with zero
+    /// browsers after removing a browser, atomically relaxes the server-imposed
+    /// CLI mute on the same token. Holding a single lock across removal and
+    /// CLI-sender collection closes the race where a new browser could register
+    /// between the two steps and have its ForceMute clobbered by a stale unmute.
     pub fn unregister_if_match(
         &self,
         token: &str,
         registration_id: u64,
     ) -> Option<UnregisterResult> {
-        let mut clients = self.clients.lock_recover();
-        let entries = clients.get_mut(token)?;
-        let position = entries
-            .iter()
-            .position(|entry| entry.registration_id == registration_id)?;
-        let removed = entries.remove(position);
-        if let Some((ssh_mode, platform)) = removed.state.cli_usage_labels() {
-            metrics::add_cli_pair_active(-1, ssh_mode, platform);
+        let (result, cli_senders_to_unmute) = {
+            let mut clients = self.clients.lock_recover();
+            let entries = clients.get_mut(token)?;
+            let position = entries
+                .iter()
+                .position(|entry| entry.registration_id == registration_id)?;
+            let removed = entries.remove(position);
+            if let Some((ssh_mode, platform)) = removed.state.cli_usage_labels() {
+                metrics::add_cli_pair_active(-1, ssh_mode, platform);
+            }
+            let removed_kind = removed.state.client_kind;
+            let browsers_remaining = entries
+                .iter()
+                .filter(|entry| entry.state.client_kind == ClientKind::Browser)
+                .count();
+            let cli_senders = if removed_kind == ClientKind::Browser && browsers_remaining == 0 {
+                entries
+                    .iter()
+                    .filter(|entry| entry.state.client_kind == ClientKind::Cli)
+                    .map(|entry| entry.tx.clone())
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            tracing::info!(
+                token_hint = %token_hint(token),
+                registration_id,
+                ?removed_kind,
+                browsers_remaining,
+                relax_cli_mute = !cli_senders.is_empty(),
+                "unregistered paired client session"
+            );
+            if entries.is_empty() {
+                clients.remove(token);
+            }
+            (
+                UnregisterResult {
+                    removed_kind,
+                    browsers_remaining,
+                },
+                cli_senders,
+            )
+        };
+
+        for tx in cli_senders_to_unmute {
+            if tx
+                .send(PairControlMessage::ForceMute { mute: false })
+                .is_err()
+            {
+                tracing::warn!(
+                    token_hint = %token_hint(token),
+                    "failed to relax CLI mute after browser disconnect"
+                );
+            }
         }
-        let removed_kind = removed.state.client_kind;
-        let browsers_remaining = entries
-            .iter()
-            .filter(|entry| entry.state.client_kind == ClientKind::Browser)
-            .count();
-        tracing::info!(
-            token_hint = %token_hint(token),
-            registration_id,
-            ?removed_kind,
-            browsers_remaining,
-            "unregistered paired client session"
-        );
-        if entries.is_empty() {
-            clients.remove(token);
-        }
-        Some(UnregisterResult {
-            removed_kind,
-            browsers_remaining,
-        })
+
+        Some(result)
     }
 
     /// Broadcast a control message to every paired client of `token`. Returns

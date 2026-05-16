@@ -134,9 +134,9 @@ impl MediaQueueItem {
         client: &Client,
         id: Uuid,
         started_at: DateTime<Utc>,
-    ) -> Result<Self> {
+    ) -> Result<Option<Self>> {
         let row = client
-            .query_one(
+            .query_opt(
                 "UPDATE media_queue_items
                  SET status = 'playing',
                      started_at = $2,
@@ -148,7 +148,23 @@ impl MediaQueueItem {
                 &[&id, &started_at],
             )
             .await?;
-        Ok(Self::from(row))
+        Ok(row.map(Self::from))
+    }
+
+    pub async fn sweep_orphan_playing(client: &Client, older_than: DateTime<Utc>) -> Result<u64> {
+        let rows = client
+            .execute(
+                "UPDATE media_queue_items
+                 SET status = 'failed',
+                     error = 'orphan playing row swept at startup',
+                     ended_at = current_timestamp,
+                     updated = current_timestamp
+                 WHERE status = 'playing'
+                   AND (started_at IS NULL OR started_at < $1)",
+                &[&older_than],
+            )
+            .await?;
+        Ok(rows)
     }
 
     pub async fn update_status(client: &Client, id: Uuid, status: &str) -> Result<Option<Self>> {

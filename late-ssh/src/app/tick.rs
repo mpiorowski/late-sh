@@ -61,6 +61,9 @@ impl App {
         if let Some(b) = self.vote.tick() {
             self.banner = Some(b);
         }
+        if let Some(b) = self.audio.tick() {
+            self.banner = Some(b);
+        }
         // News state is ticked inside chat.tick()
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
