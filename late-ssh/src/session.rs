@@ -279,54 +279,101 @@ impl PairedClientRegistry {
         delivered
     }
 
-    /// Update the audio state of a single entry. Returns the state of the entry
-    /// *after* the update plus the count of browser entries currently paired on
-    /// this token, so the caller can decide whether to push ForceMute.
-    pub fn update_state(
+    /// Apply a state update for a single entry and atomically enforce the
+    /// browser-priority mute policy under the same lock. Returns the update
+    /// outcome for callers that need it; the policy side-effects (ForceMute to
+    /// every CLI on the token) are dispatched after the lock is released.
+    ///
+    /// Policy:
+    /// - A browser just appeared on this token (transition into Browser kind) —
+    ///   every CLI on the token gets ForceMute { mute: true }.
+    /// - A CLI just identified itself with a browser already paired AND the CLI
+    ///   does not already report `muted == true` — same. The `muted` guard
+    ///   stops a WS reconnect from overriding a state the CLI is already in
+    ///   (e.g. user-initiated local mute).
+    ///
+    /// Holding the lock across the decision closes the same TOCTOU window that
+    /// `unregister_if_match` closes on the disconnect side.
+    pub fn update_state_and_enforce_mute_policy(
         &self,
         token: &str,
         registration_id: u64,
-        state: ClientAudioState,
+        new_state: ClientAudioState,
     ) -> Option<UpdateStateResult> {
-        let mut clients = self.clients.lock_recover();
-        let entries = clients.get_mut(token)?;
-        let entry = entries
-            .iter_mut()
-            .find(|entry| entry.registration_id == registration_id)?;
+        let (result, cli_senders_to_mute) = {
+            let mut clients = self.clients.lock_recover();
+            let entries = clients.get_mut(token)?;
+            let entry = entries
+                .iter_mut()
+                .find(|entry| entry.registration_id == registration_id)?;
 
-        let previous_kind = entry.state.client_kind;
-        let previous_labels = entry.state.cli_usage_labels();
-        let new_labels = state.cli_usage_labels();
+            let previous_kind = entry.state.client_kind;
+            let previous_labels = entry.state.cli_usage_labels();
+            let new_labels = new_state.cli_usage_labels();
 
-        if previous_labels != new_labels {
-            if let Some((ssh_mode, platform)) = previous_labels {
-                metrics::add_cli_pair_active(-1, ssh_mode, platform);
+            if previous_labels != new_labels {
+                if let Some((ssh_mode, platform)) = previous_labels {
+                    metrics::add_cli_pair_active(-1, ssh_mode, platform);
+                }
+                if let Some((ssh_mode, platform)) = new_labels {
+                    metrics::add_cli_pair_active(1, ssh_mode, platform);
+                }
             }
-            if let Some((ssh_mode, platform)) = new_labels {
-                metrics::add_cli_pair_active(1, ssh_mode, platform);
+
+            if !entry.usage_total_recorded
+                && let Some((ssh_mode, platform)) = new_labels
+            {
+                metrics::record_cli_pair_usage(ssh_mode, platform);
+                entry.usage_total_recorded = true;
+            }
+
+            let new_kind = new_state.client_kind;
+            let new_muted = new_state.muted;
+            entry.state = new_state;
+
+            let browsers_total = entries
+                .iter()
+                .filter(|entry| entry.state.client_kind == ClientKind::Browser)
+                .count();
+
+            let browser_just_appeared =
+                new_kind == ClientKind::Browser && previous_kind != ClientKind::Browser;
+            let cli_joined_with_browser =
+                new_kind == ClientKind::Cli && browsers_total > 0 && !new_muted;
+
+            let cli_senders = if browser_just_appeared || cli_joined_with_browser {
+                entries
+                    .iter()
+                    .filter(|entry| entry.state.client_kind == ClientKind::Cli)
+                    .map(|entry| entry.tx.clone())
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+
+            (
+                UpdateStateResult {
+                    previous_kind,
+                    new_kind,
+                    browsers_total,
+                },
+                cli_senders,
+            )
+        };
+
+        for tx in cli_senders_to_mute {
+            if tx
+                .send(PairControlMessage::ForceMute { mute: true })
+                .is_err()
+            {
+                tracing::warn!(
+                    token_hint = %token_hint(token),
+                    "failed to enforce CLI force-mute"
+                );
             }
         }
 
-        if !entry.usage_total_recorded
-            && let Some((ssh_mode, platform)) = new_labels
-        {
-            metrics::record_cli_pair_usage(ssh_mode, platform);
-            entry.usage_total_recorded = true;
-        }
-
-        entry.state = state;
-        let new_kind = entry.state.client_kind;
-
-        let browsers_total = entries
-            .iter()
-            .filter(|entry| entry.state.client_kind == ClientKind::Browser)
-            .count();
-
-        Some(UpdateStateResult {
-            previous_kind,
-            new_kind,
-            browsers_total,
-        })
+        Some(result)
     }
 
     /// Snapshot the state of the most recently registered entry, preferring a
@@ -537,7 +584,7 @@ mod tests {
         let registry = PairedClientRegistry::new();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let registration_id = registry.register("tok1".to_string(), tx);
-        registry.update_state(
+        registry.update_state_and_enforce_mute_policy(
             "tok1",
             registration_id,
             ClientAudioState {

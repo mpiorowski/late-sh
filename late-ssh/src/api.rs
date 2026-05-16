@@ -27,7 +27,7 @@ use crate::{
         svc::PlayerStateReport,
     },
     metrics,
-    session::{PairControlMessage, SessionMessage},
+    session::SessionMessage,
     state::{ActiveUsers, State},
 };
 
@@ -303,7 +303,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 muted,
                                 volume_percent,
                             } => {
-                                let result = state.paired_client_registry.update_state(
+                                state.paired_client_registry.update_state_and_enforce_mute_policy(
                                     &token,
                                     registration_id,
                                     ClientAudioState {
@@ -315,35 +315,6 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         volume_percent,
                                     },
                                 );
-                                if let Some(result) = result {
-                                    // Browser just joined (or was just identified): any
-                                    // CLI paired on this token must mute itself so the
-                                    // user does not hear double audio from both sides.
-                                    if result.new_kind == ClientKind::Browser
-                                        && result.previous_kind != ClientKind::Browser
-                                    {
-                                        state.paired_client_registry.send_control_filter(
-                                            &token,
-                                            PairControlMessage::ForceMute { mute: true },
-                                            |kind| kind == ClientKind::Cli,
-                                        );
-                                    }
-                                    // CLI just identified itself while a browser is
-                                    // already paired: mute it immediately. Skip when
-                                    // the CLI already reports muted=true so a WS
-                                    // reconnect doesn't override a state the CLI is
-                                    // already in.
-                                    if result.new_kind == ClientKind::Cli
-                                        && result.browsers_total > 0
-                                        && !muted
-                                    {
-                                        state.paired_client_registry.send_control_filter(
-                                            &token,
-                                            PairControlMessage::ForceMute { mute: true },
-                                            |kind| kind == ClientKind::Cli,
-                                        );
-                                    }
-                                }
                                 continue;
                             }
                             WsPayload::ClipboardImage { data_base64 } => {

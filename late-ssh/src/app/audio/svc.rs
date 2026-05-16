@@ -715,14 +715,12 @@ impl AudioService {
         if let Some(item) = MediaQueueItem::find_by_id(&client, item_id).await?
             && item.duration_ms.is_none()
             && item.status == MediaQueueItem::STATUS_PLAYING
-        {
-            if let Some(updated) =
+            && let Some(updated) =
                 MediaQueueItem::set_duration_if_missing(&client, item_id, duration_ms).await?
-            {
-                let mut state = self.state.lock().await;
-                if state.current_item_id == Some(item_id) {
-                    self.schedule_playback_timer(&mut state, &updated);
-                }
+        {
+            let mut state = self.state.lock().await;
+            if state.current_item_id == Some(item_id) {
+                self.schedule_playback_timer(&mut state, &updated);
             }
         }
         Ok(())
