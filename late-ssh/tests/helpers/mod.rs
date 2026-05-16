@@ -35,7 +35,8 @@ use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
-use late_ssh::session::{PairControlMessage, PairedClientRegistry, SessionRegistry};
+use late_ssh::paired_clients::{PairControlMessage, PairedClientRegistry};
+use late_ssh::session::SessionRegistry;
 use late_ssh::state::State;
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
@@ -105,6 +106,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
             api_key: None,
             model: "gemini-3.1-pro-preview".to_string(),
         },
+        youtube_api_key: None,
     }
 }
 
@@ -169,7 +171,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
         config,
-        db,
+        db: db.clone(),
+        audio_service: late_ssh::app::audio::svc::AudioService::new(db.clone(), None),
         vote_service,
         chat_service,
         notification_service,
@@ -224,6 +227,7 @@ pub fn make_app_with_chat_service(
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
+        audio_service: late_ssh::app::audio::svc::AudioService::new(db.clone(), None),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),
@@ -328,6 +332,7 @@ pub fn make_app_with_paired_client(
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
+        audio_service: late_ssh::app::audio::svc::AudioService::new(db.clone(), None),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),

@@ -1,20 +1,14 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use late_core::MutexRecover;
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-use tokio::sync::{RwLock, mpsc::Sender, mpsc::UnboundedSender};
+use late_core::audio::VizFrame;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{RwLock, mpsc::Sender};
 use uuid::Uuid;
 
 use crate::authz::Permissions;
-use crate::metrics;
 
-// WebSocket → SSH session routing for browser-sent visualization data.
+// WebSocket → SSH session routing for browser-sent visualization data and
+// other inbound SSH-side effects. The matching outbound channel (mute,
+// volume, clipboard request, force-mute) lives in `paired_clients.rs`.
 //
 // Flow:
 //   Browser (WS) sends Heartbeat + Viz frames
@@ -24,16 +18,9 @@ use crate::metrics;
 //           → App updates visualizer buffer used by TUI render
 
 #[derive(Debug, Clone)]
-pub struct BrowserVizFrame {
-    pub bands: [f32; 8],
-    pub rms: f32,
-    pub position_ms: u64,
-}
-
-#[derive(Debug, Clone)]
 pub enum SessionMessage {
     Heartbeat,
-    Viz(BrowserVizFrame),
+    Viz(VizFrame),
     ClipboardImage {
         data: Vec<u8>,
     },
@@ -57,140 +44,9 @@ pub enum SessionMessage {
     },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ClientKind {
-    Browser,
-    Cli,
-    #[default]
-    Unknown,
-}
-
-impl ClientKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            ClientKind::Browser => "Browser",
-            ClientKind::Cli => "CLI",
-            ClientKind::Unknown => "Unknown",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ClientSshMode {
-    Native,
-    #[serde(rename = "openssh")]
-    OpenSsh,
-    Old,
-    #[default]
-    Unknown,
-}
-
-impl ClientSshMode {
-    fn metric_label(self) -> Option<&'static str> {
-        match self {
-            Self::Native => Some("native"),
-            Self::OpenSsh => Some("openssh"),
-            Self::Old => Some("old"),
-            Self::Unknown => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ClientPlatform {
-    Android,
-    Linux,
-    Macos,
-    Windows,
-    #[default]
-    Unknown,
-}
-
-impl ClientPlatform {
-    fn metric_label(self) -> Option<&'static str> {
-        match self {
-            Self::Android => Some("android"),
-            Self::Linux => Some("linux"),
-            Self::Macos => Some("macos"),
-            Self::Windows => Some("windows"),
-            Self::Unknown => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ClientAudioState {
-    pub client_kind: ClientKind,
-    #[serde(default)]
-    pub ssh_mode: ClientSshMode,
-    #[serde(default)]
-    pub platform: ClientPlatform,
-    #[serde(default)]
-    pub capabilities: Vec<String>,
-    pub muted: bool,
-    pub volume_percent: u8,
-}
-
-impl Default for ClientAudioState {
-    fn default() -> Self {
-        Self {
-            client_kind: ClientKind::Unknown,
-            ssh_mode: ClientSshMode::Unknown,
-            platform: ClientPlatform::Unknown,
-            capabilities: Vec::new(),
-            muted: false,
-            volume_percent: 30,
-        }
-    }
-}
-
-impl ClientAudioState {
-    pub fn supports_clipboard_image(&self) -> bool {
-        self.client_kind == ClientKind::Cli
-            && self
-                .capabilities
-                .iter()
-                .any(|capability| capability == "clipboard_image")
-    }
-
-    fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {
-        if self.client_kind != ClientKind::Cli {
-            return None;
-        }
-
-        Some((self.ssh_mode.metric_label()?, self.platform.metric_label()?))
-    }
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(tag = "event", rename_all = "snake_case")]
-pub enum PairControlMessage {
-    ToggleMute,
-    VolumeUp,
-    VolumeDown,
-    RequestClipboardImage,
-}
-
 #[derive(Clone, Default)]
 pub struct SessionRegistry {
     sessions: Arc<RwLock<HashMap<String, Sender<SessionMessage>>>>,
-}
-
-#[derive(Clone, Default)]
-pub struct PairedClientRegistry {
-    clients: Arc<Mutex<HashMap<String, PairControlEntry>>>,
-    next_id: Arc<AtomicU64>,
-}
-
-#[derive(Clone)]
-struct PairControlEntry {
-    registration_id: u64,
-    tx: UnboundedSender<PairControlMessage>,
-    state: ClientAudioState,
-    usage_total_recorded: bool,
 }
 
 pub fn new_session_token() -> String {
@@ -246,127 +102,6 @@ impl SessionRegistry {
             );
             false
         }
-    }
-}
-
-impl PairedClientRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn register(&self, token: String, tx: UnboundedSender<PairControlMessage>) -> u64 {
-        let registration_id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let mut clients = self.clients.lock_recover();
-        if let Some(previous) = clients.get(&token) {
-            if let Some((ssh_mode, platform)) = previous.state.cli_usage_labels() {
-                metrics::add_cli_pair_active(-1, ssh_mode, platform);
-            }
-            // Legitimate reconnects hit this path; a surprise overwrite with an
-            // unknown peer would indicate token takeover, so surface it loudly.
-            tracing::warn!(
-                token_hint = %token_hint(&token),
-                previous_registration_id = previous.registration_id,
-                registration_id,
-                "paired client registration replaced existing entry"
-            );
-        } else {
-            tracing::info!(
-                token_hint = %token_hint(&token),
-                registration_id,
-                "registered paired client session"
-            );
-        }
-        clients.insert(
-            token,
-            PairControlEntry {
-                registration_id,
-                tx,
-                state: ClientAudioState::default(),
-                usage_total_recorded: false,
-            },
-        );
-        registration_id
-    }
-
-    pub fn unregister_if_match(&self, token: &str, registration_id: u64) {
-        let mut clients = self.clients.lock_recover();
-        let should_remove = clients
-            .get(token)
-            .map(|entry| entry.registration_id == registration_id)
-            .unwrap_or(false);
-        if should_remove {
-            if let Some(entry) = clients.get(token)
-                && let Some((ssh_mode, platform)) = entry.state.cli_usage_labels()
-            {
-                metrics::add_cli_pair_active(-1, ssh_mode, platform);
-            }
-            tracing::info!(
-                token_hint = %token_hint(token),
-                registration_id,
-                "unregistered paired client session"
-            );
-            clients.remove(token);
-        }
-    }
-
-    pub fn send_control(&self, token: &str, msg: PairControlMessage) -> bool {
-        let tx = {
-            let clients = self.clients.lock().unwrap_or_else(|e| {
-                tracing::warn!("paired client registry mutex poisoned, recovering");
-                e.into_inner()
-            });
-            clients.get(token).map(|entry| entry.tx.clone())
-        };
-
-        if let Some(tx) = tx {
-            if tx.send(msg).is_ok() {
-                return true;
-            }
-            tracing::warn!(
-                token_hint = %token_hint(token),
-                "failed to send paired client control message"
-            );
-            return false;
-        }
-
-        tracing::warn!(
-            token_hint = %token_hint(token),
-            "no paired client found for control message"
-        );
-        false
-    }
-
-    pub fn update_state(&self, token: &str, registration_id: u64, state: ClientAudioState) {
-        let mut clients = self.clients.lock_recover();
-        if let Some(entry) = clients.get_mut(token)
-            && entry.registration_id == registration_id
-        {
-            let previous_labels = entry.state.cli_usage_labels();
-            let new_labels = state.cli_usage_labels();
-
-            if previous_labels != new_labels {
-                if let Some((ssh_mode, platform)) = previous_labels {
-                    metrics::add_cli_pair_active(-1, ssh_mode, platform);
-                }
-                if let Some((ssh_mode, platform)) = new_labels {
-                    metrics::add_cli_pair_active(1, ssh_mode, platform);
-                }
-            }
-
-            if !entry.usage_total_recorded
-                && let Some((ssh_mode, platform)) = new_labels
-            {
-                metrics::record_cli_pair_usage(ssh_mode, platform);
-                entry.usage_total_recorded = true;
-            }
-
-            entry.state = state;
-        }
-    }
-
-    pub fn snapshot(&self, token: &str) -> Option<ClientAudioState> {
-        let clients = self.clients.lock_recover();
-        clients.get(token).map(|entry| entry.state.clone())
     }
 }
 
@@ -451,10 +186,10 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         registry.register("tok1".to_string(), tx).await;
 
-        let frame = BrowserVizFrame {
+        let frame = VizFrame {
             bands: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
             rms: 0.5,
-            position_ms: 1000,
+            track_pos_ms: 1000,
         };
         let sent = registry
             .send_message("tok1", SessionMessage::Viz(frame))
@@ -464,7 +199,7 @@ mod tests {
         match rx.recv().await.unwrap() {
             SessionMessage::Viz(f) => {
                 assert_eq!(f.rms, 0.5);
-                assert_eq!(f.position_ms, 1000);
+                assert_eq!(f.track_pos_ms, 1000);
             }
             _ => panic!("expected Viz message"),
         }
@@ -501,65 +236,5 @@ mod tests {
 
         let decoded = URL_SAFE_NO_PAD.decode(token.as_bytes()).unwrap();
         assert_eq!(decoded.len(), 16);
-    }
-
-    #[test]
-    fn client_ssh_mode_parses_openssh() {
-        let mode: ClientSshMode = serde_json::from_str(r#""openssh""#).unwrap();
-        assert_eq!(mode, ClientSshMode::OpenSsh);
-        assert_eq!(mode.metric_label(), Some("openssh"));
-    }
-
-    #[test]
-    fn paired_client_send_control_delivers_message() {
-        let registry = PairedClientRegistry::new();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        registry.register("tok1".to_string(), tx);
-
-        assert!(registry.send_control("tok1", PairControlMessage::ToggleMute));
-        assert_eq!(rx.try_recv().unwrap(), PairControlMessage::ToggleMute);
-    }
-
-    #[test]
-    fn paired_client_unregister_if_match_respects_latest_registration() {
-        let registry = PairedClientRegistry::new();
-        let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel();
-        let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel();
-        let first = registry.register("tok1".to_string(), tx1);
-        let second = registry.register("tok1".to_string(), tx2);
-
-        registry.unregister_if_match("tok1", first);
-
-        assert!(registry.send_control("tok1", PairControlMessage::ToggleMute));
-        assert_eq!(rx2.try_recv().unwrap(), PairControlMessage::ToggleMute);
-        registry.unregister_if_match("tok1", second);
-        assert!(!registry.send_control("tok1", PairControlMessage::ToggleMute));
-    }
-
-    #[test]
-    fn paired_client_snapshot_tracks_latest_state() {
-        let registry = PairedClientRegistry::new();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let registration_id = registry.register("tok1".to_string(), tx);
-        registry.update_state(
-            "tok1",
-            registration_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Macos,
-                capabilities: vec!["clipboard_image".to_string()],
-                muted: true,
-                volume_percent: 35,
-            },
-        );
-
-        let snapshot = registry.snapshot("tok1").unwrap();
-        assert_eq!(snapshot.client_kind, ClientKind::Cli);
-        assert_eq!(snapshot.ssh_mode, ClientSshMode::Native);
-        assert_eq!(snapshot.platform, ClientPlatform::Macos);
-        assert!(snapshot.supports_clipboard_image());
-        assert!(snapshot.muted);
-        assert_eq!(snapshot.volume_percent, 35);
     }
 }

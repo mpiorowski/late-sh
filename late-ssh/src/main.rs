@@ -9,11 +9,13 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::Context;
 use late_core::{
-    MutexRecover, api_types::NowPlaying, db::Db, icecast, models::chat_room::ChatRoom,
-    rate_limit::IpRateLimiter, shutdown::CancellationToken,
+    MutexRecover, db::Db, models::chat_room::ChatRoom, rate_limit::IpRateLimiter,
+    shutdown::CancellationToken,
 };
 use late_ssh::{
     api,
+    app::audio::now_playing::svc::NowPlayingService,
+    app::audio::svc::AudioService,
     app::chat::feeds::svc::FeedService,
     app::chat::news::svc::ArticleService,
     app::chat::notifications::svc::NotificationService,
@@ -33,7 +35,7 @@ use late_ssh::{
     state::State,
 };
 use tokio::{
-    sync::{Semaphore, broadcast, watch},
+    sync::{Semaphore, broadcast},
     task::JoinSet,
 };
 
@@ -116,7 +118,9 @@ async fn main() -> anyhow::Result<()> {
     let (activity_tx, mut activity_history_rx) = late_ssh::app::activity::channel::new(512);
     let activity_publisher =
         late_ssh::app::activity::publisher::ActivityPublisher::new(db.clone(), activity_tx.clone());
-    let (now_playing_tx, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
+    let now_playing_service = NowPlayingService::new(config.icecast_url.clone());
+    let now_playing_rx = now_playing_service.subscribe_state();
+    let audio_service = AudioService::new(db.clone(), config.youtube_api_key.clone());
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
         db.clone(),
@@ -233,9 +237,8 @@ async fn main() -> anyhow::Result<()> {
         active_users.clone(),
         activity_tx.clone(),
     );
-    let paired_client_registry = late_ssh::session::PairedClientRegistry::new();
+    let paired_client_registry = late_ssh::paired_clients::PairedClientRegistry::new();
     let web_chat_registry = late_ssh::web::WebChatRegistry::new();
-    let icecast_url = config.icecast_url.clone();
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,
         config.ssh_rate_limit_window_secs,
@@ -250,6 +253,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         db: db.clone(),
         ai_service: ai_service.clone(),
+        audio_service: audio_service.clone(),
         vote_service: vote_service.clone(),
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
@@ -339,42 +343,21 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let now_playing_shutdown = session_shutdown.clone();
-    tasks.spawn_blocking(move || {
-        let mut last_title: Option<String> = None;
-        loop {
-            if now_playing_shutdown.is_cancelled() {
-                tracing::info!("now playing fetcher shutting down");
-                break;
-            }
-            let result = icecast::fetch_track(&icecast_url);
-            match result {
-                Ok(track) => {
-                    tracing::debug!(track = %track, "fetched now playing");
-                    // Only update if track changed (to reset started_at correctly)
-                    let current_title = track.to_string();
-                    if last_title.as_ref() != Some(&current_title) {
-                        tracing::info!(track = %track, "now playing changed");
-                        last_title = Some(current_title);
-                        let now_playing = NowPlaying::new(track);
-                        if let Err(err) = now_playing_tx.send(Some(now_playing)) {
-                            tracing::error!(error = ?err, "failed to publish now playing update");
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to fetch now playing, retrying in 5s");
-                }
-            }
+    let now_playing_task = now_playing_service.start_poll_task(now_playing_shutdown);
+    tasks.spawn(async move {
+        now_playing_task
+            .await
+            .context("now playing task panicked")?;
+        Ok(())
+    });
 
-            for _ in 0..10 {
-                if now_playing_shutdown.is_cancelled() {
-                    tracing::info!("now playing fetcher shutting down");
-                    return Ok(());
-                }
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        }
+    // Audio rides session_shutdown (fires after ssh drain) rather than
+    // singleton_shutdown (fires at drain begin) so paired browsers keep
+    // hearing music through the entire drain window. Liquidsoap/Icecast
+    // streams from a separate process and is unaffected either way.
+    let audio_shutdown = session_shutdown.clone();
+    tasks.spawn(async move {
+        audio_service.start_background_task(audio_shutdown).await;
         Ok(())
     });
 
@@ -424,24 +407,6 @@ async fn main() -> anyhow::Result<()> {
             .await;
         Ok(())
     });
-
-    // Server-side audio analyzer (disabled - using browser-side viz only)
-    // To re-enable: add viz_tx to State, subscribe in ssh.rs, uncomment below
-    // let (viz_tx, _) = tokio::sync::broadcast::channel::<VizFrame>(32);
-    // let analyzer_tx = viz_tx.clone();
-    // tokio::task::spawn_blocking(move || {
-    //     let decoder = match SymphoniaStreamDecoder::new_http(&icecast_url) {
-    //         Ok(d) => d,
-    //         Err(e) => {
-    //             tracing::error!(error = ?e, "failed to create decoder");
-    //             return;
-    //         }
-    //     };
-    //     let sample_rate = decoder.sample_rate as f32;
-    //     if let Err(e) = run_analyzer(AnalyzerConfig::default(), analyzer_tx, decoder, sample_rate) {
-    //         tracing::error!(error = ?e, "audio analyzer failed");
-    //     }
-    // });
 
     tracing::info!("starting late.sh ssh server");
     let mut fatal_error = None;
