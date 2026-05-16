@@ -894,16 +894,7 @@ impl App {
         let Some(registry) = &self.paired_client_registry else {
             return false;
         };
-        if !registry
-            .snapshot(&self.session_token)
-            .is_some_and(|state| state.supports_clipboard_image())
-        {
-            return false;
-        }
-        if registry.send_control(
-            &self.session_token,
-            PairControlMessage::RequestClipboardImage,
-        ) {
+        if registry.request_clipboard_image(&self.session_token) {
             self.chat.begin_pending_clipboard_image_upload(room_id);
             return true;
         }
