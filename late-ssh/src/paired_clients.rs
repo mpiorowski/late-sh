@@ -305,6 +305,38 @@ impl PairedClientRegistry {
             .map(|entry| entry.state.clone())
     }
 
+    /// Send a clipboard-image request to a paired CLI on `token` that
+    /// advertises the capability. Browser entries and capability-less CLIs
+    /// are skipped — only one CLI per token can serve the clipboard.
+    /// Returns true iff a capable CLI was found and the message queued.
+    /// Distinct from `send_control` because the audio-priority `snapshot`
+    /// would shadow the CLI entry once a browser is paired.
+    pub fn request_clipboard_image(&self, token: &str) -> bool {
+        let tx = {
+            let clients = self.clients.lock_recover();
+            clients.get(token).and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry.state.supports_clipboard_image())
+                    .map(|entry| entry.tx.clone())
+            })
+        };
+        let Some(tx) = tx else {
+            return false;
+        };
+        if tx
+            .send(PairControlMessage::RequestClipboardImage)
+            .is_err()
+        {
+            tracing::warn!(
+                token_hint = %token_hint(token),
+                "failed to send paired clipboard image request"
+            );
+            return false;
+        }
+        true
+    }
+
     pub fn has_browser(&self, token: &str) -> bool {
         let clients = self.clients.lock_recover();
         clients
@@ -382,5 +414,73 @@ mod tests {
         assert!(snapshot.supports_clipboard_image());
         assert!(snapshot.muted);
         assert_eq!(snapshot.volume_percent, 35);
+    }
+
+    #[test]
+    fn paired_client_request_clipboard_image_reaches_cli_when_browser_paired() {
+        let registry = PairedClientRegistry::new();
+
+        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cli_id = registry.register("tok1".to_string(), cli_tx);
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["clipboard_image".to_string()],
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+        let browser_id = registry.register("tok1".to_string(), browser_tx);
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            browser_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Unknown,
+                platform: ClientPlatform::Unknown,
+                capabilities: Vec::new(),
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        // Drain the force-mute the browser pairing triggers on the CLI so
+        // the next assertion sees only the clipboard request.
+        let _ = cli_rx.try_recv();
+
+        assert!(registry.request_clipboard_image("tok1"));
+        assert_eq!(
+            cli_rx.try_recv().unwrap(),
+            PairControlMessage::RequestClipboardImage
+        );
+        assert!(browser_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn paired_client_request_clipboard_image_false_when_only_browser() {
+        let registry = PairedClientRegistry::new();
+        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+        let browser_id = registry.register("tok1".to_string(), browser_tx);
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            browser_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Unknown,
+                platform: ClientPlatform::Unknown,
+                capabilities: Vec::new(),
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        assert!(!registry.request_clipboard_image("tok1"));
+        assert!(browser_rx.try_recv().is_err());
     }
 }
