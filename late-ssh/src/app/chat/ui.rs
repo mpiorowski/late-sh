@@ -239,7 +239,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static
         ))]
     } else {
         vec![Line::from(Span::styled(
-            "Type a message · j/k select · Ctrl+/ jump room · or just ask @bot about anything",
+            "Type a message · j/k select · Ctrl+] icon picker · or just ask @bot about anything",
             dim,
         ))]
     };
@@ -2569,7 +2569,7 @@ mod tests {
 
         let placeholder = empty_composer_placeholder(&view);
         let expected =
-            "Type a message · j/k select · Ctrl+/ jump room · or just ask @bot about anything";
+            "Type a message · j/k select · Ctrl+] icon picker · or just ask @bot about anything";
         let width = expected.chars().count() as u16;
         let backend = TestBackend::new(width, 1);
         let mut terminal = Terminal::new(backend).expect("term");

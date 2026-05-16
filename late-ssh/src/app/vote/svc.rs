@@ -6,15 +6,15 @@ use tokio::sync::{Mutex, broadcast, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
-use super::liquidsoap;
 use crate::app::activity::event::ActivityEvent;
+use crate::app::audio::liquidsoap::LiquidsoapController;
 use crate::metrics;
 use crate::state::ActiveUsers;
 
 #[derive(Clone)]
 pub struct VoteService {
     db: Db,
-    liquidsoap_addr: String,
+    liquidsoap: LiquidsoapController,
     switch_interval: Duration,
     snapshot_tx: watch::Sender<VoteSnapshot>,
     snapshot_rx: watch::Receiver<VoteSnapshot>,
@@ -155,7 +155,7 @@ impl VoteService {
         let (event_tx, _) = broadcast::channel(256);
         Self {
             db,
-            liquidsoap_addr,
+            liquidsoap: LiquidsoapController::new(liquidsoap_addr),
             switch_interval,
             snapshot_tx,
             snapshot_rx,
@@ -244,13 +244,13 @@ impl VoteService {
     }
 
     fn send_command(&self, command: &str) {
-        let addr = self.liquidsoap_addr.clone();
+        let liquidsoap = self.liquidsoap.clone();
         let cmd = command.to_string();
-        let span_addr = addr.clone();
+        let span_addr = liquidsoap.addr().to_string();
         let span_cmd = cmd.clone();
         tokio::spawn(
             async move {
-                if let Err(err) = liquidsoap::send_command(&addr, &cmd).await {
+                if let Err(err) = liquidsoap.send_command(&cmd).await {
                     late_core::error_span!(
                         "liquidsoap_command_failed",
                         error = ?err,

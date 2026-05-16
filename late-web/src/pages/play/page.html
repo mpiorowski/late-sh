@@ -36,6 +36,7 @@
     .play-topbar {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 0.75rem;
         padding: 0.55rem 0.9rem;
         border-bottom: 1px solid #1f2937;
@@ -53,13 +54,27 @@
         color: #374151;
     }
 
+    .play-topbar .notice {
+        flex: 1 1 30rem;
+        min-width: min(100%, 16rem);
+        color: #9ca3af;
+        line-height: 1.35;
+    }
+
+    .play-topbar .notice a {
+        color: #22c55e;
+        text-decoration: underline;
+        text-underline-offset: 0.15rem;
+    }
+
     .play-topbar .meta {
-        margin-left: auto;
         display: flex;
         align-items: center;
         gap: 0.5rem;
         color: #6b7280;
         font-size: 0.7rem;
+        margin-left: auto;
+        flex-shrink: 0;
     }
 
     .play-topbar .status-dot {
@@ -119,6 +134,7 @@
         <a href="/" class="text-green-500 tracking-tight">late.sh</a>
         <span class="crumb-sep">/</span>
         <span class="text-gray-400">play</span>
+        <span class="notice">This is a live but limited <a href="https://xtermjs.org/">view</a> of late.sh. Press escape to close settings. Press 1, 2, 3, 4 to look around!</span>
 
         <div class="meta">
             <span id="terminal-status-dot" class="status-dot"></span>

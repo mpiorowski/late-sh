@@ -12,11 +12,10 @@ use ratatui::{
 
 use super::theme;
 use crate::app::activity::event::ActivityEvent;
+use crate::app::audio::{client_state::ClientAudioState, viz::Visualizer};
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::dashboard::ui::DashboardRoomCard;
-use crate::app::visualizer::Visualizer;
 use crate::app::vote::ui::VoteCardView;
-use crate::session::ClientAudioState;
 
 pub struct SidebarProps<'a> {
     pub game_selection: usize,

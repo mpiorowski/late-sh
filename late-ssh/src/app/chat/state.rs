@@ -197,6 +197,7 @@ pub struct ChatState {
     user_id: Uuid,
     permissions: Permissions,
     is_admin: bool,
+    is_moderator: bool,
     active_users: Option<ActiveUsers>,
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
@@ -262,6 +263,8 @@ pub struct ChatState {
     requested_settings_modal: bool,
     requested_mod_modal: bool,
     requested_quit: bool,
+    requested_audio_url: Option<String>,
+    requested_audio_fallback_url: Option<String>,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
     // image upload
@@ -333,6 +336,7 @@ impl ChatState {
             user_id,
             permissions,
             is_admin: permissions.is_admin(),
+            is_moderator: permissions.is_moderator(),
             active_users,
             snapshot_rx,
             event_rx,
@@ -395,6 +399,8 @@ impl ChatState {
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_quit: false,
+            requested_audio_url: None,
+            requested_audio_fallback_url: None,
             pending_mod_outputs: VecDeque::new(),
             image_upload_rx: None,
             image_upload_pending: false,
@@ -603,9 +609,18 @@ impl ChatState {
         std::mem::take(&mut self.requested_quit)
     }
 
+    pub fn take_requested_audio_url(&mut self) -> Option<String> {
+        self.requested_audio_url.take()
+    }
+
+    pub fn take_requested_audio_fallback_url(&mut self) -> Option<String> {
+        self.requested_audio_fallback_url.take()
+    }
+
     pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
         self.permissions = permissions;
         self.is_admin = permissions.is_admin();
+        self.is_moderator = permissions.is_moderator();
         self.news.set_is_admin(self.is_admin);
         self.showcase.set_is_admin(self.is_admin);
         self.work.set_is_admin(self.is_admin);
@@ -1335,6 +1350,32 @@ impl ChatState {
         if body.trim() == "/exit" {
             self.clear_composer_after_submit();
             self.requested_quit = true;
+            return None;
+        }
+
+        if let Some(url) = body.trim().strip_prefix("/audio fallback ") {
+            let url = url.trim().to_string();
+            self.clear_composer_after_submit();
+            if !self.is_admin && !self.is_moderator {
+                return Some(Banner::error("/audio is staff-only"));
+            }
+            if url.is_empty() {
+                return Some(Banner::error("Usage: /audio fallback <youtube-url>"));
+            }
+            self.requested_audio_fallback_url = Some(url);
+            return None;
+        }
+
+        if let Some(url) = body.trim().strip_prefix("/audio ") {
+            let url = url.trim().to_string();
+            self.clear_composer_after_submit();
+            if !self.is_admin && !self.is_moderator {
+                return Some(Banner::error("/audio is staff-only"));
+            }
+            if url.is_empty() {
+                return Some(Banner::error("Usage: /audio <youtube-url>"));
+            }
+            self.requested_audio_url = Some(url);
             return None;
         }
 
