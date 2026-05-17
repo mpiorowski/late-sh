@@ -8,7 +8,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
-    audio::svc::{QueueItemView, QueueSnapshot, SkipProgress},
+    audio::svc::{AudioMode, QueueItemView, QueueSnapshot, SkipProgress},
     common::theme,
 };
 
@@ -75,6 +75,7 @@ pub(crate) fn draw(
         frame,
         layout[7],
         snapshot.current.as_ref(),
+        snapshot.audio_mode,
         snapshot.skip_progress(),
     );
 
@@ -161,16 +162,23 @@ fn draw_current(
     frame: &mut Frame,
     area: Rect,
     current: Option<&QueueItemView>,
+    audio_mode: AudioMode,
     skip: Option<SkipProgress>,
 ) {
     let Some(item) = current else {
+        // No submitted track. Something is always playing: either the
+        // configured YouTube fallback (audio_mode == Youtube) or the
+        // Icecast house radio. Surface what's actually live instead of
+        // saying the queue is empty.
+        let (icon, label) = match audio_mode {
+            AudioMode::Youtube => ("▶ ", "fallback stream · YouTube"),
+            AudioMode::Icecast => ("♪ ", "Icecast house radio"),
+        };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::raw("   "),
-                Span::styled(
-                    "queue empty - falling back to Icecast",
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
+                Span::styled(icon, Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(label, Style::default().fg(theme::TEXT_DIM())),
             ])),
             area,
         );
@@ -206,12 +214,7 @@ fn draw_current(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_queue(
-    frame: &mut Frame,
-    area: Rect,
-    state: &BoothModalState,
-    queue: &[QueueItemView],
-) {
+fn draw_queue(frame: &mut Frame, area: Rect, state: &BoothModalState, queue: &[QueueItemView]) {
     if queue.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -283,10 +286,18 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
         let base = Style::default()
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD);
-        if active { base.bg(theme::BG_SELECTION()) } else { base }
+        if active {
+            base.bg(theme::BG_SELECTION())
+        } else {
+            base
+        }
     } else if item.vote_score < 0 {
         let base = Style::default().fg(theme::TEXT_DIM());
-        if active { base.bg(theme::BG_SELECTION()) } else { base }
+        if active {
+            base.bg(theme::BG_SELECTION())
+        } else {
+            base
+        }
     } else {
         meta_style
     };
@@ -338,10 +349,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, submit_enabled: bool) {
         Span::styled(" skip  ", Style::default().fg(theme::TEXT_DIM())),
     ];
     if submit_enabled {
-        spans.push(Span::styled(
-            "↵",
-            Style::default().fg(theme::AMBER_DIM()),
-        ));
+        spans.push(Span::styled("↵", Style::default().fg(theme::AMBER_DIM())));
         spans.push(Span::styled(
             " submit  ",
             Style::default().fg(theme::TEXT_DIM()),

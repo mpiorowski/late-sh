@@ -13,14 +13,14 @@ use ratatui::{
 use super::theme;
 use crate::app::activity::event::ActivityEvent;
 use crate::app::audio::{
-    client_state::{ClientAudioState, ClientKind},
+    client_state::ClientAudioState,
     svc::{QueueItemView, QueueSnapshot},
     viz::Visualizer,
 };
-use late_core::models::user::AudioSource;
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::dashboard::ui::DashboardRoomCard;
 use crate::app::vote::ui::VoteCardView;
+use late_core::models::user::AudioSource;
 
 pub struct SidebarProps<'a> {
     pub game_selection: usize,
@@ -88,12 +88,12 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // Vertical real estate, top to bottom. Active tables are lower priority
     // than bonsai: hide them before squeezing the tree below its visible size.
     let mut constraints = vec![
-        Constraint::Length(TIME_HEIGHT),         // time
-        Constraint::Length(RULE_HEIGHT),         // ── rule
-        Constraint::Length(VISUALIZER_HEIGHT),   // visualizer
-        Constraint::Length(RULE_HEIGHT),         // ── rule
-        Constraint::Length(MUSIC_STAGE_HEIGHT),  // active stage + peek strip
-        Constraint::Length(RULE_HEIGHT),         // ── rule
+        Constraint::Length(TIME_HEIGHT),        // time
+        Constraint::Length(RULE_HEIGHT),        // ── rule
+        Constraint::Length(VISUALIZER_HEIGHT),  // visualizer
+        Constraint::Length(RULE_HEIGHT),        // ── rule
+        Constraint::Length(MUSIC_STAGE_HEIGHT), // active stage + peek strip
+        Constraint::Length(RULE_HEIGHT),        // ── rule
     ];
     if show_active_tables {
         constraints.push(Constraint::Length(ACTIVE_TABLES_HEIGHT)); // active tables
@@ -332,13 +332,15 @@ fn draw_music_stage(
         return;
     }
 
-    let is_browser =
-        matches!(paired_client, Some(c) if c.client_kind == ClientKind::Browser);
-    let yt_active = is_browser && paired_browser_source == AudioSource::Youtube;
+    // Active source follows the saved preference alone, not whether the
+    // browser is currently paired. Saved pref is the source of truth — the
+    // sidebar should reflect it from the first frame, before the browser
+    // has finished pairing.
+    let yt_active = paired_browser_source == AudioSource::Youtube;
 
     let rows = Layout::vertical([
         Constraint::Length(1), // 0:  volume
-        Constraint::Length(1), // 1:  keybind hints
+        Constraint::Length(1), // 1:  vol keybind hints
         Constraint::Length(1), // 2:  yt title
         Constraint::Length(1), // 3:  track title
         Constraint::Length(1), // 4:  channel / by-submitter
@@ -346,7 +348,7 @@ fn draw_music_stage(
         Constraint::Length(1), // 6:  skip meter (blank when no skip vote)
         Constraint::Length(1), // 7:  next ⌄
         Constraint::Min(2),    // 8:  next items (absorbs spare space)
-        Constraint::Length(1), // 9:  blank
+        Constraint::Length(1), // 9:  booth/swap keybind hints
         Constraint::Length(1), // 10: ice title
         Constraint::Length(1), // 11: vibe → next · ends
         Constraint::Length(3), // 12: vote rows (draw_vote_inline splits internally)
@@ -354,13 +356,16 @@ fn draw_music_stage(
     .split(area);
 
     draw_volume_row(frame, rows[0], paired_client);
-    draw_keybind_row(frame, rows[1]);
+    draw_keybind_row(frame, rows[1], &[("m", "mute"), ("-=", "vol")]);
     draw_youtube_block(
         frame,
-        [rows[2], rows[3], rows[4], rows[5], rows[6], rows[7], rows[8]],
+        [
+            rows[2], rows[3], rows[4], rows[5], rows[6], rows[7], rows[8],
+        ],
         queue,
         yt_active,
     );
+    draw_keybind_row(frame, rows[9], &[("v+v", "queue"), ("v+x", "swap")]);
     draw_icecast_block(
         frame,
         [rows[10], rows[11], rows[12]],
@@ -373,11 +378,7 @@ fn draw_music_stage(
 /// Volume status row. 10-cell bar at 10% increments, amber fill on
 /// BORDER_DIM rail, `NN%` trailing. Replaced by `muted` (italic dim) when
 /// the paired client is muted, and `—` (dim) when nothing is paired.
-fn draw_volume_row(
-    frame: &mut Frame,
-    area: Rect,
-    paired_client: Option<&ClientAudioState>,
-) {
+fn draw_volume_row(frame: &mut Frame, area: Rect, paired_client: Option<&ClientAudioState>) {
     if area.width == 0 {
         return;
     }
@@ -389,10 +390,7 @@ fn draw_volume_row(
     )];
     match paired_client {
         None => {
-            spans.push(Span::styled(
-                "—",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ));
+            spans.push(Span::styled("—", Style::default().fg(theme::TEXT_FAINT())));
         }
         Some(state) if state.muted => {
             spans.push(Span::styled(
@@ -405,8 +403,8 @@ fn draw_volume_row(
         Some(state) => {
             let pct = state.volume_percent.min(100) as usize;
             let filled = ((pct + 5) / 10).min(10);
-            let bar_full: String = std::iter::repeat('▰').take(filled).collect();
-            let bar_empty: String = std::iter::repeat('▱').take(10 - filled).collect();
+            let bar_full: String = "▰".repeat(filled);
+            let bar_empty: String = "▱".repeat(10 - filled);
             spans.push(Span::styled(bar_full, Style::default().fg(theme::AMBER())));
             spans.push(Span::styled(
                 bar_empty,
@@ -422,11 +420,11 @@ fn draw_volume_row(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Music-stage keybind hint row. Sits under the volume bar; lists the
-/// global media keys (mute, volume up/down, source toggle, skip vote).
-/// Keys are bold amber-dim, mini-labels are faint italic. Kept terse so
-/// the row reads as ambient affordance, not a banner.
-fn draw_keybind_row(frame: &mut Frame, area: Rect) {
+/// Keybind hint row. Renders `(key, label)` groups left-to-right in dim
+/// chrome; drops trailing groups when the rail is too narrow rather than
+/// truncating mid-word. Used twice on the music stage: volume keys under
+/// the vol bar, and booth/swap keys between YouTube and Icecast.
+fn draw_keybind_row(frame: &mut Frame, area: Rect, groups: &[(&str, &str)]) {
     if area.width == 0 {
         return;
     }
@@ -437,15 +435,6 @@ fn draw_keybind_row(frame: &mut Frame, area: Rect) {
         .fg(theme::TEXT_FAINT())
         .add_modifier(Modifier::ITALIC);
     let sep_style = Style::default().fg(theme::BORDER_DIM());
-
-    // Render groups in priority order; drop trailing ones if the rail is
-    // too narrow to fit them.
-    let groups: &[(&str, &str)] = &[
-        ("m", "mute"),
-        ("-=", "vol"),
-        ("v+x", "src"),
-        ("v+s", "skip"),
-    ];
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut used = 0usize;
@@ -470,12 +459,7 @@ fn draw_keybind_row(frame: &mut Frame, area: Rect) {
 /// Stage title bar: `▌ LABEL  ───── ▶ tag`. Active: amber accent bar,
 /// uppercase amber bold label, amber tag. Inactive: dim bar, lowercase
 /// italic faint label, no tag. The trailing rule fills to the right edge.
-fn stage_title_line(
-    area_w: u16,
-    label: &str,
-    tag: Option<&str>,
-    active: bool,
-) -> Line<'static> {
+fn stage_title_line(area_w: u16, label: &str, tag: Option<&str>, active: bool) -> Line<'static> {
     let (bar_style, label_style, tag_style, label_text) = if active {
         (
             Style::default()
@@ -506,8 +490,7 @@ fn stage_title_line(
     let bar_w = 2;
     let pad_w = 2;
     let gap_w = if tag_text.is_empty() { 0 } else { 1 };
-    let used =
-        bar_w + label_text.chars().count() + pad_w + gap_w + tag_text.chars().count();
+    let used = bar_w + label_text.chars().count() + pad_w + gap_w + tag_text.chars().count();
     let dash_count = (area_w as usize).saturating_sub(used).max(1);
 
     let mut spans = vec![
@@ -530,12 +513,7 @@ fn stage_title_line(
 /// skip meter, "next ⌄" header, queue list. When the queue is empty and
 /// no fallback is configured, swaps in a `queue empty · submit v+v` hint
 /// in the track/channel slots.
-fn draw_youtube_block(
-    frame: &mut Frame,
-    rows: [Rect; 7],
-    queue: &QueueSnapshot,
-    active: bool,
-) {
+fn draw_youtube_block(frame: &mut Frame, rows: [Rect; 7], queue: &QueueSnapshot, active: bool) {
     let width = rows[0].width as usize;
 
     // No submitted track always means the fallback stream is on; there is
@@ -698,11 +676,10 @@ fn draw_icecast_block(
         rows[0],
     );
 
-    let current_label = crate::app::common::primitives::genre_label(vote.current_genre)
-        .to_ascii_lowercase();
+    let current_label =
+        crate::app::common::primitives::genre_label(vote.current_genre).to_ascii_lowercase();
     let next_genre = vote.vote_counts.winner_or(vote.current_genre);
-    let next_label =
-        crate::app::common::primitives::genre_label(next_genre).to_ascii_lowercase();
+    let next_label = crate::app::common::primitives::genre_label(next_genre).to_ascii_lowercase();
     let ends = compact_vote_duration(vote.ends_in);
 
     let current_style = if active {
@@ -734,13 +711,12 @@ fn draw_icecast_block(
     crate::app::vote::ui::draw_vote_inline(frame, rows[2], vote);
 }
 
-
 /// Skip-vote meter. Caps the dot row at 8 cells so a 20-pair threshold
 /// doesn't overflow the rail; the literal `votes/threshold` count below
 /// remains authoritative.
 fn skip_meter_spans(progress: &super::super::audio::svc::SkipProgress) -> Vec<Span<'static>> {
     const MAX_DOTS: u32 = 8;
-    let shown = progress.threshold.min(MAX_DOTS).max(1);
+    let shown = progress.threshold.clamp(1, MAX_DOTS);
     let votes_shown = progress.votes.min(shown);
     let mut dots = String::with_capacity(shown as usize);
     for i in 0..shown {
@@ -759,13 +735,20 @@ fn skip_meter_spans(progress: &super::super::audio::svc::SkipProgress) -> Vec<Sp
             format!("  {}/{}", progress.votes, progress.threshold),
             Style::default().fg(theme::AMBER_DIM()),
         ),
+        Span::raw("   "),
+        Span::styled(
+            "v+s",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
     ]
 }
 
 /// One entry in the YouTube "next" list. Number, title, then a dim score
 /// right-aligned: `+N` (positive), `-N` (negative), `·` (zero).
 fn queue_next_line(idx: usize, item: &QueueItemView, width: usize) -> Line<'static> {
-    let n_text = format!("  {}  ", idx + 1);
+    let n_text = format!("{}  ", idx + 1);
     let title = item
         .title
         .clone()
@@ -784,10 +767,7 @@ fn queue_next_line(idx: usize, item: &QueueItemView, width: usize) -> Line<'stat
             Style::default().fg(theme::TEXT_FAINT()),
         )
     } else {
-        (
-            "·".to_string(),
-            Style::default().fg(theme::TEXT_FAINT()),
-        )
+        ("·".to_string(), Style::default().fg(theme::TEXT_FAINT()))
     };
 
     let prefix_w = n_text.chars().count();
@@ -803,7 +783,6 @@ fn queue_next_line(idx: usize, item: &QueueItemView, width: usize) -> Line<'stat
         Span::styled(score_text, score_style),
     ])
 }
-
 
 fn compact_vote_duration(duration: std::time::Duration) -> String {
     let secs = duration.as_secs();
@@ -915,7 +894,6 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::vote::svc::{Genre, VoteCount};
     use std::time::Duration;
 
     #[test]
@@ -931,24 +909,5 @@ mod tests {
         assert_eq!(compact_vote_duration(Duration::from_secs(61)), "2m");
         assert_eq!(compact_vote_duration(Duration::from_secs(3600)), "1h");
         assert_eq!(compact_vote_duration(Duration::from_secs(3661)), "1h02");
-    }
-
-    #[test]
-    fn vote_vibe_inline_renders_current_arrow_next_and_countdown() {
-        let counts = VoteCount {
-            lofi: 1,
-            ambient: 3,
-            classic: 0,
-            jazz: 0,
-        };
-        let view = VoteCardView {
-            vote_counts: &counts,
-            current_genre: Genre::Lofi,
-            my_vote: None,
-            ends_in: Duration::from_secs(9 * 60),
-        };
-
-        let span = vote_vibe_inline_span(&view);
-        assert_eq!(span.content.as_ref(), "lofi → ambient · 9m");
     }
 }

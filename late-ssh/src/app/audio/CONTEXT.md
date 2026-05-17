@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, Icecast visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-17 (v1 shipped — AUDIO.md retired, deferred items folded into §15+)
+- Last updated: 2026-05-17 (music-stage sidebar widget rebuilt — both surfaces always visible, see §12)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -99,7 +99,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `subscribe_ws()` — `api.rs:237` (pair WS upgrade).
 - `subscribe_events()` — `app/audio/state.rs`.
 - `initial_ws_messages()` (`svc.rs:393-423`) — catch-up burst sent on every new pair-WS connect: `source_changed`, `queue_update`, and `load_video` for the current playing item or for the configured fallback.
-- `snapshot()` — returns `QueueSnapshot { mode, current, queue }`. Type exists but no HTTP route exposes it (see §13).
+- `snapshot()` — returns `QueueSnapshot { mode, current, queue }`. Type exists but no HTTP route exposes it (see §14).
 - `submit_url` / `submit_url_task` — un-trusted, rate-limited, validates via YouTube Data API. **No caller today.**
 - `submit_trusted_url` / `submit_trusted_url_task` — used by `/audio`. Bypasses rate limit and Data API; uses `youtube::trusted_video_from_url` to parse the ID only.
 - `set_trusted_youtube_fallback` / `set_trusted_youtube_fallback_task` — used by `/audio fallback`. Upserts the singleton `media_sources` row.
@@ -271,11 +271,68 @@ Data flow: browser Web Audio analyzer → `WsPayload::Viz` → `api.rs:293` conv
 - Shared `watch::Sender<Option<NowPlaying>>` reflects the current Icecast track title.
 - `start_poll_task` spawns a blocking thread that calls `late_core::icecast::fetch_track` every 10s (split into 1s sleeps to shut down quickly). Only emits when the title string changes.
 - Independent of `AudioService` — does not subscribe to its channels.
-- Consumers: plumbed into `App` via `state.now_playing_rx` (`app/state.rs:189`, `app/render.rs:245`), rendered by `app/common/sidebar.rs:316` (`draw_now_playing_block`). Also exposed at `GET /api/now-playing` (`api.rs:131`).
+- Consumers: `GET /api/now-playing` (`api.rs:131`). Still plumbed into `App.now_playing_rx` and on through `SidebarProps`, but the music-stage widget *explicitly ignores it* (the icecast block renders genre vibe + vote rows, not the radio track title — see §12). The plumbing is kept in case another sidebar surface wants it; remove if no caller picks it up.
 
 ---
 
-## 12. Data Model
+## 12. Sidebar music-stage widget (`common/sidebar.rs`)
+
+Renders the audio domain into the right rail. Both surfaces (YouTube + Icecast) are always visible; the active source the user is hearing gets bold amber chrome, the other gets dim italic. Entry point: `app/common/sidebar.rs:draw_music_stage`, allocated `MUSIC_STAGE_HEIGHT = 16` rows.
+
+### Layout
+
+| Row(s) | Content |
+|--------|---------|
+| 0      | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%`. Renders `muted` (italic faint) when muted, `—` when no client is paired. |
+| 1      | Volume keybind hints: `m mute  -= vol`. |
+| 2-8    | YouTube block: title bar, track title, channel, progress, skip meter (with trailing `v+s` hint when active), `next ⌄` header, queue items (`Min(2)`, absorbs spare space). |
+| 9      | Booth/swap keybind hints: `v+v queue  v+x swap`. |
+| 10-12  | Icecast block: title bar, `vibe → next · ends` one-liner, then a 3-row vote area delegated to `app/vote/ui.rs::draw_vote_inline`. |
+
+### Active-source rule
+
+```rust
+yt_active = paired_browser_source == AudioSource::Youtube
+```
+
+Pure preference-based. Does **not** gate on `is_browser`. The saved preference (loaded from `users.settings.audio_source` via `extract_audio_source` during SSH bootstrap, `ssh.rs:883`, mirrored in `App.paired_browser_source`) is the source of truth from the first frame. Pairing-completion does not change the visual state — earlier versions waited for the browser to pair before honoring the pref, which read as a startup glitch (sidebar showed Icecast for ~1s then flipped). Don't add the `is_browser` guard back.
+
+The volume row stays honest about pairing (`vol  —` when nothing paired), so users aren't misled about whether their preference is currently audible.
+
+### Fallback-not-empty semantics
+
+The widget treats "no submitted track" and "fallback playing" as the same state. When `queue.current.is_none()`:
+- Title tag is `loop` (was `fallback` — didn't fit on narrow rails after dropping `▶ ` prefix).
+- Body renders `fallback stream` / `YouTube · 24/7` plus a `queue with v+v` hint.
+- When a track is playing but queue is otherwise empty, the trailing "next" row says `· fallback next`, not "queue ends".
+
+No copy anywhere reads "queue empty". The user has pushed back on that wording multiple times; in their product framing the fallback is the steady state, not a placeholder. See `feedback_fallback_not_empty.md` in auto-memory.
+
+### Data sources
+
+- `queue_snapshot: &QueueSnapshot` — from `AudioState::queue_snapshot()` watch channel.
+- `vote: VoteCardView<'_>` — from the genre vote state.
+- `paired_client: Option<&ClientAudioState>` — for `volume_percent` and `muted` (vol row).
+- `paired_browser_source: AudioSource` — App's per-user mirror.
+- `now_playing` — plumbed but ignored, see §11.
+
+### Internal helpers (all in `sidebar.rs`)
+
+- `stage_title_line(area_w, label, tag, active)` — shared title-bar renderer. Active → uppercase amber bold + amber tag; inactive → lowercase italic faint + dropped tag. No `▶ ` glyph prefix on the tag (color + position read as a state badge; the prefix was eating cells on narrow rails).
+- `draw_volume_row` — the vol bar.
+- `draw_keybind_row(frame, area, &[(key, label), ...])` — adaptive hint renderer; drops trailing groups when the rail is too narrow rather than mid-word truncating.
+- `draw_youtube_block` / `draw_icecast_block` — fixed-size block renderers.
+- `skip_meter_spans(progress)` — includes a trailing `v+s` keybind hint inline.
+- `queue_next_line(idx, item, width)` — number flush at column 0 (no leading indent) to maximize title width.
+
+### Cross-cuts
+
+- Reuses `late-ssh/src/app/vote/ui.rs::draw_vote_inline` for the icecast vote rows. That helper uses `●`/`○` glyphs (matches the `seat_dot_spans` pattern), not block bars.
+- v+x dispatch goes through `app/state.rs::toggle_paired_playback_source` → persists `paired_browser_source` via `AudioService::persist_audio_source` and broadcasts `PairControlMessage::SetPlaybackSource`. Early-returns `None` (skipping local update + persist) when no browser is paired; the "No paired browser" banner is the user-visible feedback. The sidebar still reflects the saved preference from the DB at SSH bootstrap regardless, so the toggle silently no-op'ing doesn't desync the visual.
+
+---
+
+## 13. Data Model
 
 ### `media_queue_items` (migration `047`)
 - `id` uuidv7, `created`/`updated` tz, `submitter_id → users ON DELETE CASCADE`.
@@ -296,7 +353,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 
 ---
 
-## 13. Known Gaps and Things to Watch
+## 14. Known Gaps and Things to Watch
 
 - **`GET /api/queue` is intentionally not exposed.** `AudioService::snapshot()` and `QueueSnapshot` exist for in-process use only. The TUI booth modal reads the snapshot from `AudioState::queue_snapshot()` (a `watch::Receiver<QueueSnapshot>` populated by `publish_queue_update_with_guard`); browsers receive state via the `initial_ws_messages` catch-up burst and live `queue_update` events. An external route would only matter for non-paired observers, which we do not have today.
 - **Booth modal renders from `watch::Receiver<QueueSnapshot>`.** `AudioService` keeps a `snapshot_tx` watch sender alongside the broadcast channels; every `publish_queue_update_with_guard` pushes a snapshot into it, and `AudioState::queue_snapshot()` borrows the current value. Skip progress (`votes/threshold`) is folded into the snapshot before it ships.
@@ -309,11 +366,11 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 
 ---
 
-## 14. Design boundaries (won't build)
+## 15. Design boundaries (won.t build)
 
 These are intentional non-goals. Reopen only if the constraint that put them here changes.
 
-- **CLI YouTube decoding.** CLI plays Icecast only. The YouTube path is browser-iframe-only. See §16 for the parked external-player alternative.
+- **CLI YouTube decoding.** CLI plays Icecast only. The YouTube path is browser-iframe-only. See §17 for the parked external-player alternative.
 - **Server-side YouTube fetching.** Server routes `video_id` only; the iframe is the only thing that talks to googlevideo.com.
 - **Recording / persistent archive of YouTube audio.** Blocked by YouTube ToS.
 - **Ad stripping.** The iframe plays whatever YouTube serves.
@@ -323,12 +380,12 @@ These are intentional non-goals. Reopen only if the constraint that put them her
 
 ---
 
-## 15. Deferred (open backlog)
+## 16. Deferred (open backlog)
 
 Open work that's been deliberately punted past v1. Each line is a "we know it's missing, here's the next-time hook."
 
 - **Public `POST /api/queue/submit` HTTP route.** Booth submit goes through the in-process service. Revive when there's a non-SSH submitter (web form, third-party). YouTube Data API validation path is already in code (un-trusted route in `AudioService::submit_url_task`).
-- **`GET /api/queue` HTTP route.** Snapshot exists in-process (`QueueSnapshot`); no external consumer today. See §13 first bullet.
+- **`GET /api/queue` HTTP route.** Snapshot exists in-process (`QueueSnapshot`); no external consumer today. See §14 first bullet.
 - **TUI sidebar widget on Home for queue visibility.** Booth modal is the only surface today.
 - **Drift correction tuning.** Current thresholds (2.5s drift, 5s seek cooldown) work but were picked by feel.
 - **Multi-tab dedupe.** Two browser tabs on the same token both play. Needs a "primary tab" election or a single-tab-per-token enforcement.
@@ -340,7 +397,7 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 
 ---
 
-## 16. Parked: CLI external-player handoff for YouTube
+## 17. Parked: CLI external-player handoff for YouTube
 
 **Status: parked, not on the active build path.** Reason: the user-facing configuration burden is too high for current scale — most users won't have a suitable player installed and won't want to edit a TOML config. Revisit when the audience is technical enough or large enough to justify a setup guide.
 
@@ -398,7 +455,7 @@ Until then, YouTube playback goes through the browser iframe path (§4-§9).
 
 ---
 
-## 17. References
+## 18. References
 
 - Root context: `../../../../CONTEXT.md` — §2.7 (audio infra), §4.1 (paired-client WS).
 - Pair WS handler: `late-ssh/src/api.rs` (look for `handle_socket`).

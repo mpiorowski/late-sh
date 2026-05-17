@@ -623,13 +623,17 @@ impl App {
             show_web_chat_qr: false,
             web_chat_qr_url: None,
             show_pair_modal: false,
-            session_token: config.session_token,
+            session_token: config.session_token.clone(),
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
             active_users: active_users.clone(),
             activity_feed_rx: config.activity_feed_rx,
             activity,
-            audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
+            audio: crate::app::audio::state::AudioState::new(
+                config.audio_service,
+                config.user_id,
+                config.session_token,
+            ),
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -916,7 +920,9 @@ impl App {
         );
     }
 
-    pub fn toggle_paired_playback_source(&mut self) -> Option<late_core::models::user::AudioSource> {
+    pub fn toggle_paired_playback_source(
+        &mut self,
+    ) -> Option<late_core::models::user::AudioSource> {
         use late_core::models::user::AudioSource;
         let registry = self.paired_client_registry.as_ref()?;
         let next = match self.paired_browser_source {
@@ -930,13 +936,7 @@ impl App {
             return None;
         }
         self.paired_browser_source = next;
-        let user_id = self.user_id;
-        let audio_service = self.audio.service().clone();
-        tokio::spawn(async move {
-            if let Err(err) = audio_service.persist_audio_source(user_id, next).await {
-                tracing::warn!(error = ?err, "failed to persist audio source preference");
-            }
-        });
+        self.audio.persist_audio_source(next);
         Some(next)
     }
 

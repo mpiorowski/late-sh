@@ -27,11 +27,15 @@ pub enum PairControlMessage {
     VolumeUp,
     VolumeDown,
     RequestClipboardImage,
-    ForceMute { mute: bool },
+    ForceMute {
+        mute: bool,
+    },
     /// Per-user setting: tell the paired browser which audio source to use.
     /// Server is the source of truth (persisted in `users.settings.audio_source`)
     /// so the browser does not toggle locally; it applies whatever it receives.
-    SetPlaybackSource { source: AudioSource },
+    SetPlaybackSource {
+        source: AudioSource,
+    },
 }
 
 #[derive(Clone, Default)]
@@ -335,10 +339,7 @@ impl PairedClientRegistry {
         let Some(tx) = tx else {
             return false;
         };
-        if tx
-            .send(PairControlMessage::RequestClipboardImage)
-            .is_err()
-        {
+        if tx.send(PairControlMessage::RequestClipboardImage).is_err() {
             tracing::warn!(
                 token_hint = %token_hint(token),
                 "failed to send paired clipboard image request"
@@ -364,6 +365,17 @@ impl PairedClientRegistry {
                     .iter()
                     .any(|entry| entry.state.client_kind == ClientKind::Browser)
             })
+            .unwrap_or(false)
+    }
+
+    /// True when at least one paired entry (CLI or browser) exists for `token`.
+    /// Used to gate listener-only actions (e.g. booth skip-vote) on actual
+    /// pairing, so an SSH-only user can't influence what paired listeners hear.
+    pub fn is_paired(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)
+            .map(|entries| !entries.is_empty())
             .unwrap_or(false)
     }
 }

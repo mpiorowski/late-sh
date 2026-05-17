@@ -1,3 +1,4 @@
+use late_core::models::user::AudioSource;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -7,17 +8,19 @@ use crate::app::common::primitives::Banner;
 pub struct AudioState {
     pub(crate) service: AudioService,
     user_id: Uuid,
+    session_token: String,
     event_rx: broadcast::Receiver<AudioEvent>,
     snapshot_rx: watch::Receiver<QueueSnapshot>,
 }
 
 impl AudioState {
-    pub fn new(service: AudioService, user_id: Uuid) -> Self {
+    pub fn new(service: AudioService, user_id: Uuid, session_token: String) -> Self {
         let event_rx = service.subscribe_events();
         let snapshot_rx = service.subscribe_snapshot();
         Self {
             service,
             user_id,
+            session_token,
             event_rx,
             snapshot_rx,
         }
@@ -61,7 +64,15 @@ impl AudioState {
     }
 
     pub fn booth_skip_vote(&self) {
-        self.service.cast_skip_vote_task(self.user_id);
+        self.service
+            .cast_skip_vote_task(self.user_id, self.session_token.clone());
+    }
+
+    /// Spawn an audio-source persist task that surfaces failures as banners
+    /// via `AudioEvent::AudioSourcePersistFailed`. Caller is expected to have
+    /// already optimistically updated local UI state.
+    pub fn persist_audio_source(&self, source: AudioSource) {
+        self.service.persist_audio_source_task(self.user_id, source);
     }
 
     pub fn tick(&mut self) -> Option<Banner> {
@@ -88,9 +99,7 @@ impl AudioState {
                 {
                     banner = Some(Banner::error(&message));
                 }
-                AudioEvent::BoothSubmitQueued { user_id, position }
-                    if user_id == self.user_id =>
-                {
+                AudioEvent::BoothSubmitQueued { user_id, position } if user_id == self.user_id => {
                     banner = Some(if position == 0 {
                         Banner::success("Submitted - up next")
                     } else {
@@ -117,6 +126,11 @@ impl AudioState {
                     banner = Some(Banner::success(&format!(
                         "Skip vote registered ({votes}/{threshold})"
                     )));
+                }
+                AudioEvent::AudioSourcePersistFailed { user_id, message }
+                    if user_id == self.user_id =>
+                {
+                    banner = Some(Banner::error(&message));
                 }
                 _ => {}
             }

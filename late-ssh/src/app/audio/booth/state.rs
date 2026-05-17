@@ -94,7 +94,10 @@ impl BoothModalState {
         self.focus = focus;
     }
 
-    pub(crate) fn selected_item<'a>(&self, queue: &'a [QueueItemView]) -> Option<&'a QueueItemView> {
+    pub(crate) fn selected_item<'a>(
+        &self,
+        queue: &'a [QueueItemView],
+    ) -> Option<&'a QueueItemView> {
         queue.get(self.selected)
     }
 
