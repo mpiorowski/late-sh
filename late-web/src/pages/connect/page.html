@@ -63,13 +63,13 @@
                     this.connectWs();
                 }
 
-                window.addEventListener('late-youtube-ready', () => {
+                const onYoutubeReady = () => {
                     this.ytReady = true;
                     this.ensureYoutubePlayer();
-                });
+                };
+                window.addEventListener('late-youtube-ready', onYoutubeReady);
                 if (window.lateYoutubeApiReady) {
-                    this.ytReady = true;
-                    this.ensureYoutubePlayer();
+                    onYoutubeReady();
                 }
             },
 
@@ -198,8 +198,9 @@
 
                 if (this.audioMode === 'youtube') {
                     this.ensureYoutubePlayer();
-                    if (this.pendingYoutubeItem) {
-                        this.playYoutubeItem(this.pendingYoutubeItem);
+                    const itemToPlay = this.pendingYoutubeItem || this.currentYoutubeItem;
+                    if (itemToPlay) {
+                        this.playYoutubeItem(itemToPlay);
                     } else if (this.autoplayBlocked && this.ytPlayer && this.ytPlayer.playVideo) {
                         this.autoplayBlocked = false;
                         this.status = 'buffering';
@@ -448,6 +449,9 @@
                 if (this.userOverrideMode !== null && this.userOverrideMode !== mode) {
                     return;
                 }
+                if (this.audioMode === mode) {
+                    return;
+                }
                 this.applySourceMode(mode);
             },
 
@@ -471,9 +475,12 @@
                     this.ensureYoutubePlayer();
                     // Prefer the freshest stashed item; fall back to whatever
                     // we last had as current, so a switch-back to YouTube can
-                    // resume a paused video instead of doing nothing.
+                    // resume a paused video instead of doing nothing. Only
+                    // kick playback if the user has already gestured via
+                    // [ start audio ] — otherwise leave the item staged and
+                    // let that click drive the first play.
                     const itemToPlay = this.pendingYoutubeItem || this.currentYoutubeItem;
-                    if (itemToPlay) {
+                    if (itemToPlay && this.audioEnabled) {
                         this.playYoutubeItem(itemToPlay);
                     }
                 } else {

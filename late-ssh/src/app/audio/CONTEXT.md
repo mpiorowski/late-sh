@@ -3,10 +3,9 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, Icecast visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-16 (booth shipped)
+- Last updated: 2026-05-17 (v1 shipped — AUDIO.md retired, deferred items folded into §15+)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
-- Design doc: `../../../../AUDIO.md` (authoritative product spec — read it for *why*; this file is the *what currently exists*)
 
 ---
 
@@ -299,7 +298,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 
 ## 13. Known Gaps and Things to Watch
 
-- **`GET /api/queue` is intentionally not exposed.** `AudioService::snapshot()` and `QueueSnapshot` exist for in-process use only. The TUI booth modal reads the snapshot from `AudioState::queue_snapshot()` (a `watch::Receiver<QueueSnapshot>` populated by `publish_queue_update_with_guard`); browsers receive state via the `initial_ws_messages` catch-up burst and live `queue_update` events. An external route would only matter for non-paired observers, which we do not have today. See AUDIO.md §5.4.
+- **`GET /api/queue` is intentionally not exposed.** `AudioService::snapshot()` and `QueueSnapshot` exist for in-process use only. The TUI booth modal reads the snapshot from `AudioState::queue_snapshot()` (a `watch::Receiver<QueueSnapshot>` populated by `publish_queue_update_with_guard`); browsers receive state via the `initial_ws_messages` catch-up burst and live `queue_update` events. An external route would only matter for non-paired observers, which we do not have today.
 - **Booth modal renders from `watch::Receiver<QueueSnapshot>`.** `AudioService` keeps a `snapshot_tx` watch sender alongside the broadcast channels; every `publish_queue_update_with_guard` pushes a snapshot into it, and `AudioState::queue_snapshot()` borrows the current value. Skip progress (`votes/threshold`) is folded into the snapshot before it ships.
 - **`liquidsoap.rs` lives here but is only used by `app/vote/svc.rs`.** AudioService does *not* drive Liquidsoap. Treat `AudioMode::Icecast` as a hint to the browser/CLI, not a Liquidsoap state change.
 - **`/music` ≠ `/audio`.** `/music` is a help-topic command. `/audio` (and `/audio fallback`) are the submit commands. Don't conflate.
@@ -310,9 +309,97 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 
 ---
 
-## 14. References
+## 14. Design boundaries (won't build)
 
-- Design doc: `../../../../AUDIO.md` — read this for product intent, deferred decisions, and the parked CLI-external-player plan.
+These are intentional non-goals. Reopen only if the constraint that put them here changes.
+
+- **CLI YouTube decoding.** CLI plays Icecast only. The YouTube path is browser-iframe-only. See §16 for the parked external-player alternative.
+- **Server-side YouTube fetching.** Server routes `video_id` only; the iframe is the only thing that talks to googlevideo.com.
+- **Recording / persistent archive of YouTube audio.** Blocked by YouTube ToS.
+- **Ad stripping.** The iframe plays whatever YouTube serves.
+- **Lyrics, album art, fancy metadata.** Title + channel is enough.
+- **Custom genre control per submission.** Fallback uses the global vote winner like everywhere else.
+- **Real Web Audio analysis of the YouTube iframe.** Not possible — cross-origin iframe, no audio hook in the IFrame Player API. The Icecast visualizer (§10) keeps working; any future YouTube-mode visualizer must either hide, switch to a labeled "playing" indicator driven procedurally (name it honestly in code — `procedural_indicator_bands`, never `viz_bands`), or stop showing bars.
+
+---
+
+## 15. Deferred (open backlog)
+
+Open work that's been deliberately punted past v1. Each line is a "we know it's missing, here's the next-time hook."
+
+- **Public `POST /api/queue/submit` HTTP route.** Booth submit goes through the in-process service. Revive when there's a non-SSH submitter (web form, third-party). YouTube Data API validation path is already in code (un-trusted route in `AudioService::submit_url_task`).
+- **`GET /api/queue` HTTP route.** Snapshot exists in-process (`QueueSnapshot`); no external consumer today. See §13 first bullet.
+- **TUI sidebar widget on Home for queue visibility.** Booth modal is the only surface today.
+- **Drift correction tuning.** Current thresholds (2.5s drift, 5s seek cooldown) work but were picked by feel.
+- **Multi-tab dedupe.** Two browser tabs on the same token both play. Needs a "primary tab" election or a single-tab-per-token enforcement.
+- **Region-lock partial failure UX.** Staff `/audio` skips the Data API; region-locked items fail at the browser via `error` → server marks `failed` → queue advances. Pre-validation would catch it at submit time.
+- **Better admin feedback** when DB insert fails after local URL validation succeeds.
+- **Browser-side voting UI.** Protocol already carries `vote_score` per item and `skip_progress` on the current item; no client renders them yet.
+- **Weighted votes by role** (admin/mod ≠ user) — currently 1 user = 1 vote.
+- **Vote history / reputation.**
+
+---
+
+## 16. Parked: CLI external-player handoff for YouTube
+
+**Status: parked, not on the active build path.** Reason: the user-facing configuration burden is too high for current scale — most users won't have a suitable player installed and won't want to edit a TOML config. Revisit when the audience is technical enough or large enough to justify a setup guide.
+
+### Idea
+
+Instead of opening a browser for YouTube playback, `late` shells out to a local media player (mpv, vlc, FreeTube, mpsyt, anything) that already knows how to play YouTube. late.sh never touches YouTube audio; the CLI is a general external-player runner that the user wires up. Server still ships only `video_id` over `/api/ws/pair`.
+
+```text
+server  → "play video_id at offset N" (WS, metadata only)
+late CLI → spawns or controls user-configured local player
+player  → fetches and decodes audio from YouTube (belongs to the user)
+```
+
+### Two control modes
+
+**Command mode** (~80 LOC of Rust):
+```toml
+[player.youtube]
+mode = "command"
+command = "<player> <flags> {url}"
+```
+Server says play → CLI spawns the command with `{url}` substituted → process exits when the track ends → CLI tells server `ended`. Skip = SIGTERM.
+
+**IPC mode** (richer — sync/seek/pause):
+```toml
+[player.youtube]
+mode = "ipc"
+launch = "<player> --idle --input-ipc-server={socket}"
+protocol = "mpv"
+```
+Long-running player. CLI sends commands over a JSON/IPC socket. `protocol` is the only player-specific code shipped in `late`. Start with one adapter; community can add more.
+
+### Ship / don't ship boundary
+
+| Safe (ship)                                          | Unsafe (don't ship)                                       |
+|------------------------------------------------------|-----------------------------------------------------------|
+| Config slot for external player command              | Bundled mpv or yt-dlp binaries                            |
+| Template variables (`{url}`, `{socket}`)             | `late install-youtube` subcommand                         |
+| Generic IPC protocol adapter (mpv first)             | Auto-download of any extraction tool                      |
+| `late doctor` against a benign non-YouTube test URL  | `late doctor` testing against a real YouTube URL          |
+| Clear errors when no player is configured            | Naming a specific tool inside the binary                  |
+| Community-maintained `EXTERNAL_PLAYERS.md`           | Official "recommended player" in onboarding flow          |
+
+### Posture
+
+late.sh ships zero yt-dlp code; every byte of YouTube audio is fetched by the user's machine, by a tool the user chose. A user-side mpv-with-yt-dlp setup still violates YouTube ToS on the user's machine (yt-dlp strips ads, branding, controls). If this is ever activated, docs must be explicit that the CLI is a generic external-player runner and that the user — not late.sh — is responsible for what their configured player does.
+
+### Reactivation criteria
+
+- User base is large/technical enough that a setup guide is worth maintaining.
+- A stable, official YouTube-API-compliant CLI player emerges (none currently exists; closest options all use yt-dlp underneath).
+- We decide to make late.sh deliberately CLI-power-user-shaped, and a player slot fits the product identity.
+
+Until then, YouTube playback goes through the browser iframe path (§4-§9).
+
+---
+
+## 17. References
+
 - Root context: `../../../../CONTEXT.md` — §2.7 (audio infra), §4.1 (paired-client WS).
 - Pair WS handler: `late-ssh/src/api.rs` (look for `handle_socket`).
 - Pair registry / mute policy: `late-ssh/src/paired_clients.rs`.
@@ -321,3 +408,4 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - YouTube IFrame Player API: https://developers.google.com/youtube/iframe_api_reference
 - YouTube Data API `videos.list`: https://developers.google.com/youtube/v3/docs/videos/list
 - Browser autoplay: https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay
+- mpv JSON IPC (for the parked plan): https://mpv.io/manual/master/#json-ipc
