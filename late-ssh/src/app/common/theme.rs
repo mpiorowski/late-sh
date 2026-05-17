@@ -76,6 +76,7 @@ pub enum ThemeKind {
     MonoFogSemantic = 70,
     DeepSea = 71,
     Crush = 72,
+    MonaLisa = 73,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -332,6 +333,12 @@ pub const OPTIONS: &[ThemeOption] = &[
         group: ThemeGroup::Ports,
         id: "deepsea",
         label: "Deep Sea",
+    },
+    ThemeOption {
+        kind: ThemeKind::MonaLisa,
+        group: ThemeGroup::Ports,
+        id: "MonaLisa",
+        label: "Mona Lisa",
     },
     ThemeOption {
         kind: ThemeKind::CopperFresh,
@@ -2829,6 +2836,37 @@ const PALETTE_PANTERA: Palette = Palette {
     badge_gold: Color::Rgb(245, 239, 52),
 };
 
+// inspired by the Mona Lisa iterm2 colorscheme: https://iterm2colorschemes.com/
+const PALETTE_MONALISA: Palette = Palette {
+    bg_canvas: Color::Rgb(18, 11, 13),
+    bg_selection: Color::Rgb(53, 27, 14),
+    bg_highlight: Color::Rgb(53, 27, 14),
+    border_dim: Color::Rgb(53, 27, 14),
+    border: Color::Rgb(99, 98, 50),
+    border_active: Color::Rgb(155, 41, 28),
+    text_faint: Color::Rgb(81, 92, 93),
+    text_dim: Color::Rgb(135, 66, 40),
+    text_muted: Color::Rgb(81, 92, 93),
+    text: Color::Rgb(215, 190, 105),
+    text_bright: Color::Rgb(247, 215, 92),
+    amber: Color::Rgb(235, 186, 91),
+    amber_dim: Color::Rgb(180, 140, 60),
+    amber_glow: Color::Rgb(235, 186, 91),
+    chat_body: Color::Rgb(215, 190, 105),
+    chat_author: Color::Rgb(155, 29, 41),
+    mention: Color::Rgb(255, 149, 102),
+    success: Color::Rgb(138, 205, 143),
+    error: Color::Rgb(255, 91, 106),
+    bot: Color::Rgb(255, 229, 152),
+    bonsai_sprout: Color::Rgb(180, 178, 100),
+    bonsai_leaf: Color::Rgb(88, 128, 86),
+    bonsai_canopy: Color::Rgb(77, 181, 255),
+    bonsai_bloom: Color::Rgb(213, 95, 222),
+    badge_bronze: Color::Rgb(135, 66, 40),
+    badge_silver: Color::Rgb(219, 226, 239),
+    badge_gold: Color::Rgb(247, 215, 92),
+};
+
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Contrast) };
 }
@@ -2964,6 +3002,7 @@ fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
         ThemeKind::MonoDimSemantic => &PALETTE_MONO_DIM_SEMANTIC,
         ThemeKind::MonoFogSemantic => &PALETTE_MONO_FOG_SEMANTIC,
         ThemeKind::Crush => &PALETTE_PANTERA,
+        ThemeKind::MonaLisa => &PALETTE_MONALISA,
     }
 }
 
