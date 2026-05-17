@@ -1,12 +1,10 @@
 use std::time::Instant;
 
-use late_core::audio::VizFrame;
-
 use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
 use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
-use crate::session::{BrowserVizFrame, SessionMessage};
+use crate::session::SessionMessage;
 
 impl App {
     pub fn tick(&mut self) {
@@ -61,6 +59,9 @@ impl App {
             self.set_screen(Screen::Dashboard);
         }
         if let Some(b) = self.vote.tick() {
+            self.banner = Some(b);
+        }
+        if let Some(b) = self.audio.tick() {
             self.banner = Some(b);
         }
         // News state is ticked inside chat.tick()
@@ -217,14 +218,9 @@ impl App {
         }
     }
 
-    fn push_browser_frame(&mut self, frame: BrowserVizFrame) {
+    fn push_browser_frame(&mut self, frame: late_core::audio::VizFrame) {
         self.last_browser_viz_at = Some(Instant::now());
-        let viz = VizFrame {
-            bands: frame.bands,
-            rms: frame.rms,
-            track_pos_ms: frame.position_ms,
-        };
-        self.browser_viz_buffer.push_back(viz);
+        self.browser_viz_buffer.push_back(frame);
         while self.browser_viz_buffer.len() > 75 {
             self.browser_viz_buffer.pop_front();
         }

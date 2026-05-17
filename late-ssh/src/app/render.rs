@@ -15,7 +15,9 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::user::RightSidebarMode;
 
 use super::{
-    artboard, bonsai, chat,
+    artboard,
+    audio::{client_state::ClientAudioState, viz::Visualizer},
+    bonsai, chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
@@ -25,7 +27,6 @@ use super::{
     settings_modal,
     state::{App, NotificationMode},
     terminal_help_modal,
-    visualizer::Visualizer,
 };
 
 fn sanitize_notification_field(input: &str) -> String {
@@ -159,7 +160,7 @@ struct DrawContext<'a> {
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
-    paired_client: Option<&'a crate::session::ClientAudioState>,
+    paired_client: Option<&'a ClientAudioState>,
     vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
     online_count: usize,

@@ -195,6 +195,7 @@ struct SharedState {
     activity_generation: [u64; 2],
     board: [Option<Mark>; 9],
     turn: Mark,
+    next_starter: Mark,
     winner: Option<Winner>,
     status_message: String,
 }
@@ -209,6 +210,7 @@ impl SharedState {
             activity_generation: [0; 2],
             board: [None; 9],
             turn: Mark::X,
+            next_starter: Mark::O,
             winner: None,
             status_message: "Take a seat to play.".to_string(),
         }
@@ -235,7 +237,7 @@ impl SharedState {
         };
         self.seats[index] = Some(user_id);
         self.status_message = if self.seats.iter().all(Option::is_some) {
-            "Game on. X moves first.".to_string()
+            format!("Game on. {} moves first.", self.turn.label())
         } else {
             "Waiting for a second player.".to_string()
         };
@@ -249,6 +251,7 @@ impl SharedState {
         self.seats[index] = None;
         self.board = [None; 9];
         self.turn = Mark::X;
+        self.next_starter = Mark::O;
         self.winner = None;
         self.status_message = "Player left. Board reset.".to_string();
     }
@@ -302,9 +305,10 @@ impl SharedState {
             return;
         }
         self.board = [None; 9];
-        self.turn = Mark::X;
+        self.turn = self.next_starter;
+        self.next_starter = self.next_starter.other();
         self.winner = None;
-        self.status_message = "New round. X moves first.".to_string();
+        self.status_message = format!("New round. {} moves first.", self.turn.label());
     }
 
     fn record_activity(&mut self, user_id: Uuid) -> Option<u64> {
@@ -328,6 +332,7 @@ impl SharedState {
         self.seats[seat_index] = None;
         self.board = [None; 9];
         self.turn = Mark::X;
+        self.next_starter = Mark::O;
         self.winner = None;
         self.status_message = format!("Seat {} idle for 5m and left. Board reset.", seat_index + 1);
         true

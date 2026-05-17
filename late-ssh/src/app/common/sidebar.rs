@@ -12,11 +12,10 @@ use ratatui::{
 
 use super::theme;
 use crate::app::activity::event::ActivityEvent;
+use crate::app::audio::{client_state::ClientAudioState, viz::Visualizer};
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::dashboard::ui::DashboardRoomCard;
-use crate::app::visualizer::Visualizer;
 use crate::app::vote::ui::VoteCardView;
-use crate::session::ClientAudioState;
 
 pub struct SidebarProps<'a> {
     pub game_selection: usize,
@@ -205,17 +204,6 @@ fn active_tables_room_hint(idx: usize) -> Vec<Span<'static>> {
 }
 
 fn draw_empty_active_tables(frame: &mut Frame, area: Rect) {
-    let key = |text: &str| -> Span<'static> {
-        Span::styled(
-            text.to_string(),
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        )
-    };
-    let dim = |text: &str| -> Span<'static> {
-        Span::styled(text.to_string(), Style::default().fg(theme::TEXT_DIM()))
-    };
     let faint = |text: &str| -> Span<'static> {
         Span::styled(
             text.to_string(),
@@ -225,12 +213,7 @@ fn draw_empty_active_tables(frame: &mut Frame, area: Rect) {
         )
     };
 
-    let lines = vec![
-        Line::from(faint("no active tables")),
-        Line::from(vec![key("b1"), dim("/"), key("b2"), dim("/"), key("b3")]),
-        Line::from(vec![key("n"), dim(" create table")]),
-        Line::from(vec![key("Enter"), dim(" join")]),
-    ];
+    let lines = vec![Line::from(faint("no active tables"))];
     frame.render_widget(Paragraph::new(lines), area);
 }
 
