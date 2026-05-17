@@ -39,6 +39,8 @@
             autoplayBlocked: false,
             wsRetries: 0,
             audioRetries: 0,
+            userPreferIcecast: false,
+            serverAudioMode: 'icecast',
 
             init() {
                 this.$refs.audio.src = this.audioUrl;
@@ -154,6 +156,9 @@
                             this.seekYoutube(payload.offset_ms || 0);
                             break;
                         case 'queue_update':
+                            break;
+                        case 'toggle_playback_source':
+                            this.toggleUserPlaybackSource();
                             break;
                     }
                 };
@@ -421,13 +426,35 @@
                 return Math.min(1.0, this.softCompress(rms * 3.0));
             },
 
+            // Toggle the user's local Icecast/YouTube preference. Triggered
+            // by the paired TUI's v+x keybind. When userPreferIcecast becomes
+            // true we drop straight back to Icecast even if the server is
+            // playing a YouTube queue item; when it becomes false we honor
+            // whatever the server last broadcast.
+            toggleUserPlaybackSource() {
+                this.userPreferIcecast = !this.userPreferIcecast;
+                if (this.userPreferIcecast) {
+                    if (this.audioMode === 'youtube') {
+                        this.applySourceMode('icecast');
+                    }
+                } else if (this.serverAudioMode === 'youtube' && this.youtubeEnabled) {
+                    this.applySourceMode('youtube');
+                }
+            },
+
             applySourceMode(mode) {
                 if (mode !== 'youtube' && mode !== 'icecast') {
                     return;
                 }
+                this.serverAudioMode = mode;
                 // Hard gate: without the ?youtube=true flag this page never
                 // leaves Icecast, regardless of what the server broadcasts.
                 if (mode === 'youtube' && !this.youtubeEnabled) {
+                    return;
+                }
+                // Per-user override: while the user has opted into Icecast via
+                // v+x, ignore source_changed: youtube and stay on Icecast.
+                if (mode === 'youtube' && this.userPreferIcecast) {
                     return;
                 }
                 const modeChanged = this.audioMode !== mode;

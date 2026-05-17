@@ -27,6 +27,13 @@ impl YoutubeClient {
         }
     }
 
+    pub fn has_api_key(&self) -> bool {
+        self.api_key
+            .as_deref()
+            .map(|key| !key.trim().is_empty())
+            .unwrap_or(false)
+    }
+
     pub async fn validate_url(&self, url: &str) -> Result<YoutubeVideo> {
         let video_id = extract_video_id(url)?;
         self.validate_video_id(video_id).await

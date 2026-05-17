@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, Icecast visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-16
+- Last updated: 2026-05-16 (booth shipped)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Design doc: `../../../../AUDIO.md` (authoritative product spec — read it for *why*; this file is the *what currently exists*)
@@ -33,22 +33,29 @@ Out of scope here (lives elsewhere):
 
 ```text
 late-ssh/src/app/audio/
-├── mod.rs                  # declarations only (client_state, liquidsoap, now_playing, state, svc, viz, youtube)
-├── svc.rs                  # AudioService: queue state machine, WS broadcast, resume, fallback debounce, sync seek
-├── state.rs                # AudioState: per-session UI shim — proxies submits and turns AudioEvent into Banners
+├── mod.rs                  # declarations only (booth, client_state, liquidsoap, now_playing, state, svc, viz, youtube)
+├── svc.rs                  # AudioService: queue state machine, WS broadcast, resume, fallback debounce, sync seek, votes/skip-vote
+├── state.rs                # AudioState: per-session UI shim — proxies submits/votes and turns AudioEvent into Banners
 ├── client_state.rs         # ClientAudioState + ClientKind/SshMode/Platform enums (the client_state WS payload)
 ├── liquidsoap.rs           # LiquidsoapController telnet client (NOT used by AudioService — only by app/vote/svc.rs)
 ├── viz.rs                  # Visualizer (Icecast bands/RMS/beat) + ratatui render_inline
 ├── youtube.rs              # URL parsing + optional YouTube Data API validation client
-├── now_playing/
+├── booth/
 │   ├── mod.rs
-│   └── svc.rs              # NowPlayingService: 10s Icecast title poll, watch<Option<NowPlaying>>
-└── room/                   # EMPTY placeholder directory (no mod.rs, not referenced) — see §13
+│   ├── state.rs            # BoothModalState: open flag, submit input, selected index, focus
+│   ├── input.rs            # modal-open key dispatch (submit/queue focus, +/- vote, s skip)
+│   └── ui.rs               # ratatui modal: submit row, current track, queue list with score
+└── now_playing/
+    ├── mod.rs
+    └── svc.rs              # NowPlayingService: 10s Icecast title poll, watch<Option<NowPlaying>>
 ```
 
 Cross-crate touchpoints:
-- `late-core/src/models/media_queue_item.rs`, `media_source.rs` — DB models.
-- `late-core/migrations/047_create_media_queue_items.sql`, `048_create_media_sources.sql`.
+- `late-core/src/models/media_queue_item.rs`, `media_source.rs`,
+  `media_queue_vote.rs` — DB models.
+- `late-core/migrations/047_create_media_queue_items.sql`,
+  `048_create_media_sources.sql`,
+  `049_create_media_queue_votes.sql`.
 - `late-core/src/audio.rs` — `VizFrame { bands[8], rms, track_pos_ms }` shared between server and CLI.
 - `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::ForceMute`, mute-priority policy.
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
@@ -292,8 +299,8 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 
 ## 13. Known Gaps and Things to Watch
 
-- **`GET /api/queue` is intentionally not exposed.** `AudioService::snapshot()` and `QueueSnapshot` exist for in-process use only. The TUI reads the queue via direct DB queries through `MediaQueueItem` (`list_snapshot`, `first_queued`); browsers receive state via the `initial_ws_messages` catch-up burst and live `queue_update` events. An external route would only matter for non-paired observers, which we do not have today. See AUDIO.md §5.4.
-- **`room/` is an empty directory.** No `mod.rs`, not referenced from `mod.rs`, no git history. Either a stale scaffold or intent marker. Safe to delete; if kept, leave it as-is — adding files would require wiring through `mod.rs`.
+- **`GET /api/queue` is intentionally not exposed.** `AudioService::snapshot()` and `QueueSnapshot` exist for in-process use only. The TUI booth modal reads the snapshot from `AudioState::queue_snapshot()` (a `watch::Receiver<QueueSnapshot>` populated by `publish_queue_update_with_guard`); browsers receive state via the `initial_ws_messages` catch-up burst and live `queue_update` events. An external route would only matter for non-paired observers, which we do not have today. See AUDIO.md §5.4.
+- **Booth modal renders from `watch::Receiver<QueueSnapshot>`.** `AudioService` keeps a `snapshot_tx` watch sender alongside the broadcast channels; every `publish_queue_update_with_guard` pushes a snapshot into it, and `AudioState::queue_snapshot()` borrows the current value. Skip progress (`votes/threshold`) is folded into the snapshot before it ships.
 - **`liquidsoap.rs` lives here but is only used by `app/vote/svc.rs`.** AudioService does *not* drive Liquidsoap. Treat `AudioMode::Icecast` as a hint to the browser/CLI, not a Liquidsoap state change.
 - **`/music` ≠ `/audio`.** `/music` is a help-topic command. `/audio` (and `/audio fallback`) are the submit commands. Don't conflate.
 - **No `GET /api/queue` and no submit UI** means visibility for MVP is via DB inspection or browser/CLI logs.

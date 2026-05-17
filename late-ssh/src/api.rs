@@ -388,6 +388,7 @@ fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry
         .unregister_if_match(token, registration_id);
+    state.audio_service.reevaluate_skip_threshold_task();
 }
 
 async fn send_json_ws<T: serde::Serialize>(

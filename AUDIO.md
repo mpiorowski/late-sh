@@ -536,6 +536,13 @@ are still captured so future-you does not relitigate.
   when a fallback stream is configured.
 - CLI tolerates audio events and keeps its Icecast path.
 - Audio code consolidation into `late-ssh/src/app/audio/`.
+- Music Booth: `media_queue_votes` migration + model, +/- voting on queued
+  items, democratic skip-vote with paired-client threshold, public submit
+  path revived (un-trusted YouTube Data API validation), TUI booth modal
+  with submit/list/vote keybinds.
+- Booth chat keybinds: `v+v` opens the booth modal, `v+s` casts a skip
+  vote, `v+x` toggles the *paired browser* between Icecast and the
+  YouTube queue (per-user preference, browser-side state).
 
 ### Ready flow
 
@@ -551,15 +558,16 @@ are still captured so future-you does not relitigate.
 
 ### Not done / intentionally deferred
 
-- Public/non-admin `POST /api/queue/submit`.
-- YouTube Data API validation for public submits.
-- Queue submission UI.
+- Public/non-admin `POST /api/queue/submit` HTTP route (booth submit
+  goes through the in-process service, not HTTP).
 - TUI sidebar widget on Home for queue visibility.
-- Voting.
 - Drift correction tuning.
 - Multi-tab dedupe.
 - Region-lock partial failure UX.
 - Better admin feedback if DB insert fails after local URL validation.
+- Browser-side voting UI.
+- Persistent per-user Icecast preference (today the `v+x` toggle is
+  browser-memory only and resets on browser reload).
 
 ---
 
@@ -726,7 +734,7 @@ in §3-§8.
 
 ---
 
-## 14. Music Booth (planned)
+## 14. Music Booth (shipped)
 
 Adds public YouTube submissions, per-track up/down voting, and democratic
 skip on the existing global YouTube queue (§1-§13). Icecast and the genre

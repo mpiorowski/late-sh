@@ -172,7 +172,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         active_users,
         config,
         db: db.clone(),
-        audio_service: late_ssh::app::audio::svc::AudioService::new(db.clone(), None),
+        audio_service: late_ssh::app::audio::svc::AudioService::new(
+            db.clone(),
+            None,
+            late_ssh::paired_clients::PairedClientRegistry::new(),
+        ),
         vote_service,
         chat_service,
         notification_service,
@@ -227,7 +231,11 @@ pub fn make_app_with_chat_service(
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
-        audio_service: late_ssh::app::audio::svc::AudioService::new(db.clone(), None),
+        audio_service: late_ssh::app::audio::svc::AudioService::new(
+            db.clone(),
+            None,
+            late_ssh::paired_clients::PairedClientRegistry::new(),
+        ),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),
@@ -332,7 +340,11 @@ pub fn make_app_with_paired_client(
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
-        audio_service: late_ssh::app::audio::svc::AudioService::new(db.clone(), None),
+        audio_service: late_ssh::app::audio::svc::AudioService::new(
+            db.clone(),
+            None,
+            late_ssh::paired_clients::PairedClientRegistry::new(),
+        ),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),

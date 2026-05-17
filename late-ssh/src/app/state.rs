@@ -278,6 +278,7 @@ pub struct App {
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
+    pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
 
     pub(crate) vote_prefix_armed: bool,
     pub(crate) hot_room_prefix_armed: bool,
@@ -645,6 +646,7 @@ impl App {
             rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
+            booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             vote_prefix_armed: false,
             hot_room_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
@@ -888,6 +890,16 @@ impl App {
             return false;
         };
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
+    }
+
+    pub fn toggle_paired_playback_source(&mut self) -> bool {
+        let Some(registry) = &self.paired_client_registry else {
+            return false;
+        };
+        registry.send_control_to_browsers(
+            &self.session_token,
+            PairControlMessage::TogglePlaybackSource,
+        )
     }
 
     pub fn request_paired_clipboard_image_upload(&mut self, room_id: Option<Uuid>) -> bool {

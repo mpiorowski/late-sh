@@ -170,6 +170,10 @@ struct DrawContext<'a> {
     pair_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    booth_modal_open: bool,
+    booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
+    booth_snapshot: crate::app::audio::svc::QueueSnapshot,
+    booth_submit_enabled: bool,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
@@ -531,6 +535,10 @@ impl App {
                         pair_url: &self.connect_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
+                        booth_modal_open: self.booth_modal_state.is_open(),
+                        booth_modal_state: &self.booth_modal_state,
+                        booth_snapshot: self.audio.queue_snapshot(),
+                        booth_submit_enabled: self.audio.booth_submit_enabled(),
                         chat_state: &self.chat,
                         user_id: self.user_id,
                         news_modal,
@@ -889,6 +897,16 @@ impl App {
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
+            );
+        }
+
+        if ctx.booth_modal_open {
+            crate::app::audio::booth::ui::draw(
+                frame,
+                inner,
+                ctx.booth_modal_state,
+                &ctx.booth_snapshot,
+                ctx.booth_submit_enabled,
             );
         }
 

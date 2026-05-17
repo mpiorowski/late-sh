@@ -27,6 +27,10 @@ pub enum PairControlMessage {
     VolumeDown,
     RequestClipboardImage,
     ForceMute { mute: bool },
+    /// Per-user request: flip the paired browser between the YouTube queue
+    /// and Icecast playback. Browser stores the preference locally and
+    /// suppresses `source_changed: youtube` while Icecast is preferred.
+    TogglePlaybackSource,
 }
 
 #[derive(Clone, Default)]
@@ -153,6 +157,12 @@ impl PairedClientRegistry {
     /// the number of entries that accepted the message.
     pub fn send_control(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, |_| true) > 0
+    }
+
+    /// Send a control message only to browser entries on `token`. Used for
+    /// browser-only signals like `TogglePlaybackSource`.
+    pub fn send_control_to_browsers(&self, token: &str, msg: PairControlMessage) -> bool {
+        self.send_control_filter(token, msg, |kind| kind == ClientKind::Browser) > 0
     }
 
     /// Send a control message to paired entries whose `client_kind` matches the
@@ -335,6 +345,13 @@ impl PairedClientRegistry {
             return false;
         }
         true
+    }
+
+    /// Total number of paired client entries across all tokens. Used as the
+    /// denominator for skip-vote threshold calculations.
+    pub fn total_pairings(&self) -> usize {
+        let clients = self.clients.lock_recover();
+        clients.values().map(|entries| entries.len()).sum()
     }
 
     pub fn has_browser(&self, token: &str) -> bool {

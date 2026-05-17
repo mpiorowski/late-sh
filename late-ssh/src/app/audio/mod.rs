@@ -1,3 +1,4 @@
+pub mod booth;
 pub mod client_state;
 pub mod liquidsoap;
 pub mod now_playing;
