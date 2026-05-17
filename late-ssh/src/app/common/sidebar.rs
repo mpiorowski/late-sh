@@ -69,8 +69,9 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     const TIME_HEIGHT: u16 = 1;
     const RULE_HEIGHT: u16 = 1;
     const VISUALIZER_HEIGHT: u16 = 6;
-    // Music stage: volume + youtube block + icecast block, both always visible.
-    const MUSIC_STAGE_HEIGHT: u16 = 14;
+    // Music stage: volume + youtube block + icecast block (with vote), both
+    // always visible.
+    const MUSIC_STAGE_HEIGHT: u16 = 16;
     const ACTIVE_TABLES_HEIGHT: u16 = 6;
     const BONSAI_MIN_HEIGHT: u16 = 3;
 
@@ -337,7 +338,7 @@ fn draw_music_stage(
 
     let rows = Layout::vertical([
         Constraint::Length(1), // 0:  volume
-        Constraint::Length(1), // 1:  blank
+        Constraint::Length(1), // 1:  keybind hints
         Constraint::Length(1), // 2:  yt title
         Constraint::Length(1), // 3:  track title
         Constraint::Length(1), // 4:  channel / by-submitter
@@ -347,12 +348,13 @@ fn draw_music_stage(
         Constraint::Min(2),    // 8:  next items (absorbs spare space)
         Constraint::Length(1), // 9:  blank
         Constraint::Length(1), // 10: ice title
-        Constraint::Length(1), // 11: vibe → next
-        Constraint::Length(1), // 12: ends in
+        Constraint::Length(1), // 11: vibe → next · ends
+        Constraint::Length(3), // 12: vote rows (draw_vote_inline splits internally)
     ])
     .split(area);
 
     draw_volume_row(frame, rows[0], paired_client);
+    draw_keybind_row(frame, rows[1]);
     draw_youtube_block(
         frame,
         [rows[2], rows[3], rows[4], rows[5], rows[6], rows[7], rows[8]],
@@ -417,6 +419,51 @@ fn draw_volume_row(
             ));
         }
     }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Music-stage keybind hint row. Sits under the volume bar; lists the
+/// global media keys (mute, volume up/down, source toggle, skip vote).
+/// Keys are bold amber-dim, mini-labels are faint italic. Kept terse so
+/// the row reads as ambient affordance, not a banner.
+fn draw_keybind_row(frame: &mut Frame, area: Rect) {
+    if area.width == 0 {
+        return;
+    }
+    let key_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default()
+        .fg(theme::TEXT_FAINT())
+        .add_modifier(Modifier::ITALIC);
+    let sep_style = Style::default().fg(theme::BORDER_DIM());
+
+    // Render groups in priority order; drop trailing ones if the rail is
+    // too narrow to fit them.
+    let groups: &[(&str, &str)] = &[
+        ("m", "mute"),
+        ("-=", "vol"),
+        ("v+x", "src"),
+        ("v+s", "skip"),
+    ];
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for (i, (key, label)) in groups.iter().enumerate() {
+        let sep = if i == 0 { "" } else { "  " };
+        let group_w = sep.chars().count() + key.chars().count() + 1 + label.chars().count();
+        if used + group_w > area.width as usize {
+            break;
+        }
+        if !sep.is_empty() {
+            spans.push(Span::styled(sep.to_string(), sep_style));
+        }
+        spans.push(Span::styled(key.to_string(), key_style));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(label.to_string(), label_style));
+        used += group_w;
+    }
+
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -626,9 +673,10 @@ fn draw_youtube_block(
     }
 }
 
-/// Icecast block. Fixed 3-row footprint: title, vibe transition, vote
-/// countdown. Drops the radio track title entirely; the user asked for
-/// vibe / time-left / next-vibe and nothing else.
+/// Icecast block. 5-row footprint passed as 3 rects: title, combined
+/// `vibe → next · ends` line, then a 3-row tall vote area that
+/// `draw_vote_inline` splits internally. Drops the radio track title;
+/// the user wants vibe / countdown / vote options and nothing else.
 fn draw_icecast_block(
     frame: &mut Frame,
     rows: [Rect; 3],
@@ -636,8 +684,6 @@ fn draw_icecast_block(
     paired_client: Option<&ClientAudioState>,
     active: bool,
 ) {
-    let width = rows[0].width as usize;
-
     let tag = if active {
         match paired_client {
             Some(state) if state.muted => Some("muted"),
@@ -657,6 +703,7 @@ fn draw_icecast_block(
     let next_genre = vote.vote_counts.winner_or(vote.current_genre);
     let next_label =
         crate::app::common::primitives::genre_label(next_genre).to_ascii_lowercase();
+    let ends = compact_vote_duration(vote.ends_in);
 
     let current_style = if active {
         Style::default()
@@ -675,28 +722,16 @@ fn draw_icecast_block(
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                "vibe  ",
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
             Span::styled(current_label, current_style),
             Span::styled(" → ", Style::default().fg(theme::AMBER_DIM())),
             Span::styled(next_label, next_style),
+            Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
+            Span::styled(ends, Style::default().fg(theme::TEXT_FAINT())),
         ])),
         rows[1],
     );
 
-    let ends_text = format!("ends {}", compact_vote_duration(vote.ends_in));
-    let pad = width.saturating_sub(ends_text.chars().count());
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(" ".repeat(pad)),
-            Span::styled(ends_text, Style::default().fg(theme::TEXT_FAINT())),
-        ])),
-        rows[2],
-    );
+    crate::app::vote::ui::draw_vote_inline(frame, rows[2], vote);
 }
 
 
