@@ -12,7 +12,12 @@ use ratatui::{
 
 use super::theme;
 use crate::app::activity::event::ActivityEvent;
-use crate::app::audio::{client_state::ClientAudioState, viz::Visualizer};
+use crate::app::audio::{
+    client_state::{ClientAudioState, ClientKind},
+    svc::{AudioMode, QueueItemView, QueueSnapshot},
+    viz::Visualizer,
+};
+use late_core::models::user::AudioSource;
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::dashboard::ui::DashboardRoomCard;
 use crate::app::vote::ui::VoteCardView;
@@ -33,6 +38,14 @@ pub struct SidebarProps<'a> {
     /// Top multiplayer rooms — rendered as a compact "active tables" block
     /// in the right rail.
     pub top_rooms: &'a [DashboardRoomCard],
+    /// YouTube queue snapshot — drives the music stage's active panel and
+    /// peek strip. Fed from the same watch channel as the booth modal.
+    pub queue_snapshot: &'a QueueSnapshot,
+    /// Per-user paired-browser audio source preference (mirrors
+    /// `users.settings.audio_source`, flipped by v+x). When set to
+    /// `Icecast` the user has opted out of YouTube even if the global queue
+    /// is playing, so the music stage stays on Icecast.
+    pub paired_browser_source: AudioSource,
 }
 
 pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
@@ -56,7 +69,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     const TIME_HEIGHT: u16 = 1;
     const RULE_HEIGHT: u16 = 1;
     const VISUALIZER_HEIGHT: u16 = 6;
-    const NOW_PLAYING_HEIGHT: u16 = 9;
+    // Music stage: active panel (~11 rows) + peek strip (1 row) + spacer (1).
+    const MUSIC_STAGE_HEIGHT: u16 = 13;
     const ACTIVE_TABLES_HEIGHT: u16 = 6;
     const BONSAI_MIN_HEIGHT: u16 = 3;
 
@@ -64,7 +78,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         + RULE_HEIGHT
         + VISUALIZER_HEIGHT
         + RULE_HEIGHT
-        + NOW_PLAYING_HEIGHT
+        + MUSIC_STAGE_HEIGHT
         + RULE_HEIGHT;
     let active_tables_budget = ACTIVE_TABLES_HEIGHT + RULE_HEIGHT;
     let show_active_tables =
@@ -73,12 +87,12 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // Vertical real estate, top to bottom. Active tables are lower priority
     // than bonsai: hide them before squeezing the tree below its visible size.
     let mut constraints = vec![
-        Constraint::Length(TIME_HEIGHT),        // time
-        Constraint::Length(RULE_HEIGHT),        // ── rule
-        Constraint::Length(VISUALIZER_HEIGHT),  // visualizer
-        Constraint::Length(RULE_HEIGHT),        // ── rule
-        Constraint::Length(NOW_PLAYING_HEIGHT), // now playing + vote
-        Constraint::Length(RULE_HEIGHT),        // ── rule
+        Constraint::Length(TIME_HEIGHT),         // time
+        Constraint::Length(RULE_HEIGHT),         // ── rule
+        Constraint::Length(VISUALIZER_HEIGHT),   // visualizer
+        Constraint::Length(RULE_HEIGHT),         // ── rule
+        Constraint::Length(MUSIC_STAGE_HEIGHT),  // active stage + peek strip
+        Constraint::Length(RULE_HEIGHT),         // ── rule
     ];
     if show_active_tables {
         constraints.push(Constraint::Length(ACTIVE_TABLES_HEIGHT)); // active tables
@@ -107,12 +121,14 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
     draw_horizontal_rule(frame, inset(layout[3]));
 
-    draw_now_playing_block(
+    draw_music_stage(
         frame,
         inset(layout[4]),
         props.now_playing,
         props.paired_client,
         &props.vote,
+        props.queue_snapshot,
+        props.paired_browser_source,
     );
 
     draw_horizontal_rule(frame, inset(layout[5]));
@@ -297,129 +313,589 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_now_playing_block(
+/// Music stage. Renders the audible surface as a full panel and the other
+/// surface as a single-line peek strip. The selector reads three things:
+///
+/// * `paired_client.client_kind` — CLI literally can't decode YouTube, so
+///   a CLI listener is always on the Icecast stage regardless of the
+///   global queue or the user's preference.
+/// * `paired_browser_source` — the per-user `v+x` preference. This is the
+///   primary signal: even with no paired browser yet, flipping it should
+///   move the stage so the user can see what their browser will land on.
+/// * `audio_mode` — the global flip set by `AudioService`. A user
+///   preferring YouTube only sees a YouTube stage when the system is
+///   actually producing YouTube (queue track or fallback stream). When
+///   the global mode is Icecast (truly empty queue, no fallback, debounce
+///   expired), every listener falls back to Icecast and we follow.
+///
+/// Note: `audio_mode == Youtube` covers both an active queue track AND a
+/// fallback stream. An empty queue does NOT mean we leave YouTube —
+/// `current = None` while `audio_mode = Youtube` is the fallback case.
+fn draw_music_stage(
+    frame: &mut Frame,
+    area: Rect,
+    now_playing: Option<&NowPlaying>,
+    paired_client: Option<&ClientAudioState>,
+    vote: &VoteCardView<'_>,
+    queue: &QueueSnapshot,
+    paired_browser_source: AudioSource,
+) {
+    if area.width == 0 || area.height < 4 {
+        return;
+    }
+
+    let cli_paired =
+        matches!(paired_client, Some(c) if c.client_kind == ClientKind::Cli);
+    let on_youtube = !cli_paired
+        && paired_browser_source == AudioSource::Youtube
+        && queue.audio_mode == AudioMode::Youtube;
+
+    let split = Layout::vertical([
+        Constraint::Min(3),    // active stage
+        Constraint::Length(1), // peek strip
+    ])
+    .split(area);
+
+    if on_youtube {
+        draw_youtube_stage(frame, split[0], queue, paired_client);
+        draw_icecast_peek(frame, split[1], now_playing, vote);
+    } else {
+        draw_icecast_stage(frame, split[0], now_playing, paired_client, vote);
+        draw_youtube_peek(
+            frame,
+            split[1],
+            queue,
+            paired_client,
+            paired_browser_source,
+        );
+    }
+}
+
+/// Stage title bar: `▌ LABEL  ─────── ▶ tag`. The accent bar + amber title
+/// reads as "this is the one you're hearing"; the trailing rule fills to
+/// the right edge so the band always anchors visually.
+fn stage_title_line(area_w: u16, label: &str, mode_tag: &str) -> Line<'static> {
+    let mode_text = format!("▶ {mode_tag}");
+    let bar_w = 2;
+    let pad_w = 2;
+    let gap_w = 1;
+    let used = bar_w + label.chars().count() + pad_w + gap_w + mode_text.chars().count();
+    let dash_count = (area_w as usize).saturating_sub(used).max(1);
+    Line::from(vec![
+        Span::styled(
+            "▌ ",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            label.to_string(),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            "─".repeat(dash_count),
+            Style::default().fg(theme::BORDER_DIM()),
+        ),
+        Span::raw(" "),
+        Span::styled(mode_text, Style::default().fg(theme::AMBER_DIM())),
+    ])
+}
+
+/// Active YouTube panel. Either real queue playback (with skip meter +
+/// next list) or a fallback-stream placeholder when the queue is empty
+/// but a YouTube fallback is configured. Tag reflects pairing: `off` when
+/// nothing is paired (preview only), `live` while a queue item plays,
+/// `fallback` while the singleton fallback stream is playing.
+fn draw_youtube_stage(
+    frame: &mut Frame,
+    area: Rect,
+    queue: &QueueSnapshot,
+    paired_client: Option<&ClientAudioState>,
+) {
+    let width = area.width as usize;
+    let has_track = queue.current.is_some();
+    let mode_tag = if paired_client.is_none() {
+        "off"
+    } else if has_track {
+        "live"
+    } else {
+        "fallback"
+    };
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // title
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // track title
+        Constraint::Length(1), // channel / subtitle
+        Constraint::Length(1), // progress
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // skip meter / hint
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // "next ⌄"
+        Constraint::Min(0),    // next items
+    ])
+    .split(area);
+
+    frame.render_widget(
+        Paragraph::new(stage_title_line(area.width, "YOUTUBE", mode_tag)),
+        rows[0],
+    );
+
+    if let Some(current) = &queue.current {
+        let title = current
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("yt:{}", current.video_id));
+        frame.render_widget(track_title_para(&title, width, "  "), rows[2]);
+
+        let subtitle = current
+            .channel
+            .clone()
+            .or_else(|| (!current.submitter.is_empty()).then(|| format!("by {}", current.submitter)));
+        if let Some(subtitle) = subtitle {
+            frame.render_widget(track_meta_para(&subtitle, width, "  "), rows[3]);
+        }
+
+        let elapsed_secs = current
+            .started_at_ms
+            .map(|started| {
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                ((now_ms.saturating_sub(started)).max(0) / 1000) as u64
+            })
+            .unwrap_or(0);
+        let inner = inset_left(rows[4], 2);
+        if let Some(duration_ms) = current.duration_ms
+            && duration_ms > 0
+            && !current.is_stream
+        {
+            draw_progress_line(frame, inner, elapsed_secs, (duration_ms as u64) / 1000);
+        } else {
+            draw_elapsed_line(frame, inner, elapsed_secs);
+        }
+
+        if let Some(progress) = &queue.skip_progress {
+            frame.render_widget(
+                Paragraph::new(Line::from(skip_meter_spans(progress))),
+                rows[6],
+            );
+        }
+
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    "next ⌄",
+                    Style::default()
+                        .fg(theme::TEXT_FAINT())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ])),
+            rows[8],
+        );
+
+        let max_rows = (rows[9].height as usize).min(3);
+        if queue.queue.is_empty() {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        "· queue ends after this one",
+                        Style::default().fg(theme::TEXT_FAINT()),
+                    ),
+                ])),
+                rows[9],
+            );
+        } else {
+            let lines: Vec<Line<'static>> = queue
+                .queue
+                .iter()
+                .take(max_rows)
+                .enumerate()
+                .map(|(idx, item)| queue_next_line(idx, item, width))
+                .collect();
+            frame.render_widget(Paragraph::new(lines), rows[9]);
+        }
+    } else {
+        frame.render_widget(track_title_para("fallback stream", width, "  "), rows[2]);
+        frame.render_widget(track_meta_para("YouTube · 24/7", width, "  "), rows[3]);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("queue empty", Style::default().fg(theme::TEXT_DIM())),
+            ])),
+            rows[6],
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("submit with  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(
+                    "v+v",
+                    Style::default()
+                        .fg(theme::AMBER_DIM())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])),
+            rows[8],
+        );
+    }
+}
+
+/// Active Icecast panel: title + artist + progress + genre vibe + vote dots.
+/// Mirrors the previous now-playing block's data but framed in the new
+/// stage chrome so it sits alongside the YouTube panel cleanly.
+fn draw_icecast_stage(
     frame: &mut Frame,
     area: Rect,
     now_playing: Option<&NowPlaying>,
     paired_client: Option<&ClientAudioState>,
     vote: &VoteCardView<'_>,
 ) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
+    let width = area.width as usize;
+    let mode_tag = match paired_client {
+        Some(state) if state.muted => "muted",
+        Some(_) => "live",
+        None => "off",
+    };
 
     let rows = Layout::vertical([
         Constraint::Length(1), // title
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // track title
         Constraint::Length(1), // artist
         Constraint::Length(1), // progress
-        Constraint::Length(1), // pair status
-        Constraint::Length(1), // controls
-        Constraint::Length(1), // now/next vibe
-        Constraint::Fill(1),   // vote rows
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // vibe heading
+        Constraint::Min(0),    // vote rows
     ])
     .split(area);
 
+    frame.render_widget(
+        Paragraph::new(stage_title_line(area.width, "ICECAST", mode_tag)),
+        rows[0],
+    );
+
     let (title, artist) = match now_playing {
         Some(np) => (
-            truncate_chars(&np.track.title, area.width as usize),
-            truncate_chars(
-                np.track.artist.as_deref().unwrap_or("unknown"),
-                area.width as usize,
-            ),
+            np.track.title.clone(),
+            np.track
+                .artist
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
         ),
         None => ("waiting for stream".to_string(), String::new()),
     };
-
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            title,
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ))),
-        rows[0],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            artist,
-            Style::default().fg(theme::TEXT_DIM()),
-        ))),
-        rows[1],
-    );
+    frame.render_widget(track_title_para(&title, width, "  "), rows[2]);
+    if !artist.is_empty() {
+        frame.render_widget(track_meta_para(&artist, width, "  "), rows[3]);
+    }
 
     if let Some(np) = now_playing {
         let elapsed = np.started_at.elapsed().as_secs();
+        let inner = inset_left(rows[4], 2);
         if let Some(dur) = np.track.duration_seconds {
-            draw_progress_line(frame, rows[2], elapsed, dur);
+            draw_progress_line(frame, inner, elapsed, dur);
         } else {
-            draw_elapsed_line(frame, rows[2], elapsed);
+            draw_elapsed_line(frame, inner, elapsed);
         }
     }
 
-    let pair_text = match paired_client {
-        Some(state) => format!(
-            "{} · {}%{}",
-            state.client_kind.label(),
-            state.volume_percent,
-            if state.muted { " · muted" } else { "" }
-        ),
-        None => "no pair".to_string(),
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            truncate_chars(&pair_text, rows[3].width as usize),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ))),
-        rows[3],
-    );
-
     frame.render_widget(
         Paragraph::new(Line::from(vec![
+            Span::raw("  "),
             Span::styled(
-                "-/=",
+                "vibe ",
                 Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
             ),
-            Span::styled(" vol  ", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(
-                "m",
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" mute", Style::default().fg(theme::TEXT_FAINT())),
+            Span::raw(" "),
+            vote_vibe_inline_span(vote),
         ])),
-        rows[4],
+        rows[6],
     );
-
-    draw_vibe_line(frame, rows[5], vote);
-    crate::app::vote::ui::draw_vote_inline(frame, rows[6], vote);
+    crate::app::vote::ui::draw_vote_inline(frame, rows[7], vote);
 }
 
-fn draw_vibe_line(frame: &mut Frame, area: Rect, vote: &VoteCardView<'_>) {
-    if area.width == 0 || area.height == 0 {
+/// Peek strip shown beneath the active panel when YouTube is the stage —
+/// one dim line summarising the radio (genre vote + countdown) so listeners
+/// can see what they'd fall back to.
+fn draw_icecast_peek(
+    frame: &mut Frame,
+    area: Rect,
+    now_playing: Option<&NowPlaying>,
+    vote: &VoteCardView<'_>,
+) {
+    if area.width == 0 {
         return;
     }
+    let next = vote.vote_counts.winner_or(vote.current_genre);
+    let current_label =
+        crate::app::common::primitives::genre_label(vote.current_genre).to_ascii_lowercase();
+    let next_label = crate::app::common::primitives::genre_label(next).to_ascii_lowercase();
+    let ends = compact_vote_duration(vote.ends_in);
+    let now_label = now_playing
+        .map(|np| {
+            let artist = np.track.artist.as_deref().unwrap_or("unknown");
+            format!("{} · {}", artist, np.track.title)
+        })
+        .unwrap_or_else(|| "waiting".to_string());
 
-    frame.render_widget(Paragraph::new(vote_vibe_line(vote)), area);
+    let spans = vec![
+        Span::styled("─ ", Style::default().fg(theme::BORDER_DIM())),
+        Span::styled(
+            "icecast ",
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        ),
+        Span::styled("· ", Style::default().fg(theme::BORDER_DIM())),
+        Span::styled(current_label, Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(" → ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(next_label, Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
+        Span::styled(ends, Style::default().fg(theme::TEXT_FAINT())),
+    ];
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let remaining = (area.width as usize).saturating_sub(used);
+    let mut spans = spans;
+    if remaining > 6 {
+        spans.push(Span::styled("  ", Style::default()));
+        let now_budget = remaining.saturating_sub(2);
+        spans.push(Span::styled(
+            truncate_chars(&now_label, now_budget),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn vote_vibe_line(vote: &VoteCardView<'_>) -> Line<'static> {
-    let next = vote.vote_counts.winner_or(vote.current_genre);
-    let current =
-        crate::app::common::primitives::genre_label(vote.current_genre).to_ascii_lowercase();
-    let next = crate::app::common::primitives::genre_label(next).to_ascii_lowercase();
-    let ends = compact_vote_duration(vote.ends_in);
+/// Peek strip shown beneath the active Icecast panel — a one-liner about
+/// the YouTube side. Tag is different depending on *why* the user isn't on
+/// YouTube: CLI listeners can't hear it at all, browser users pinned to
+/// Icecast via v+x are opting out and the hint reminds them how to swap.
+fn draw_youtube_peek(
+    frame: &mut Frame,
+    area: Rect,
+    queue: &QueueSnapshot,
+    paired_client: Option<&ClientAudioState>,
+    paired_browser_source: AudioSource,
+) {
+    if area.width == 0 {
+        return;
+    }
+    let is_browser =
+        matches!(paired_client, Some(state) if state.client_kind == ClientKind::Browser);
+    let pinned_icecast = is_browser && paired_browser_source == AudioSource::Icecast;
+
+    let mut spans = vec![
+        Span::styled("─ ", Style::default().fg(theme::BORDER_DIM())),
+        Span::styled(
+            "youtube ",
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        ),
+        Span::styled("· ", Style::default().fg(theme::BORDER_DIM())),
+    ];
+
+    let suffix_text = if pinned_icecast {
+        Some("  v+x to switch")
+    } else if !is_browser && queue.current.is_some() {
+        Some("  pair browser to hear")
+    } else {
+        None
+    };
+
+    let yt_mode_active = queue.audio_mode == AudioMode::Youtube;
+    match (&queue.current, queue.queue.len()) {
+        (Some(current), extra) => {
+            let title = current
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("yt:{}", current.video_id));
+            spans.push(Span::styled(
+                "▶ ",
+                Style::default().fg(theme::AMBER_DIM()),
+            ));
+            let queue_suffix = if extra > 0 {
+                format!("  (+{extra} queued)")
+            } else {
+                String::new()
+            };
+            let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            let suffix_len = suffix_text.map(|s| s.chars().count()).unwrap_or(0)
+                + queue_suffix.chars().count();
+            let title_budget = (area.width as usize).saturating_sub(used + suffix_len);
+            spans.push(Span::styled(
+                truncate_chars(&title, title_budget),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+            if !queue_suffix.is_empty() {
+                spans.push(Span::styled(
+                    queue_suffix,
+                    Style::default().fg(theme::TEXT_FAINT()),
+                ));
+            }
+        }
+        (None, _) if yt_mode_active => {
+            // Queue empty but the YouTube fallback stream is still on —
+            // distinct from "queue truly empty, mode flipped to icecast".
+            spans.push(Span::styled(
+                "▶ ",
+                Style::default().fg(theme::AMBER_DIM()),
+            ));
+            spans.push(Span::styled(
+                "fallback stream",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+        (None, _) => {
+            let hint = if pinned_icecast {
+                "queue empty · pinned"
+            } else if is_browser {
+                "queue empty"
+            } else {
+                "queue empty · browser-only"
+            };
+            spans.push(Span::styled(hint, Style::default().fg(theme::TEXT_FAINT())));
+        }
+    }
+
+    if let Some(suffix) = suffix_text {
+        let style = if pinned_icecast {
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC)
+        };
+        spans.push(Span::styled(suffix.to_string(), style));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Skip-vote meter. Caps the dot row at 8 cells so a 20-pair threshold
+/// doesn't overflow the rail; the literal `votes/threshold` count below
+/// remains authoritative.
+fn skip_meter_spans(progress: &super::super::audio::svc::SkipProgress) -> Vec<Span<'static>> {
+    const MAX_DOTS: u32 = 8;
+    let shown = progress.threshold.min(MAX_DOTS).max(1);
+    let votes_shown = progress.votes.min(shown);
+    let mut dots = String::with_capacity(shown as usize);
+    for i in 0..shown {
+        dots.push(if i < votes_shown { '●' } else { '○' });
+    }
+    vec![
+        Span::raw("  "),
+        Span::styled(
+            "skip  ",
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(dots, Style::default().fg(theme::AMBER_GLOW())),
+        Span::styled(
+            format!("  {}/{}", progress.votes, progress.threshold),
+            Style::default().fg(theme::AMBER_DIM()),
+        ),
+    ]
+}
+
+/// One entry in the YouTube "next" list. Number, title, then a dim score
+/// right-aligned: `+N` (positive), `-N` (negative), `·` (zero).
+fn queue_next_line(idx: usize, item: &QueueItemView, width: usize) -> Line<'static> {
+    let n_text = format!("  {}  ", idx + 1);
+    let title = item
+        .title
+        .clone()
+        .unwrap_or_else(|| format!("yt:{}", item.video_id));
+
+    let (score_text, score_style) = if item.vote_score > 0 {
+        (
+            format!("+{}", item.vote_score),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if item.vote_score < 0 {
+        (
+            item.vote_score.to_string(),
+            Style::default().fg(theme::TEXT_FAINT()),
+        )
+    } else {
+        (
+            "·".to_string(),
+            Style::default().fg(theme::TEXT_FAINT()),
+        )
+    };
+
+    let prefix_w = n_text.chars().count();
+    let score_w = score_text.chars().count();
+    let title_budget = width.saturating_sub(prefix_w + score_w + 2);
+    let title_text = truncate_chars(&title, title_budget);
+    let pad = title_budget.saturating_sub(title_text.chars().count());
 
     Line::from(vec![
-        Span::styled(current, Style::default().fg(theme::SUCCESS())),
-        Span::styled(" > ", Style::default().fg(theme::TEXT_FAINT())),
-        Span::styled(next, Style::default().fg(theme::AMBER())),
-        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
-        Span::styled(ends, Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(n_text, Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled(title_text, Style::default().fg(theme::TEXT())),
+        Span::raw(" ".repeat(pad + 2)),
+        Span::styled(score_text, score_style),
     ])
 }
+
+fn track_title_para(text: &str, width: usize, lead: &str) -> Paragraph<'static> {
+    let budget = width.saturating_sub(lead.chars().count());
+    Paragraph::new(Line::from(vec![
+        Span::raw(lead.to_string()),
+        Span::styled(
+            truncate_chars(text, budget),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]))
+}
+
+fn track_meta_para(text: &str, width: usize, lead: &str) -> Paragraph<'static> {
+    let budget = width.saturating_sub(lead.chars().count());
+    Paragraph::new(Line::from(vec![
+        Span::raw(lead.to_string()),
+        Span::styled(
+            truncate_chars(text, budget),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]))
+}
+
+fn inset_left(area: Rect, cols: u16) -> Rect {
+    let cols = cols.min(area.width);
+    Rect {
+        x: area.x + cols,
+        y: area.y,
+        width: area.width.saturating_sub(cols),
+        height: area.height,
+    }
+}
+
+fn vote_vibe_inline_span(vote: &VoteCardView<'_>) -> Span<'static> {
+    let next = vote.vote_counts.winner_or(vote.current_genre);
+    let current_label =
+        crate::app::common::primitives::genre_label(vote.current_genre).to_ascii_lowercase();
+    let next_label = crate::app::common::primitives::genre_label(next).to_ascii_lowercase();
+    let ends = compact_vote_duration(vote.ends_in);
+    Span::styled(
+        format!("{current_label} → {next_label} · {ends}"),
+        Style::default().fg(theme::TEXT_BRIGHT()),
+    )
+}
+
 
 fn compact_vote_duration(duration: std::time::Duration) -> String {
     let secs = duration.as_secs();
@@ -550,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn vote_vibe_line_includes_vote_end_time() {
+    fn vote_vibe_inline_renders_current_arrow_next_and_countdown() {
         let counts = VoteCount {
             lofi: 1,
             ambient: 3,
@@ -564,11 +1040,7 @@ mod tests {
             ends_in: Duration::from_secs(9 * 60),
         };
 
-        let text: String = vote_vibe_line(&view)
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-
-        assert_eq!(text, "lofi > ambient · 9m");
+        let span = vote_vibe_inline_span(&view);
+        assert_eq!(span.content.as_ref(), "lofi → ambient · 9m");
     }
 }
