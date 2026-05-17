@@ -251,22 +251,18 @@ Admin commands:
 - `/fill-room #room` bulk-adds all users to an existing public room and flips `auto_join=true`; private rooms cannot be filled.
 
 Moderation modal commands:
-- `help [command]`
-- `user @name`
-- `bans [server|artboard|room #slug] [limit]`
-- `audit [limit]`
-- `room kick #slug @name [reason...]`
-- `room ban #slug @name [duration] [reason...]`
-- `room unban #slug @name`
-- `server kick @name [reason...]`
-- `server ban @name [duration] [reason...]`
-- `server unban @name`
-- `artboard ban @name [duration] [reason...]`
-- `artboard unban @name`
-- `grant mod @name`
-- `revoke mod @name`
+- `rename-room <#oldname> <#newname>`
+- `rename-user <@oldname> <@newname>`
+- `view <@user|#room|bans|audit|artboard|help> [pagenumber]`
+- `artboard restore [YYYY-MM-DD] [reason...]`
+- `kick <server|#room> @name [reason...]`
+- `ban <server|#room|artboard> @name [duration] [reason...]`
+- `unban <server|#room|artboard> @name [reason...]`
+- `admin`
+- `admin grant mod @name`
+- `admin revoke mod @name`
 
-Moderation list limits default to 25 and cap at 100. Durations use positive `s/m/h/d` suffixes.
+Moderation list pages show 15 rows. Durations use positive `s/m/h/d` suffixes.
 
 Reply mode:
 - Captures `ReplyTarget { message_id, author, preview }`.
