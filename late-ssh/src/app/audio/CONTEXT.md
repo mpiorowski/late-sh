@@ -125,11 +125,12 @@ All transitions go through `svc.rs`:
 - **Fallback debounce** (`svc.rs:729-745`): one task armed when the queue drains. Cancelled by any new submission via `cancel_fallback` (`svc.rs:253`).
 - Both are owned via `oneshot` cancel handles on `QueueState`; dropping the sender cancels the task.
 
-### `playback_duration` rules (`svc.rs:803-809`)
+### `playback_duration` rules (`svc.rs:1197-1205`)
 - `is_stream = true` → always `STREAM_CAP` (1h).
-- Non-stream with known `duration_ms` → use it.
-- Non-stream with unknown duration → `STREAM_CAP` (1h fallback cap).
-- `record_browser_duration` (`svc.rs:706-727`) is the only path that backfills `duration_ms` from the browser, conditionally on the current playing item and only when the DB value is NULL. After write, it reschedules the playback timer to the now-known end time.
+- Non-stream with known `duration_ms` → `min(duration_ms, STREAM_CAP)` — **1h is a hard cap on every item, not a fallback.** A 2h video plays its first hour, server timer fires, queue advances.
+- Non-stream with unknown duration → `STREAM_CAP` (1h).
+- `record_browser_duration` (`svc.rs:1100-1121`) is the only path that backfills `duration_ms` from the browser, conditionally on the current playing item and only when the DB value is NULL. After write, it reschedules the playback timer to `min(real_duration, STREAM_CAP)`.
+- `playback_known_duration` (uncapped) is still used by `finish_item_from_player` (`svc.rs:859`) to reject premature browser `ended` reports — a 2h video that the browser claims ended at 30min is rebutted with a `Seek`, regardless of the 1h playback cap.
 
 ### `player_state` ingress (`svc.rs:347-373`)
 Routed by report `state` field:
@@ -271,13 +272,13 @@ Data flow: browser Web Audio analyzer → `WsPayload::Viz` → `api.rs:293` conv
 - Shared `watch::Sender<Option<NowPlaying>>` reflects the current Icecast track title.
 - `start_poll_task` spawns a blocking thread that calls `late_core::icecast::fetch_track` every 10s (split into 1s sleeps to shut down quickly). Only emits when the title string changes.
 - Independent of `AudioService` — does not subscribe to its channels.
-- Consumers: `GET /api/now-playing` (`api.rs:131`). Still plumbed into `App.now_playing_rx` and on through `SidebarProps`, but the music-stage widget *explicitly ignores it* (the icecast block renders genre vibe + vote rows, not the radio track title — see §12). The plumbing is kept in case another sidebar surface wants it; remove if no caller picks it up.
+- Consumers: `GET /api/now-playing` (`api.rs:131`), and the sidebar music-stage widget (`app/common/sidebar.rs::draw_icecast_block`) which renders `Artist - Title` plus a progress/elapsed line under the icecast title. When the watch hasn't ticked yet, the block shows `no signal` and the progress row stays blank.
 
 ---
 
 ## 12. Sidebar music-stage widget (`common/sidebar.rs`)
 
-Renders the audio domain into the right rail. Both surfaces (YouTube + Icecast) are always visible; the active source the user is hearing gets bold amber chrome, the other gets dim italic. Entry point: `app/common/sidebar.rs:draw_music_stage`, allocated `MUSIC_STAGE_HEIGHT = 16` rows.
+Renders the audio domain into the right rail. Both surfaces (YouTube + Icecast) are always visible; the active source the user is hearing gets bold amber chrome, the other gets dim italic. Entry point: `app/common/sidebar.rs:draw_music_stage`, allocated `MUSIC_STAGE_HEIGHT = 18` rows.
 
 ### Layout
 
@@ -287,7 +288,7 @@ Renders the audio domain into the right rail. Both surfaces (YouTube + Icecast) 
 | 1      | Volume keybind hints: `m mute  -= vol`. |
 | 2-8    | YouTube block: title bar, track title, channel, progress, skip meter (with trailing `v+s` hint when active), `next ⌄` header, queue items (`Min(2)`, absorbs spare space). |
 | 9      | Booth/swap keybind hints: `v+v queue  v+x swap`. |
-| 10-12  | Icecast block: title bar, `vibe → next · ends` one-liner, then a 3-row vote area delegated to `app/vote/ui.rs::draw_vote_inline`. |
+| 10-14  | Icecast block: title bar, track (`Artist - Title` combined on one row), progress/elapsed line (uses `draw_progress_line` when `duration_seconds` is known, `draw_elapsed_line` otherwise), `vibe → next · ends` one-liner, then a 3-row vote area delegated to `app/vote/ui.rs::draw_vote_inline`. Track + progress fall back to `no signal` and a blank row when the `now_playing` watch hasn't emitted yet. |
 
 ### Active-source rule
 
@@ -314,7 +315,7 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 - `vote: VoteCardView<'_>` — from the genre vote state.
 - `paired_client: Option<&ClientAudioState>` — for `volume_percent` and `muted` (vol row).
 - `paired_browser_source: AudioSource` — App's per-user mirror.
-- `now_playing` — plumbed but ignored, see §11.
+- `now_playing: Option<&NowPlaying>` — Icecast title + duration source, from `NowPlayingService` (§11). Drives the icecast track and progress rows.
 
 ### Internal helpers (all in `sidebar.rs`)
 

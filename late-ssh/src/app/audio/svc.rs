@@ -1199,7 +1199,9 @@ fn playback_duration(item: &MediaQueueItem) -> Duration {
         return STREAM_CAP;
     }
 
-    playback_known_duration(item).unwrap_or(STREAM_CAP)
+    playback_known_duration(item)
+        .map(|d| d.min(STREAM_CAP))
+        .unwrap_or(STREAM_CAP)
 }
 
 fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {

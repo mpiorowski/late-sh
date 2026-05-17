@@ -800,4 +800,8 @@ Music Booth (v then v)
 
 Skip the current track
   v then s          add your vote to skip. The track skips once enough paired users agree.
-  s                 same thing, while you're in the booth queue.";
+  s                 same thing, while you're in the booth queue.
+
+Track length
+
+  Every track is capped at 1 hour. Shorter videos play to their real end; anything longer (long mixes, live streams, the YouTube fallback) gets cut off at the 1h mark and the queue moves on.";
