@@ -1526,7 +1526,12 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
 fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    if app.profile_state.profile().show_right_sidebar {
+    let profile = app.profile_state.profile();
+    if crate::app::render::resolve_right_sidebar_enabled(
+        profile.right_sidebar_mode,
+        &profile.right_sidebar_screens,
+        app.screen,
+    ) {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
     } else {
         inner

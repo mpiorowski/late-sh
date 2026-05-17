@@ -1,5 +1,6 @@
 use crate::app::input::{MouseButton, MouseEventKind, ParsedInput, sanitize_paste_markers};
 use crate::app::state::App;
+use late_core::models::user::RightSidebarMode;
 
 use super::gem::GemKey;
 use super::state::{PickerKind, Row, Tab};
@@ -8,6 +9,11 @@ use crate::app::settings_modal::state::SettingsModalState;
 pub fn handle_input(app: &mut App, event: ParsedInput) {
     if app.settings_modal_state.delete_account_dialog().open() {
         handle_delete_account_dialog_input(app, event);
+        return;
+    }
+
+    if app.settings_modal_state.right_sidebar_custom_open() {
+        handle_right_sidebar_custom_input(app, event);
         return;
     }
 
@@ -90,8 +96,9 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_row(-1),
         ParsedInput::Arrow(b'C') => app.settings_modal_state.cycle_setting(true),
         ParsedInput::Arrow(b'D') => app.settings_modal_state.cycle_setting(false),
-        ParsedInput::Byte(b' ') | ParsedInput::Byte(b'\r') => activate_selected_row(app),
-        ParsedInput::Char('e') | ParsedInput::Char('E') => activate_selected_row(app),
+        ParsedInput::Byte(b' ') => activate_selected_row(app, false),
+        ParsedInput::Byte(b'\r') => activate_selected_row(app, true),
+        ParsedInput::Char('e') | ParsedInput::Char('E') => activate_selected_row(app, true),
         _ => {}
     }
 }
@@ -238,7 +245,7 @@ fn is_close_event(event: &ParsedInput) -> bool {
     )
 }
 
-fn activate_selected_row(app: &mut App) {
+fn activate_selected_row(app: &mut App, open_custom_sidebar: bool) {
     match app.settings_modal_state.selected_row() {
         Row::Username => app.settings_modal_state.start_username_edit(),
         Row::Ide | Row::Terminal | Row::Os | Row::Langs => {
@@ -250,7 +257,6 @@ fn activate_selected_row(app: &mut App) {
         }
         Row::Theme
         | Row::BackgroundColor
-        | Row::RightSidebar
         | Row::RoomListSidebar
         | Row::LoungeInfo
         | Row::WireBox
@@ -260,8 +266,35 @@ fn activate_selected_row(app: &mut App) {
         | Row::Bell
         | Row::Cooldown
         | Row::NotifyFormat => app.settings_modal_state.cycle_setting(true),
+        Row::RightSidebar => {
+            if open_custom_sidebar
+                && app.settings_modal_state.draft().right_sidebar_mode == RightSidebarMode::Custom
+            {
+                app.settings_modal_state.open_right_sidebar_custom();
+            } else {
+                app.settings_modal_state.cycle_setting(true);
+            }
+        }
         Row::Country => app.settings_modal_state.open_picker(PickerKind::Country),
         Row::Timezone => app.settings_modal_state.open_picker(PickerKind::Timezone),
+    }
+}
+
+fn handle_right_sidebar_custom_input(app: &mut App, event: ParsedInput) {
+    match event {
+        ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            app.settings_modal_state.close_right_sidebar_custom();
+        }
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => app.settings_modal_state.move_right_sidebar_custom(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_right_sidebar_custom(-1),
+        ParsedInput::Byte(b' ' | b'\r') | ParsedInput::Char('e' | 'E') => app
+            .settings_modal_state
+            .toggle_right_sidebar_custom_screen(),
+        _ => {}
     }
 }
 
