@@ -313,24 +313,19 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// Music stage. Renders the audible surface as a full panel and the other
-/// surface as a single-line peek strip. The selector reads three things:
+/// Music stage. Renders the *currently producing* audio surface as a full
+/// panel and the other surface as a single-line peek strip.
 ///
-/// * `paired_client.client_kind` — CLI literally can't decode YouTube, so
-///   a CLI listener is always on the Icecast stage regardless of the
-///   global queue or the user's preference.
-/// * `paired_browser_source` — the per-user `v+x` preference. This is the
-///   primary signal: even with no paired browser yet, flipping it should
-///   move the stage so the user can see what their browser will land on.
-/// * `audio_mode` — the global flip set by `AudioService`. A user
-///   preferring YouTube only sees a YouTube stage when the system is
-///   actually producing YouTube (queue track or fallback stream). When
-///   the global mode is Icecast (truly empty queue, no fallback, debounce
-///   expired), every listener falls back to Icecast and we follow.
+/// Stage selector is intentionally simple — it follows the global
+/// `audio_mode` flip set by `AudioService`. An empty queue does NOT mean
+/// we leave YouTube: `audio_mode = Youtube` with `current = None` is the
+/// fallback-stream case and stays on the YouTube stage. The only override
+/// is CLI listeners, who literally cannot decode YouTube and will only
+/// hear Icecast no matter what the server is producing globally.
 ///
-/// Note: `audio_mode == Youtube` covers both an active queue track AND a
-/// fallback stream. An empty queue does NOT mean we leave YouTube —
-/// `current = None` while `audio_mode = Youtube` is the fallback case.
+/// The per-user `paired_browser_source` preference (flipped by v+x) does
+/// not move the stage — it informs the stage *tag* (`▶ pinned` when the
+/// user opted out of YouTube) and the peek strip's hint text.
 fn draw_music_stage(
     frame: &mut Frame,
     area: Rect,
@@ -346,9 +341,7 @@ fn draw_music_stage(
 
     let cli_paired =
         matches!(paired_client, Some(c) if c.client_kind == ClientKind::Cli);
-    let on_youtube = !cli_paired
-        && paired_browser_source == AudioSource::Youtube
-        && queue.audio_mode == AudioMode::Youtube;
+    let on_youtube = !cli_paired && queue.audio_mode == AudioMode::Youtube;
 
     let split = Layout::vertical([
         Constraint::Min(3),    // active stage
@@ -357,7 +350,7 @@ fn draw_music_stage(
     .split(area);
 
     if on_youtube {
-        draw_youtube_stage(frame, split[0], queue, paired_client);
+        draw_youtube_stage(frame, split[0], queue, paired_client, paired_browser_source);
         draw_icecast_peek(frame, split[1], now_playing, vote);
     } else {
         draw_icecast_stage(frame, split[0], now_playing, paired_client, vote);
@@ -406,19 +399,26 @@ fn stage_title_line(area_w: u16, label: &str, mode_tag: &str) -> Line<'static> {
 
 /// Active YouTube panel. Either real queue playback (with skip meter +
 /// next list) or a fallback-stream placeholder when the queue is empty
-/// but a YouTube fallback is configured. Tag reflects pairing: `off` when
-/// nothing is paired (preview only), `live` while a queue item plays,
-/// `fallback` while the singleton fallback stream is playing.
+/// but a YouTube fallback is configured. Tag reflects what the user is
+/// actually hearing: `off` (no pairing), `pinned` (browser paired but
+/// user opted out via v+x → hearing Icecast instead), `fallback`
+/// (fallback stream playing), or `live` (queue track playing).
 fn draw_youtube_stage(
     frame: &mut Frame,
     area: Rect,
     queue: &QueueSnapshot,
     paired_client: Option<&ClientAudioState>,
+    paired_browser_source: AudioSource,
 ) {
     let width = area.width as usize;
     let has_track = queue.current.is_some();
+    let is_browser =
+        matches!(paired_client, Some(c) if c.client_kind == ClientKind::Browser);
+    let pinned_icecast = is_browser && paired_browser_source == AudioSource::Icecast;
     let mode_tag = if paired_client.is_none() {
         "off"
+    } else if pinned_icecast {
+        "pinned"
     } else if has_track {
         "live"
     } else {

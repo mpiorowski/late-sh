@@ -40,6 +40,7 @@
             audioRetries: 0,
             userOverrideMode: 'icecast',
             serverAudioMode: 'icecast',
+            unmuteOnNextPlay: false,
 
             init() {
                 this.$refs.audio.src = this.audioUrl;
@@ -468,15 +469,19 @@
                         this.status = this.audioEnabled ? 'buffering' : 'ready';
                     }
                     this.ensureYoutubePlayer();
-                    if (this.pendingYoutubeItem) {
-                        this.playYoutubeItem(this.pendingYoutubeItem);
+                    // Prefer the freshest stashed item; fall back to whatever
+                    // we last had as current, so a switch-back to YouTube can
+                    // resume a paused video instead of doing nothing.
+                    const itemToPlay = this.pendingYoutubeItem || this.currentYoutubeItem;
+                    if (itemToPlay) {
+                        this.playYoutubeItem(itemToPlay);
                     }
                 } else {
-                    if (this.ytPlayer && this.ytPlayer.stopVideo) {
-                        this.ytPlayer.stopVideo();
+                    // Pause (don't stop) so a later v+x flip back to YouTube
+                    // can resume the same item with one playVideo() call.
+                    if (this.ytPlayer && this.ytPlayer.pauseVideo) {
+                        this.ytPlayer.pauseVideo();
                     }
-                    this.currentYoutubeItem = null;
-                    this.pendingYoutubeItem = null;
                     this.lastYoutubeSeekAt = 0;
                     this.stopPlayerStateLoop();
                     if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
@@ -538,11 +543,17 @@
                 // Pre-cue the video into the iframe even while pinned to
                 // Icecast so a later v+x flip is one `playVideo()` away.
                 // cueVideoById loads metadata + first frames without starting
-                // playback.
+                // playback. Skip if the iframe already has this video — we
+                // don't want to reset a paused/cued state to CUED again.
                 if (this.userOverrideMode === 'icecast') {
                     this.pendingYoutubeItem = item;
                     this.ensureYoutubePlayer();
-                    if (this.ytPlayer && this.ytReady && this.ytPlayer.cueVideoById) {
+                    if (
+                        this.ytPlayer
+                        && this.ytReady
+                        && this.ytPlayer.cueVideoById
+                        && this.loadedYoutubeVideoId() !== item.videoId
+                    ) {
                         const offsetMs = this.expectedYoutubeOffsetMs(item);
                         this.ytPlayer.cueVideoById({
                             videoId: item.videoId,
@@ -628,36 +639,55 @@
                     this.autoplayBlocked = true;
                     this.status = 'ready';
                     this.sendYoutubeState('buffering');
+                    if (this.unmuteOnNextPlay) {
+                        this.unmuteOnNextPlay = false;
+                        this.applyMuteState(this.muted);
+                    }
                 };
 
-                // First pass: if the player parked at CUED/UNSTARTED, autoplay
-                // got refused — flag immediately and surface the [ tap to play ]
-                // button.
-                window.setTimeout(() => {
-                    if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
+                const tryMutedRecovery = () => {
+                    if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
                         return;
                     }
-                    const state = this.ytPlayer.getPlayerState();
-                    if (
-                        state === window.YT.PlayerState.CUED
-                        || state === window.YT.PlayerState.UNSTARTED
-                    ) {
+                    if (!this.ytPlayer || !this.ytPlayer.mute || !this.ytPlayer.playVideo) {
                         flagBlocked();
+                        return;
                     }
-                }, 600);
+                    // Chrome's per-origin Media Engagement Index gates audible
+                    // iframe autoplay. Muted autoplay is always allowed, so
+                    // mute → play → unmute on PLAYING is the universal escape.
+                    this.unmuteOnNextPlay = !this.muted;
+                    this.ytPlayer.mute();
+                    this.ytPlayer.playVideo();
 
-                // Second pass: anything-but-PLAYING at 1.5s is treated as
-                // autoplay refused. BUFFERING for that long basically never
-                // resolves on its own when the gesture context is stale.
+                    // If even muted autoplay doesn't get us to PLAYING within
+                    // 1.5s, fall back to the [ tap to play ] flow.
+                    window.setTimeout(() => {
+                        if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                            return;
+                        }
+                        if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
+                            return;
+                        }
+                        const state = this.ytPlayer.getPlayerState();
+                        if (state !== window.YT.PlayerState.PLAYING) {
+                            flagBlocked();
+                        }
+                    }, 1500);
+                };
+
+                // First pass: at 800ms, if the player isn't already PLAYING,
+                // attempt the muted-autoplay recovery before resorting to the
+                // tap-to-play button.
                 window.setTimeout(() => {
                     if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
                         return;
                     }
                     const state = this.ytPlayer.getPlayerState();
                     if (state !== window.YT.PlayerState.PLAYING) {
-                        flagBlocked();
+                        tryMutedRecovery();
                     }
-                }, 1500);
+                }, 800);
             },
 
             seekYoutube(offsetMs) {
@@ -678,6 +708,10 @@
                 if (state === window.YT.PlayerState.PLAYING) {
                     this.autoplayBlocked = false;
                     this.status = 'playing';
+                    if (this.unmuteOnNextPlay) {
+                        this.unmuteOnNextPlay = false;
+                        this.applyMuteState(this.muted);
+                    }
                     this.correctYoutubeDrift();
                     this.sendYoutubeState('playing');
                 } else if (state === window.YT.PlayerState.PAUSED) {
