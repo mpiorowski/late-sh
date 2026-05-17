@@ -880,6 +880,7 @@ impl russh::server::Handler for ClientHandler {
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
+            initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
 
             // Server state
             is_draining: self.state.is_draining.clone(),

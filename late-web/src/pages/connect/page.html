@@ -16,7 +16,6 @@
             token: '{{ token }}',
             apiUrl: '{{ api_url }}',
             audioUrl: '{{ audio_url }}',
-            youtubeEnabled: {{ youtube_enabled }},
             audioCtx: null,
             analyser: null,
             sourceNode: null,
@@ -39,6 +38,9 @@
             autoplayBlocked: false,
             wsRetries: 0,
             audioRetries: 0,
+            userOverrideMode: 'icecast',
+            serverAudioMode: 'icecast',
+            unmuteOnNextPlay: false,
 
             init() {
                 this.$refs.audio.src = this.audioUrl;
@@ -61,12 +63,13 @@
                     this.connectWs();
                 }
 
-                window.addEventListener('late-youtube-ready', () => {
+                const onYoutubeReady = () => {
                     this.ytReady = true;
                     this.ensureYoutubePlayer();
-                });
+                };
+                window.addEventListener('late-youtube-ready', onYoutubeReady);
                 if (window.lateYoutubeApiReady) {
-                    this.ytReady = true;
+                    onYoutubeReady();
                 }
             },
 
@@ -145,7 +148,7 @@
                             this.adjustLocalVolume(-5);
                             break;
                         case 'source_changed':
-                            this.applySourceMode(payload.audio_mode);
+                            this.applyServerSourceMode(payload.audio_mode);
                             break;
                         case 'load_video':
                             this.loadYoutubeVideo(payload);
@@ -154,6 +157,9 @@
                             this.seekYoutube(payload.offset_ms || 0);
                             break;
                         case 'queue_update':
+                            break;
+                        case 'set_playback_source':
+                            this.applyUserPlaybackSource(payload.source);
                             break;
                     }
                 };
@@ -192,8 +198,9 @@
 
                 if (this.audioMode === 'youtube') {
                     this.ensureYoutubePlayer();
-                    if (this.pendingYoutubeItem) {
-                        this.playYoutubeItem(this.pendingYoutubeItem);
+                    const itemToPlay = this.pendingYoutubeItem || this.currentYoutubeItem;
+                    if (itemToPlay) {
+                        this.playYoutubeItem(itemToPlay);
                     } else if (this.autoplayBlocked && this.ytPlayer && this.ytPlayer.playVideo) {
                         this.autoplayBlocked = false;
                         this.status = 'buffering';
@@ -421,13 +428,35 @@
                 return Math.min(1.0, this.softCompress(rms * 3.0));
             },
 
-            applySourceMode(mode) {
+            // Apply a server-pushed user preference. The TUI's v+x keybind
+            // flips the value in the DB and broadcasts `set_playback_source`;
+            // we just apply whatever the server tells us, no local toggling.
+            applyUserPlaybackSource(source) {
+                if (source !== 'icecast' && source !== 'youtube') {
+                    return;
+                }
+                this.userOverrideMode = source;
+                if (this.audioMode !== source) {
+                    this.applySourceMode(source);
+                }
+            },
+
+            applyServerSourceMode(mode) {
                 if (mode !== 'youtube' && mode !== 'icecast') {
                     return;
                 }
-                // Hard gate: without the ?youtube=true flag this page never
-                // leaves Icecast, regardless of what the server broadcasts.
-                if (mode === 'youtube' && !this.youtubeEnabled) {
+                this.serverAudioMode = mode;
+                if (this.userOverrideMode !== null && this.userOverrideMode !== mode) {
+                    return;
+                }
+                if (this.audioMode === mode) {
+                    return;
+                }
+                this.applySourceMode(mode);
+            },
+
+            applySourceMode(mode) {
+                if (mode !== 'youtube' && mode !== 'icecast') {
                     return;
                 }
                 const modeChanged = this.audioMode !== mode;
@@ -444,15 +473,22 @@
                         this.status = this.audioEnabled ? 'buffering' : 'ready';
                     }
                     this.ensureYoutubePlayer();
-                    if (this.pendingYoutubeItem) {
-                        this.playYoutubeItem(this.pendingYoutubeItem);
+                    // Prefer the freshest stashed item; fall back to whatever
+                    // we last had as current, so a switch-back to YouTube can
+                    // resume a paused video instead of doing nothing. Only
+                    // kick playback if the user has already gestured via
+                    // [ start audio ] — otherwise leave the item staged and
+                    // let that click drive the first play.
+                    const itemToPlay = this.pendingYoutubeItem || this.currentYoutubeItem;
+                    if (itemToPlay && this.audioEnabled) {
+                        this.playYoutubeItem(itemToPlay);
                     }
                 } else {
-                    if (this.ytPlayer && this.ytPlayer.stopVideo) {
-                        this.ytPlayer.stopVideo();
+                    // Pause (don't stop) so a later v+x flip back to YouTube
+                    // can resume the same item with one playVideo() call.
+                    if (this.ytPlayer && this.ytPlayer.pauseVideo) {
+                        this.ytPlayer.pauseVideo();
                     }
-                    this.currentYoutubeItem = null;
-                    this.pendingYoutubeItem = null;
                     this.lastYoutubeSeekAt = 0;
                     this.stopPlayerStateLoop();
                     if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
@@ -481,7 +517,18 @@
                             this.ytPlayer.setVolume(this.volumePercent);
                             this.applyMuteState(this.muted);
                             if (this.pendingYoutubeItem) {
-                                this.playYoutubeItem(this.pendingYoutubeItem);
+                                // While pinned to Icecast, cue (load but don't
+                                // play). Otherwise play normally.
+                                if (this.userOverrideMode === 'icecast') {
+                                    const item = this.pendingYoutubeItem;
+                                    const offsetMs = this.expectedYoutubeOffsetMs(item);
+                                    this.ytPlayer.cueVideoById({
+                                        videoId: item.videoId,
+                                        startSeconds: Math.floor(offsetMs / 1000),
+                                    });
+                                } else {
+                                    this.playYoutubeItem(this.pendingYoutubeItem);
+                                }
                             }
                         },
                         onStateChange: (event) => this.handleYoutubeStateChange(event.data),
@@ -491,10 +538,6 @@
             },
 
             loadYoutubeVideo(payload) {
-                if (!this.youtubeEnabled) {
-                    return;
-                }
-                this.audioMode = 'youtube';
                 const item = {
                     itemId: payload.item_id,
                     videoId: payload.video_id,
@@ -503,6 +546,30 @@
                     receivedAtMs: performance.now(),
                     isStream: !!payload.is_stream,
                 };
+
+                // Pre-cue the video into the iframe even while pinned to
+                // Icecast so a later v+x flip is one `playVideo()` away.
+                // cueVideoById loads metadata + first frames without starting
+                // playback. Skip if the iframe already has this video — we
+                // don't want to reset a paused/cued state to CUED again.
+                if (this.userOverrideMode === 'icecast') {
+                    this.pendingYoutubeItem = item;
+                    this.ensureYoutubePlayer();
+                    if (
+                        this.ytPlayer
+                        && this.ytReady
+                        && this.ytPlayer.cueVideoById
+                        && this.loadedYoutubeVideoId() !== item.videoId
+                    ) {
+                        const offsetMs = this.expectedYoutubeOffsetMs(item);
+                        this.ytPlayer.cueVideoById({
+                            videoId: item.videoId,
+                            startSeconds: Math.floor(offsetMs / 1000),
+                        });
+                    }
+                    return;
+                }
+                this.audioMode = 'youtube';
 
                 if (this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
                     this.currentYoutubeItem = item;
@@ -539,15 +606,25 @@
                 if (switchingItems && this.ytPlayer.stopVideo) {
                     this.ytPlayer.stopVideo();
                 }
+                // If the iframe already has the same video cued (from the
+                // Icecast-pinned pre-cue path), just hit play — that path
+                // is more autoplay-friendly than a fresh loadVideoById.
+                const alreadyLoaded = !switchingItems
+                    && this.loadedYoutubeVideoId() === item.videoId;
                 this.pendingYoutubeItem = null;
                 this.currentYoutubeItem = item;
                 this.status = 'buffering';
                 this.lastYoutubeSeekAt = 0;
                 const offsetMs = this.expectedYoutubeOffsetMs(item);
-                this.ytPlayer.loadVideoById({
-                    videoId: item.videoId,
-                    startSeconds: Math.floor(offsetMs / 1000),
-                });
+                if (alreadyLoaded && this.ytPlayer.playVideo) {
+                    this.ytPlayer.playVideo();
+                    this.correctYoutubeDriftTo(offsetMs);
+                } else {
+                    this.ytPlayer.loadVideoById({
+                        videoId: item.videoId,
+                        startSeconds: Math.floor(offsetMs / 1000),
+                    });
+                }
                 this.verifyYoutubeLoad(item);
                 this.detectAutoplayBlocked(item);
                 this.ytPlayer.setVolume(this.volumePercent);
@@ -556,26 +633,72 @@
             },
 
             detectAutoplayBlocked(item) {
-                window.setTimeout(() => {
+                const flagBlocked = () => {
                     if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
                         return;
                     }
                     if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
                         return;
                     }
-                    const state = this.ytPlayer.getPlayerState();
-                    const cued = window.YT.PlayerState.CUED;
-                    const unstarted = window.YT.PlayerState.UNSTARTED;
-                    if (state === cued || state === unstarted) {
-                        this.autoplayBlocked = true;
-                        this.status = 'ready';
-                        this.sendYoutubeState('buffering');
+                    if (this.autoplayBlocked || this.status === 'playing') {
+                        return;
                     }
-                }, 1500);
+                    this.autoplayBlocked = true;
+                    this.status = 'ready';
+                    this.sendYoutubeState('buffering');
+                    if (this.unmuteOnNextPlay) {
+                        this.unmuteOnNextPlay = false;
+                        this.applyMuteState(this.muted);
+                    }
+                };
+
+                const tryMutedRecovery = () => {
+                    if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                        return;
+                    }
+                    if (!this.ytPlayer || !this.ytPlayer.mute || !this.ytPlayer.playVideo) {
+                        flagBlocked();
+                        return;
+                    }
+                    // Chrome's per-origin Media Engagement Index gates audible
+                    // iframe autoplay. Muted autoplay is always allowed, so
+                    // mute → play → unmute on PLAYING is the universal escape.
+                    this.unmuteOnNextPlay = !this.muted;
+                    this.ytPlayer.mute();
+                    this.ytPlayer.playVideo();
+
+                    // If even muted autoplay doesn't get us to PLAYING within
+                    // 1.5s, fall back to the [ tap to play ] flow.
+                    window.setTimeout(() => {
+                        if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                            return;
+                        }
+                        if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
+                            return;
+                        }
+                        const state = this.ytPlayer.getPlayerState();
+                        if (state !== window.YT.PlayerState.PLAYING) {
+                            flagBlocked();
+                        }
+                    }, 1500);
+                };
+
+                // First pass: at 800ms, if the player isn't already PLAYING,
+                // attempt the muted-autoplay recovery before resorting to the
+                // tap-to-play button.
+                window.setTimeout(() => {
+                    if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
+                        return;
+                    }
+                    const state = this.ytPlayer.getPlayerState();
+                    if (state !== window.YT.PlayerState.PLAYING) {
+                        tryMutedRecovery();
+                    }
+                }, 800);
             },
 
             seekYoutube(offsetMs) {
-                if (!this.youtubeEnabled) {
+                if (this.userOverrideMode === 'icecast') {
                     return;
                 }
                 this.correctYoutubeDriftTo(offsetMs || 0);
@@ -592,6 +715,10 @@
                 if (state === window.YT.PlayerState.PLAYING) {
                     this.autoplayBlocked = false;
                     this.status = 'playing';
+                    if (this.unmuteOnNextPlay) {
+                        this.unmuteOnNextPlay = false;
+                        this.applyMuteState(this.muted);
+                    }
                     this.correctYoutubeDrift();
                     this.sendYoutubeState('playing');
                 } else if (state === window.YT.PlayerState.PAUSED) {
@@ -760,9 +887,7 @@
     }
 </script>
 
-{% if youtube_enabled %}
 <script src="https://www.youtube.com/iframe_api"></script>
-{% endif %}
 
 <div x-data="player()" class="max-w-lg mx-auto pt-8 sm:pt-16">
 
@@ -787,7 +912,7 @@
         <template x-if="status === 'buffering'">
             <div class="flex items-center gap-2.5 text-yellow-500">
                 <span class="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
-                buffering stream...
+                <span x-text="audioMode === 'youtube' ? 'loading video...' : 'buffering stream...'"></span>
             </div>
         </template>
         <template x-if="status === 'playing'">
@@ -808,11 +933,9 @@
         hx-get="/pair/status" hx-trigger="load, every 5s" hx-swap="innerHTML">
     </div>
 
-    {% if youtube_enabled %}
     <div x-cloak x-show="audioMode === 'youtube'" class="mb-8">
         <div id="yt-player" class="w-[320px] max-w-full aspect-video bg-black"></div>
     </div>
-    {% endif %}
 
     <div class="space-y-3" x-cloak>
         <button @click="startPlayback"

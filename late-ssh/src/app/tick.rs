@@ -140,6 +140,9 @@ impl App {
                     )));
                     updated = true;
                 }
+                SessionMessage::BrowserPaired => {
+                    self.replay_paired_browser_source();
+                }
             }
         }
         self.expire_artboard_ban_if_needed();

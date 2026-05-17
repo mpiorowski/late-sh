@@ -204,6 +204,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         is_new_user,
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
+        initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
         is_draining: state.is_draining.clone(),
     }
 }

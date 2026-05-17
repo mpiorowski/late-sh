@@ -12,6 +12,7 @@ pub mod chips;
 pub mod game_room;
 pub mod leaderboard;
 pub mod media_queue_item;
+pub mod media_queue_vote;
 pub mod media_source;
 pub mod mention_feed_read;
 pub mod minesweeper;
