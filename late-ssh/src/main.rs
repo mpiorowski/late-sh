@@ -120,7 +120,12 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::activity::publisher::ActivityPublisher::new(db.clone(), activity_tx.clone());
     let now_playing_service = NowPlayingService::new(config.icecast_url.clone());
     let now_playing_rx = now_playing_service.subscribe_state();
-    let audio_service = AudioService::new(db.clone(), config.youtube_api_key.clone());
+    let paired_client_registry = late_ssh::paired_clients::PairedClientRegistry::new();
+    let audio_service = AudioService::new(
+        db.clone(),
+        config.youtube_api_key.clone(),
+        paired_client_registry.clone(),
+    );
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
         db.clone(),
@@ -237,7 +242,6 @@ async fn main() -> anyhow::Result<()> {
         active_users.clone(),
         activity_tx.clone(),
     );
-    let paired_client_registry = late_ssh::paired_clients::PairedClientRegistry::new();
     let web_chat_registry = late_ssh::web::WebChatRegistry::new();
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,

@@ -146,8 +146,8 @@ pub fn draw_vote_inline(frame: &mut Frame, area: Rect, view: &VoteCardView<'_>) 
 
         let spans = vec![
             Span::styled(format!("{:<8}", name), Style::default().fg(name_color)),
-            Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
-            Span::styled("·".repeat(empty), Style::default().fg(theme::BORDER_DIM())),
+            Span::styled("●".repeat(filled), Style::default().fg(bar_color)),
+            Span::styled("○".repeat(empty), Style::default().fg(theme::BORDER_DIM())),
             Span::styled(
                 format!(" {:>2}", votes),
                 Style::default().fg(theme::TEXT_FAINT()),

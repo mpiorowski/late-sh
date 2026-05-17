@@ -291,6 +291,17 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             value = var.AI_MODEL
           }
 
+          # --- YouTube Data API ---
+          env {
+            name = "LATE_YOUTUBE_API_KEY"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.youtube_credentials.metadata[0].name
+                key  = "api_key"
+              }
+            }
+          }
+
           # --- SSH host key volume ---
           volume_mount {
             name       = "ssh-host-key"

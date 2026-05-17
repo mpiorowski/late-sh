@@ -1,10 +1,35 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioSource {
+    #[default]
+    Icecast,
+    Youtube,
+}
+
+impl AudioSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Icecast => "icecast",
+            Self::Youtube => "youtube",
+        }
+    }
+
+    pub fn from_settings_str(value: &str) -> Self {
+        match value {
+            "youtube" => Self::Youtube,
+            _ => Self::Icecast,
+        }
+    }
+}
 
 crate::model! {
     table = "users";
@@ -57,6 +82,7 @@ impl RightSidebarMode {
 
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
+const AUDIO_SOURCE_KEY: &str = "audio_source";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
@@ -259,6 +285,33 @@ impl User {
         Ok(extract_theme_id(&settings))
     }
 
+    pub async fn audio_source(client: &Client, user_id: Uuid) -> Result<AudioSource> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_audio_source(&settings))
+    }
+
+    /// Atomically merge `audio_source` into `settings` without clobbering other keys.
+    pub async fn set_audio_source(
+        client: &Client,
+        user_id: Uuid,
+        source: AudioSource,
+    ) -> Result<()> {
+        let value = source.as_str();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&AUDIO_SOURCE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     /// Adds `target_id` to the ignore list. Returns `(changed, ids)` —
     /// `changed` is false if the id was already present.
     pub async fn add_ignored_user_id(
@@ -416,6 +469,14 @@ pub fn extract_theme_id(settings: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+pub fn extract_audio_source(settings: &Value) -> AudioSource {
+    settings
+        .get(AUDIO_SOURCE_KEY)
+        .and_then(Value::as_str)
+        .map(AudioSource::from_settings_str)
+        .unwrap_or_default()
 }
 
 pub fn extract_notify_kinds(settings: &Value) -> Vec<String> {

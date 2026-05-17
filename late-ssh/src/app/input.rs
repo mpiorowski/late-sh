@@ -1,6 +1,7 @@
 use super::{
-    chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_search_modal, settings_modal, state::App, terminal_help_modal,
+    audio::booth as audio_booth, chat, dashboard, help_modal, hub, icon_picker, mod_modal,
+    profile_modal, quit_confirm, room_search_modal, settings_modal, state::App,
+    terminal_help_modal,
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -627,6 +628,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.booth_modal_state.is_open() {
+        audio_booth::input::handle_input(app, event);
+        return;
+    }
+
     if app.chat.has_news_modal() {
         handle_news_modal_input(app, &event);
         return;
@@ -1155,6 +1161,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
+        return;
+    }
+    if app.booth_modal_state.is_open() {
+        app.booth_modal_state.close();
         return;
     }
     if app.chat.has_news_modal() {

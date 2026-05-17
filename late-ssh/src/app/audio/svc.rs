@@ -1,16 +1,26 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use late_core::{
     db::Db,
-    models::{media_queue_item::MediaQueueItem, media_source::MediaSource, user::User},
+    models::{
+        media_queue_item::MediaQueueItem,
+        media_queue_vote::{CastVoteOutcome, MediaQueueVote},
+        media_source::MediaSource,
+        user::User,
+    },
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
 
 use super::youtube::YoutubeClient;
+use crate::paired_clients::PairedClientRegistry;
 
 const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 3;
@@ -26,7 +36,9 @@ pub struct AudioService {
     youtube: YoutubeClient,
     ws_tx: broadcast::Sender<AudioWsMessage>,
     event_tx: broadcast::Sender<AudioEvent>,
+    snapshot_tx: watch::Sender<QueueSnapshot>,
     state: Arc<Mutex<QueueState>>,
+    paired_clients: PairedClientRegistry,
 }
 
 #[derive(Default)]
@@ -36,6 +48,7 @@ struct QueueState {
     sequence: u64,
     playback_cancel: Option<oneshot::Sender<()>>,
     fallback_cancel: Option<oneshot::Sender<()>>,
+    skip_votes: HashSet<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -75,15 +88,71 @@ pub enum AudioWsMessage {
         current: Option<QueueItemView>,
         queue: Vec<QueueItemView>,
         sequence: u64,
+        skip_progress: Option<SkipProgress>,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SkipProgress {
+    pub votes: u32,
+    pub threshold: u32,
 }
 
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
-    TrustedSubmitQueued { user_id: Uuid, position: i64 },
-    TrustedSubmitFailed { user_id: Uuid, message: String },
-    YoutubeFallbackSet { user_id: Uuid },
-    YoutubeFallbackFailed { user_id: Uuid, message: String },
+    TrustedSubmitQueued {
+        user_id: Uuid,
+        position: i64,
+    },
+    TrustedSubmitFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    YoutubeFallbackSet {
+        user_id: Uuid,
+    },
+    YoutubeFallbackFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    BoothSubmitQueued {
+        user_id: Uuid,
+        position: i64,
+    },
+    BoothSubmitFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    BoothVoteApplied {
+        user_id: Uuid,
+        item_id: Uuid,
+        score: i32,
+    },
+    BoothVoteFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    BoothSkipFired {
+        user_id: Uuid,
+    },
+    BoothSkipProgress {
+        user_id: Uuid,
+        votes: u32,
+        threshold: u32,
+    },
+    /// The spawned DB persist for `users.settings.audio_source` failed. The
+    /// caller has already optimistically updated local state; this surfaces
+    /// the failure as a banner so the user knows their pref didn't save.
+    AudioSourcePersistFailed {
+        user_id: Uuid,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CastSkipResult {
+    pub progress: SkipProgress,
+    pub fired: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,6 +160,14 @@ pub struct QueueSnapshot {
     pub audio_mode: AudioMode,
     pub current: Option<QueueItemView>,
     pub queue: Vec<QueueItemView>,
+    #[serde(default)]
+    pub skip_progress: Option<SkipProgress>,
+}
+
+impl QueueSnapshot {
+    pub fn skip_progress(&self) -> Option<SkipProgress> {
+        self.skip_progress
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +180,9 @@ pub struct QueueItemView {
     pub started_at_ms: Option<i64>,
     pub is_stream: bool,
     pub submitter: String,
+    pub submitter_id: Uuid,
+    #[serde(default)]
+    pub vote_score: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,16 +218,39 @@ pub struct PlayerStateReport {
 }
 
 impl AudioService {
-    pub fn new(db: Db, youtube_api_key: Option<String>) -> Self {
+    pub fn new(
+        db: Db,
+        youtube_api_key: Option<String>,
+        paired_clients: PairedClientRegistry,
+    ) -> Self {
         let (ws_tx, _) = broadcast::channel(512);
         let (event_tx, _) = broadcast::channel(256);
+        let (snapshot_tx, _) = watch::channel(QueueSnapshot {
+            audio_mode: AudioMode::Icecast,
+            current: None,
+            queue: Vec::new(),
+            skip_progress: None,
+        });
         Self {
             db,
             youtube: YoutubeClient::new(youtube_api_key),
             ws_tx,
             event_tx,
+            snapshot_tx,
             state: Arc::new(Mutex::new(QueueState::default())),
+            paired_clients,
         }
+    }
+
+    pub fn subscribe_snapshot(&self) -> watch::Receiver<QueueSnapshot> {
+        self.snapshot_tx.subscribe()
+    }
+
+    /// True once the YouTube Data API key is configured. The booth disables
+    /// public submissions when this returns false; staff `/audio` keeps
+    /// working through the trusted path.
+    pub fn booth_submit_enabled(&self) -> bool {
+        self.youtube.has_api_key()
     }
 
     pub fn subscribe_ws(&self) -> broadcast::Receiver<AudioWsMessage> {
@@ -286,6 +389,42 @@ impl AudioService {
         });
     }
 
+    /// Booth submit: same as `submit_url` (YouTube Data API validation +
+    /// rate limit) but emits banner events so the modal can surface
+    /// success/failure to the submitter.
+    pub fn booth_submit_public_task(&self, user_id: Uuid, url: String) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if !service.booth_submit_enabled() {
+                service.publish_event(AudioEvent::BoothSubmitFailed {
+                    user_id,
+                    message: "Submissions disabled - server YouTube key is unset".to_string(),
+                });
+                return;
+            }
+            match service.submit_url(user_id, &url).await {
+                Ok(response) => {
+                    service.publish_event(AudioEvent::BoothSubmitQueued {
+                        user_id,
+                        position: response.position_in_queue,
+                    });
+                }
+                Err(err) => {
+                    late_core::error_span!(
+                        "audio_booth_submit_failed",
+                        error = ?err,
+                        user_id = %user_id,
+                        "failed to submit booth audio URL"
+                    );
+                    service.publish_event(AudioEvent::BoothSubmitFailed {
+                        user_id,
+                        message: booth_submit_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
     pub fn submit_trusted_url_task(&self, user_id: Uuid, url: String) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -344,6 +483,235 @@ impl AudioService {
         let _ = self.event_tx.send(event);
     }
 
+    /// Cast or change a vote (+1/-1) on a queued item. Rejects votes against
+    /// the currently-playing track and against non-queued items. Returns the
+    /// new aggregate score on success.
+    pub async fn persist_audio_source(
+        &self,
+        user_id: Uuid,
+        source: late_core::models::user::AudioSource,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        late_core::models::user::User::set_audio_source(&client, user_id, source).await
+    }
+
+    pub async fn read_audio_source(
+        &self,
+        user_id: Uuid,
+    ) -> Result<late_core::models::user::AudioSource> {
+        let client = self.db.get().await?;
+        late_core::models::user::User::audio_source(&client, user_id).await
+    }
+
+    /// Spawn a background persist for the user's audio-source preference.
+    /// On failure publishes `AudioSourcePersistFailed` so the session's
+    /// `AudioState::tick` can surface a banner.
+    pub fn persist_audio_source_task(
+        &self,
+        user_id: Uuid,
+        source: late_core::models::user::AudioSource,
+    ) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = service.persist_audio_source(user_id, source).await {
+                late_core::error_span!(
+                    "audio_source_persist_failed",
+                    error = ?err,
+                    user_id = %user_id,
+                    "failed to persist audio source preference"
+                );
+                service.publish_event(AudioEvent::AudioSourcePersistFailed {
+                    user_id,
+                    message: "Failed to save audio source preference".to_string(),
+                });
+            }
+        });
+    }
+
+    pub async fn cast_vote(&self, user_id: Uuid, item_id: Uuid, value: i16) -> Result<i32> {
+        if value != 1 && value != -1 {
+            anyhow::bail!("invalid vote value");
+        }
+
+        let mut client = self.db.get().await?;
+        let outcome = MediaQueueVote::cast_guarded(&mut client, user_id, item_id, value).await?;
+        drop(client);
+        let score = match outcome {
+            CastVoteOutcome::Applied(score) => score,
+            CastVoteOutcome::NotFound => anyhow::bail!("queue item not found"),
+            CastVoteOutcome::VotingClosed => anyhow::bail!("voting closed - track started"),
+            CastVoteOutcome::NotVoteable => anyhow::bail!("queue item is no longer voteable"),
+        };
+
+        let mut state = self.state.lock().await;
+        self.publish_queue_update_with_guard(&mut state).await?;
+        Ok(score)
+    }
+
+    /// Remove a vote (returns new score) for the user/item pair.
+    pub async fn clear_vote(&self, user_id: Uuid, item_id: Uuid) -> Result<i32> {
+        let client = self.db.get().await?;
+        let score = MediaQueueVote::delete_vote(&client, user_id, item_id).await?;
+        drop(client);
+
+        let mut state = self.state.lock().await;
+        self.publish_queue_update_with_guard(&mut state).await?;
+        Ok(score)
+    }
+
+    /// Cast a skip-vote for the currently-playing track. Returns the new
+    /// progress; if the threshold has been hit, advances the queue.
+    ///
+    /// Gated on the caller's session having at least one paired client. An
+    /// SSH-only user can't influence what paired listeners hear, otherwise a
+    /// coordinated unpaired group could grief the threshold (which is
+    /// computed against `paired_clients.total_pairings()`).
+    pub async fn cast_skip_vote(
+        &self,
+        user_id: Uuid,
+        session_token: &str,
+    ) -> Result<CastSkipResult> {
+        if !self.paired_clients.is_paired(session_token) {
+            anyhow::bail!("pair a client to skip-vote");
+        }
+
+        let mut state = self.state.lock().await;
+        let Some(current_id) = state.current_item_id else {
+            anyhow::bail!("nothing is playing");
+        };
+
+        state.skip_votes.insert(user_id);
+        let votes = state.skip_votes.len() as u32;
+        let threshold = skip_threshold(self.paired_clients.total_pairings());
+        let fired = votes >= threshold;
+
+        if fired {
+            let client = self.db.get().await?;
+            let _ =
+                MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
+                    .await?;
+            drop(client);
+            state.current_item_id = None;
+            state.skip_votes.clear();
+            self.cancel_playback(&mut state);
+            self.advance_to_next_with_guard(&mut state).await?;
+        } else {
+            self.publish_queue_update_with_guard(&mut state).await?;
+        }
+
+        Ok(CastSkipResult {
+            progress: SkipProgress { votes, threshold },
+            fired,
+        })
+    }
+
+    /// Re-evaluate whether the pending skip-votes already meet the threshold.
+    /// Called from the disconnect path when the paired-client total drops; if
+    /// the threshold fell to or below the existing vote count, fire a skip.
+    pub async fn reevaluate_skip_threshold(&self) -> Result<()> {
+        let mut state = self.state.lock().await;
+        let Some(current_id) = state.current_item_id else {
+            return Ok(());
+        };
+        if state.skip_votes.is_empty() {
+            return Ok(());
+        }
+        let votes = state.skip_votes.len() as u32;
+        let threshold = skip_threshold(self.paired_clients.total_pairings());
+        if votes < threshold {
+            self.publish_queue_update_with_guard(&mut state).await?;
+            return Ok(());
+        }
+        let client = self.db.get().await?;
+        let _ = MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
+            .await?;
+        drop(client);
+        state.current_item_id = None;
+        state.skip_votes.clear();
+        self.cancel_playback(&mut state);
+        self.advance_to_next_with_guard(&mut state).await
+    }
+
+    pub fn cast_vote_task(&self, user_id: Uuid, item_id: Uuid, value: i16) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.cast_vote(user_id, item_id, value).await {
+                Ok(score) => {
+                    service.publish_event(AudioEvent::BoothVoteApplied {
+                        user_id,
+                        item_id,
+                        score,
+                    });
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothVoteFailed {
+                        user_id,
+                        message: booth_vote_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn clear_vote_task(&self, user_id: Uuid, item_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.clear_vote(user_id, item_id).await {
+                Ok(score) => {
+                    service.publish_event(AudioEvent::BoothVoteApplied {
+                        user_id,
+                        item_id,
+                        score,
+                    });
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothVoteFailed {
+                        user_id,
+                        message: booth_vote_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn cast_skip_vote_task(&self, user_id: Uuid, session_token: String) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.cast_skip_vote(user_id, &session_token).await {
+                Ok(result) => {
+                    if result.fired {
+                        service.publish_event(AudioEvent::BoothSkipFired { user_id });
+                    } else {
+                        service.publish_event(AudioEvent::BoothSkipProgress {
+                            user_id,
+                            votes: result.progress.votes,
+                            threshold: result.progress.threshold,
+                        });
+                    }
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothVoteFailed {
+                        user_id,
+                        message: booth_vote_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn reevaluate_skip_threshold_task(&self) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = service.reevaluate_skip_threshold().await {
+                late_core::error_span!(
+                    "audio_skip_reeval_failed",
+                    error = ?err,
+                    "failed to re-evaluate skip threshold"
+                );
+            }
+        });
+    }
+
     pub async fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
         match report.state {
             PlayerPlaybackState::Ended => self.finish_item_from_player(report).await,
@@ -393,6 +761,7 @@ impl AudioService {
     pub async fn initial_ws_messages(&self) -> Result<Vec<AudioWsMessage>> {
         let state = self.state.lock().await;
         let snapshot = self.load_snapshot(state.mode).await?;
+        let skip_progress = self.compute_skip_progress(&state, snapshot.current.as_ref());
         let mut events = vec![
             AudioWsMessage::SourceChanged {
                 audio_mode: snapshot.audio_mode,
@@ -401,6 +770,7 @@ impl AudioService {
                 current: snapshot.current.clone(),
                 queue: snapshot.queue.clone(),
                 sequence: state.sequence,
+                skip_progress,
             },
         ];
         if let Some(current) = &snapshot.current
@@ -445,6 +815,7 @@ impl AudioService {
         if let Some(item) = MediaQueueItem::current_playing(&client).await? {
             if item_is_still_playable(&item, now) {
                 state.current_item_id = Some(item.id);
+                state.skip_votes.clear();
                 state.mode = AudioMode::Youtube;
                 self.schedule_playback_timer(&mut state, &item);
                 self.publish_source_change(AudioMode::Youtube);
@@ -524,6 +895,7 @@ impl AudioService {
             return Ok(());
         }
         state.current_item_id = None;
+        state.skip_votes.clear();
         self.cancel_playback(&mut state);
         self.advance_to_next_with_guard(&mut state).await
     }
@@ -540,13 +912,14 @@ impl AudioService {
             return Ok(());
         }
         state.current_item_id = None;
+        state.skip_votes.clear();
         self.cancel_playback(&mut state);
         self.advance_to_next_with_guard(&mut state).await
     }
 
     async fn advance_to_next_with_guard(&self, state: &mut QueueState) -> Result<()> {
         let client = self.db.get().await?;
-        if let Some(next) = MediaQueueItem::first_queued(&client).await? {
+        if let Some((next, _score)) = MediaQueueItem::first_queued(&client).await? {
             self.cancel_fallback(state);
             let Some(item) = MediaQueueItem::mark_playing(&client, next.id, Utc::now()).await?
             else {
@@ -559,6 +932,7 @@ impl AudioService {
                 return Ok(());
             };
             state.current_item_id = Some(item.id);
+            state.skip_votes.clear();
             state.mode = AudioMode::Youtube;
             self.schedule_playback_timer(state, &item);
             self.publish_source_change(AudioMode::Youtube);
@@ -568,6 +942,7 @@ impl AudioService {
         }
 
         state.current_item_id = None;
+        state.skip_votes.clear();
         self.cancel_playback(state);
         if !self.publish_youtube_fallback_with_guard(state).await? {
             self.schedule_fallback(state);
@@ -578,13 +953,31 @@ impl AudioService {
 
     async fn publish_queue_update_with_guard(&self, state: &mut QueueState) -> Result<()> {
         state.sequence = state.sequence.saturating_add(1);
-        let snapshot = self.load_snapshot(state.mode).await?;
+        let mut snapshot = self.load_snapshot(state.mode).await?;
+        snapshot.skip_progress = self.compute_skip_progress(state, snapshot.current.as_ref());
+        let _ = self.snapshot_tx.send(snapshot.clone());
         let _ = self.ws_tx.send(AudioWsMessage::QueueUpdate {
             current: snapshot.current,
             queue: snapshot.queue,
             sequence: state.sequence,
+            skip_progress: snapshot.skip_progress,
         });
         Ok(())
+    }
+
+    /// Compute the skip-vote progress for the currently playing item. Returns
+    /// None when nothing is playing (skip vote only applies to a live track).
+    fn compute_skip_progress(
+        &self,
+        state: &QueueState,
+        current: Option<&QueueItemView>,
+    ) -> Option<SkipProgress> {
+        if current.is_none() || state.current_item_id.is_none() {
+            return None;
+        }
+        let votes = state.skip_votes.len() as u32;
+        let threshold = skip_threshold(self.paired_clients.total_pairings());
+        Some(SkipProgress { votes, threshold })
     }
 
     async fn load_snapshot(&self, mode: AudioMode) -> Result<QueueSnapshot> {
@@ -592,14 +985,14 @@ impl AudioService {
         let items = MediaQueueItem::list_snapshot(&client, QUEUE_SNAPSHOT_LIMIT).await?;
         let user_ids = items
             .iter()
-            .map(|item| item.submitter_id)
+            .map(|(item, _)| item.submitter_id)
             .collect::<Vec<_>>();
         let usernames = User::list_usernames_by_ids(&client, &user_ids).await?;
 
         let mut current = None;
         let mut queue = Vec::new();
-        for item in items {
-            let view = queue_item_view(item, &usernames);
+        for (item, score) in items {
+            let view = queue_item_view(item, score, &usernames);
             if view.started_at_ms.is_some() {
                 current = Some(view);
             } else {
@@ -611,6 +1004,7 @@ impl AudioService {
             audio_mode: mode,
             current,
             queue,
+            skip_progress: None,
         })
     }
 
@@ -832,6 +1226,46 @@ fn offset_from_started_at_ms(started_at_ms: i64) -> u64 {
         .unwrap_or_default()
 }
 
+fn skip_threshold(paired_total: usize) -> u32 {
+    let total = paired_total as f32;
+    let value = (total * 0.1).ceil() as u32;
+    value.max(1)
+}
+
+fn booth_submit_error_message(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if text.contains("invalid url") || text.contains("youtube") && text.contains("not found") {
+        "Invalid YouTube URL".to_string()
+    } else if text.contains("rate limit") || text.contains("submission rate limit") {
+        "Slow down - too many submissions".to_string()
+    } else if text.contains("not public") {
+        "Video is not public".to_string()
+    } else if text.contains("not embeddable") {
+        "Video is not embeddable".to_string()
+    } else if text.contains("api key") || text.contains("youtube data api") {
+        "YouTube validation failed - try again".to_string()
+    } else {
+        "Failed to submit".to_string()
+    }
+}
+
+fn booth_vote_error_message(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if text.contains("voting closed") {
+        "Voting closed - track started".to_string()
+    } else if text.contains("pair a client") {
+        "Pair a client to skip-vote".to_string()
+    } else if text.contains("nothing is playing") {
+        "Nothing is playing".to_string()
+    } else if text.contains("queue item not found")
+        || text.contains("queue item is no longer voteable")
+    {
+        "Item is no longer in the queue".to_string()
+    } else {
+        "Vote failed".to_string()
+    }
+}
+
 fn trusted_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("invalid url")
@@ -856,7 +1290,11 @@ fn fallback_load_event(source: &MediaSource) -> AudioWsMessage {
     }
 }
 
-fn queue_item_view(item: MediaQueueItem, usernames: &HashMap<Uuid, String>) -> QueueItemView {
+fn queue_item_view(
+    item: MediaQueueItem,
+    vote_score: i32,
+    usernames: &HashMap<Uuid, String>,
+) -> QueueItemView {
     QueueItemView {
         id: item.id,
         video_id: item.external_id,
@@ -869,5 +1307,32 @@ fn queue_item_view(item: MediaQueueItem, usernames: &HashMap<Uuid, String>) -> Q
             .get(&item.submitter_id)
             .cloned()
             .unwrap_or_default(),
+        submitter_id: item.submitter_id,
+        vote_score,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skip_threshold;
+
+    #[test]
+    fn skip_threshold_floors_at_one_and_uses_ten_percent_ceil() {
+        // No pairings → still need one vote to skip (avoids divide-by-zero
+        // making the threshold trivially satisfiable).
+        assert_eq!(skip_threshold(0), 1);
+        // Small rooms collapse to threshold 1: any paired listener can skip.
+        assert_eq!(skip_threshold(1), 1);
+        assert_eq!(skip_threshold(5), 1);
+        assert_eq!(skip_threshold(9), 1);
+        assert_eq!(skip_threshold(10), 1);
+        // 10% ceil kicks in above 10 paired clients.
+        assert_eq!(skip_threshold(11), 2);
+        assert_eq!(skip_threshold(20), 2);
+        assert_eq!(skip_threshold(21), 3);
+        assert_eq!(skip_threshold(25), 3);
+        assert_eq!(skip_threshold(91), 10);
+        assert_eq!(skip_threshold(100), 10);
+        assert_eq!(skip_threshold(101), 11);
     }
 }

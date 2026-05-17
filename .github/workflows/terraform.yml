@@ -40,6 +40,7 @@ jobs:
       TF_VAR_AI_ENABLED: ${{ vars.AI_ENABLED }}
       TF_VAR_AI_MODEL: ${{ vars.AI_MODEL }}
       TF_VAR_AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      TF_VAR_YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
       TF_VAR_VOTE_SWITCH_INTERVAL_SECS: ${{ vars.VOTE_SWITCH_INTERVAL_SECS }}
       TF_VAR_S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
       TF_VAR_S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
