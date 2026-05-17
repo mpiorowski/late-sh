@@ -278,7 +278,7 @@ Data flow: browser Web Audio analyzer → `WsPayload::Viz` → `api.rs:293` conv
 
 ## 12. Sidebar music-stage widget (`common/sidebar.rs`)
 
-Renders the audio domain into the right rail. Both surfaces (YouTube + Icecast) are always visible; the active source the user is hearing gets bold amber chrome, the other gets dim italic. Entry point: `app/common/sidebar.rs:draw_music_stage`, allocated `MUSIC_STAGE_HEIGHT = 18` rows.
+Renders the audio domain into the right rail. Both surfaces (YouTube + Icecast) are always visible; the active source the user is hearing gets bold amber chrome, the other gets dim italic. Entry point: `app/common/sidebar.rs:draw_music_stage`, allocated `MUSIC_STAGE_HEIGHT = 17` rows. Both blocks share the same row shape — title, track (combined on one line), progress, then surface-specific tail — so the active/inactive comparison reads naturally.
 
 ### Layout
 
@@ -286,9 +286,9 @@ Renders the audio domain into the right rail. Both surfaces (YouTube + Icecast) 
 |--------|---------|
 | 0      | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%`. Renders `muted` (italic faint) when muted, `—` when no client is paired. |
 | 1      | Volume keybind hints: `m mute  -= vol`. |
-| 2-8    | YouTube block: title bar, track title, channel, progress, skip meter (with trailing `v+s` hint when active), `next ⌄` header, queue items (`Min(2)`, absorbs spare space). |
-| 9      | Booth/swap keybind hints: `v+v queue  v+x swap`. |
-| 10-14  | Icecast block: title bar, track (`Artist - Title` combined on one row), progress/elapsed line (uses `draw_progress_line` when `duration_seconds` is known, `draw_elapsed_line` otherwise), `vibe → next · ends` one-liner, then a 3-row vote area delegated to `app/vote/ui.rs::draw_vote_inline`. Track + progress fall back to `no signal` and a blank row when the `now_playing` watch hasn't emitted yet. |
+| 2-7    | YouTube block: title bar, track (`Channel - Title` combined on one row; falls back to `by <submitter> - Title` when channel is unknown, then to bare title), progress, skip meter (with trailing `v+s` hint when active), `next ⌄` header, queue items (`Min(2)`, absorbs spare space). |
+| 8      | Booth/swap keybind hints: `v+v queue  v+x swap`. |
+| 9-13   | Icecast block: title bar, track (`Artist - Title` combined on one row), progress/elapsed line (uses `draw_progress_line` when `duration_seconds` is known, `draw_elapsed_line` otherwise), `vibe → next · ends` one-liner, then a 3-row vote area delegated to `app/vote/ui.rs::draw_vote_inline`. Track + progress fall back to `no signal` and a blank row when the `now_playing` watch hasn't emitted yet. |
 
 ### Active-source rule
 
