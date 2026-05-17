@@ -1,10 +1,35 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioSource {
+    #[default]
+    Icecast,
+    Youtube,
+}
+
+impl AudioSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Icecast => "icecast",
+            Self::Youtube => "youtube",
+        }
+    }
+
+    pub fn from_settings_str(value: &str) -> Self {
+        match value {
+            "youtube" => Self::Youtube,
+            _ => Self::Icecast,
+        }
+    }
+}
 
 crate::model! {
     table = "users";
@@ -24,8 +49,40 @@ crate::model! {
 
 pub const USERNAME_MAX_LEN: usize = 32;
 
+/// Number of top-level screens (Dashboard, Arcade, Rooms, Artboard).
+pub const RIGHT_SIDEBAR_SCREEN_COUNT: u8 = 4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RightSidebarMode {
+    On,
+    Off,
+    Custom,
+}
+
+impl RightSidebarMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::On, true) => Self::Off,
+            (Self::Off, true) => Self::Custom,
+            (Self::Custom, true) => Self::On,
+            (Self::On, false) => Self::Custom,
+            (Self::Off, false) => Self::On,
+            (Self::Custom, false) => Self::Off,
+        }
+    }
+}
+
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
+const AUDIO_SOURCE_KEY: &str = "audio_source";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
@@ -34,6 +91,8 @@ const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
 const SHOW_DASHBOARD_WIRE_KEY: &str = "show_dashboard_wire";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
+const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
+const RIGHT_SIDEBAR_SCREENS_KEY: &str = "right_sidebar_screens";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
@@ -226,6 +285,33 @@ impl User {
         Ok(extract_theme_id(&settings))
     }
 
+    pub async fn audio_source(client: &Client, user_id: Uuid) -> Result<AudioSource> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_audio_source(&settings))
+    }
+
+    /// Atomically merge `audio_source` into `settings` without clobbering other keys.
+    pub async fn set_audio_source(
+        client: &Client,
+        user_id: Uuid,
+        source: AudioSource,
+    ) -> Result<()> {
+        let value = source.as_str();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&AUDIO_SOURCE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     /// Adds `target_id` to the ignore list. Returns `(changed, ids)` —
     /// `changed` is false if the id was already present.
     pub async fn add_ignored_user_id(
@@ -385,6 +471,14 @@ pub fn extract_theme_id(settings: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
+pub fn extract_audio_source(settings: &Value) -> AudioSource {
+    settings
+        .get(AUDIO_SOURCE_KEY)
+        .and_then(Value::as_str)
+        .map(AudioSource::from_settings_str)
+        .unwrap_or_default()
+}
+
 pub fn extract_notify_kinds(settings: &Value) -> Vec<String> {
     settings
         .get(NOTIFY_KINDS_KEY)
@@ -449,10 +543,61 @@ pub fn extract_show_dashboard_wire(settings: &Value) -> bool {
 }
 
 pub fn extract_show_right_sidebar(settings: &Value) -> bool {
+    match settings
+        .get(RIGHT_SIDEBAR_MODE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some("on" | "custom") => return true,
+        Some("off") => return false,
+        _ => {}
+    }
+
     settings
         .get(SHOW_RIGHT_SIDEBAR_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+pub fn extract_right_sidebar_mode(settings: &Value) -> RightSidebarMode {
+    match settings
+        .get(RIGHT_SIDEBAR_MODE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some("on") => RightSidebarMode::On,
+        Some("off") => RightSidebarMode::Off,
+        Some("custom") => RightSidebarMode::Custom,
+        _ if settings
+            .get(SHOW_RIGHT_SIDEBAR_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(true) =>
+        {
+            RightSidebarMode::On
+        }
+        _ => RightSidebarMode::Off,
+    }
+}
+
+pub fn extract_right_sidebar_screens(settings: &Value) -> Vec<u8> {
+    let Some(values) = settings
+        .get(RIGHT_SIDEBAR_SCREENS_KEY)
+        .and_then(Value::as_array)
+    else {
+        return (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect();
+    };
+
+    let mut screens = BTreeSet::new();
+    for value in values {
+        let Some(raw) = value.as_u64() else {
+            continue;
+        };
+        if (1..=u64::from(RIGHT_SIDEBAR_SCREEN_COUNT)).contains(&raw) {
+            screens.insert(raw as u8);
+        }
+    }
+
+    screens.into_iter().collect()
 }
 
 pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
@@ -701,6 +846,45 @@ mod tests {
     fn extract_show_right_sidebar_reads_explicit_false() {
         let settings = json!({ "show_right_sidebar": false });
         assert!(!extract_show_right_sidebar(&settings));
+    }
+
+    #[test]
+    fn extract_show_right_sidebar_prefers_new_mode() {
+        let settings = json!({
+            "show_right_sidebar": true,
+            "right_sidebar_mode": "off",
+        });
+        assert!(!extract_show_right_sidebar(&settings));
+    }
+
+    #[test]
+    fn extract_right_sidebar_mode_reads_custom() {
+        let settings = json!({ "right_sidebar_mode": "custom" });
+        assert_eq!(
+            extract_right_sidebar_mode(&settings),
+            RightSidebarMode::Custom
+        );
+    }
+
+    #[test]
+    fn extract_right_sidebar_mode_falls_back_to_legacy_bool() {
+        let settings = json!({ "show_right_sidebar": false });
+        assert_eq!(extract_right_sidebar_mode(&settings), RightSidebarMode::Off);
+    }
+
+    #[test]
+    fn extract_right_sidebar_screens_defaults_to_all_screens() {
+        let settings = json!({});
+        assert_eq!(
+            extract_right_sidebar_screens(&settings),
+            (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_right_sidebar_screens_dedupes_and_drops_invalid_values() {
+        let settings = json!({ "right_sidebar_screens": [3, 1, 3, 9, "2"] });
+        assert_eq!(extract_right_sidebar_screens(&settings), vec![1, 3]);
     }
 
     #[test]

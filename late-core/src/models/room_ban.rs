@@ -75,6 +75,14 @@ impl RoomBan {
         client: &Client,
         limit: i64,
     ) -> Result<Vec<RoomBanListItem>> {
+        Self::active_with_usernames_page(client, limit, 0).await
+    }
+
+    pub async fn active_with_usernames_page(
+        client: &Client,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<RoomBanListItem>> {
         let rows = client
             .query(
                 "SELECT rb.*, room.slug AS room_slug,
@@ -86,8 +94,8 @@ impl RoomBan {
                  LEFT JOIN users actor ON actor.id = rb.actor_user_id
                  WHERE rb.expires_at IS NULL OR rb.expires_at > current_timestamp
                  ORDER BY rb.created DESC
-                 LIMIT $1",
-                &[&limit],
+                 LIMIT $1 OFFSET $2",
+                &[&limit, &offset],
             )
             .await?;
         Ok(rows.into_iter().map(Self::list_item_from_row).collect())
@@ -97,6 +105,15 @@ impl RoomBan {
         client: &Client,
         room_id: Uuid,
         limit: i64,
+    ) -> Result<Vec<RoomBanListItem>> {
+        Self::active_for_room_with_usernames_page(client, room_id, limit, 0).await
+    }
+
+    pub async fn active_for_room_with_usernames_page(
+        client: &Client,
+        room_id: Uuid,
+        limit: i64,
+        offset: i64,
     ) -> Result<Vec<RoomBanListItem>> {
         let rows = client
             .query(
@@ -110,8 +127,8 @@ impl RoomBan {
                  WHERE rb.room_id = $1
                    AND (rb.expires_at IS NULL OR rb.expires_at > current_timestamp)
                  ORDER BY rb.created DESC
-                 LIMIT $2",
-                &[&room_id, &limit],
+                 LIMIT $2 OFFSET $3",
+                &[&room_id, &limit, &offset],
             )
             .await?;
         Ok(rows.into_iter().map(Self::list_item_from_row).collect())

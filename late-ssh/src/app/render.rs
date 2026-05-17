@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::user::RightSidebarMode;
 
 use super::{
     artboard,
@@ -67,6 +68,30 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
         draft_enabled
     } else {
         profile_enabled
+    }
+}
+
+/// Map a top-level screen to its 1-based slot in `right_sidebar_screens`.
+pub(crate) fn screen_number(screen: Screen) -> u8 {
+    match screen {
+        Screen::Dashboard => 1,
+        Screen::Arcade => 2,
+        Screen::Rooms => 3,
+        Screen::Artboard => 4,
+    }
+}
+
+/// Resolve whether the right sidebar should render on `screen` given a profile
+/// (or draft) sidebar mode and per-screen visibility set.
+pub(crate) fn resolve_right_sidebar_enabled(
+    mode: RightSidebarMode,
+    screens: &[u8],
+    screen: Screen,
+) -> bool {
+    match mode {
+        RightSidebarMode::On => true,
+        RightSidebarMode::Off => false,
+        RightSidebarMode::Custom => screens.contains(&screen_number(screen)),
     }
 }
 
@@ -170,6 +195,11 @@ struct DrawContext<'a> {
     pair_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    booth_modal_open: bool,
+    booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
+    booth_snapshot: crate::app::audio::svc::QueueSnapshot,
+    booth_submit_enabled: bool,
+    paired_browser_source: late_core::models::user::AudioSource,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
@@ -223,8 +253,16 @@ impl App {
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
-            self.settings_modal_state.draft().show_right_sidebar,
-            self.profile_state.profile().show_right_sidebar,
+            resolve_right_sidebar_enabled(
+                self.settings_modal_state.draft().right_sidebar_mode,
+                &self.settings_modal_state.draft().right_sidebar_screens,
+                self.screen,
+            ),
+            resolve_right_sidebar_enabled(
+                self.profile_state.profile().right_sidebar_mode,
+                &self.profile_state.profile().right_sidebar_screens,
+                self.screen,
+            ),
         );
         let show_room_list_sidebar = room_list_sidebar_enabled(
             self.show_settings,
@@ -531,6 +569,11 @@ impl App {
                         pair_url: &self.connect_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
+                        booth_modal_open: self.booth_modal_state.is_open(),
+                        booth_modal_state: &self.booth_modal_state,
+                        booth_snapshot: self.audio.queue_snapshot(),
+                        booth_submit_enabled: self.audio.booth_submit_enabled(),
+                        paired_browser_source: self.paired_browser_source,
                         chat_state: &self.chat,
                         user_id: self.user_id,
                         news_modal,
@@ -789,6 +832,8 @@ impl App {
                     activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
                     top_rooms: ctx.top_rooms,
+                    queue_snapshot: &ctx.booth_snapshot,
+                    paired_browser_source: ctx.paired_browser_source,
                 },
             );
         }
@@ -889,6 +934,16 @@ impl App {
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
+            );
+        }
+
+        if ctx.booth_modal_open {
+            crate::app::audio::booth::ui::draw(
+                frame,
+                inner,
+                ctx.booth_modal_state,
+                &ctx.booth_snapshot,
+                ctx.booth_submit_enabled,
             );
         }
 

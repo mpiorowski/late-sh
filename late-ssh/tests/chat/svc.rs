@@ -9,7 +9,7 @@ use late_core::models::{
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::ServerBan,
-    user::User,
+    user::{RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User},
 };
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::chat::notifications::svc::NotificationService;
@@ -707,6 +707,8 @@ async fn room_tail_task_loads_favorite_room_history() {
             show_dashboard_header: true,
             show_dashboard_wire: true,
             show_right_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: vec![favorite_room.id],
@@ -1540,7 +1542,7 @@ async fn mod_room_ban_command_bans_kicks_and_audits() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "room ban #mod-ban-room @mod_ban_target 1h test cleanup".to_string(),
+        "ban #mod-ban-room @mod_ban_target 1h test cleanup".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1820,7 +1822,7 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "server kick @server_kick_target cool off".to_string(),
+        "kick server @server_kick_target cool off".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1902,7 +1904,7 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "server ban @server_ban_target 1h test ban".to_string(),
+        "ban server @server_ban_target 1h test ban".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2019,7 +2021,7 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "artboard ban @artboard_ban_target 1h paint cooldown".to_string(),
+        "ban artboard @artboard_ban_target 1h paint cooldown".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2235,9 +2237,9 @@ async fn mod_bans_command_lists_active_bans() {
         .expect("create room");
 
     for command in [
-        "server ban @list_server_target 1h server reason",
-        "artboard ban @list_artboard_target 1h art reason",
-        "room ban #list-bans-room @list_room_target 1h room reason",
+        "ban server @list_server_target 1h server reason",
+        "ban artboard @list_artboard_target 1h art reason",
+        "ban #list-bans-room @list_room_target 1h room reason",
     ] {
         service.run_mod_command_task(
             actor.id,
@@ -2260,7 +2262,7 @@ async fn mod_bans_command_lists_active_bans() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "bans 10".to_string(),
+        "view bans".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2329,7 +2331,7 @@ async fn mod_audit_command_lists_recent_audit_entries() {
         actor.id,
         Permissions::new(false, true),
         Uuid::now_v7(),
-        "server kick @list_audit_target audit reason".to_string(),
+        "kick server @list_audit_target audit reason".to_string(),
     );
     let event = timeout(Duration::from_secs(2), events.recv())
         .await
@@ -2345,7 +2347,7 @@ async fn mod_audit_command_lists_recent_audit_entries() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "audit 5".to_string(),
+        "view audit".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2364,7 +2366,7 @@ async fn mod_audit_command_lists_recent_audit_entries() {
             assert!(
                 lines
                     .iter()
-                    .any(|line| line == "recent audit log entries (limit 5)")
+                    .any(|line| line == "recent audit log entries (page 1, 15 per page)")
             );
             assert!(lines.iter().any(|line| line.contains("@list_audit_actor")
                 && line.contains("server_kick")
@@ -2420,7 +2422,7 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "room ban #room-notify @room_notify_target 1h test".to_string(),
+        "ban #room-notify @room_notify_target 1h test".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2488,7 +2490,7 @@ async fn grant_mod_command_updates_active_session_permissions() {
         actor.id,
         Permissions::new(true, false),
         request_id,
-        "grant mod @grant_mod_target".to_string(),
+        "admin grant mod @grant_mod_target".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())

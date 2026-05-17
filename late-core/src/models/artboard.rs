@@ -85,6 +85,29 @@ impl Snapshot {
             .collect())
     }
 
+    pub async fn list_archive_summaries(
+        client: &Client,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<SnapshotSummary>> {
+        let rows = client
+            .query(
+                "SELECT board_key, updated FROM artboard_snapshots
+                 WHERE board_key LIKE 'daily:%' OR board_key LIKE 'monthly:%'
+                 ORDER BY board_key DESC, created DESC
+                 LIMIT $1 OFFSET $2",
+                &[&limit, &offset],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SnapshotSummary {
+                board_key: row.get("board_key"),
+                updated: row.get("updated"),
+            })
+            .collect())
+    }
+
     pub async fn delete_by_board_key(client: &Client, board_key: &str) -> Result<u64> {
         let count = client
             .execute(

@@ -409,7 +409,10 @@ fn overview_lines() -> Vec<String> {
         "  q                 open quit confirm (press q again to leave)",
         "  m                 mute paired client",
         "  + / -             paired client volume",
-        "  v then v          cycle Home panels: left, right, lounge info, combos",
+        "  v then v          open the Music Booth (submit + queue + votes)",
+        "  v then x          swap paired browser between Icecast and YouTube",
+        "  v then s          skip-vote the current YouTube track",
+        "  v then 1/2/3      vote Lofi / Ambient / Classic genre",
         "",
         "Home",
         "  P                 install CLI · pair browser (curl / nix / source + QR)",
@@ -637,7 +640,8 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  background color, right sidebar, room list, and lounge info visibility".to_string(),
+        "  background color, room list, and lounge info visibility".to_string(),
+        "  right sidebar mode (on/off/custom) with per-screen visibility".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "".to_string(),
         "How to open it".to_string(),
@@ -729,31 +733,72 @@ fn bonsai_help_lines() -> Vec<String> {
 const MUSIC_HELP_TEXT: &str = "\
 How music works on late.sh
 
-SSH is a terminal protocol - it carries text, not audio. To hear music you need a second audio channel that pairs with your SSH session.
+late.sh has two audio surfaces running at once:
 
-Option 1 (recommended): Install the CLI
+  Icecast    a 24/7 house radio. The room votes on the genre.
+  YouTube    a shared queue everyone can submit links to.
 
-  macOS / Linux / Termux:
-    curl -fsSL https://cli.late.sh/install.sh | bash
+You pick which one your paired browser plays. The sidebar shows both at a glance: the one you're actually hearing is highlighted, the other is dimmed.
 
-  Windows PowerShell:
-    irm https://cli.late.sh/install.ps1 | iex
+Get audio paired
 
-Then run `late` instead of `ssh late.sh`. It launches SSH + local audio playback in one process - no browser needed. The CLI decodes the MP3 stream locally, plays through your system audio, and pairs with the TUI over WebSocket for visualizer + controls.
+  Option 1 (recommended): install the CLI
 
-Don't trust the install script? Build from source:
+    macOS / Linux / Termux:
+      curl -fsSL https://cli.late.sh/install.sh | bash
 
-  git clone https://github.com/mpiorowski/late-sh
-  cargo build --release --bin late
+    Windows PowerShell:
+      irm https://cli.late.sh/install.ps1 | iex
 
-You can also use the Nix option shown in the Home pair modal.
+    Then run `late` instead of `ssh late.sh`. One process, SSH + local audio. The CLI plays Icecast only.
 
-Option 2: Browser pairing
+    Build from source instead:
+      git clone https://github.com/mpiorowski/late-sh
+      cargo build --release --bin late
 
-On Home, press `P` to open CLI install options plus the browser pairing QR/link. The browser connects to your session via a token-based WebSocket, streams audio, and feeds visualizer frames back to the sidebar.
+    A Nix option is shown in the Home pair modal.
 
-Both options give you:
-  m = mute | +/- = volume | visualizer in the sidebar
-  Vote for genres on Home: v1 v2 v3
+  Option 2: browser pairing
 
-The stream is 128kbps MP3 from Icecast, fed by Liquidsoap playlists of CC0/CC-BY music. The winning genre switches every hour based on votes.";
+    On Home press P for the pair modal: install hints plus a QR / link. The browser plays whichever source you have selected, including YouTube.
+
+Global keys (work anywhere)
+  m                 mute paired client
+  + / -             volume up / down
+
+Vote the Icecast genre
+  v then 1 / l      Lofi
+  v then 2 / a      Ambient
+  v then 3 / c      Classic
+  The winning genre takes over on the next hourly flip.
+
+Swap which source you hear
+  v then x          toggle your paired browser between Icecast and YouTube. Your choice is saved per-user, so a refresh keeps it.
+
+Music Booth (v then v)
+
+  Opens a modal with a URL submit row on top and the queue below.
+
+  Tab               switch focus between submit and queue
+  Esc               close
+
+  Submit focus:
+    type            paste or type a YouTube URL
+    Enter           submit
+    ↓ or Ctrl+J     drop into the queue
+    Backspace       delete char
+
+  Queue focus:
+    j / k or ↑ / ↓  move selection
+    PageUp/PageDown jump 8 rows
+    + or =          upvote selected item
+    - or _          downvote selected item
+    0               clear your vote
+    s               skip-vote the currently playing track
+    ↑ at the top    back to the submit row
+
+  The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
+
+Skip the current track
+  v then s          add your vote to skip. The track skips once enough paired users agree.
+  s                 same thing, while you're in the booth queue.";

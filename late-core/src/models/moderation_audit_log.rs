@@ -27,6 +27,14 @@ impl ModerationAuditLog {
         client: &tokio_postgres::Client,
         limit: i64,
     ) -> Result<Vec<ModerationAuditLogListItem>> {
+        Self::recent_with_usernames_page(client, limit, 0).await
+    }
+
+    pub async fn recent_with_usernames_page(
+        client: &tokio_postgres::Client,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ModerationAuditLogListItem>> {
         let rows = client
             .query(
                 "SELECT mal.*, actor.username AS actor_username, target.username AS target_username
@@ -35,8 +43,8 @@ impl ModerationAuditLog {
                  LEFT JOIN users target
                    ON target.id = mal.target_id AND mal.target_kind = 'user'
                  ORDER BY mal.created DESC
-                 LIMIT $1",
-                &[&limit],
+                 LIMIT $1 OFFSET $2",
+                &[&limit, &offset],
             )
             .await?;
         Ok(rows

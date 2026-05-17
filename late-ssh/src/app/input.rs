@@ -1,6 +1,7 @@
 use super::{
-    chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_search_modal, settings_modal, state::App, terminal_help_modal,
+    audio::booth as audio_booth, chat, dashboard, help_modal, hub, icon_picker, mod_modal,
+    profile_modal, quit_confirm, room_search_modal, settings_modal, state::App,
+    terminal_help_modal,
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -627,6 +628,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.booth_modal_state.is_open() {
+        audio_booth::input::handle_input(app, event);
+        return;
+    }
+
     if app.chat.has_news_modal() {
         handle_news_modal_input(app, &event);
         return;
@@ -1157,6 +1163,10 @@ fn dispatch_escape(app: &mut App) {
         app.room_search_modal_state.close();
         return;
     }
+    if app.booth_modal_state.is_open() {
+        app.booth_modal_state.close();
+        return;
+    }
     if app.chat.has_news_modal() {
         app.chat.close_news_modal();
         return;
@@ -1516,7 +1526,12 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
 fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    if app.profile_state.profile().show_right_sidebar {
+    let profile = app.profile_state.profile();
+    if crate::app::render::resolve_right_sidebar_enabled(
+        profile.right_sidebar_mode,
+        &profile.right_sidebar_screens,
+        app.screen,
+    ) {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
     } else {
         inner

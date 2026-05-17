@@ -2,7 +2,9 @@ use std::cell::Cell;
 
 use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::rss_feed::RssFeed;
-use late_core::models::user::sanitize_username_input;
+use late_core::models::user::{
+    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, sanitize_username_input,
+};
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
@@ -231,6 +233,8 @@ pub struct SettingsModalState {
     bio_input: TextArea<'static>,
     picker: PickerState,
     delete_account: DeleteAccountDialogState,
+    right_sidebar_custom_open: bool,
+    right_sidebar_custom_index: usize,
     feeds: Vec<RssFeed>,
     feed_index: usize,
     editing_feed_url: bool,
@@ -267,6 +271,8 @@ impl SettingsModalState {
             bio_input: new_bio_textarea(false),
             picker: PickerState::default(),
             delete_account: DeleteAccountDialogState::new(),
+            right_sidebar_custom_open: false,
+            right_sidebar_custom_index: 0,
             feeds: Vec::new(),
             feed_index: 0,
             editing_feed_url: false,
@@ -298,6 +304,8 @@ impl SettingsModalState {
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
         self.delete_account = DeleteAccountDialogState::new();
+        self.right_sidebar_custom_open = false;
+        self.right_sidebar_custom_index = 0;
         self.feed_service.list_task(self.user_id);
     }
 
@@ -392,6 +400,49 @@ impl SettingsModalState {
 
     pub fn selected_row(&self) -> Row {
         Row::ALL[self.row_index]
+    }
+
+    pub fn right_sidebar_custom_open(&self) -> bool {
+        self.right_sidebar_custom_open
+    }
+
+    pub fn open_right_sidebar_custom(&mut self) {
+        self.right_sidebar_custom_open = true;
+        self.right_sidebar_custom_index = 0;
+    }
+
+    pub fn close_right_sidebar_custom(&mut self) {
+        self.right_sidebar_custom_open = false;
+    }
+
+    pub fn right_sidebar_custom_index(&self) -> usize {
+        self.right_sidebar_custom_index
+    }
+
+    pub fn move_right_sidebar_custom(&mut self, delta: isize) {
+        let last = (RIGHT_SIDEBAR_SCREEN_COUNT as isize - 1).max(0);
+        self.right_sidebar_custom_index =
+            (self.right_sidebar_custom_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn right_sidebar_screen_enabled(&self, screen_number: u8) -> bool {
+        self.draft.right_sidebar_screens.contains(&screen_number)
+    }
+
+    pub fn toggle_right_sidebar_custom_screen(&mut self) {
+        let screen_number = (self.right_sidebar_custom_index + 1) as u8;
+        if let Some(index) = self
+            .draft
+            .right_sidebar_screens
+            .iter()
+            .position(|screen| *screen == screen_number)
+        {
+            self.draft.right_sidebar_screens.remove(index);
+        } else {
+            self.draft.right_sidebar_screens.push(screen_number);
+            self.draft.right_sidebar_screens.sort_unstable();
+        }
+        self.save();
     }
 
     pub fn delete_account_dialog(&self) -> &DeleteAccountDialogState {
@@ -1277,7 +1328,9 @@ impl SettingsModalState {
                 true
             }
             Row::RightSidebar => {
-                self.draft.show_right_sidebar ^= true;
+                self.draft.right_sidebar_mode = self.draft.right_sidebar_mode.cycle(forward);
+                self.draft.show_right_sidebar =
+                    self.draft.right_sidebar_mode != RightSidebarMode::Off;
                 true
             }
             Row::RoomListSidebar => {
@@ -1353,6 +1406,8 @@ impl SettingsModalState {
                 show_dashboard_header: self.draft.show_dashboard_header,
                 show_dashboard_wire: self.draft.show_dashboard_wire,
                 show_right_sidebar: self.draft.show_right_sidebar,
+                right_sidebar_mode: self.draft.right_sidebar_mode,
+                right_sidebar_screens: self.draft.right_sidebar_screens.clone(),
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),

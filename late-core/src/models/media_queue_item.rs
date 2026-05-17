@@ -63,19 +63,29 @@ impl MediaQueueItem {
         Self::get(client, id).await
     }
 
-    pub async fn list_snapshot(client: &Client, limit: i64) -> Result<Vec<Self>> {
+    pub async fn list_snapshot(client: &Client, limit: i64) -> Result<Vec<(Self, i32)>> {
         let rows = client
             .query(
-                "SELECT * FROM media_queue_items
-                 WHERE status IN ('queued', 'playing')
+                "SELECT mqi.*, COALESCE(SUM(mqv.value), 0)::int AS vote_score
+                 FROM media_queue_items mqi
+                 LEFT JOIN media_queue_votes mqv ON mqv.item_id = mqi.id
+                 WHERE mqi.status IN ('queued', 'playing')
+                 GROUP BY mqi.id
                  ORDER BY
-                    CASE status WHEN 'playing' THEN 0 ELSE 1 END,
-                    created
+                    CASE mqi.status WHEN 'playing' THEN 0 ELSE 1 END,
+                    vote_score DESC,
+                    mqi.created
                  LIMIT $1",
                 &[&limit],
             )
             .await?;
-        Ok(rows.into_iter().map(Self::from).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let score: i32 = row.get("vote_score");
+                (Self::from(row), score)
+            })
+            .collect())
     }
 
     pub async fn queued_before_count(client: &Client, created: DateTime<Utc>) -> Result<i64> {
@@ -104,17 +114,23 @@ impl MediaQueueItem {
         Ok(row.get(0))
     }
 
-    pub async fn first_queued(client: &Client) -> Result<Option<Self>> {
+    pub async fn first_queued(client: &Client) -> Result<Option<(Self, i32)>> {
         let row = client
             .query_opt(
-                "SELECT * FROM media_queue_items
-                 WHERE status = 'queued'
-                 ORDER BY created
+                "SELECT mqi.*, COALESCE(SUM(mqv.value), 0)::int AS vote_score
+                 FROM media_queue_items mqi
+                 LEFT JOIN media_queue_votes mqv ON mqv.item_id = mqi.id
+                 WHERE mqi.status = 'queued'
+                 GROUP BY mqi.id
+                 ORDER BY vote_score DESC, mqi.created
                  LIMIT 1",
                 &[],
             )
             .await?;
-        Ok(row.map(Self::from))
+        Ok(row.map(|row| {
+            let score: i32 = row.get("vote_score");
+            (Self::from(row), score)
+        }))
     }
 
     pub async fn current_playing(client: &Client) -> Result<Option<Self>> {

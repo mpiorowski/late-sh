@@ -42,6 +42,10 @@ pub enum SessionMessage {
         slug: String,
         message: String,
     },
+    /// A browser just attached on this session token. The SSH side responds
+    /// by pushing the user's stored audio source so a refreshed page lands
+    /// in the right mode.
+    BrowserPaired,
 }
 
 #[derive(Clone, Default)]
