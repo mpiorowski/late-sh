@@ -47,7 +47,7 @@ fn handle_submit_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x7F) | ParsedInput::Byte(0x08) => {
             app.booth_modal_state.backspace();
         }
-        ParsedInput::Arrow(b'B') => {
+        ParsedInput::Arrow(b'B') | ParsedInput::Byte(0x0A) => {
             app.booth_modal_state.set_focus(BoothFocus::Queue);
         }
         ParsedInput::Paste(bytes) => {
@@ -69,14 +69,14 @@ fn handle_submit_input(app: &mut App, event: ParsedInput) {
 
 fn handle_queue_input(app: &mut App, event: ParsedInput, queue_len: usize) {
     match event {
-        ParsedInput::Arrow(b'A') => {
+        ParsedInput::Arrow(b'A') | ParsedInput::Byte(0x0B) => {
             if app.booth_modal_state.selected() == 0 {
                 app.booth_modal_state.set_focus(BoothFocus::Submit);
             } else {
                 app.booth_modal_state.move_selection(-1, queue_len);
             }
         }
-        ParsedInput::Arrow(b'B') => {
+        ParsedInput::Arrow(b'B') | ParsedInput::Byte(0x0A) => {
             app.booth_modal_state.move_selection(1, queue_len);
         }
         ParsedInput::PageUp => app.booth_modal_state.move_selection(-8, queue_len),

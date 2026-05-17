@@ -447,6 +447,23 @@ impl AudioService {
     /// Cast or change a vote (+1/-1) on a queued item. Rejects votes against
     /// the currently-playing track and against non-queued items. Returns the
     /// new aggregate score on success.
+    pub async fn persist_audio_source(
+        &self,
+        user_id: Uuid,
+        source: late_core::models::user::AudioSource,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        late_core::models::user::User::set_audio_source(&client, user_id, source).await
+    }
+
+    pub async fn read_audio_source(
+        &self,
+        user_id: Uuid,
+    ) -> Result<late_core::models::user::AudioSource> {
+        let client = self.db.get().await?;
+        late_core::models::user::User::audio_source(&client, user_id).await
+    }
+
     pub async fn cast_vote(&self, user_id: Uuid, item_id: Uuid, value: i16) -> Result<i32> {
         if value != 1 && value != -1 {
             anyhow::bail!("invalid vote value");

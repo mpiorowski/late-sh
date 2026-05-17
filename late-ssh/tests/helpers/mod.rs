@@ -319,6 +319,7 @@ pub fn make_app_with_chat_service(
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
+        initial_audio_source: late_core::models::user::AudioSource::default(),
     })
     .expect("app");
     app.skip_splash_for_tests();
@@ -428,6 +429,7 @@ pub fn make_app_with_paired_client(
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
+        initial_audio_source: late_core::models::user::AudioSource::default(),
     })
     .expect("app");
     app.skip_splash_for_tests();

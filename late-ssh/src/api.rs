@@ -303,7 +303,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 muted,
                                 volume_percent,
                             } => {
-                                state.paired_client_registry.update_state_and_enforce_mute_policy(
+                                let result = state.paired_client_registry.update_state_and_enforce_mute_policy(
                                     &token,
                                     registration_id,
                                     ClientAudioState {
@@ -315,6 +315,15 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         volume_percent,
                                     },
                                 );
+                                if let Some(update) = result
+                                    && update.new_kind == ClientKind::Browser
+                                    && update.previous_kind != ClientKind::Browser
+                                {
+                                    state
+                                        .session_registry
+                                        .send_message(&token, SessionMessage::BrowserPaired)
+                                        .await;
+                                }
                                 continue;
                             }
                             WsPayload::ClipboardImage { data_base64 } => {

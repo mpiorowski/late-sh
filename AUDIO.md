@@ -542,7 +542,9 @@ are still captured so future-you does not relitigate.
   with submit/list/vote keybinds.
 - Booth chat keybinds: `v+v` opens the booth modal, `v+s` casts a skip
   vote, `v+x` toggles the *paired browser* between Icecast and the
-  YouTube queue (per-user preference, browser-side state).
+  YouTube queue. The choice is persisted in `users.settings.audio_source`
+  and replayed to the browser on every pair-up, so a refresh lands in
+  the right mode.
 
 ### Ready flow
 
@@ -566,27 +568,6 @@ are still captured so future-you does not relitigate.
 - Region-lock partial failure UX.
 - Better admin feedback if DB insert fails after local URL validation.
 - Browser-side voting UI.
-- Persistent per-user Icecast preference (today the `v+x` toggle is
-  browser-memory only and resets on browser reload).
-
----
-
-## 10b. Browser-side YouTube gate (`?youtube=true`)
-
-The connect page (`/{token}`) accepts an optional `?youtube=true`
-query parameter. Without it, the page never leaves Icecast: it ignores
-`source_changed: youtube`, `load_video`, and `seek` events, and the
-YouTube IFrame API script is not loaded. With it, the full YouTube path
-runs.
-
-This is a temporary admin/mod-only toggle so the v1 push can land with
-the YouTube path dark for general visitors while still being testable by
-copying a link with the flag. The end-state UX is an in-page Icecast /
-YouTube switch; the query gate will be replaced when that ships.
-
-The gate applies to both queue items and the YouTube fallback stream:
-if the flag is absent, the page stays on Icecast even when a fallback is
-configured server-side.
 
 ---
 

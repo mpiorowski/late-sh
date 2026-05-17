@@ -61,7 +61,7 @@ Cross-crate touchpoints:
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
 - `late-ssh/src/app/chat/{state,input}.rs` — `/audio` and `/audio fallback` chat commands.
 - `late-cli/src/ws.rs`, `late-cli/src/main.rs`, `late-cli/src/audio/output.rs` — CLI tolerates unknown audio events, applies `force_mute` to the shared mute atomic.
-- `late-web/src/pages/connect/page.html` + `connect/mod.rs` — browser IFrame player, drift correction, `?youtube=true` gate.
+- `late-web/src/pages/connect/page.html` + `connect/mod.rs` — browser IFrame player, drift correction, per-user v+x source toggle.
 
 ---
 
@@ -240,10 +240,10 @@ Goal: the CLI tolerates everything new the audio domain added, plays Icecast unc
 
 ## 9. Web Connect Page Integration
 
-File: `late-web/src/pages/connect/page.html`. Query plumbing: `late-web/src/pages/connect/mod.rs:46-67` decodes `?youtube=true` into the template variable `youtube_enabled`.
+File: `late-web/src/pages/connect/page.html`. The IFrame API and `<div id="yt-player">` are always rendered; the audio source is decided in the browser.
 
-- **`?youtube=true` gate.** Without it, the page never leaves Icecast: ignores `source_changed: youtube` (line 488), `load_video` (line 557), `seek` (line 641); the IFrame API script tag and `<div id="yt-player">` are not rendered (lines 826-828, 1091-1095). Temporary toggle for staged rollout — design doc plans to replace with an in-page switch.
-- **IFrame API load.** `<script src="https://www.youtube.com/iframe_api">` gated by `{% if youtube_enabled %}`. Global `window.lateYoutubeApiReady` and `onYouTubeIframeAPIReady` hooks resolve a promise that the Alpine component awaits in `init()`.
+- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube`, default `icecast`). TUI `v+x` flips the value via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App::paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source }` to every paired browser. On every browser pair-up (`api.rs:298` detects `previous_kind != Browser && new_kind == Browser`), the SSH session is notified via `SessionMessage::BrowserPaired` and `App::replay_paired_browser_source` re-pushes the current value, so a refreshed page lands in the right mode. The browser is a follower: `applyUserPlaybackSource(source)` stores `userOverrideMode` and applies. While the user is pinned to icecast, `loadYoutubeVideo` and `seekYoutube` early-return so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately).
+- **IFrame API load.** `<script src="https://www.youtube.com/iframe_api">` is always included. Global `window.lateYoutubeApiReady` and `onYouTubeIframeAPIReady` hooks resolve a promise that the Alpine component awaits in `init()`.
 - **`source_changed` swap** (`applySourceMode`, lines 487-528). Into `youtube`: pause `<audio>`, ensure player exists, kick playback of pending item. Into `icecast`: `ytPlayer.stopVideo()`, restart `startPlayback()` for the `<audio>` if audio is enabled. The `modeChanged` guard prevents repeated `source_changed: youtube` broadcasts during queue transitions from resetting the iframe.
 - **`load_video` → `loadVideoById`** (lines 597-619). Calls `loadVideoById({ videoId, startSeconds: offsetMs/1000 })` with `expectedYoutubeOffsetMs` compensated for time since the message was received. `verifyYoutubeLoad` re-checks after 1s and reloads if the video id mismatches.
 - **Drift correction** (`correctYoutubeDriftTo`, lines 770-791). Periodic loop fires every 10s; `|drift| < 2500ms` → ignore; otherwise hard `seekTo` with a 5s cooldown. Live streams (`item.isStream`) skip drift entirely; the server's 1h cap governs.

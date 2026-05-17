@@ -16,7 +16,6 @@
             token: '{{ token }}',
             apiUrl: '{{ api_url }}',
             audioUrl: '{{ audio_url }}',
-            youtubeEnabled: {{ youtube_enabled }},
             audioCtx: null,
             analyser: null,
             sourceNode: null,
@@ -39,7 +38,7 @@
             autoplayBlocked: false,
             wsRetries: 0,
             audioRetries: 0,
-            userPreferIcecast: false,
+            userOverrideMode: 'icecast',
             serverAudioMode: 'icecast',
 
             init() {
@@ -147,7 +146,7 @@
                             this.adjustLocalVolume(-5);
                             break;
                         case 'source_changed':
-                            this.applySourceMode(payload.audio_mode);
+                            this.applyServerSourceMode(payload.audio_mode);
                             break;
                         case 'load_video':
                             this.loadYoutubeVideo(payload);
@@ -157,8 +156,8 @@
                             break;
                         case 'queue_update':
                             break;
-                        case 'toggle_playback_source':
-                            this.toggleUserPlaybackSource();
+                        case 'set_playback_source':
+                            this.applyUserPlaybackSource(payload.source);
                             break;
                     }
                 };
@@ -426,35 +425,32 @@
                 return Math.min(1.0, this.softCompress(rms * 3.0));
             },
 
-            // Toggle the user's local Icecast/YouTube preference. Triggered
-            // by the paired TUI's v+x keybind. When userPreferIcecast becomes
-            // true we drop straight back to Icecast even if the server is
-            // playing a YouTube queue item; when it becomes false we honor
-            // whatever the server last broadcast.
-            toggleUserPlaybackSource() {
-                this.userPreferIcecast = !this.userPreferIcecast;
-                if (this.userPreferIcecast) {
-                    if (this.audioMode === 'youtube') {
-                        this.applySourceMode('icecast');
-                    }
-                } else if (this.serverAudioMode === 'youtube' && this.youtubeEnabled) {
-                    this.applySourceMode('youtube');
+            // Apply a server-pushed user preference. The TUI's v+x keybind
+            // flips the value in the DB and broadcasts `set_playback_source`;
+            // we just apply whatever the server tells us, no local toggling.
+            applyUserPlaybackSource(source) {
+                if (source !== 'icecast' && source !== 'youtube') {
+                    return;
+                }
+                this.userOverrideMode = source;
+                if (this.audioMode !== source) {
+                    this.applySourceMode(source);
                 }
             },
 
-            applySourceMode(mode) {
+            applyServerSourceMode(mode) {
                 if (mode !== 'youtube' && mode !== 'icecast') {
                     return;
                 }
                 this.serverAudioMode = mode;
-                // Hard gate: without the ?youtube=true flag this page never
-                // leaves Icecast, regardless of what the server broadcasts.
-                if (mode === 'youtube' && !this.youtubeEnabled) {
+                if (this.userOverrideMode !== null && this.userOverrideMode !== mode) {
                     return;
                 }
-                // Per-user override: while the user has opted into Icecast via
-                // v+x, ignore source_changed: youtube and stay on Icecast.
-                if (mode === 'youtube' && this.userPreferIcecast) {
+                this.applySourceMode(mode);
+            },
+
+            applySourceMode(mode) {
+                if (mode !== 'youtube' && mode !== 'icecast') {
                     return;
                 }
                 const modeChanged = this.audioMode !== mode;
@@ -518,10 +514,6 @@
             },
 
             loadYoutubeVideo(payload) {
-                if (!this.youtubeEnabled) {
-                    return;
-                }
-                this.audioMode = 'youtube';
                 const item = {
                     itemId: payload.item_id,
                     videoId: payload.video_id,
@@ -530,6 +522,14 @@
                     receivedAtMs: performance.now(),
                     isStream: !!payload.is_stream,
                 };
+
+                // Stash the current item even while pinned to Icecast so a
+                // later v+x to YouTube has something to play immediately.
+                if (this.userOverrideMode === 'icecast') {
+                    this.pendingYoutubeItem = item;
+                    return;
+                }
+                this.audioMode = 'youtube';
 
                 if (this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
                     this.currentYoutubeItem = item;
@@ -602,7 +602,7 @@
             },
 
             seekYoutube(offsetMs) {
-                if (!this.youtubeEnabled) {
+                if (this.userOverrideMode === 'icecast') {
                     return;
                 }
                 this.correctYoutubeDriftTo(offsetMs || 0);
@@ -787,9 +787,7 @@
     }
 </script>
 
-{% if youtube_enabled %}
 <script src="https://www.youtube.com/iframe_api"></script>
-{% endif %}
 
 <div x-data="player()" class="max-w-lg mx-auto pt-8 sm:pt-16">
 
@@ -835,11 +833,9 @@
         hx-get="/pair/status" hx-trigger="load, every 5s" hx-swap="innerHTML">
     </div>
 
-    {% if youtube_enabled %}
     <div x-cloak x-show="audioMode === 'youtube'" class="mb-8">
         <div id="yt-player" class="w-[320px] max-w-full aspect-video bg-black"></div>
     </div>
-    {% endif %}
 
     <div class="space-y-3" x-cloak>
         <button @click="startPlayback"

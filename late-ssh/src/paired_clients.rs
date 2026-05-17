@@ -1,4 +1,5 @@
 use late_core::MutexRecover;
+use late_core::models::user::AudioSource;
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -27,10 +28,10 @@ pub enum PairControlMessage {
     VolumeDown,
     RequestClipboardImage,
     ForceMute { mute: bool },
-    /// Per-user request: flip the paired browser between the YouTube queue
-    /// and Icecast playback. Browser stores the preference locally and
-    /// suppresses `source_changed: youtube` while Icecast is preferred.
-    TogglePlaybackSource,
+    /// Per-user setting: tell the paired browser which audio source to use.
+    /// Server is the source of truth (persisted in `users.settings.audio_source`)
+    /// so the browser does not toggle locally; it applies whatever it receives.
+    SetPlaybackSource { source: AudioSource },
 }
 
 #[derive(Clone, Default)]

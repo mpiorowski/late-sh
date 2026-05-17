@@ -206,6 +206,10 @@ pub struct SessionConfig {
 
     /// Display config
     pub initial_theme_id: String,
+    /// Initial audio source for the paired browser, loaded from
+    /// `users.settings.audio_source` (default `Icecast`). v+x mutates this and
+    /// persists the new value.
+    pub initial_audio_source: late_core::models::user::AudioSource,
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -279,6 +283,11 @@ pub struct App {
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
+    /// Server-authoritative audio source for the paired browser. Mirrors
+    /// `users.settings.audio_source`. v+x flips this, persists it to the DB,
+    /// and pushes `SetPlaybackSource` to the browser. On browser pair-up the
+    /// current value is replayed so a refresh lands in the right mode.
+    pub(crate) paired_browser_source: late_core::models::user::AudioSource,
 
     pub(crate) vote_prefix_armed: bool,
     pub(crate) hot_room_prefix_armed: bool,
@@ -647,6 +656,7 @@ impl App {
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
+            paired_browser_source: config.initial_audio_source,
             vote_prefix_armed: false,
             hot_room_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
@@ -892,14 +902,42 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
     }
 
-    pub fn toggle_paired_playback_source(&mut self) -> bool {
-        let Some(registry) = &self.paired_client_registry else {
-            return false;
+    /// Push the currently-stored audio source to all paired browsers. Called
+    /// when a browser registers so a fresh page reflects the persisted choice.
+    pub fn replay_paired_browser_source(&self) {
+        let Some(registry) = self.paired_client_registry.as_ref() else {
+            return;
         };
         registry.send_control_to_browsers(
             &self.session_token,
-            PairControlMessage::TogglePlaybackSource,
-        )
+            PairControlMessage::SetPlaybackSource {
+                source: self.paired_browser_source,
+            },
+        );
+    }
+
+    pub fn toggle_paired_playback_source(&mut self) -> Option<late_core::models::user::AudioSource> {
+        use late_core::models::user::AudioSource;
+        let registry = self.paired_client_registry.as_ref()?;
+        let next = match self.paired_browser_source {
+            AudioSource::Icecast => AudioSource::Youtube,
+            AudioSource::Youtube => AudioSource::Icecast,
+        };
+        if !registry.send_control_to_browsers(
+            &self.session_token,
+            PairControlMessage::SetPlaybackSource { source: next },
+        ) {
+            return None;
+        }
+        self.paired_browser_source = next;
+        let user_id = self.user_id;
+        let audio_service = self.audio.service().clone();
+        tokio::spawn(async move {
+            if let Err(err) = audio_service.persist_audio_source(user_id, next).await {
+                tracing::warn!(error = ?err, "failed to persist audio source preference");
+            }
+        });
+        Some(next)
     }
 
     pub fn request_paired_clipboard_image_upload(&mut self, room_id: Option<Uuid>) -> bool {
