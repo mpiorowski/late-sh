@@ -14,7 +14,7 @@ use super::theme;
 use crate::app::activity::event::ActivityEvent;
 use crate::app::audio::{
     client_state::{ClientAudioState, ClientKind},
-    svc::{AudioMode, QueueItemView, QueueSnapshot},
+    svc::{QueueItemView, QueueSnapshot},
     viz::Visualizer,
 };
 use late_core::models::user::AudioSource;
@@ -314,8 +314,8 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
 }
 
 /// Music stage. Both surfaces (YouTube + Icecast) render together with a
-/// dedicated volume row on top. The active source — what the user is
-/// actually hearing — gets bold amber chrome; the other gets dim italic.
+/// dedicated volume row on top. The active source (what the user is
+/// actually hearing) gets bold amber chrome; the other gets dim italic.
 /// The `▌` accent bar carries the active signal, content widgets keep
 /// their own coloring so the data stays legible on both sides.
 fn draw_music_stage(
@@ -333,9 +333,7 @@ fn draw_music_stage(
 
     let is_browser =
         matches!(paired_client, Some(c) if c.client_kind == ClientKind::Browser);
-    let yt_active = is_browser
-        && paired_browser_source == AudioSource::Youtube
-        && queue.audio_mode == AudioMode::Youtube;
+    let yt_active = is_browser && paired_browser_source == AudioSource::Youtube;
 
     let rows = Layout::vertical([
         Constraint::Length(1), // 0:  volume
@@ -455,7 +453,9 @@ fn stage_title_line(
         )
     };
 
-    let tag_text = tag.map(|t| format!("▶ {t}")).unwrap_or_default();
+    // Tag has no glyph prefix; color + position already reads as a state
+    // badge and the prefix was eating cells on a narrow rail.
+    let tag_text = tag.map(|t| t.to_string()).unwrap_or_default();
     let bar_w = 2;
     let pad_w = 2;
     let gap_w = if tag_text.is_empty() { 0 } else { 1 };
@@ -491,11 +491,14 @@ fn draw_youtube_block(
 ) {
     let width = rows[0].width as usize;
 
-    let tag = match (active, queue.current.is_some(), queue.audio_mode) {
-        (true, true, _) => Some("live"),
-        (true, false, AudioMode::Youtube) => Some("fallback"),
-        (false, true, _) => Some("queued"),
-        _ => None,
+    // No submitted track always means the fallback stream is on; there is
+    // no silent "empty queue" state. Tag stays on both sides when fallback
+    // is playing so the state is visible; with a real track, the inactive
+    // side drops its tag (track title in the body carries the signal).
+    let tag = match (queue.current.is_some(), active) {
+        (true, true) => Some("live"),
+        (true, false) => None,
+        (false, _) => Some("loop"),
     };
     frame.render_widget(
         Paragraph::new(stage_title_line(rows[0].width, "youtube", tag, active)),
@@ -578,7 +581,7 @@ fn draw_youtube_block(
         if queue.queue.is_empty() {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
-                    "· queue ends after this one",
+                    "· fallback next",
                     Style::default().fg(theme::TEXT_FAINT()),
                 ))),
                 rows[6],
@@ -593,27 +596,24 @@ fn draw_youtube_block(
                 .collect();
             frame.render_widget(Paragraph::new(lines), rows[6]);
         }
-    } else if queue.audio_mode == AudioMode::Youtube {
-        // Fallback stream playing — no specific track to show.
+    } else {
+        // No submitted track; the fallback stream is always on.
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "fallback stream",
-                title_style,
-            ))),
+            Paragraph::new(Line::from(Span::styled("fallback stream", title_style))),
             rows[1],
         );
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled("YouTube · 24/7", meta_style))),
             rows[2],
         );
-    } else {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled("queue empty", title_style))),
-            rows[1],
-        );
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("submit with  ", meta_style),
+                Span::styled(
+                    "queue with  ",
+                    Style::default()
+                        .fg(theme::TEXT_FAINT())
+                        .add_modifier(Modifier::ITALIC),
+                ),
                 Span::styled(
                     "v+v",
                     Style::default()
@@ -621,13 +621,13 @@ fn draw_youtube_block(
                         .add_modifier(Modifier::BOLD),
                 ),
             ])),
-            rows[2],
+            rows[5],
         );
     }
 }
 
 /// Icecast block. Fixed 3-row footprint: title, vibe transition, vote
-/// countdown. Drops the radio track title entirely — the user asked for
+/// countdown. Drops the radio track title entirely; the user asked for
 /// vibe / time-left / next-vibe and nothing else.
 fn draw_icecast_block(
     frame: &mut Frame,
@@ -645,7 +645,7 @@ fn draw_icecast_block(
             None => Some("off"),
         }
     } else {
-        Some("standby")
+        None
     };
     frame.render_widget(
         Paragraph::new(stage_title_line(rows[0].width, "icecast", tag, active)),
