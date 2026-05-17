@@ -324,10 +324,7 @@ impl PairedClientRegistry {
         let Some(tx) = tx else {
             return false;
         };
-        if tx
-            .send(PairControlMessage::RequestClipboardImage)
-            .is_err()
-        {
+        if tx.send(PairControlMessage::RequestClipboardImage).is_err() {
             tracing::warn!(
                 token_hint = %token_hint(token),
                 "failed to send paired clipboard image request"
