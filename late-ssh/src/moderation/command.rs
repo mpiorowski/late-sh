@@ -8,12 +8,18 @@ pub(crate) enum ModCommand {
     User {
         username: String,
     },
+    RoomInfo {
+        slug: String,
+    },
     Bans {
         scope: BanListScope,
-        limit: i64,
+        page: i64,
     },
     Audit {
-        limit: i64,
+        page: i64,
+    },
+    ArtboardSnapshots {
+        page: i64,
     },
     RenameRoom {
         slug: String,
@@ -168,19 +174,59 @@ pub(crate) fn parse_mod_command(input: &str) -> Result<ModCommand> {
         "help" => Ok(ModCommand::Help {
             topic: nonempty(rest.join(" ")),
         }),
-        "user" => Ok(ModCommand::User {
-            username: required_username(rest.first().copied(), "usage: user @name")?,
-        }),
-        "bans" => parse_bans_mod_command(&rest),
-        "audit" => parse_audit_mod_command(&rest),
+        "view" => parse_view_mod_command(&rest),
         "rename-room" => parse_rename_room_mod_command(&rest),
         "rename-user" => parse_rename_user_mod_command(&rest),
-        "room" => parse_room_mod_command(&rest),
-        "server" => parse_server_mod_command(&rest),
+        "kick" => parse_kick_mod_command(&rest),
+        "ban" => parse_ban_mod_command(&rest),
+        "unban" => parse_unban_mod_command(&rest),
         "artboard" => parse_artboard_mod_command(&rest),
-        "grant" => parse_role_mod_command(RoleAction::GrantMod, &rest),
-        "revoke" => parse_role_mod_command(RoleAction::RevokeMod, &rest),
+        "admin" => parse_admin_mod_command(&rest),
         _ => anyhow::bail!("unknown mod command: {head}"),
+    }
+}
+
+fn parse_view_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: view <@user|#room|bans|audit|artboard|help> [pagenumber]";
+    let Some(target) = parts.first().copied() else {
+        anyhow::bail!(USAGE);
+    };
+    match target {
+        "help" => {
+            if parts.len() > 1 {
+                anyhow::bail!(USAGE);
+            }
+            Ok(ModCommand::Help {
+                topic: Some("view".to_string()),
+            })
+        }
+        "bans" => parse_bans_mod_command(&parts[1..]),
+        "audit" => parse_audit_mod_command(&parts[1..]),
+        "artboard" => {
+            if parts.len() > 2 {
+                anyhow::bail!("usage: view artboard [pagenumber]");
+            }
+            Ok(ModCommand::ArtboardSnapshots {
+                page: optional_page(parts.get(1).copied())?,
+            })
+        }
+        _ if target.starts_with('@') => {
+            if parts.len() > 1 {
+                anyhow::bail!("usage: view @name");
+            }
+            Ok(ModCommand::User {
+                username: required_username(Some(target), "usage: view @name")?,
+            })
+        }
+        _ if target.starts_with('#') => {
+            if parts.len() > 1 {
+                anyhow::bail!("usage: view #roomname");
+            }
+            Ok(ModCommand::RoomInfo {
+                slug: required_room_target(target, "usage: view #roomname")?,
+            })
+        }
+        _ => anyhow::bail!(USAGE),
     }
 }
 
@@ -188,51 +234,48 @@ fn parse_bans_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
         return Ok(ModCommand::Bans {
             scope: BanListScope::All,
-            limit: DEFAULT_LIST_LIMIT,
+            page: DEFAULT_PAGE,
         });
     };
 
-    if let Some(limit) = parse_limit(first)? {
+    if let Some(page) = parse_page(first)? {
         if parts.len() > 1 {
-            anyhow::bail!("usage: bans [server|artboard|room #roomname] [limit]");
+            anyhow::bail!("usage: view bans [server|artboard|#roomname] [pagenumber]");
         }
         return Ok(ModCommand::Bans {
             scope: BanListScope::All,
-            limit,
+            page,
         });
     }
 
     match first {
         "server" => {
             if parts.len() > 2 {
-                anyhow::bail!("usage: bans server [limit]");
+                anyhow::bail!("usage: view bans server [pagenumber]");
             }
             Ok(ModCommand::Bans {
                 scope: BanListScope::Server,
-                limit: optional_limit(parts.get(1).copied())?,
+                page: optional_page(parts.get(1).copied())?,
             })
         }
         "artboard" => {
             if parts.len() > 2 {
-                anyhow::bail!("usage: bans artboard [limit]");
+                anyhow::bail!("usage: view bans artboard [pagenumber]");
             }
             Ok(ModCommand::Bans {
                 scope: BanListScope::Artboard,
-                limit: optional_limit(parts.get(1).copied())?,
+                page: optional_page(parts.get(1).copied())?,
             })
         }
-        "room" => {
-            if parts.len() > 3 {
-                anyhow::bail!("usage: bans room #roomname [limit]");
+        _ if first.starts_with('#') => {
+            if parts.len() > 2 {
+                anyhow::bail!("usage: view bans #roomname [pagenumber]");
             }
             Ok(ModCommand::Bans {
                 scope: BanListScope::Room {
-                    slug: required_slug(
-                        parts.get(1).copied(),
-                        "usage: bans room #roomname [limit]",
-                    )?,
+                    slug: required_room_target(first, "usage: view bans #roomname [pagenumber]")?,
                 },
-                limit: optional_limit(parts.get(2).copied())?,
+                page: optional_page(parts.get(1).copied())?,
             })
         }
         _ => anyhow::bail!("unknown bans scope: {first}"),
@@ -241,113 +284,140 @@ fn parse_bans_mod_command(parts: &[&str]) -> Result<ModCommand> {
 
 fn parse_audit_mod_command(parts: &[&str]) -> Result<ModCommand> {
     if parts.len() > 1 {
-        anyhow::bail!("usage: audit [limit]");
+        anyhow::bail!("usage: view audit [pagenumber]");
     }
     Ok(ModCommand::Audit {
-        limit: optional_limit(parts.first().copied())?,
+        page: optional_page(parts.first().copied())?,
     })
 }
 
 fn parse_rename_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: rename-room #oldname #newname";
     if parts.len() != 2 {
-        anyhow::bail!("usage: rename-room #old #new");
+        anyhow::bail!(USAGE);
     }
     Ok(ModCommand::RenameRoom {
-        slug: required_slug(parts.first().copied(), "usage: rename-room #old #new")?,
-        new_slug: required_slug(parts.get(1).copied(), "usage: rename-room #old #new")?,
+        slug: required_slug(parts.first().copied(), USAGE)?,
+        new_slug: required_slug(parts.get(1).copied(), USAGE)?,
     })
 }
 
 fn parse_rename_user_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: rename-user @oldname @newname";
     if parts.len() != 2 {
-        anyhow::bail!("usage: rename-user @old @new");
+        anyhow::bail!(USAGE);
     }
     Ok(ModCommand::RenameUser {
-        username: required_username(parts.first().copied(), "usage: rename-user @old @new")?,
-        new_username: required_username(parts.get(1).copied(), "usage: rename-user @old @new")?,
+        username: required_username(parts.first().copied(), USAGE)?,
+        new_username: required_username(parts.get(1).copied(), USAGE)?,
     })
 }
 
-fn parse_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: room #roomname | room <action> ...");
+fn parse_kick_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: kick <server|#roomname> @name [reason...]";
+    let Some(target) = parts.first().copied() else {
+        anyhow::bail!(USAGE);
     };
-    match first {
-        "kick" | "ban" | "unban" => {
-            let action = match first {
-                "kick" => RoomModAction::Kick,
-                "ban" => RoomModAction::Ban,
-                "unban" => RoomModAction::Unban,
-                _ => unreachable!(),
-            };
-            let slug = required_slug(parts.get(1).copied(), "usage: room kick #roomname @name")?;
-            let username =
-                required_username(parts.get(2).copied(), "usage: room kick #roomname @name")?;
-            let (duration, reason_start) = if matches!(action, RoomModAction::Ban) {
-                parse_optional_duration(parts.get(3).copied(), 3)?
-            } else {
-                (None, 3)
-            };
-            Ok(ModCommand::RoomAction {
-                action,
-                slug,
-                username,
-                duration,
-                reason: parts.get(reason_start..).unwrap_or_default().join(" "),
-            })
-        }
-        _ => anyhow::bail!("unknown room action: {first}"),
+    let username = required_username(parts.get(1).copied(), USAGE)?;
+    let reason = parts.get(2..).unwrap_or_default().join(" ");
+    if target == "server" {
+        return Ok(ModCommand::ServerUser {
+            action: ServerUserAction::Kick,
+            username,
+            duration: None,
+            reason,
+        });
+    }
+    if target.starts_with('#') {
+        return Ok(ModCommand::RoomAction {
+            action: RoomModAction::Kick,
+            slug: required_room_target(target, USAGE)?,
+            username,
+            duration: None,
+            reason,
+        });
+    }
+    anyhow::bail!(USAGE)
+}
+
+fn parse_ban_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: ban <server|#roomname|artboard> @name [duration] [reason...]";
+    let Some(target) = parts.first().copied() else {
+        anyhow::bail!(USAGE);
+    };
+    let username = required_username(parts.get(1).copied(), USAGE)?;
+    let (duration, reason_start) = parse_optional_duration(parts.get(2).copied(), 2)?;
+    let reason = parts.get(reason_start..).unwrap_or_default().join(" ");
+    match target {
+        "server" => Ok(ModCommand::ServerUser {
+            action: ServerUserAction::Ban,
+            username,
+            duration,
+            reason,
+        }),
+        "artboard" => Ok(ModCommand::Artboard {
+            action: ArtboardAction::Ban,
+            username,
+            duration,
+            reason,
+        }),
+        _ if target.starts_with('#') => Ok(ModCommand::RoomAction {
+            action: RoomModAction::Ban,
+            slug: required_room_target(target, USAGE)?,
+            username,
+            duration,
+            reason,
+        }),
+        _ => anyhow::bail!(USAGE),
     }
 }
 
-fn parse_server_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: server <kick|ban|unban> @name");
+fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: unban <server|#roomname|artboard> @name [reason...]";
+    let Some(target) = parts.first().copied() else {
+        anyhow::bail!(USAGE);
     };
-    let action = match first {
-        "kick" => ServerUserAction::Kick,
-        "ban" => ServerUserAction::Ban,
-        "unban" => ServerUserAction::Unban,
-        _ => anyhow::bail!("unknown server action: {first}"),
-    };
-    let username = required_username(parts.get(1).copied(), "usage: server <action> @name")?;
-    let (duration, reason_start) = if matches!(action, ServerUserAction::Ban) {
-        parse_optional_duration(parts.get(2).copied(), 2)?
-    } else {
-        (None, 2)
-    };
-    Ok(ModCommand::ServerUser {
-        action,
-        username,
-        duration,
-        reason: parts.get(reason_start..).unwrap_or_default().join(" "),
-    })
+    let username = required_username(parts.get(1).copied(), USAGE)?;
+    let reason = parts.get(2..).unwrap_or_default().join(" ");
+    match target {
+        "server" => Ok(ModCommand::ServerUser {
+            action: ServerUserAction::Unban,
+            username,
+            duration: None,
+            reason,
+        }),
+        "artboard" => Ok(ModCommand::Artboard {
+            action: ArtboardAction::Unban,
+            username,
+            duration: None,
+            reason,
+        }),
+        _ if target.starts_with('#') => Ok(ModCommand::RoomAction {
+            action: RoomModAction::Unban,
+            slug: required_room_target(target, USAGE)?,
+            username,
+            duration: None,
+            reason,
+        }),
+        _ => anyhow::bail!(USAGE),
+    }
 }
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: artboard <ban|unban|restore> ...");
+        anyhow::bail!("usage: artboard restore [YYYY-MM-DD] [reason...]");
     };
     if first == "restore" {
         return parse_artboard_restore_mod_command(&parts[1..]);
     }
-    let action = match first {
-        "ban" => ArtboardAction::Ban,
-        "unban" => ArtboardAction::Unban,
-        _ => anyhow::bail!("unknown artboard action: {first}"),
-    };
-    let username = required_username(parts.get(1).copied(), "usage: artboard <action> @name")?;
-    let (duration, reason_start) = if matches!(action, ArtboardAction::Ban) {
-        parse_optional_duration(parts.get(2).copied(), 2)?
-    } else {
-        (None, 2)
-    };
-    Ok(ModCommand::Artboard {
-        action,
-        username,
-        duration,
-        reason: parts.get(reason_start..).unwrap_or_default().join(" "),
-    })
+    anyhow::bail!("usage: artboard restore [YYYY-MM-DD] [reason...]")
+}
+
+fn required_room_target(value: &str, usage: &str) -> Result<String> {
+    if !value.starts_with('#') {
+        anyhow::bail!(usage.to_string());
+    }
+    required_slug(Some(value), usage)
 }
 
 fn parse_artboard_restore_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -359,15 +429,25 @@ fn parse_artboard_restore_mod_command(parts: &[&str]) -> Result<ModCommand> {
         None => (None, 0),
     };
     let reason = parts.get(reason_start..).unwrap_or_default().join(" ");
-    if reason.trim().is_empty() {
-        anyhow::bail!("usage: artboard restore [YYYY-MM-DD] <reason...>");
-    }
     Ok(ModCommand::ArtboardRestore { date, reason })
+}
+
+fn parse_admin_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    let Some(action) = parts.first().copied() else {
+        return Ok(ModCommand::Help {
+            topic: Some("admin".to_string()),
+        });
+    };
+    match action {
+        "grant" => parse_role_mod_command(RoleAction::GrantMod, &parts[1..]),
+        "revoke" => parse_role_mod_command(RoleAction::RevokeMod, &parts[1..]),
+        _ => anyhow::bail!("unknown admin command: {action}"),
+    }
 }
 
 fn parse_role_mod_command(mod_action: RoleAction, parts: &[&str]) -> Result<ModCommand> {
     let Some(role) = parts.first().copied() else {
-        anyhow::bail!("usage: grant mod @name | revoke mod @name");
+        anyhow::bail!("usage: admin grant mod @name | admin revoke mod @name");
     };
     let action = match role {
         "mod" | "moderator" => mod_action,
@@ -376,7 +456,7 @@ fn parse_role_mod_command(mod_action: RoleAction, parts: &[&str]) -> Result<ModC
     };
     Ok(ModCommand::Role {
         action,
-        username: required_username(parts.get(1).copied(), "usage: grant mod @name")?,
+        username: required_username(parts.get(1).copied(), "usage: admin grant mod @name")?,
     })
 }
 
@@ -421,24 +501,25 @@ fn parse_mod_duration(value: &str) -> Result<Option<chrono::Duration>> {
     Ok(Some(duration))
 }
 
-const DEFAULT_LIST_LIMIT: i64 = 25;
-const MAX_LIST_LIMIT: i64 = 100;
+pub(crate) const LIST_PAGE_SIZE: i64 = 15;
+const DEFAULT_PAGE: i64 = 1;
+const MAX_PAGE: i64 = 1000;
 
-fn optional_limit(value: Option<&str>) -> Result<i64> {
+fn optional_page(value: Option<&str>) -> Result<i64> {
     let Some(value) = value else {
-        return Ok(DEFAULT_LIST_LIMIT);
+        return Ok(DEFAULT_PAGE);
     };
-    parse_limit(value)?.ok_or_else(|| anyhow::anyhow!("limit must be a positive number"))
+    parse_page(value)?.ok_or_else(|| anyhow::anyhow!("page number must be a positive number"))
 }
 
-fn parse_limit(value: &str) -> Result<Option<i64>> {
-    let Ok(limit) = value.parse::<i64>() else {
+fn parse_page(value: &str) -> Result<Option<i64>> {
+    let Ok(page) = value.parse::<i64>() else {
         return Ok(None);
     };
-    if limit <= 0 {
-        anyhow::bail!("limit must be positive");
+    if page <= 0 {
+        anyhow::bail!("page number must be positive");
     }
-    Ok(Some(limit.min(MAX_LIST_LIMIT)))
+    Ok(Some(page.min(MAX_PAGE)))
 }
 
 fn nonempty(value: String) -> Option<String> {
@@ -513,153 +594,168 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         .filter(|topic| !topic.is_empty())
     else {
         return help_lines(&[
-            "help [command]",
-            "user @name",
-            "bans [server|artboard|room #roomname] [limit]",
-            "audit [limit]",
-            "rename-room #old #new",
-            "rename-user @old @new",
-            "room kick #roomname @name [reason...]",
-            "room ban #roomname @name [duration] [reason...]",
-            "room unban #roomname @name",
-            "server kick @name [reason...]",
-            "server ban @name [duration] [reason...]",
-            "server unban @name",
-            "artboard ban @name [duration] [reason...]",
-            "artboard unban @name",
+            "--- general ---",
+            "rename-room <#oldname> <#newname>",
+            "rename-user <@oldname> <@newname>",
+            "view   <@user|#room|bans|audit|artboard|help> [pagenumber]",
             "artboard restore [YYYY-MM-DD] [reason...]",
-            "grant mod @name",
-            "revoke mod @name",
             "",
-            "Username arguments prefer @name; bare name is also accepted.",
-            "Use help <command> for details, e.g. help room ban.",
+            "--- bans, etc. ---",
+            "kick   <server|#room> @name [reason...]",
+            "ban    <server|#room|artboard> @name [duration] [reason...]",
+            "unban  <server|#room|artboard> @name [reason...]",
+            "",
+            "--- help & admin ---",
+            "admin           - show admin commands",
+            "admin <command> - run admin commands",
+            "help <command>  - get help with command",
         ]);
     };
 
     let lines: &[&str] = match topic.as_str() {
         "help" => &[
-            "help [command]",
+            "help <command>",
             "Shows the command list or focused help for one command.",
-            "command: optional command/subcommand, e.g. user, room ban, server ban.",
+            "command: e.g. rename-room, view, ban, artboard restore, admin grant mod.",
         ],
-        "user" => &[
-            "user @name",
-            "Shows one user's id, roles, timestamps, and active server/artboard ban flags.",
-            "@name: username; bare name is also accepted.",
+        "rename" => &[
+            "rename-room <#oldname> <#newname>",
+            "rename-user <@oldname> <@newname>",
+            "Renames rooms or users.",
+            "Subtopics: help rename-room, help rename-user.",
         ],
-        "bans" => &[
-            "bans [server|artboard|room #roomname] [limit]",
-            "Lists current active bans. Without a scope, shows server, artboard, and room bans.",
-            "limit: optional positive number; capped at 100; default 25.",
-        ],
-        "bans server" => &[
-            "bans server [limit]",
-            "Lists active server bans with actor, expiry, and reason.",
-        ],
-        "bans artboard" => &[
-            "bans artboard [limit]",
-            "Lists active artboard bans with actor, expiry, and reason.",
-        ],
-        "bans room" => &[
-            "bans room #roomname [limit]",
-            "Lists active bans for one room, e.g. #general.",
-        ],
-        "audit" => &[
-            "audit [limit]",
-            "Lists recent moderation audit log entries.",
-            "limit: optional positive number; capped at 100; default 25.",
-        ],
-        "rename-room" => &[
-            "rename-room #old #new",
+        "rename-room" | "rename room" => &[
+            "rename-room #oldname #newname",
             "Renames a non-DM room, e.g. #old-room to #new-room.",
             "Moderator or admin only. #general is reserved and cannot be renamed.",
         ],
-        "rename-user" => &[
-            "rename-user @old @new",
+        "rename-user" | "rename user" => &[
+            "rename-user @oldname @newname",
             "Renames a user account.",
-            "@old: existing username; bare old is also accepted.",
-            "@new: desired username; bare new is also accepted and sanitized with normal username rules.",
+            "@oldname: existing username; bare oldname is also accepted.",
+            "@newname: desired username; bare newname is also accepted and sanitized with normal username rules.",
             "Moderator or admin only. Writes a moderation audit entry.",
         ],
-        "room" => &[
-            "room <kick|ban|unban> #roomname @name",
-            "Subcommands: room kick, room ban, room unban.",
+        "view" => &[
+            "view <@user|#room|bans|audit|artboard|help> [pagenumber]",
+            "Views moderation data.",
+            "Subtopics: help view user, help view room, help view bans, help view audit, help view artboard.",
         ],
-        "room kick" => &[
-            "room kick #roomname @name [reason...]",
-            "Removes a user from a room without creating a ban.",
-            "#roomname: room name, e.g. #general. @name: username; bare name is also accepted. reason: optional audit text.",
+        "view user" => &[
+            "view @name",
+            "Shows one user's id, roles, timestamps, and active server/artboard ban flags.",
+            "@name: username; bare name is also accepted.",
         ],
-        "room ban" => &[
-            "room ban #roomname @name [duration] [reason...]",
-            "Bans a user from a room and removes their membership.",
-            "#roomname: room name, e.g. #general. @name: username; bare name is also accepted.",
+        "view room" => &[
+            "view #roomname",
+            "Shows room id, type, visibility, flags, and member count.",
+        ],
+        "view bans" => &[
+            "view bans [server|artboard|#roomname] [pagenumber]",
+            "Lists current active bans. Without a scope, shows server, artboard, and room bans.",
+            "pagenumber: optional positive page number; 15 rows per page.",
+        ],
+        "view bans server" => &[
+            "view bans server [pagenumber]",
+            "Lists active server bans with actor, expiry, and reason.",
+        ],
+        "view bans artboard" => &[
+            "view bans artboard [pagenumber]",
+            "Lists active artboard bans with actor, expiry, and reason.",
+        ],
+        "view bans room" => &[
+            "view bans #roomname [pagenumber]",
+            "Lists active bans for one room, e.g. #general.",
+        ],
+        "view audit" => &[
+            "view audit [pagenumber]",
+            "Lists recent moderation audit log entries.",
+            "pagenumber: optional positive page number; 15 rows per page.",
+        ],
+        "view artboard" => &[
+            "view artboard [pagenumber]",
+            "Lists daily and monthly Artboard snapshots.",
+            "pagenumber: optional positive page number; 15 rows per page.",
+        ],
+        "kick" => &[
+            "kick <server|#room> @name [reason...]",
+            "Terminates active sessions for server, or removes a user from a room.",
+            "#roomname is required for room operations, e.g. #general.",
+            "@name: username; bare name is also accepted. reason: optional audit text.",
+            "Subtopics: help kick server, help kick room.",
+        ],
+        "kick server" => &[
+            "kick server @name [reason...]",
+            "Terminates active sessions for one user.",
+        ],
+        "kick room" => &[
+            "kick #roomname @name [reason...]",
+            "Removes one user from one room.",
+        ],
+        "ban" => &[
+            "ban <server|#room|artboard> @name [duration] [reason...]",
+            "Creates a server, artboard, or room ban. Room bans also remove membership.",
+            "#roomname is required for room operations, e.g. #general.",
+            "@name: username; bare name is also accepted.",
             "duration: optional positive number plus s/m/h/d, e.g. 30m or 7d; omit for permanent.",
             "reason: optional audit text after duration.",
+            "Subtopics: help ban server, help ban room, help ban artboard.",
         ],
-        "room unban" => &[
-            "room unban #roomname @name",
-            "Removes an active room ban for a user.",
-            "#roomname: room name, e.g. #general. @name: username; bare name is also accepted.",
+        "ban server" => &[
+            "ban server @name [duration] [reason...]",
+            "Creates a server ban and terminates active sessions.",
         ],
-        "server" => &[
-            "server <kick|ban|unban> @name",
-            "Applies server-wide session removal or bans.",
-            "Subcommands: server kick, server ban, server unban.",
+        "ban room" => &[
+            "ban #roomname @name [duration] [reason...]",
+            "Creates a room ban and removes membership.",
         ],
-        "server kick" => &[
-            "server kick @name [reason...]",
-            "Terminates a user's active sessions without creating a ban.",
+        "ban artboard" => &[
+            "ban artboard @name [duration] [reason...]",
+            "Creates an Artboard editing ban.",
+        ],
+        "unban" => &[
+            "unban <server|#room|artboard> @name [reason...]",
+            "Removes active server, artboard, or room bans for a user.",
+            "#roomname is required for room operations, e.g. #general.",
             "@name: username; bare name is also accepted. reason: optional audit text.",
+            "Subtopics: help unban server, help unban room, help unban artboard.",
         ],
-        "server ban" => &[
-            "server ban @name [duration] [reason...]",
-            "Creates a server user ban and terminates active sessions.",
-            "@name: username; bare name is also accepted.",
-            "duration: optional positive number plus s/m/h/d, e.g. 2h or 7d; omit for permanent.",
-            "reason: optional audit text after duration.",
+        "unban server" => &[
+            "unban server @name [reason...]",
+            "Removes active server bans for one user.",
         ],
-        "server unban" => &[
-            "server unban @name",
-            "Removes active server bans for that user.",
-            "@name: username; bare name is also accepted.",
+        "unban room" => &[
+            "unban #roomname @name [reason...]",
+            "Removes active room bans for one user in one room.",
+        ],
+        "unban artboard" => &[
+            "unban artboard @name [reason...]",
+            "Removes active Artboard editing bans for one user.",
         ],
         "artboard" => &[
-            "artboard <ban|unban|restore> ...",
-            "Controls artboard access and snapshots.",
-            "Subcommands: artboard ban, artboard unban, artboard restore.",
-        ],
-        "artboard ban" => &[
-            "artboard ban @name [duration] [reason...]",
-            "Bans a user from the artboard.",
-            "@name: username; bare name is also accepted.",
-            "duration: optional positive number plus s/m/h/d; omit for permanent.",
-            "reason: optional audit text after duration.",
-        ],
-        "artboard unban" => &[
-            "artboard unban @name",
-            "Removes an artboard ban for a user.",
-            "@name: username; bare name is also accepted.",
+            "artboard restore [YYYY-MM-DD] [reason...]",
+            "Restores Artboard snapshots.",
+            "Subtopics: help artboard restore.",
         ],
         "artboard restore" => &[
-            "artboard restore [YYYY-MM-DD] <reason...>",
+            "artboard restore [YYYY-MM-DD] [reason...]",
             "Restores live Artboard from a daily UTC snapshot.",
             "date: optional daily snapshot date; defaults to previous UTC day.",
-            "reason: required audit text.",
+            "reason: optional audit text.",
             "Moderator or admin only. Writes a moderation audit entry and backs up the previous main row.",
         ],
-        "grant" => &[
-            "grant mod @name",
-            "Grants a role to a user.",
-            "@name: username; bare name is also accepted.",
+        "admin" => &[
+            "admin <grant|revoke> mod @name",
+            "Admin-only role commands.",
+            "Subcommands: admin grant mod, admin revoke mod.",
         ],
-        "grant mod" => &[
-            "grant mod @name",
+        "admin grant" | "admin grant mod" => &[
+            "admin grant mod @name",
             "Grants moderator role to a user.",
             "@name: username; bare name is also accepted.",
         ],
-        "revoke" | "revoke mod" => &[
-            "revoke mod @name",
+        "admin revoke" | "admin revoke mod" => &[
+            "admin revoke mod @name",
             "Revokes moderator role from a user.",
             "@name: username; bare name is also accepted.",
         ],
@@ -705,15 +801,21 @@ mod tests {
             ModCommand::Help { topic: None }
         );
         assert_eq!(
-            parse_mod_command("help server ban").unwrap(),
+            parse_mod_command("help ban server").unwrap(),
             ModCommand::Help {
-                topic: Some("server ban".to_string())
+                topic: Some("ban server".to_string())
             }
         );
         assert_eq!(
-            parse_mod_command("help room ban").unwrap(),
+            parse_mod_command("help ban room").unwrap(),
             ModCommand::Help {
-                topic: Some("room ban".to_string())
+                topic: Some("ban room".to_string())
+            }
+        );
+        assert_eq!(
+            parse_mod_command("admin").unwrap(),
+            ModCommand::Help {
+                topic: Some("admin".to_string())
             }
         );
         assert!(parse_mod_command("/moderator help").is_err());
@@ -721,48 +823,54 @@ mod tests {
 
     #[test]
     fn command_help_explains_audit_arguments() {
-        let lines = mod_help_lines(Some("audit"));
+        let lines = mod_help_lines(Some("view audit"));
 
         assert!(
-            lines.iter().any(|line| line == "audit [limit]"),
+            lines.iter().any(|line| line == "view audit [pagenumber]"),
             "audit help should be available: {lines:?}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("capped at 100")),
-            "audit help should explain limit bounds: {lines:?}"
+            lines.iter().any(|line| line.contains("15 rows per page")),
+            "audit help should explain page size: {lines:?}"
         );
     }
 
     #[test]
-    fn command_help_explains_server_ban_arguments() {
-        let lines = mod_help_lines(Some("server ban"));
+    fn command_help_explains_ban_arguments() {
+        let lines = mod_help_lines(Some("ban"));
 
         assert!(
             lines
                 .iter()
-                .any(|line| line == "server ban @name [duration] [reason...]")
+                .any(|line| line == "ban <server|#room|artboard> @name [duration] [reason...]")
         );
         assert!(
             lines.iter().any(|line| line.contains("s/m/h/d")),
-            "server ban help should explain duration syntax: {lines:?}"
+            "ban help should explain duration syntax: {lines:?}"
         );
     }
 
     #[test]
-    fn command_help_prefers_at_prefixed_usernames() {
+    fn command_help_uses_limited_grouped_surface() {
         let lines = mod_help_lines(None);
 
         assert!(
             lines
                 .iter()
-                .any(|line| line == "Username arguments prefer @name; bare name is also accepted."),
-            "top-level help should explain username convention: {lines:?}"
+                .any(|line| line == "rename-room <#oldname> <#newname>"),
+            "top-level help should show rename-room command: {lines:?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "server ban @name [duration] [reason...]"),
-            "top-level help should show @name in username-taking commands: {lines:?}"
+                .any(|line| line == "rename-user <@oldname> <@newname>"),
+            "top-level help should show rename-user command: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "ban    <server|#room|artboard> @name [duration] [reason...]"),
+            "top-level help should show verb-primary ban form: {lines:?}"
         );
     }
 
@@ -770,8 +878,8 @@ mod tests {
     fn command_help_uses_roomname_examples_instead_of_slug_jargon() {
         let lines = [
             mod_help_lines(None),
-            mod_help_lines(Some("room ban")),
-            mod_help_lines(Some("bans room")),
+            mod_help_lines(Some("ban room")),
+            mod_help_lines(Some("view bans room")),
         ]
         .concat();
 
@@ -801,7 +909,7 @@ mod tests {
     #[test]
     fn parses_room_ban_with_duration_and_reason() {
         assert_eq!(
-            parse_mod_command("room ban #lobby @alice 7d cleanup").unwrap(),
+            parse_mod_command("ban #lobby @alice 7d cleanup").unwrap(),
             ModCommand::RoomAction {
                 action: RoomModAction::Ban,
                 slug: "lobby".to_string(),
@@ -815,18 +923,18 @@ mod tests {
     #[test]
     fn parses_at_prefixed_usernames_for_all_username_commands() {
         let cases = [
-            ("user @alice", "alice"),
+            ("view @alice", "alice"),
             ("rename-user @alice @bob", "alice"),
-            ("room kick #lobby @alice reason", "alice"),
-            ("room ban #lobby @alice 7d cleanup", "alice"),
-            ("room unban #lobby @alice", "alice"),
-            ("server kick @alice reason", "alice"),
-            ("server ban @alice policy", "alice"),
-            ("server unban @alice", "alice"),
-            ("artboard ban @alice policy", "alice"),
-            ("artboard unban @alice", "alice"),
-            ("grant mod @alice", "alice"),
-            ("revoke mod @alice", "alice"),
+            ("kick #lobby @alice reason", "alice"),
+            ("ban #lobby @alice 7d cleanup", "alice"),
+            ("unban #lobby @alice", "alice"),
+            ("kick server @alice reason", "alice"),
+            ("ban server @alice policy", "alice"),
+            ("unban server @alice", "alice"),
+            ("ban artboard @alice policy", "alice"),
+            ("unban artboard @alice", "alice"),
+            ("admin grant mod @alice", "alice"),
+            ("admin revoke mod @alice", "alice"),
         ];
 
         for (input, expected_username) in cases {
@@ -849,7 +957,7 @@ mod tests {
     #[test]
     fn parses_bare_usernames_for_mod_commands() {
         assert_eq!(
-            parse_mod_command("server ban alice policy").unwrap(),
+            parse_mod_command("ban server alice policy").unwrap(),
             ModCommand::ServerUser {
                 action: ServerUserAction::Ban,
                 username: "alice".to_string(),
@@ -877,6 +985,7 @@ mod tests {
         );
         assert!(parse_mod_command("rename-room #old").is_err());
         assert!(parse_mod_command("rename-room #old #new extra").is_err());
+        assert!(parse_mod_command("rename room #old #new").is_err());
     }
 
     #[test]
@@ -890,12 +999,13 @@ mod tests {
         );
         assert!(parse_mod_command("rename-user @old").is_err());
         assert!(parse_mod_command("rename-user @old @new extra").is_err());
+        assert!(parse_mod_command("rename user @old @new").is_err());
     }
 
     #[test]
     fn parses_server_permanent_ban_without_duration() {
         assert_eq!(
-            parse_mod_command("server ban @alice policy").unwrap(),
+            parse_mod_command("ban server @alice policy").unwrap(),
             ModCommand::ServerUser {
                 action: ServerUserAction::Ban,
                 username: "alice".to_string(),
@@ -908,7 +1018,7 @@ mod tests {
     #[test]
     fn parses_reason_that_looks_like_duration_suffix() {
         assert_eq!(
-            parse_mod_command("server ban @alice spam wave").unwrap(),
+            parse_mod_command("ban server @alice spam wave").unwrap(),
             ModCommand::ServerUser {
                 action: ServerUserAction::Ban,
                 username: "alice".to_string(),
@@ -921,7 +1031,7 @@ mod tests {
     #[test]
     fn parses_server_kick() {
         assert_eq!(
-            parse_mod_command("server kick @alice go outside").unwrap(),
+            parse_mod_command("kick server @alice go outside").unwrap(),
             ModCommand::ServerUser {
                 action: ServerUserAction::Kick,
                 username: "alice".to_string(),
@@ -929,50 +1039,50 @@ mod tests {
                 reason: "go outside".to_string(),
             }
         );
-        assert!(parse_mod_command("server disconnect @alice").is_err());
+        assert!(parse_mod_command("disconnect server @alice").is_err());
     }
 
     #[test]
     fn parses_ban_listing_commands() {
         assert_eq!(
-            parse_mod_command("bans").unwrap(),
+            parse_mod_command("view bans").unwrap(),
             ModCommand::Bans {
                 scope: BanListScope::All,
-                limit: DEFAULT_LIST_LIMIT,
+                page: DEFAULT_PAGE,
             }
         );
         assert_eq!(
-            parse_mod_command("bans room #lobby 200").unwrap(),
+            parse_mod_command("view bans #lobby 200").unwrap(),
             ModCommand::Bans {
                 scope: BanListScope::Room {
                     slug: "lobby".to_string()
                 },
-                limit: MAX_LIST_LIMIT,
+                page: 200,
             }
         );
         assert_eq!(
-            parse_mod_command("bans server 3").unwrap(),
+            parse_mod_command("view bans server 3").unwrap(),
             ModCommand::Bans {
                 scope: BanListScope::Server,
-                limit: 3,
+                page: 3,
             }
         );
-        assert!(parse_mod_command("bans topic").is_err());
+        assert!(parse_mod_command("view bans topic").is_err());
+        assert!(parse_mod_command("bans").is_err());
     }
 
     #[test]
     fn parses_audit_listing_commands() {
         assert_eq!(
-            parse_mod_command("audit").unwrap(),
-            ModCommand::Audit {
-                limit: DEFAULT_LIST_LIMIT,
-            }
+            parse_mod_command("view audit").unwrap(),
+            ModCommand::Audit { page: DEFAULT_PAGE }
         );
         assert_eq!(
-            parse_mod_command("audit 5").unwrap(),
-            ModCommand::Audit { limit: 5 }
+            parse_mod_command("view audit 5").unwrap(),
+            ModCommand::Audit { page: 5 }
         );
-        assert!(parse_mod_command("audit nope").is_err());
+        assert!(parse_mod_command("view audit nope").is_err());
+        assert!(parse_mod_command("audit").is_err());
     }
 
     #[test]
@@ -991,8 +1101,20 @@ mod tests {
                 reason: "rollback latest".to_string(),
             }
         );
-        assert!(parse_mod_command("artboard restore").is_err());
-        assert!(parse_mod_command("artboard restore 2026-05-06").is_err());
+        assert_eq!(
+            parse_mod_command("artboard restore").unwrap(),
+            ModCommand::ArtboardRestore {
+                date: None,
+                reason: String::new(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("artboard restore 2026-05-06").unwrap(),
+            ModCommand::ArtboardRestore {
+                date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 6).unwrap()),
+                reason: String::new(),
+            }
+        );
     }
 
     #[test]
@@ -1010,8 +1132,10 @@ mod tests {
             | ModCommand::Artboard { username, .. }
             | ModCommand::Role { username, .. } => username,
             ModCommand::Help { .. }
+            | ModCommand::RoomInfo { .. }
             | ModCommand::Bans { .. }
             | ModCommand::Audit { .. }
+            | ModCommand::ArtboardSnapshots { .. }
             | ModCommand::RenameRoom { .. }
             | ModCommand::ArtboardRestore { .. } => {
                 panic!("command does not have a primary username: {command:?}")
