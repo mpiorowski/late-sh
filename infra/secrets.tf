@@ -67,6 +67,22 @@ resource "kubernetes_secret_v1" "ai_credentials" {
 }
 
 # =============================================================================
+# YouTube Data API
+# =============================================================================
+
+resource "kubernetes_secret_v1" "youtube_credentials" {
+  metadata {
+    name = "youtube-credentials"
+  }
+
+  data = {
+    api_key = var.YOUTUBE_API_KEY
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Web Terminal Tunnel Token
 # =============================================================================
 
