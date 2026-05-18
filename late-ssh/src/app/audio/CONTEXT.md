@@ -88,7 +88,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 
 ### Constants (`svc.rs:15-21`)
 - `QUEUE_SNAPSHOT_LIMIT = 50`
-- `MAX_SUBMISSIONS_PER_WINDOW = 10` over `SUBMISSION_WINDOW = 30 minutes` — applies to un-trusted `submit_url`, which is the path reached by the Music Booth submit modal (`booth_submit_public_task`). Trusted/admin paths (`submit_trusted_url`) bypass.
+- `MAX_SUBMISSIONS_PER_WINDOW = 10` over `SUBMISSION_WINDOW = 5 minutes` — applies to un-trusted `submit_url`, which is the path reached by the Music Booth submit modal (`booth_submit_public_task`). Trusted/admin paths (`submit_trusted_url`) bypass.
 - `FALLBACK_DEBOUNCE = 10s`
 - `PLAYBACK_HEARTBEAT_INTERVAL = 10s` — periodic `LoadVideo` re-broadcast for the current item. Safety net: browsers already showing the right item no-op; stuck/disconnected/wrong-item browsers force-swap. Replaces the old `Seek`-based sync.
 - `STREAM_CAP = 1h` — hard cap on any single playing row's wall-clock lifetime.
@@ -158,7 +158,10 @@ Routed by report `state` field:
 - `control_rx` — `PairControlMessage` from `PairedClientRegistry` (mute/volume/force_mute/clipboard)
 - `audio_rx` — `AudioWsMessage` from `AudioService::subscribe_ws()`
 
-On connect, `audio_service.initial_ws_messages()` emits the catch-up burst.
+On connect, `api.rs` sends the user's persisted `set_playback_source` first, then
+`audio_service.initial_ws_messages()` emits the catch-up burst. This ordering keeps
+the browser from briefly assuming the default Icecast preference and staging a
+YouTube item without entering the switching/playback path.
 
 ### Server → client `AudioWsMessage` (tagged enum, snake_case)
 - `load_video { item_id, video_id, is_stream }` — sent on track changes AND every 10s as a heartbeat. Browsers swap when `item_id` differs from what they're playing; same-item heartbeat is a no-op.
@@ -167,6 +170,8 @@ On connect, `audio_service.initial_ws_messages()` emits the catch-up burst.
 
 ### Server → client `PairControlMessage` (`paired_clients.rs:22-30`)
 - `toggle_mute`, `volume_up`, `volume_down`, `request_clipboard_image`, `force_mute { mute }`.
+- `set_playback_source { source: "icecast" | "youtube" }` — sent immediately on
+  pair-WS connect and re-sent by the SSH session on browser-pair notification.
 
 ### Client → server `WsPayload` (`api.rs:39-68`)
 - `heartbeat`
@@ -271,7 +276,7 @@ Goal: the CLI tolerates everything new the audio domain added, plays Icecast unc
 
 File: `late-web/src/pages/connect/page.html`. The IFrame API and `<div id="yt-player">` are always rendered; the audio source is decided in the browser.
 
-- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube`, default `icecast`). TUI `v+x` flips the value via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App::paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source }` to every paired browser. On every browser pair-up (`api.rs:298` detects `previous_kind != Browser && new_kind == Browser`), the SSH session is notified via `SessionMessage::BrowserPaired` and `App::replay_paired_browser_source` re-pushes the current value, so a refreshed page lands in the right mode. The browser is a follower: `applyUserPlaybackSource(source)` stores `userOverrideMode` and applies. While the user is pinned to icecast, `loadYoutubeVideo` and `seekYoutube` early-return so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately).
+- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube`, default `icecast`). TUI `v+x` flips the value via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App::paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source }` to every paired browser. On pair-WS connect, `api.rs` sends the persisted source before the audio catch-up burst. On every browser pair-up (`api.rs` detects `previous_kind != Browser && new_kind == Browser`), the SSH session is also notified via `SessionMessage::BrowserPaired` and `App::replay_paired_browser_source` re-pushes the current value. The browser is a follower: `applyUserPlaybackSource(source)` stores `userOverrideMode` and applies. While the user is pinned to icecast, `loadYoutubeVideo` and `seekYoutube` early-return so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately).
 - **IFrame API load.** `<script src="https://www.youtube.com/iframe_api">` is always included. Global `window.lateYoutubeApiReady` and `onYouTubeIframeAPIReady` hooks resolve a promise that the Alpine component awaits in `init()`.
 - **`source_changed` swap** (`applySourceMode`). Into `youtube`: pause `<audio>`, ensure player exists, kick playback of pending item. Into `icecast`: `ytPlayer.pauseVideo()`, restart `startPlayback()` for the `<audio>` if audio is enabled. The `modeChanged` guard prevents repeated `source_changed: youtube` broadcasts during queue transitions from resetting the iframe.
 - **`load_video` → force-switch or no-op** (`loadYoutubeVideo`). New shape: payload is `{ item_id, video_id, is_stream }` — no offset, no started_at. Same `item_id` AND iframe is already showing the right `video_id` → no-op (this is the safety-net heartbeat path; a manual pause stays paused). Otherwise → `loadVideoById({ videoId })` from 0, swap `currentYoutubeItem`. `verifyYoutubeLoad` re-checks after 1s and reloads if the video id still mismatches.

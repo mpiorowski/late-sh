@@ -223,6 +223,18 @@ impl App {
         } else {
             self.visualizer.tick_idle();
         }
+
+        // Procedural indicator for YouTube source — real frequency analysis is
+        // impossible across the cross-origin iframe (CONTEXT.md §10). Active
+        // only when the user is pinned to YouTube AND the server has something
+        // audible (queued item or fallback); when audio_mode flips to Icecast
+        // (nothing to play), the user is hearing silence and the bars stop.
+        let procedural = self.paired_browser_source
+            == late_core::models::user::AudioSource::Youtube
+            && self.audio.queue_snapshot().audio_mode
+                == crate::app::audio::svc::AudioMode::Youtube;
+        self.visualizer.set_procedural_active(procedural);
+        self.visualizer.tick_procedural();
     }
 
     fn push_browser_frame(&mut self, frame: late_core::audio::VizFrame) {

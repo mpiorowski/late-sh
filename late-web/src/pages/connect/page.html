@@ -671,7 +671,17 @@
             },
 
             handleYoutubeStateChange(state) {
-                if (!window.YT || !this.currentYoutubeItem) {
+                if (!window.YT) {
+                    return;
+                }
+                if (!this.currentYoutubeItem && this.pendingYoutubeItem) {
+                    const loadedVideoId = this.loadedYoutubeVideoId();
+                    if (!loadedVideoId || loadedVideoId === this.pendingYoutubeItem.videoId) {
+                        this.currentYoutubeItem = this.pendingYoutubeItem;
+                        this.pendingYoutubeItem = null;
+                    }
+                }
+                if (!this.currentYoutubeItem) {
                     return;
                 }
                 if (!this.youtubePlayerMatchesCurrent()) {
@@ -679,12 +689,15 @@
                     return;
                 }
                 if (state === window.YT.PlayerState.PLAYING) {
+                    this.audioEnabled = true;
                     this.autoplayBlocked = false;
+                    this.audioMode = 'youtube';
                     this.status = 'playing';
                     if (this.unmuteOnNextPlay) {
                         this.unmuteOnNextPlay = false;
                         this.applyMuteState(this.muted);
                     }
+                    this.sendClientState();
                     this.sendYoutubeState('playing');
                 } else if (state === window.YT.PlayerState.PAUSED) {
                     this.sendYoutubeState('paused');
