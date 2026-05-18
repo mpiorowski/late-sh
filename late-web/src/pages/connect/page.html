@@ -77,19 +77,22 @@
                 console.log(`Reconnecting audio stream... (attempt ${this.audioRetries})`);
 
                 setTimeout(() => {
-                    if (this.status !== 'disconnected') {
-                        const audio = this.$refs.audio;
-                        const separator = this.audioUrl.includes('?') ? '&' : '?';
-                        audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
-                        audio.load();
-                        audio.play().then(() => {
-                            this.audioRetries = 0;
-                            this.status = 'playing';
-                        }).catch(e => {
-                            console.error("Playback restart failed:", e);
-                            this.handleAudioError();
-                        });
+                    if (this.status === 'disconnected' || this.audioMode !== 'icecast') {
+                        return;
                     }
+                    const audio = this.$refs.audio;
+                    const separator = this.audioUrl.includes('?') ? '&' : '?';
+                    audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
+                    audio.load();
+                    audio.play().then(() => {
+                        if (this.audioMode !== 'icecast') return;
+                        this.audioRetries = 0;
+                        this.status = 'playing';
+                    }).catch(e => {
+                        if (this.audioMode !== 'icecast') return;
+                        console.error("Playback restart failed:", e);
+                        this.handleAudioError();
+                    });
                 }, 2000);
             },
 
@@ -199,9 +202,11 @@
                 const separator = this.audioUrl.includes('?') ? '&' : '?';
                 audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
                 audio.play().then(() => {
+                    if (this.audioMode !== 'icecast') return;
                     this.audioRetries = 0;
                     this.status = 'playing';
                 }).catch(e => {
+                    if (this.audioMode !== 'icecast') return;
                     console.error("Playback failed:", e);
                     this.handleAudioError();
                 });
@@ -678,7 +683,7 @@
 
     <div class="space-y-3" x-cloak>
         <button @click="startPlayback"
-            x-show="status === 'ready' || status === 'disconnected' || status === 'buffering' || autoplayBlocked"
+            x-show="status !== 'playing' && (status === 'ready' || status === 'disconnected' || status === 'buffering' || autoplayBlocked)"
             :disabled="status === 'buffering' && !autoplayBlocked"
             class="w-full text-left border px-4 py-3 text-sm transition-colors duration-200" :class="(status === 'buffering' && !autoplayBlocked)
                     ? 'border-gray-800 text-gray-600 cursor-wait'
