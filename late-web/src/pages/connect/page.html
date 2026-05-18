@@ -16,14 +16,6 @@
             token: '{{ token }}',
             apiUrl: '{{ api_url }}',
             audioUrl: '{{ audio_url }}',
-            audioCtx: null,
-            analyser: null,
-            sourceNode: null,
-            freqData: null,
-            timeData: null,
-            bandBins: null,
-            vizInterval: null,
-            heartbeatInterval: null,
             ytPlayer: null,
             ytReady: false,
             pendingYoutubeItem: null,
@@ -63,7 +55,9 @@
 
                 const onYoutubeReady = () => {
                     this.ytReady = true;
-                    this.ensureYoutubePlayer();
+                    if (this.audioMode === 'youtube') {
+                        this.ensureYoutubePlayer();
+                    }
                 };
                 window.addEventListener('late-youtube-ready', onYoutubeReady);
                 if (window.lateYoutubeApiReady) {
@@ -83,22 +77,22 @@
                 console.log(`Reconnecting audio stream... (attempt ${this.audioRetries})`);
 
                 setTimeout(() => {
-                    if (this.status !== 'disconnected') {
-                        const audio = this.$refs.audio;
-                        const separator = this.audioUrl.includes('?') ? '&' : '?';
-                        audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
-                        audio.load();
-                        audio.play().then(() => {
-                            this.audioRetries = 0;
-                            this.status = 'playing';
-                            if (!this.audioCtx || this.audioCtx.state !== 'running') {
-                                this.startAnalyzer();
-                            }
-                        }).catch(e => {
-                            console.error("Playback restart failed:", e);
-                            this.handleAudioError();
-                        });
+                    if (this.status === 'disconnected' || this.audioMode !== 'icecast') {
+                        return;
                     }
+                    const audio = this.$refs.audio;
+                    const separator = this.audioUrl.includes('?') ? '&' : '?';
+                    audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
+                    audio.load();
+                    audio.play().then(() => {
+                        if (this.audioMode !== 'icecast') return;
+                        this.audioRetries = 0;
+                        this.status = 'playing';
+                    }).catch(e => {
+                        if (this.audioMode !== 'icecast') return;
+                        console.error("Playback restart failed:", e);
+                        this.handleAudioError();
+                    });
                 }, 2000);
             },
 
@@ -204,38 +198,15 @@
                     return;
                 }
 
-                // Apple requires AudioContext creation/resume to be synchronous to user interaction
-                const AudioCtx = window.AudioContext || window.webkitAudioContext;
-                if (AudioCtx) {
-                    if (!this.audioCtx) {
-                        this.audioCtx = new AudioCtx();
-                        const audio = this.$refs.audio;
-                        this.sourceNode = this.audioCtx.createMediaElementSource(audio);
-                        this.analyser = this.audioCtx.createAnalyser();
-                        this.analyser.fftSize = 1024;
-                        this.analyser.minDecibels = -100;
-                        this.analyser.maxDecibels = -30;
-                        this.analyser.smoothingTimeConstant = 0.2;
-                        this.sourceNode.connect(this.analyser);
-                        this.analyser.connect(this.audioCtx.destination);
-
-                        this.freqData = new Uint8Array(this.analyser.frequencyBinCount);
-                        this.timeData = new Float32Array(this.analyser.fftSize);
-                        this.bandBins = this.buildLogBands(this.audioCtx.sampleRate, this.analyser.fftSize, 8);
-                    }
-                    if (this.audioCtx.state === 'suspended') {
-                        this.audioCtx.resume();
-                    }
-                }
-
                 const audio = this.$refs.audio;
                 const separator = this.audioUrl.includes('?') ? '&' : '?';
                 audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
                 audio.play().then(() => {
+                    if (this.audioMode !== 'icecast') return;
                     this.audioRetries = 0;
                     this.status = 'playing';
-                    this.startAnalyzer();
                 }).catch(e => {
+                    if (this.audioMode !== 'icecast') return;
                     console.error("Playback failed:", e);
                     this.handleAudioError();
                 });
@@ -248,20 +219,8 @@
                     audio.src = '';
                 }
 
-                if (this.vizInterval) {
-                    clearInterval(this.vizInterval);
-                    this.vizInterval = null;
-                }
-                if (this.heartbeatInterval) {
-                    clearInterval(this.heartbeatInterval);
-                    this.heartbeatInterval = null;
-                }
                 if (this.ytPlayer && this.ytPlayer.stopVideo) {
                     this.ytPlayer.stopVideo();
-                }
-
-                if (this.audioCtx && this.audioCtx.state === 'running') {
-                    this.audioCtx.suspend();
                 }
 
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -310,113 +269,6 @@
                     muted: this.muted,
                     volume_percent: this.volumePercent,
                 }));
-            },
-
-            startAnalyzer() {
-                if (this.audioMode !== 'icecast') {
-                    return;
-                }
-                // Resume existing AudioContext if suspended
-                if (this.audioCtx) {
-                    if (this.audioCtx.state === 'suspended') {
-                        this.audioCtx.resume();
-                    }
-                    this.startVizLoop();
-                    return;
-                }
-
-                console.warn('Web Audio API not initialized or not supported; falling back to heartbeat only');
-                this.startFallbackHeartbeat();
-            },
-
-            startVizLoop() {
-                if (this.vizInterval) {
-                    return;
-                }
-                this.vizInterval = setInterval(() => {
-                    if (this.audioMode !== 'icecast' || this.status !== 'playing' || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-                        return;
-                    }
-                    const audio = this.$refs.audio;
-                    const bands = this.sampleBands();
-                    const rms = this.sampleRms();
-                    const payload = {
-                        event: 'viz',
-                        position_ms: Math.floor(audio.currentTime * 1000),
-                        bands: bands,
-                        rms: rms
-                    };
-                    this.ws.send(JSON.stringify(payload));
-                }, 100);
-            },
-
-            startFallbackHeartbeat() {
-                if (this.heartbeatInterval) {
-                    return;
-                }
-                this.heartbeatInterval = setInterval(() => {
-                    if (this.status === 'playing' && this.ws.readyState === WebSocket.OPEN) {
-                        const payload = {
-                            event: 'heartbeat',
-                            position_ms: Math.floor(this.$refs.audio.currentTime * 1000)
-                        };
-                        this.ws.send(JSON.stringify(payload));
-                    }
-                }, 1000);
-            },
-
-            buildLogBands(sampleRate, fftSize, bandCount) {
-                const nyquist = sampleRate / 2;
-                const minHz = 60.0;
-                const maxHz = Math.min(nyquist, 12000.0);
-                const logMin = Math.log(minHz);
-                const logMax = Math.log(maxHz);
-                const bins = [];
-                for (let i = 0; i < bandCount; i++) {
-                    const t0 = i / bandCount;
-                    const t1 = (i + 1) / bandCount;
-                    const f0 = Math.exp(logMin + (logMax - logMin) * t0);
-                    const f1 = Math.exp(logMin + (logMax - logMin) * t1);
-                    const b0 = Math.max(1, Math.floor((f0 / nyquist) * (fftSize / 2)));
-                    const b1 = Math.max(b0 + 1, Math.ceil((f1 / nyquist) * (fftSize / 2)));
-                    bins.push([b0, b1]);
-                }
-                return bins;
-            },
-
-            softCompress(x) {
-                const k = 2.0;
-                return (k * x) / (1.0 + k * x);
-            },
-
-            sampleBands() {
-                this.analyser.getByteFrequencyData(this.freqData);
-                const bands = [];
-                for (let i = 0; i < this.bandBins.length; i++) {
-                    const [start, end] = this.bandBins[i];
-                    let sum = 0.0;
-                    let count = 0;
-                    const max = Math.min(end, this.freqData.length);
-                    for (let j = start; j < max; j++) {
-                        sum += this.freqData[j];
-                        count += 1;
-                    }
-                    const avg = count > 0 ? sum / count : 0.0;
-                    const norm = avg / 255.0;
-                    bands.push(Math.min(1.0, this.softCompress(norm * 3.0)));
-                }
-                return bands;
-            },
-
-            sampleRms() {
-                this.analyser.getFloatTimeDomainData(this.timeData);
-                let sum = 0.0;
-                for (let i = 0; i < this.timeData.length; i++) {
-                    const v = this.timeData[i];
-                    sum += v * v;
-                }
-                const rms = Math.sqrt(sum / this.timeData.length);
-                return Math.min(1.0, this.softCompress(rms * 3.0));
             },
 
             // Apply a server-pushed user preference. The TUI's v+x keybind
@@ -490,7 +342,11 @@
             },
 
             ensureYoutubePlayer() {
-                if (this.ytPlayer || !window.YT || !window.YT.Player) {
+                if (this.ytPlayer) {
+                    return;
+                }
+                if (!window.YT || !window.YT.Player) {
+                    this.loadYoutubeApi();
                     return;
                 }
                 this.ytPlayer = new window.YT.Player('yt-player', {
@@ -506,13 +362,7 @@
                             this.ytPlayer.setVolume(this.volumePercent);
                             this.applyMuteState(this.muted);
                             if (this.pendingYoutubeItem) {
-                                // While pinned to Icecast, cue (load but don't
-                                // play). Otherwise play normally.
-                                if (this.userOverrideMode === 'icecast') {
-                                    this.ytPlayer.cueVideoById({
-                                        videoId: this.pendingYoutubeItem.videoId,
-                                    });
-                                } else {
+                                if (this.userOverrideMode !== 'icecast') {
                                     this.playYoutubeItem(this.pendingYoutubeItem);
                                 }
                             }
@@ -523,6 +373,17 @@
                 });
             },
 
+            loadYoutubeApi() {
+                if (window.lateYoutubeApiReady || window.lateYoutubeApiLoading) {
+                    return;
+                }
+                window.lateYoutubeApiLoading = true;
+                const script = document.createElement('script');
+                script.src = 'https://www.youtube.com/iframe_api';
+                script.async = true;
+                document.head.appendChild(script);
+            },
+
             loadYoutubeVideo(payload) {
                 const item = {
                     itemId: payload.item_id,
@@ -530,19 +391,8 @@
                     isStream: !!payload.is_stream,
                 };
 
-                // Pre-cue the video into the iframe even while pinned to
-                // Icecast so a later v+x flip is one `playVideo()` away.
                 if (this.userOverrideMode === 'icecast') {
                     this.pendingYoutubeItem = item;
-                    this.ensureYoutubePlayer();
-                    if (
-                        this.ytPlayer
-                        && this.ytReady
-                        && this.ytPlayer.cueVideoById
-                        && this.loadedYoutubeVideoId() !== item.videoId
-                    ) {
-                        this.ytPlayer.cueVideoById({ videoId: item.videoId });
-                    }
                     return;
                 }
                 this.audioMode = 'youtube';
@@ -586,9 +436,6 @@
                 if (switchingItems && this.ytPlayer.stopVideo) {
                     this.ytPlayer.stopVideo();
                 }
-                // If the iframe already has the same video cued (from the
-                // Icecast-pinned pre-cue path), just hit play — that path
-                // is more autoplay-friendly than a fresh loadVideoById.
                 const alreadyLoaded = !switchingItems
                     && this.loadedYoutubeVideoId() === item.videoId;
                 this.pendingYoutubeItem = null;
@@ -671,7 +518,17 @@
             },
 
             handleYoutubeStateChange(state) {
-                if (!window.YT || !this.currentYoutubeItem) {
+                if (!window.YT) {
+                    return;
+                }
+                if (!this.currentYoutubeItem && this.pendingYoutubeItem) {
+                    const loadedVideoId = this.loadedYoutubeVideoId();
+                    if (!loadedVideoId || loadedVideoId === this.pendingYoutubeItem.videoId) {
+                        this.currentYoutubeItem = this.pendingYoutubeItem;
+                        this.pendingYoutubeItem = null;
+                    }
+                }
+                if (!this.currentYoutubeItem) {
                     return;
                 }
                 if (!this.youtubePlayerMatchesCurrent()) {
@@ -679,12 +536,15 @@
                     return;
                 }
                 if (state === window.YT.PlayerState.PLAYING) {
+                    this.audioEnabled = true;
                     this.autoplayBlocked = false;
+                    this.audioMode = 'youtube';
                     this.status = 'playing';
                     if (this.unmuteOnNextPlay) {
                         this.unmuteOnNextPlay = false;
                         this.applyMuteState(this.muted);
                     }
+                    this.sendClientState();
                     this.sendYoutubeState('playing');
                 } else if (state === window.YT.PlayerState.PAUSED) {
                     this.sendYoutubeState('paused');
@@ -773,8 +633,6 @@
     }
 </script>
 
-<script src="https://www.youtube.com/iframe_api"></script>
-
 <div x-data="player()" class="max-w-lg mx-auto pt-8 sm:pt-16">
 
     <div class="mb-10">
@@ -825,7 +683,7 @@
 
     <div class="space-y-3" x-cloak>
         <button @click="startPlayback"
-            x-show="status === 'ready' || status === 'disconnected' || status === 'buffering' || autoplayBlocked"
+            x-show="status !== 'playing' && (status === 'ready' || status === 'disconnected' || status === 'buffering' || autoplayBlocked)"
             :disabled="status === 'buffering' && !autoplayBlocked"
             class="w-full text-left border px-4 py-3 text-sm transition-colors duration-200" :class="(status === 'buffering' && !autoplayBlocked)
                     ? 'border-gray-800 text-gray-600 cursor-wait'

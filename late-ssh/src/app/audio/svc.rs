@@ -25,7 +25,7 @@ use crate::paired_clients::PairedClientRegistry;
 
 const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 10;
-const SUBMISSION_WINDOW: chrono::Duration = chrono::Duration::minutes(30);
+const SUBMISSION_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
 const FALLBACK_DEBOUNCE: Duration = Duration::from_secs(10);
 const PLAYBACK_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const STREAM_CAP: Duration = Duration::from_secs(60 * 60);

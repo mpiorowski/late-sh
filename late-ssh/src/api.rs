@@ -255,6 +255,21 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");
 
+    if send_json_ws(
+        &mut socket,
+        &crate::paired_clients::PairControlMessage::SetPlaybackSource {
+            source: audio_source,
+        },
+        &token_hint,
+        "initial playback source",
+    )
+    .await
+    .is_err()
+    {
+        release_pair_registration(&state, &token, registration_id);
+        return;
+    }
+
     match state.audio_service.initial_ws_messages().await {
         Ok(messages) => {
             for msg in messages {

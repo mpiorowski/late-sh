@@ -15,6 +15,12 @@ pub struct Visualizer {
     // Beat detection (volume-independent rhythm tracking)
     rms_avg: f32,
     beat: f32,
+    // Procedural indicator (YouTube source — no real frequency data, cross-origin
+    // iframe). Slow breathing sine wave. Does NOT pretend to be audio-reactive;
+    // kept visually distinct (AMBER_DIM) so a glance separates it from real bars.
+    // See CONTEXT.md §10 / §18.
+    procedural_active: bool,
+    procedural_phase: f32,
 }
 
 impl Default for Visualizer {
@@ -31,6 +37,8 @@ impl Visualizer {
             has_viz: false,
             rms_avg: 0.0,
             beat: 0.0,
+            procedural_active: false,
+            procedural_phase: 0.0,
         }
     }
 
@@ -67,12 +75,54 @@ impl Visualizer {
         self.beat = (self.beat * 0.9).max(0.0);
     }
 
+    pub fn set_procedural_active(&mut self, active: bool) {
+        self.procedural_active = active;
+    }
+
+    pub fn tick_procedural(&mut self) {
+        if !self.procedural_active {
+            return;
+        }
+        self.procedural_phase += 0.08;
+        if self.procedural_phase > std::f32::consts::TAU * 1024.0 {
+            self.procedural_phase -= std::f32::consts::TAU * 1024.0;
+        }
+    }
+
+    fn procedural_bands(&self) -> [f32; 8] {
+        // Layered sines: a primary traveling wave, a faster shimmer offset
+        // per-band, and a slow global breath. The phases multiply (1.0, 1.7,
+        // 0.35) are deliberately incommensurate so the pattern doesn't repeat
+        // visibly inside a few seconds.
+        let mut out = [0.0f32; 8];
+        let breath = 0.05 * (self.procedural_phase * 0.35).sin();
+        for (i, slot) in out.iter_mut().enumerate() {
+            let p = self.procedural_phase + (i as f32) * 0.55;
+            let primary = 0.20 * p.sin();
+            let shimmer = 0.07 * (p * 1.7 + (i as f32) * 0.31).sin();
+            *slot = (0.5 + primary + shimmer + breath).clamp(0.05, 0.95);
+        }
+        out
+    }
+
+    fn procedural_block(fill: f32) -> &'static str {
+        // 9-step sub-cell vertical block: ' ' through '█' in 1/8 increments.
+        const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+        let idx = (fill.clamp(0.0, 1.0) * 8.0).round() as usize;
+        BLOCKS[idx.min(8)]
+    }
+
     /// Borderless visualizer for the merged shell. Renders bars only when
     /// audio is paired; otherwise shows a "no audio" hint plus the `P` shortcut
     /// for the install/pair modal. No block, no title — the rail's whitespace
     /// owns the separation.
     pub fn render_inline(&self, frame: &mut Frame, area: Rect) {
         if area.height == 0 || area.width == 0 {
+            return;
+        }
+        if self.procedural_active {
+            let lines = self.build_procedural_lines(area);
+            frame.render_widget(Paragraph::new(lines), area);
             return;
         }
         if !self.has_viz {
@@ -142,6 +192,51 @@ impl Visualizer {
                 };
 
                 spans.push(Span::styled(ch.to_string().repeat(band_width), style));
+                if gap > 0 && i + 1 < band_count {
+                    spans.push(Span::raw(" ".repeat(gap)));
+                }
+            }
+
+            lines.push(Line::from(spans));
+        }
+
+        lines
+    }
+
+    fn build_procedural_lines(&self, area: Rect) -> Vec<Line<'static>> {
+        let height = area.height as usize;
+        let width = area.width as usize;
+        if height == 0 || width == 0 {
+            return Vec::new();
+        }
+
+        let band_count = width.div_ceil(2).max(1);
+        let gap = 1usize;
+
+        // No tilt — the procedural pattern is decorative, not a frequency
+        // spectrum. Tilting it would lean the whole wave to one side and read
+        // as broken rather than stylized.
+        let source = self.procedural_bands();
+        let bands = self.resample(&source, band_count);
+        let style = Style::default().fg(theme::AMBER_DIM());
+
+        let mut lines = Vec::with_capacity(height);
+        for row in 0..height {
+            // Vertical cell index measured from the bottom (0 = bottom row).
+            let cell_from_bottom = (height - row - 1) as f32;
+            let mut spans: Vec<Span> = Vec::with_capacity(band_count * 2);
+
+            for (i, &band) in bands.iter().enumerate().take(band_count) {
+                let bar_height_cells = band.clamp(0.0, 1.0) * height as f32;
+                // How much of THIS cell is filled by the bar (0..1).
+                let fill = (bar_height_cells - cell_from_bottom).clamp(0.0, 1.0);
+
+                if fill <= 0.0 {
+                    spans.push(Span::raw(" "));
+                } else {
+                    spans.push(Span::styled(Self::procedural_block(fill), style));
+                }
+
                 if gap > 0 && i + 1 < band_count {
                     spans.push(Span::raw(" ".repeat(gap)));
                 }
@@ -313,5 +408,101 @@ mod tests {
         viz.rms = 1.0;
         viz.tick_idle();
         assert_eq!(viz.rms, 1.0); // unchanged because has_viz is false
+    }
+
+    #[test]
+    fn tick_procedural_advances_phase_when_active() {
+        let mut viz = Visualizer::new();
+        viz.set_procedural_active(true);
+        let before = viz.procedural_phase;
+        viz.tick_procedural();
+        assert!(viz.procedural_phase > before);
+    }
+
+    #[test]
+    fn tick_procedural_no_op_when_inactive() {
+        let mut viz = Visualizer::new();
+        viz.tick_procedural();
+        assert_eq!(viz.procedural_phase, 0.0);
+    }
+
+    #[test]
+    fn procedural_bands_stay_in_range() {
+        let viz = Visualizer::new();
+        for h in viz.procedural_bands() {
+            assert!((0.0..=1.0).contains(&h));
+        }
+    }
+
+    #[test]
+    fn procedural_bands_animate_with_phase() {
+        let mut viz = Visualizer::new();
+        let first = viz.procedural_bands();
+        viz.set_procedural_active(true);
+        // Several ticks should produce a different shape.
+        for _ in 0..10 {
+            viz.tick_procedural();
+        }
+        let later = viz.procedural_bands();
+        assert!(
+            first
+                .iter()
+                .zip(later.iter())
+                .any(|(a, b)| (a - b).abs() > 0.01)
+        );
+    }
+
+    #[test]
+    fn render_inline_uses_procedural_path_when_active() {
+        let width = 17;
+        let height = 6;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut viz = Visualizer::new();
+        viz.set_procedural_active(true);
+        // Advance once so at least one band sits above the midline.
+        viz.tick_procedural();
+
+        terminal
+            .draw(|frame| viz.render_inline(frame, Rect::new(0, 0, width, height)))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let mut rendered = String::new();
+        for y in 0..height {
+            for x in 0..width {
+                rendered.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        // Procedural path renders bars, NOT the idle "no audio paired" copy.
+        assert!(rendered.contains('█'));
+        assert!(!rendered.contains("no audio paired"));
+    }
+
+    #[test]
+    fn procedural_takes_priority_over_real_viz() {
+        // If both real viz frames AND procedural are active, procedural wins —
+        // user pinned to YouTube source should not see stale Icecast bars.
+        let width = 17;
+        let height = 4;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut viz = Visualizer::new();
+        viz.has_viz = true;
+        viz.bands = [1.0; 8];
+        viz.set_procedural_active(true);
+
+        terminal
+            .draw(|frame| viz.render_inline(frame, Rect::new(0, 0, width, height)))
+            .expect("draw");
+
+        // Procedural bars peak around 0.75; full-height column from real bands
+        // would fill every row. Top row should be empty under the procedural path.
+        let buffer = terminal.backend().buffer();
+        let mut top_row = String::new();
+        for x in 0..width {
+            top_row.push_str(buffer[(x, 0)].symbol());
+        }
+        assert!(!top_row.contains('█'));
     }
 }

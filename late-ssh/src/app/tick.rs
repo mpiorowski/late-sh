@@ -92,13 +92,11 @@ impl App {
             }
         }
 
-        let mut updated = false;
         for msg in messages {
             match msg {
                 SessionMessage::Heartbeat => {}
                 SessionMessage::Viz(viz) => {
                     self.push_browser_frame(viz);
-                    updated = true;
                 }
                 SessionMessage::ClipboardImage { data } => {
                     let Some(upload) = self.chat.take_pending_clipboard_image_upload() else {
@@ -113,12 +111,10 @@ impl App {
                             "Clipboard image found - uploading...",
                         ));
                     }
-                    updated = true;
                 }
                 SessionMessage::ClipboardImageFailed { message } => {
                     self.chat.clear_pending_clipboard_image_upload();
                     self.banner = Some(crate::app::common::primitives::Banner::error(&message));
-                    updated = true;
                 }
                 SessionMessage::Terminate { reason } => {
                     tracing::info!(reason, "session terminated by control message");
@@ -126,11 +122,9 @@ impl App {
                 }
                 SessionMessage::ArtboardBanChanged { banned, expires_at } => {
                     self.set_artboard_banned(banned, expires_at);
-                    updated = true;
                 }
                 SessionMessage::PermissionsChanged { permissions } => {
                     self.set_permissions(permissions);
-                    updated = true;
                 }
                 SessionMessage::RoomRemoved {
                     room_id,
@@ -142,7 +136,6 @@ impl App {
                     self.banner = Some(crate::app::common::primitives::Banner::error(&format!(
                         "{message}: #{slug}"
                     )));
-                    updated = true;
                 }
                 SessionMessage::BrowserPaired => {
                     self.replay_paired_browser_source();
@@ -216,10 +209,16 @@ impl App {
             }
         }
 
-        if updated {
-            if let Some(frame) = self.browser_viz_buffer.back().cloned() {
-                self.visualizer.update(&frame);
-            }
+        // Browser audio is synthetic-only. The web page no longer sends real
+        // frequency frames for either Icecast or YouTube, so animate whenever a
+        // browser is paired as this session's audio surface.
+        let procedural = self
+            .paired_client_state()
+            .map(|state| state.client_kind == crate::app::audio::client_state::ClientKind::Browser)
+            .unwrap_or(false);
+        self.visualizer.set_procedural_active(procedural);
+        if procedural {
+            self.visualizer.tick_procedural();
         } else {
             self.visualizer.tick_idle();
         }

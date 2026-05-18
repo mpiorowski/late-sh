@@ -1,9 +1,9 @@
 # late-ssh Audio Context
 
 ## Metadata
-- Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, Icecast visualizer, now-playing poller
+- Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-18 (added §18 parked plan: OS audio loopback for CLI-side visualization. Premised on the embedded-webview CLI playback work — once the CLI does local audio output, tap PipeWire/WASAPI/ScreenCaptureKit, run FFT locally, produce real `VizFrame`s across YouTube + Icecast + anything. Browser Web Audio analyzer can retire when this lands. Cross-ref from §10. Sibling to §17 external-player plan but with no yt-dlp posture concerns.)
+- Last updated: 2026-05-18 (browser-pair visualizer is now synthetic-only for both Icecast and YouTube; the web page no longer creates a Web Audio analyzer or sends `viz` frames. §18 remains the parked plan for future real OS-loopback FFT.)
 - Previously: booth modal now surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Two submit paths diverge in metadata: booth (`booth_submit_public_task` → `submit_url` → Data API) inserts rows with title/channel/`duration_ms`/`is_stream` already populated; staff `/audio` (`submit_trusted_url_task`) inserts NULL metadata and the browser backfills `duration_ms` on first play via `record_browser_duration`. See §4 Public API + §2 booth/ui.rs note.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -17,7 +17,7 @@ Owned by this domain:
 - Global, DB-backed YouTube queue: submission, persistence, single-playing invariant, server-driven track switching (per-browser playback timeline), fallback debounce.
 - The singleton "YouTube fallback" stream that plays when the queue is empty.
 - Audio source arbitration between paired CLI and paired browser clients on the same SSH token (`force_mute`).
-- Icecast visualizer driven by browser-side Web Audio analysis.
+- Synthetic browser-pair visualizer used for both Icecast and YouTube.
 - Now-playing poller for the Icecast track title.
 - The `/audio` and `/audio fallback` SSH chat commands (staff-only).
 
@@ -38,7 +38,7 @@ late-ssh/src/app/audio/
 ├── state.rs                # AudioState: per-session UI shim — proxies submits/votes and turns AudioEvent into Banners
 ├── client_state.rs         # ClientAudioState + ClientKind/SshMode/Platform enums (the client_state WS payload)
 ├── liquidsoap.rs           # LiquidsoapController telnet client (NOT used by AudioService — only by app/vote/svc.rs)
-├── viz.rs                  # Visualizer (Icecast bands/RMS/beat) + ratatui render_inline
+├── viz.rs                  # Visualizer (procedural bars, legacy bands/RMS/beat) + ratatui render_inline
 ├── youtube.rs              # URL parsing + optional YouTube Data API validation client
 ├── booth/
 │   ├── mod.rs
@@ -88,7 +88,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 
 ### Constants (`svc.rs:15-21`)
 - `QUEUE_SNAPSHOT_LIMIT = 50`
-- `MAX_SUBMISSIONS_PER_WINDOW = 10` over `SUBMISSION_WINDOW = 30 minutes` — applies to un-trusted `submit_url`, which is the path reached by the Music Booth submit modal (`booth_submit_public_task`). Trusted/admin paths (`submit_trusted_url`) bypass.
+- `MAX_SUBMISSIONS_PER_WINDOW = 10` over `SUBMISSION_WINDOW = 5 minutes` — applies to un-trusted `submit_url`, which is the path reached by the Music Booth submit modal (`booth_submit_public_task`). Trusted/admin paths (`submit_trusted_url`) bypass.
 - `FALLBACK_DEBOUNCE = 10s`
 - `PLAYBACK_HEARTBEAT_INTERVAL = 10s` — periodic `LoadVideo` re-broadcast for the current item. Safety net: browsers already showing the right item no-op; stuck/disconnected/wrong-item browsers force-swap. Replaces the old `Seek`-based sync.
 - `STREAM_CAP = 1h` — hard cap on any single playing row's wall-clock lifetime.
@@ -158,7 +158,10 @@ Routed by report `state` field:
 - `control_rx` — `PairControlMessage` from `PairedClientRegistry` (mute/volume/force_mute/clipboard)
 - `audio_rx` — `AudioWsMessage` from `AudioService::subscribe_ws()`
 
-On connect, `audio_service.initial_ws_messages()` emits the catch-up burst.
+On connect, `api.rs` sends the user's persisted `set_playback_source` first, then
+`audio_service.initial_ws_messages()` emits the catch-up burst. This ordering keeps
+the browser from briefly assuming the default Icecast preference and staging a
+YouTube item without entering the switching/playback path.
 
 ### Server → client `AudioWsMessage` (tagged enum, snake_case)
 - `load_video { item_id, video_id, is_stream }` — sent on track changes AND every 10s as a heartbeat. Browsers swap when `item_id` differs from what they're playing; same-item heartbeat is a no-op.
@@ -167,10 +170,12 @@ On connect, `audio_service.initial_ws_messages()` emits the catch-up burst.
 
 ### Server → client `PairControlMessage` (`paired_clients.rs:22-30`)
 - `toggle_mute`, `volume_up`, `volume_down`, `request_clipboard_image`, `force_mute { mute }`.
+- `set_playback_source { source: "icecast" | "youtube" }` — sent immediately on
+  pair-WS connect and re-sent by the SSH session on browser-pair notification.
 
 ### Client → server `WsPayload` (`api.rs:39-68`)
 - `heartbeat`
-- `viz { position_ms, bands[8], rms }` — browser-only, drives the Icecast visualizer
+- `viz { position_ms, bands[8], rms }` — legacy/compat payload; the current web page does not send it
 - `client_state { client_kind, ssh_mode, platform, capabilities, muted, volume_percent }`
 - `clipboard_image { … }`, `clipboard_image_failed { … }`
 - `player_state(PlayerStateReport)` — `{ item_id, state, offset_ms?, duration_ms?, autoplay_blocked, error? }` (`svc.rs:126-138`)
@@ -269,11 +274,12 @@ Goal: the CLI tolerates everything new the audio domain added, plays Icecast unc
 
 ## 9. Web Connect Page Integration
 
-File: `late-web/src/pages/connect/page.html`. The IFrame API and `<div id="yt-player">` are always rendered; the audio source is decided in the browser.
+File: `late-web/src/pages/connect/page.html`. The audio source is decided in the browser; the YouTube API/player is lazy-loaded only when the browser actually enters YouTube mode.
 
-- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube`, default `icecast`). TUI `v+x` flips the value via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App::paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source }` to every paired browser. On every browser pair-up (`api.rs:298` detects `previous_kind != Browser && new_kind == Browser`), the SSH session is notified via `SessionMessage::BrowserPaired` and `App::replay_paired_browser_source` re-pushes the current value, so a refreshed page lands in the right mode. The browser is a follower: `applyUserPlaybackSource(source)` stores `userOverrideMode` and applies. While the user is pinned to icecast, `loadYoutubeVideo` and `seekYoutube` early-return so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately).
-- **IFrame API load.** `<script src="https://www.youtube.com/iframe_api">` is always included. Global `window.lateYoutubeApiReady` and `onYouTubeIframeAPIReady` hooks resolve a promise that the Alpine component awaits in `init()`.
+- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube`, default `icecast`). TUI `v+x` flips the value via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App::paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source }` to every paired browser. On pair-WS connect, `api.rs` sends the persisted source before the audio catch-up burst. On every browser pair-up (`api.rs` detects `previous_kind != Browser && new_kind == Browser`), the SSH session is also notified via `SessionMessage::BrowserPaired` and `App::replay_paired_browser_source` re-pushes the current value. The browser is a follower: `applyUserPlaybackSource(source)` stores `userOverrideMode` and applies. While the user is pinned to icecast, `loadYoutubeVideo` and `seekYoutube` early-return so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately).
+- **IFrame API load.** The page does not include the YouTube iframe API up front. `ensureYoutubePlayer()` calls `loadYoutubeApi()` on demand, which appends `https://www.youtube.com/iframe_api`; `window.lateYoutubeApiReady` / `onYouTubeIframeAPIReady` then create the player only if `audioMode === "youtube"`.
 - **`source_changed` swap** (`applySourceMode`). Into `youtube`: pause `<audio>`, ensure player exists, kick playback of pending item. Into `icecast`: `ytPlayer.pauseVideo()`, restart `startPlayback()` for the `<audio>` if audio is enabled. The `modeChanged` guard prevents repeated `source_changed: youtube` broadcasts during queue transitions from resetting the iframe.
+- **Icecast-pinned resource behavior.** While pinned to Icecast, `load_video` only stashes `pendingYoutubeItem`; it does not create the YouTube iframe or pre-cue the video. A later source flip to YouTube starts from the pending item, and the server's 10s `load_video` heartbeat remains the safety net.
 - **`load_video` → force-switch or no-op** (`loadYoutubeVideo`). New shape: payload is `{ item_id, video_id, is_stream }` — no offset, no started_at. Same `item_id` AND iframe is already showing the right `video_id` → no-op (this is the safety-net heartbeat path; a manual pause stays paused). Otherwise → `loadVideoById({ videoId })` from 0, swap `currentYoutubeItem`. `verifyYoutubeLoad` re-checks after 1s and reloads if the video id still mismatches.
 - **No drift correction.** Each browser plays its own timeline. Slow networks just lag behind — no `seekTo` jumps. The "everyone hears the same offset" invariant is dropped on purpose.
 - **`player_state` reports** (`sendYoutubeState`). Emits `{ event: 'player_state', item_id, state, offset_ms, duration_ms, autoplay_blocked, error }` on YT state transitions (PLAYING/PAUSED/BUFFERING/ENDED). No periodic loop. Server reads `duration_ms` for backfill via `record_browser_duration`; the rest is informational.
@@ -284,15 +290,16 @@ File: `late-web/src/pages/connect/page.html`. The IFrame API and `<div id="yt-pl
 
 ## 10. Visualizer (`viz.rs`)
 
-- `Visualizer { bands[8], rms, has_viz, rms_avg, beat }` consumes `late_core::audio::VizFrame { bands[8], rms, track_pos_ms }`.
-- `update(&mut self, &VizFrame)` clamps bands, smooths `rms_avg` (0.95/0.05 EMA), decays `beat *= 0.9`, fires `beat = 1.0` when `frame.rms / rms_avg > 1.3`.
-- `tick_idle()` decays bands/RMS/beat each tick when no frames arrive (called when `has_viz == true` only).
-- `beat()` is volume-independent and drives bonsai animation.
-- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"P install · pair"` (last only when height ≥ 5). Live draws 1-cell bars with 1-cell gaps using linear resample plus tilt `(0.65 + 0.35·t)·γ^1.1`.
-
-Data flow: browser Web Audio analyzer → `WsPayload::Viz` → `api.rs:293` converts to `SessionMessage::Viz(VizFrame)` → session dispatcher → `app/tick.rs:213` feeds it through `Visualizer::update` (latest frame each tick) → `app/common/sidebar.rs:106` renders.
-
-**Icecast-only by browser constraint.** A YouTube iframe is cross-origin; the browser cannot tap its audio. When mode is YouTube, the browser stops sending `viz` frames, `has_viz` decays to false, and the sidebar reverts to the idle panel. Do not pretend YouTube has frequency analysis — if a future UI wants a "playing" indicator for YouTube, drive it procedurally and name it as such in code (e.g. `procedural_indicator_bands`, not `viz_bands`).
+- Browser-paired audio is synthetic-only for both Icecast and YouTube. The web
+  page does not create a Web Audio `AudioContext`, does not run an analyzer, and
+  does not send `viz` frames.
+- `app/tick.rs` turns `Visualizer::procedural_active` on whenever this SSH
+  session has a paired browser (`paired_client_state().client_kind == Browser`).
+  This is source-agnostic: Icecast and YouTube render the same procedural bars.
+- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"P install · pair"` (last only when height ≥ 5). Procedural live draws dim amber 1-cell-wide bars with 1-cell gaps at **sub-cell vertical resolution** (`▁▂▃▄▅▆▇█`, 9-step). Bar heights come from layered sines — a primary traveling wave, a faster per-band shimmer, and a slow global breath term (incommensurate frequencies so the pattern doesn't visibly repeat in a few seconds). No spectrum-style tilt is applied on the procedural path; the wave shape is decorative, not a frequency analog.
+- The old `VizFrame`/`Visualizer::update` path is still present for compatibility
+  with existing payload parsing and tests, but browser web playback no longer
+  drives it.
 
 **Future unlock: OS audio loopback.** Once the CLI hosts its own playback (embedded webview track), the cross-origin constraint disappears entirely — we capture local audio output at the OS layer (PipeWire / WASAPI / ScreenCaptureKit) and feed real `VizFrame`s through the existing pipeline for every source, including YouTube. See §18 for the parked plan. Until that lands, procedural bars are the only honest YouTube-mode indicator.
 
@@ -413,7 +420,7 @@ These are intentional non-goals. Reopen only if the constraint that put them her
 - **Ad stripping.** The iframe plays whatever YouTube serves.
 - **Lyrics, album art, fancy metadata.** Title + channel is enough.
 - **Custom genre control per submission.** Fallback uses the global vote winner like everywhere else.
-- **Real Web Audio analysis of the YouTube iframe.** Not possible — cross-origin iframe, no audio hook in the IFrame Player API. The Icecast visualizer (§10) keeps working; any future YouTube-mode visualizer must either hide, switch to a labeled "playing" indicator driven procedurally (name it honestly in code — `procedural_indicator_bands`, never `viz_bands`), or stop showing bars.
+- **Real Web Audio analysis of the YouTube iframe.** Not possible — cross-origin iframe, no audio hook in the IFrame Player API. Browser-paired audio therefore uses the same synthetic visualizer for both Icecast and YouTube (§10) until OS-loopback capture exists.
 
 ---
 
@@ -498,7 +505,7 @@ Until then, YouTube playback goes through the browser iframe path (§4-§9).
 
 ### Idea
 
-Tap the CLI's own audio output at the OS layer, run FFT locally, emit `VizFrame { bands[8], rms, track_pos_ms }` through the existing pipeline. Works uniformly for YouTube, Icecast, and anything else the user plays through `late`. The browser-side Web Audio analyzer (§10 data-flow) can retire — viz becomes CLI-owned across every source, and the pair-WS `viz` fan-in can be removed.
+Tap the CLI's own audio output at the OS layer, run FFT locally, emit `VizFrame { bands[8], rms, track_pos_ms }` through the existing pipeline. Works uniformly for YouTube, Icecast, and anything else the user plays through `late`. The current browser-pair synthetic visualizer (§10) can retire — viz becomes CLI-owned across every source, and the pair-WS `viz` fan-in can be removed.
 
 ### Per-platform capture
 
@@ -525,7 +532,8 @@ A single trait inside `late-cli/src/audio/` abstracts the platform-specific capt
 - Embedded-webview CLI playback work is on the active roadmap or already shipped.
 - We're willing to take on platform-specific audio code (the LATE bar to clear is one Linux backend).
 
-Until then, browser-pair YouTube uses procedural bars (§10) and Icecast viz continues to flow through the browser Web Audio analyzer.
+Until then, browser-paired audio uses procedural bars for both Icecast and
+YouTube (§10).
 
 ---
 
