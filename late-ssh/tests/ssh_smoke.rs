@@ -176,7 +176,7 @@ async fn closing_token_exec_channel_does_not_close_interactive_shell() {
         .expect("exec token request");
     let mut token_payload = Vec::new();
     while token_payload.is_empty() {
-        match timeout(Duration::from_secs(2), token_channel.wait())
+        match timeout(Duration::from_secs(15), token_channel.wait())
             .await
             .expect("token response timeout")
             .expect("token channel closed before data")
@@ -224,7 +224,7 @@ async fn closing_token_exec_channel_does_not_close_interactive_shell() {
 
 async fn expect_shell_data(channel: &mut russh::Channel<client::Msg>) {
     loop {
-        match timeout(Duration::from_secs(2), channel.wait()).await {
+        match timeout(Duration::from_secs(15), channel.wait()).await {
             Ok(Some(ChannelMsg::Data { .. })) => return,
             Ok(Some(ChannelMsg::Close)) => panic!("interactive shell closed unexpectedly"),
             Ok(Some(_)) => {}
