@@ -87,6 +87,12 @@ fn handle_queue_input(app: &mut App, event: ParsedInput, queue_len: usize) {
         ParsedInput::Char('s') | ParsedInput::Char('S') => {
             app.audio.booth_skip_vote();
         }
+        ParsedInput::Char('d') | ParsedInput::Char('D') => {
+            delete_selected(app);
+        }
+        ParsedInput::Char('u') | ParsedInput::Char('U') => {
+            toggle_unskippable_selected(app);
+        }
         _ => {}
     }
 }
@@ -105,4 +111,22 @@ fn clear_selected_vote(app: &mut App) {
         return;
     };
     app.audio.booth_clear_vote(item_id);
+}
+
+fn delete_selected(app: &mut App) {
+    let snapshot = app.audio.queue_snapshot();
+    let Some(item_id) = app.booth_modal_state.selected_item_id(&snapshot.queue) else {
+        return;
+    };
+    let is_staff = app.is_admin || app.is_moderator;
+    app.audio.booth_delete(item_id, is_staff);
+}
+
+fn toggle_unskippable_selected(app: &mut App) {
+    let snapshot = app.audio.queue_snapshot();
+    let Some(item_id) = app.booth_modal_state.selected_item_id(&snapshot.queue) else {
+        return;
+    };
+    let is_staff = app.is_admin || app.is_moderator;
+    app.audio.booth_toggle_unskippable(item_id, is_staff);
 }

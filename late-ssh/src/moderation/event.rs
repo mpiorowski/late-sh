@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::authz::Permissions;
-use crate::moderation::command::{ArtboardAction, RoleAction, RoomModAction, ServerUserAction};
+use crate::moderation::command::{
+    ArtboardAction, AudioAction, RoleAction, RoomModAction, ServerUserAction,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModerationEvent {
@@ -49,6 +51,14 @@ pub enum ModerationEvent {
         actor_user_id: Uuid,
         source_key: String,
         backup_key: Option<String>,
+        reason: String,
+    },
+    AudioAction {
+        actor_user_id: Uuid,
+        target_user_id: Uuid,
+        action: AudioAction,
+        banned: bool,
+        expires_at: Option<DateTime<Utc>>,
         reason: String,
     },
     RoleAction {

@@ -80,6 +80,16 @@ impl AudioState {
             .cast_skip_vote_task(self.user_id, self.session_token.clone());
     }
 
+    pub fn booth_delete(&self, item_id: Uuid, is_staff: bool) {
+        self.service
+            .delete_queue_item_task(self.user_id, item_id, is_staff);
+    }
+
+    pub fn booth_toggle_unskippable(&self, item_id: Uuid, is_staff: bool) {
+        self.service
+            .toggle_unskippable_task(self.user_id, item_id, is_staff);
+    }
+
     /// Spawn an audio-source persist task that surfaces failures as banners
     /// via `AudioEvent::AudioSourcePersistFailed`. Caller is expected to have
     /// already optimistically updated local UI state.
@@ -135,6 +145,29 @@ impl AudioState {
                 }
                 AudioEvent::BoothSkipFired { user_id } if user_id == self.user_id => {
                     banner = Some(Banner::success("Skip threshold reached"));
+                }
+                AudioEvent::BoothItemDeleted { user_id } if user_id == self.user_id => {
+                    banner = Some(Banner::success("Deleted track"));
+                }
+                AudioEvent::BoothItemDeleteFailed { user_id, message }
+                    if user_id == self.user_id =>
+                {
+                    banner = Some(Banner::error(&message));
+                }
+                AudioEvent::BoothItemUnskippableToggled {
+                    user_id,
+                    unskippable,
+                } if user_id == self.user_id => {
+                    banner = Some(Banner::success(if unskippable {
+                        "Locked - skip-vote disabled"
+                    } else {
+                        "Unlocked - skip-vote enabled"
+                    }));
+                }
+                AudioEvent::BoothItemUnskippableFailed { user_id, message }
+                    if user_id == self.user_id =>
+                {
+                    banner = Some(Banner::error(&message));
                 }
                 AudioEvent::BoothSkipProgress {
                     user_id,

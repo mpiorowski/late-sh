@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use late_core::{
     db::Db,
     models::{
+        audio_ban::AudioBan,
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
@@ -28,7 +29,7 @@ const SUBMISSION_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
 const FALLBACK_DEBOUNCE: Duration = Duration::from_secs(10);
 const PLAYBACK_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
-const SKIP_VOTE_FRACTION: f32 = 0.3;
+const SKIP_VOTE_PERCENT: usize = 30;
 const SKIP_VOTE_MIN: u32 = 2;
 
 #[derive(Clone)]
@@ -138,6 +139,21 @@ pub enum AudioEvent {
     BoothSkipFired {
         user_id: Uuid,
     },
+    BoothItemDeleted {
+        user_id: Uuid,
+    },
+    BoothItemDeleteFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    BoothItemUnskippableToggled {
+        user_id: Uuid,
+        unskippable: bool,
+    },
+    BoothItemUnskippableFailed {
+        user_id: Uuid,
+        message: String,
+    },
     BoothSkipProgress {
         user_id: Uuid,
         votes: u32,
@@ -186,6 +202,8 @@ pub struct QueueItemView {
     pub submitter_id: Uuid,
     #[serde(default)]
     pub vote_score: i32,
+    #[serde(default)]
+    pub unskippable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -335,6 +353,9 @@ impl AudioService {
 
         let item = {
             let client = self.db.get().await?;
+            if AudioBan::is_active_for_user(&client, user_id).await? {
+                anyhow::bail!("audio ban: submitting blocked");
+            }
             if enforce_rate_limit {
                 let since = Utc::now() - SUBMISSION_WINDOW;
                 let recent =
@@ -606,11 +627,26 @@ impl AudioService {
         if !self.paired_clients.has_youtube_listener(session_token) {
             anyhow::bail!("switch to youtube to skip-vote");
         }
+        {
+            let client = self.db.get().await?;
+            if AudioBan::is_active_for_user(&client, user_id).await? {
+                anyhow::bail!("audio ban: skip-vote blocked");
+            }
+        }
 
         let mut state = self.state.lock().await;
         let Some(current_id) = state.current_item_id else {
             anyhow::bail!("nothing is playing");
         };
+
+        {
+            let client = self.db.get().await?;
+            if let Some(item) = MediaQueueItem::find_by_id(&client, current_id).await?
+                && item.unskippable
+            {
+                anyhow::bail!("track is unskippable");
+            }
+        }
 
         state.skip_votes.insert(user_id);
         let votes = state.skip_votes.len() as u32;
@@ -656,6 +692,12 @@ impl AudioService {
             return Ok(());
         }
         let client = self.db.get().await?;
+        if let Some(item) = MediaQueueItem::find_by_id(&client, current_id).await?
+            && item.unskippable
+        {
+            self.publish_queue_update_with_guard(&mut state).await?;
+            return Ok(());
+        }
         let _ = MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
             .await?;
         drop(client);
@@ -767,6 +809,107 @@ impl AudioService {
                         "Failed to skip audio".to_string()
                     };
                     service.publish_event(AudioEvent::TrustedSkipFailed { user_id, message });
+                }
+            }
+        });
+    }
+
+    /// Delete a queued track. Permission gate: staff (admin or moderator) can
+    /// delete anyone's submission; non-staff can only delete their own. The
+    /// currently-playing track is never deletable here — `delete_queued`
+    /// restricts the DB write to `status = 'queued'`, and the booth UI only
+    /// selects from the queue list anyway. Use `/audio skip` to remove the
+    /// playing item.
+    pub async fn delete_queue_item(
+        &self,
+        user_id: Uuid,
+        item_id: Uuid,
+        is_staff: bool,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let item = MediaQueueItem::find_by_id(&client, item_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("queue item not found"))?;
+        if item.status != MediaQueueItem::STATUS_QUEUED {
+            anyhow::bail!("track is no longer queued");
+        }
+        if !is_staff && item.submitter_id != user_id {
+            anyhow::bail!("not allowed");
+        }
+        let deleted = MediaQueueItem::delete_queued(&client, item_id).await?;
+        drop(client);
+        if deleted == 0 {
+            anyhow::bail!("track is no longer queued");
+        }
+        let mut state = self.state.lock().await;
+        self.publish_queue_update_with_guard(&mut state).await?;
+        Ok(())
+    }
+
+    /// Toggle `unskippable` on a queued item. Staff-only: regular users never
+    /// get to lock a track. The DB write also restricts to `status = 'queued'`,
+    /// so a track already promoted to playing keeps whatever value it carried
+    /// when it left the queue.
+    pub async fn toggle_unskippable(
+        &self,
+        user_id: Uuid,
+        item_id: Uuid,
+        is_staff: bool,
+    ) -> Result<bool> {
+        if !is_staff {
+            anyhow::bail!("not allowed");
+        }
+        let client = self.db.get().await?;
+        let updated = MediaQueueItem::toggle_unskippable_queued(&client, item_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("track is no longer queued"))?;
+        drop(client);
+        let new_value = updated.unskippable;
+        let mut state = self.state.lock().await;
+        self.publish_queue_update_with_guard(&mut state).await?;
+        // Acknowledge the user_id so we don't emit a warning about an unused
+        // variable in release builds; the user_id is also useful in tracing.
+        tracing::debug!(
+            %user_id,
+            %item_id,
+            unskippable = new_value,
+            "unskippable toggled"
+        );
+        Ok(new_value)
+    }
+
+    pub fn toggle_unskippable_task(&self, user_id: Uuid, item_id: Uuid, is_staff: bool) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.toggle_unskippable(user_id, item_id, is_staff).await {
+                Ok(unskippable) => {
+                    service.publish_event(AudioEvent::BoothItemUnskippableToggled {
+                        user_id,
+                        unskippable,
+                    });
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothItemUnskippableFailed {
+                        user_id,
+                        message: booth_unskippable_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn delete_queue_item_task(&self, user_id: Uuid, item_id: Uuid, is_staff: bool) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.delete_queue_item(user_id, item_id, is_staff).await {
+                Ok(()) => {
+                    service.publish_event(AudioEvent::BoothItemDeleted { user_id });
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothItemDeleteFailed {
+                        user_id,
+                        message: booth_delete_error_message(&err),
+                    });
                 }
             }
         });
@@ -1241,14 +1384,16 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
 }
 
 fn skip_threshold(paired_total: usize) -> u32 {
-    let total = paired_total as f32;
-    let value = (total * SKIP_VOTE_FRACTION).ceil() as u32;
+    let value = paired_total.saturating_mul(SKIP_VOTE_PERCENT).div_ceil(100) as u32;
     value.max(SKIP_VOTE_MIN)
 }
 
 fn booth_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("invalid url") || text.contains("youtube") && text.contains("not found") {
+    if text.contains("audio ban") {
+        "Banned from submitting audio".to_string()
+    } else if text.contains("invalid url") || text.contains("youtube") && text.contains("not found")
+    {
         "Invalid YouTube URL".to_string()
     } else if text.contains("rate limit") || text.contains("submission rate limit") {
         "Slow down - too many submissions".to_string()
@@ -1265,7 +1410,9 @@ fn booth_submit_error_message(err: &anyhow::Error) -> String {
 
 fn booth_vote_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("voting closed") {
+    if text.contains("audio ban") {
+        "Banned from voting".to_string()
+    } else if text.contains("voting closed") {
         "Voting closed - track started".to_string()
     } else if text.contains("pair a client") {
         "Pair a client to skip-vote".to_string()
@@ -1280,9 +1427,33 @@ fn booth_vote_error_message(err: &anyhow::Error) -> String {
     }
 }
 
+fn booth_unskippable_error_message(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if text.contains("not allowed") {
+        "Only staff can lock tracks".to_string()
+    } else if text.contains("no longer queued") || text.contains("not found") {
+        "Track is no longer in the queue".to_string()
+    } else {
+        "Failed to update track".to_string()
+    }
+}
+
+fn booth_delete_error_message(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if text.contains("not allowed") {
+        "Only the submitter or staff can delete this track".to_string()
+    } else if text.contains("queue item not found") || text.contains("no longer queued") {
+        "Track is no longer in the queue".to_string()
+    } else {
+        "Failed to delete track".to_string()
+    }
+}
+
 fn trusted_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("invalid url")
+    if text.contains("audio ban") {
+        "Banned from submitting audio".to_string()
+    } else if text.contains("invalid url")
         || text.contains("unsupported youtube url")
         || text.contains("invalid youtube video id")
     {
@@ -1321,6 +1492,7 @@ fn queue_item_view(
             .unwrap_or_default(),
         submitter_id: item.submitter_id,
         vote_score,
+        unskippable: item.unskippable,
     }
 }
 

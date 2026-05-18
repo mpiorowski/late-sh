@@ -52,6 +52,12 @@ pub(crate) enum ModCommand {
         date: Option<chrono::NaiveDate>,
         reason: String,
     },
+    Audio {
+        action: AudioAction,
+        username: String,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    },
     Role {
         action: RoleAction,
         username: String,
@@ -64,6 +70,7 @@ pub(crate) enum BanListScope {
     Server,
     Room { slug: String },
     Artboard,
+    Audio,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +141,28 @@ impl ArtboardAction {
         match self {
             Self::Ban => "artboard_ban",
             Self::Unban => "artboard_unban",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioAction {
+    Ban,
+    Unban,
+}
+
+impl AudioAction {
+    pub(crate) const fn past_tense(self) -> &'static str {
+        match self {
+            Self::Ban => "audio-banned",
+            Self::Unban => "removed audio ban for",
+        }
+    }
+
+    pub(crate) const fn audit_name(self) -> &'static str {
+        match self {
+            Self::Ban => "audio_ban",
+            Self::Unban => "audio_unban",
         }
     }
 }
@@ -240,7 +269,7 @@ fn parse_bans_mod_command(parts: &[&str]) -> Result<ModCommand> {
 
     if let Some(page) = parse_page(first)? {
         if parts.len() > 1 {
-            anyhow::bail!("usage: view bans [server|artboard|#roomname] [pagenumber]");
+            anyhow::bail!("usage: view bans [server|artboard|audio|#roomname] [pagenumber]");
         }
         return Ok(ModCommand::Bans {
             scope: BanListScope::All,
@@ -264,6 +293,15 @@ fn parse_bans_mod_command(parts: &[&str]) -> Result<ModCommand> {
             }
             Ok(ModCommand::Bans {
                 scope: BanListScope::Artboard,
+                page: optional_page(parts.get(1).copied())?,
+            })
+        }
+        "audio" => {
+            if parts.len() > 2 {
+                anyhow::bail!("usage: view bans audio [pagenumber]");
+            }
+            Ok(ModCommand::Bans {
+                scope: BanListScope::Audio,
                 page: optional_page(parts.get(1).copied())?,
             })
         }
@@ -341,7 +379,7 @@ fn parse_kick_mod_command(parts: &[&str]) -> Result<ModCommand> {
 }
 
 fn parse_ban_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: ban <server|#roomname|artboard> @name [duration] [reason...]";
+    const USAGE: &str = "usage: ban <server|#roomname|artboard|audio> @name [duration] [reason...]";
     let Some(target) = parts.first().copied() else {
         anyhow::bail!(USAGE);
     };
@@ -361,6 +399,12 @@ fn parse_ban_mod_command(parts: &[&str]) -> Result<ModCommand> {
             duration,
             reason,
         }),
+        "audio" => Ok(ModCommand::Audio {
+            action: AudioAction::Ban,
+            username,
+            duration,
+            reason,
+        }),
         _ if target.starts_with('#') => Ok(ModCommand::RoomAction {
             action: RoomModAction::Ban,
             slug: required_room_target(target, USAGE)?,
@@ -373,7 +417,7 @@ fn parse_ban_mod_command(parts: &[&str]) -> Result<ModCommand> {
 }
 
 fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: unban <server|#roomname|artboard> @name [reason...]";
+    const USAGE: &str = "usage: unban <server|#roomname|artboard|audio> @name [reason...]";
     let Some(target) = parts.first().copied() else {
         anyhow::bail!(USAGE);
     };
@@ -388,6 +432,12 @@ fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
         }),
         "artboard" => Ok(ModCommand::Artboard {
             action: ArtboardAction::Unban,
+            username,
+            duration: None,
+            reason,
+        }),
+        "audio" => Ok(ModCommand::Audio {
+            action: AudioAction::Unban,
             username,
             duration: None,
             reason,
@@ -602,8 +652,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "",
             "--- bans, etc. ---",
             "kick   <server|#room> @name [reason...]",
-            "ban    <server|#room|artboard> @name [duration] [reason...]",
-            "unban  <server|#room|artboard> @name [reason...]",
+            "ban    <server|#room|artboard|audio> @name [duration] [reason...]",
+            "unban  <server|#room|artboard|audio> @name [reason...]",
             "",
             "--- help & admin ---",
             "admin           - show admin commands",
@@ -651,8 +701,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Shows room id, type, visibility, flags, and member count.",
         ],
         "view bans" => &[
-            "view bans [server|artboard|#roomname] [pagenumber]",
-            "Lists current active bans. Without a scope, shows server, artboard, and room bans.",
+            "view bans [server|artboard|audio|#roomname] [pagenumber]",
+            "Lists current active bans. Without a scope, shows server, artboard, audio, and room bans.",
             "pagenumber: optional positive page number; 15 rows per page.",
         ],
         "view bans server" => &[
@@ -662,6 +712,10 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         "view bans artboard" => &[
             "view bans artboard [pagenumber]",
             "Lists active artboard bans with actor, expiry, and reason.",
+        ],
+        "view bans audio" => &[
+            "view bans audio [pagenumber]",
+            "Lists active audio bans with actor, expiry, and reason.",
         ],
         "view bans room" => &[
             "view bans #roomname [pagenumber]",
@@ -693,13 +747,13 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Removes one user from one room.",
         ],
         "ban" => &[
-            "ban <server|#room|artboard> @name [duration] [reason...]",
-            "Creates a server, artboard, or room ban. Room bans also remove membership.",
+            "ban <server|#room|artboard|audio> @name [duration] [reason...]",
+            "Creates a server, artboard, audio, or room ban. Room bans also remove membership.",
             "#roomname is required for room operations, e.g. #general.",
             "@name: username; bare name is also accepted.",
             "duration: optional positive number plus s/m/h/d, e.g. 30m or 7d; omit for permanent.",
             "reason: optional audit text after duration.",
-            "Subtopics: help ban server, help ban room, help ban artboard.",
+            "Subtopics: help ban server, help ban room, help ban artboard, help ban audio.",
         ],
         "ban server" => &[
             "ban server @name [duration] [reason...]",
@@ -713,12 +767,16 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "ban artboard @name [duration] [reason...]",
             "Creates an Artboard editing ban.",
         ],
+        "ban audio" => &[
+            "ban audio @name [duration] [reason...]",
+            "Blocks a user from submitting YouTube tracks and from casting skip-votes.",
+        ],
         "unban" => &[
-            "unban <server|#room|artboard> @name [reason...]",
-            "Removes active server, artboard, or room bans for a user.",
+            "unban <server|#room|artboard|audio> @name [reason...]",
+            "Removes active server, artboard, audio, or room bans for a user.",
             "#roomname is required for room operations, e.g. #general.",
             "@name: username; bare name is also accepted. reason: optional audit text.",
-            "Subtopics: help unban server, help unban room, help unban artboard.",
+            "Subtopics: help unban server, help unban room, help unban artboard, help unban audio.",
         ],
         "unban server" => &[
             "unban server @name [reason...]",
@@ -731,6 +789,10 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         "unban artboard" => &[
             "unban artboard @name [reason...]",
             "Removes active Artboard editing bans for one user.",
+        ],
+        "unban audio" => &[
+            "unban audio @name [reason...]",
+            "Removes the active audio ban for one user.",
         ],
         "artboard" => &[
             "artboard restore [YYYY-MM-DD] [reason...]",
@@ -1130,6 +1192,7 @@ mod tests {
             | ModCommand::RoomAction { username, .. }
             | ModCommand::ServerUser { username, .. }
             | ModCommand::Artboard { username, .. }
+            | ModCommand::Audio { username, .. }
             | ModCommand::Role { username, .. } => username,
             ModCommand::Help { .. }
             | ModCommand::RoomInfo { .. }

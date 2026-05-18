@@ -1,0 +1,2 @@
+ALTER TABLE media_queue_items
+    ADD COLUMN unskippable BOOLEAN NOT NULL DEFAULT FALSE;

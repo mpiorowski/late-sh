@@ -19,6 +19,7 @@ crate::model! {
         pub started_at: Option<DateTime<Utc>>,
         pub ended_at: Option<DateTime<Utc>>,
         pub error: Option<String>,
+        pub unskippable: bool,
     }
 }
 
@@ -181,6 +182,34 @@ impl MediaQueueItem {
             )
             .await?;
         Ok(rows)
+    }
+
+    /// Atomically flip `unskippable` on a queued item. Returns `Some(row)`
+    /// with the new value on success; `None` if the item is not queued (or
+    /// does not exist).
+    pub async fn toggle_unskippable_queued(client: &Client, id: Uuid) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "UPDATE media_queue_items
+                 SET unskippable = NOT unskippable,
+                     updated = current_timestamp
+                 WHERE id = $1 AND status = 'queued'
+                 RETURNING *",
+                &[&id],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
+    pub async fn delete_queued(client: &Client, id: Uuid) -> Result<u64> {
+        let count = client
+            .execute(
+                "DELETE FROM media_queue_items
+                 WHERE id = $1 AND status = 'queued'",
+                &[&id],
+            )
+            .await?;
+        Ok(count)
     }
 
     pub async fn update_status(client: &Client, id: Uuid, status: &str) -> Result<Option<Self>> {

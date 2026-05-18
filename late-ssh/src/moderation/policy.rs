@@ -41,6 +41,8 @@ bitflags! {
         const RENAME_ROOM = 1 << 15;
         const RESTORE_ARTBOARD = 1 << 16;
         const RENAME_USER = 1 << 17;
+        const BAN_FROM_AUDIO = 1 << 18;
+        const UNBAN_FROM_AUDIO = 1 << 19;
     }
 }
 
@@ -60,7 +62,9 @@ const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::VIEW_STAFF_INFO)
     .union(Caps::RENAME_ROOM)
     .union(Caps::RESTORE_ARTBOARD)
-    .union(Caps::RENAME_USER);
+    .union(Caps::RENAME_USER)
+    .union(Caps::BAN_FROM_AUDIO)
+    .union(Caps::UNBAN_FROM_AUDIO);
 
 const ADMIN: Caps = Caps::all();
 

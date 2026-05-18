@@ -775,19 +775,18 @@ fn skip_meter_spans(progress: &super::super::audio::svc::SkipProgress) -> Vec<Sp
         dots.push(if i < votes_shown { '●' } else { '○' });
     }
     vec![
-        Span::raw("  "),
         Span::styled(
-            "skip  ",
+            "skip ",
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(dots, Style::default().fg(theme::AMBER_GLOW())),
         Span::styled(
-            format!("  {}/{}", progress.votes, progress.threshold),
+            format!(" {}/{}", progress.votes, progress.threshold),
             Style::default().fg(theme::AMBER_DIM()),
         ),
-        Span::raw("   "),
+        Span::raw(" "),
         Span::styled(
             "v+s",
             Style::default()
