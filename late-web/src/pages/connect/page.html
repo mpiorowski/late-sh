@@ -28,8 +28,6 @@
             ytReady: false,
             pendingYoutubeItem: null,
             currentYoutubeItem: null,
-            playerStateInterval: null,
-            lastYoutubeSeekAt: 0,
             lastYoutubeReloadAt: 0,
             copied: null,
             volumePercent: 30,
@@ -153,9 +151,6 @@
                         case 'load_video':
                             this.loadYoutubeVideo(payload);
                             break;
-                        case 'seek':
-                            this.seekYoutube(payload.offset_ms || 0);
-                            break;
                         case 'queue_update':
                             break;
                         case 'set_playback_source':
@@ -260,10 +255,6 @@
                 if (this.heartbeatInterval) {
                     clearInterval(this.heartbeatInterval);
                     this.heartbeatInterval = null;
-                }
-                if (this.playerStateInterval) {
-                    clearInterval(this.playerStateInterval);
-                    this.playerStateInterval = null;
                 }
                 if (this.ytPlayer && this.ytPlayer.stopVideo) {
                     this.ytPlayer.stopVideo();
@@ -489,8 +480,6 @@
                     if (this.ytPlayer && this.ytPlayer.pauseVideo) {
                         this.ytPlayer.pauseVideo();
                     }
-                    this.lastYoutubeSeekAt = 0;
-                    this.stopPlayerStateLoop();
                     if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
                         this.startPlayback();
                     } else {
@@ -520,11 +509,8 @@
                                 // While pinned to Icecast, cue (load but don't
                                 // play). Otherwise play normally.
                                 if (this.userOverrideMode === 'icecast') {
-                                    const item = this.pendingYoutubeItem;
-                                    const offsetMs = this.expectedYoutubeOffsetMs(item);
                                     this.ytPlayer.cueVideoById({
-                                        videoId: item.videoId,
-                                        startSeconds: Math.floor(offsetMs / 1000),
+                                        videoId: this.pendingYoutubeItem.videoId,
                                     });
                                 } else {
                                     this.playYoutubeItem(this.pendingYoutubeItem);
@@ -541,17 +527,11 @@
                 const item = {
                     itemId: payload.item_id,
                     videoId: payload.video_id,
-                    startedAtMs: payload.started_at_ms,
-                    offsetMs: this.loadVideoOffsetMs(payload),
-                    receivedAtMs: performance.now(),
                     isStream: !!payload.is_stream,
                 };
 
                 // Pre-cue the video into the iframe even while pinned to
                 // Icecast so a later v+x flip is one `playVideo()` away.
-                // cueVideoById loads metadata + first frames without starting
-                // playback. Skip if the iframe already has this video — we
-                // don't want to reset a paused/cued state to CUED again.
                 if (this.userOverrideMode === 'icecast') {
                     this.pendingYoutubeItem = item;
                     this.ensureYoutubePlayer();
@@ -561,21 +541,21 @@
                         && this.ytPlayer.cueVideoById
                         && this.loadedYoutubeVideoId() !== item.videoId
                     ) {
-                        const offsetMs = this.expectedYoutubeOffsetMs(item);
-                        this.ytPlayer.cueVideoById({
-                            videoId: item.videoId,
-                            startSeconds: Math.floor(offsetMs / 1000),
-                        });
+                        this.ytPlayer.cueVideoById({ videoId: item.videoId });
                     }
                     return;
                 }
                 this.audioMode = 'youtube';
 
-                if (this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                // Safety-net heartbeat no-op: same queued item AND iframe is
+                // already showing the right video. Don't restart playback —
+                // a paused user stays paused.
+                if (
+                    this.isSameYoutubeItem(this.currentYoutubeItem, item)
+                    && this.loadedYoutubeVideoId() === item.videoId
+                ) {
                     this.currentYoutubeItem = item;
                     this.pendingYoutubeItem = null;
-                    this.seekYoutube(this.expectedYoutubeOffsetMs(item));
-                    this.startPlayerStateLoop();
                     return;
                 }
 
@@ -614,22 +594,15 @@
                 this.pendingYoutubeItem = null;
                 this.currentYoutubeItem = item;
                 this.status = 'buffering';
-                this.lastYoutubeSeekAt = 0;
-                const offsetMs = this.expectedYoutubeOffsetMs(item);
                 if (alreadyLoaded && this.ytPlayer.playVideo) {
                     this.ytPlayer.playVideo();
-                    this.correctYoutubeDriftTo(offsetMs);
                 } else {
-                    this.ytPlayer.loadVideoById({
-                        videoId: item.videoId,
-                        startSeconds: Math.floor(offsetMs / 1000),
-                    });
+                    this.ytPlayer.loadVideoById({ videoId: item.videoId });
                 }
                 this.verifyYoutubeLoad(item);
                 this.detectAutoplayBlocked(item);
                 this.ytPlayer.setVolume(this.volumePercent);
                 this.applyMuteState(this.muted);
-                this.startPlayerStateLoop();
             },
 
             detectAutoplayBlocked(item) {
@@ -697,13 +670,6 @@
                 }, 800);
             },
 
-            seekYoutube(offsetMs) {
-                if (this.userOverrideMode === 'icecast') {
-                    return;
-                }
-                this.correctYoutubeDriftTo(offsetMs || 0);
-            },
-
             handleYoutubeStateChange(state) {
                 if (!window.YT || !this.currentYoutubeItem) {
                     return;
@@ -719,7 +685,6 @@
                         this.unmuteOnNextPlay = false;
                         this.applyMuteState(this.muted);
                     }
-                    this.correctYoutubeDrift();
                     this.sendYoutubeState('playing');
                 } else if (state === window.YT.PlayerState.PAUSED) {
                     this.sendYoutubeState('paused');
@@ -729,7 +694,6 @@
                 } else if (state === window.YT.PlayerState.ENDED) {
                     this.sendYoutubeState('ended');
                     this.status = 'buffering';
-                    this.stopPlayerStateLoop();
                 }
             },
 
@@ -762,11 +726,7 @@
                 if (this.ytPlayer.stopVideo) {
                     this.ytPlayer.stopVideo();
                 }
-                const offsetMs = this.expectedYoutubeOffsetMs(item);
-                this.ytPlayer.loadVideoById({
-                    videoId: item.videoId,
-                    startSeconds: Math.floor(offsetMs / 1000),
-                });
+                this.ytPlayer.loadVideoById({ videoId: item.videoId });
             },
 
             verifyYoutubeLoad(item) {
@@ -778,80 +738,6 @@
                         this.reloadCurrentYoutubeItem();
                     }
                 }, 1000);
-            },
-
-            startPlayerStateLoop() {
-                if (this.playerStateInterval) {
-                    return;
-                }
-                this.playerStateInterval = setInterval(() => {
-                    if (this.audioMode === 'youtube' && this.currentYoutubeItem) {
-                        this.correctYoutubeDrift();
-                        this.sendYoutubeState('playing');
-                    }
-                }, 10000);
-            },
-
-            stopPlayerStateLoop() {
-                if (this.playerStateInterval) {
-                    clearInterval(this.playerStateInterval);
-                    this.playerStateInterval = null;
-                }
-            },
-
-            loadVideoOffsetMs(payload) {
-                const offsetMs = Number(payload.offset_ms);
-                if (Number.isFinite(offsetMs) && offsetMs >= 0) {
-                    return offsetMs;
-                }
-                return Math.max(0, Date.now() - payload.started_at_ms);
-            },
-
-            expectedYoutubeOffsetMs(item) {
-                if (!item || item.isStream) {
-                    return 0;
-                }
-                return Math.max(0, item.offsetMs + (performance.now() - item.receivedAtMs));
-            },
-
-            correctYoutubeDrift() {
-                if (!this.currentYoutubeItem || this.currentYoutubeItem.isStream) {
-                    return;
-                }
-                if (!this.ytPlayer || !this.ytPlayer.getCurrentTime || !this.ytPlayer.seekTo) {
-                    return;
-                }
-
-                const now = Date.now();
-                if (now - this.lastYoutubeSeekAt < 5000) {
-                    return;
-                }
-
-                const expectedMs = this.expectedYoutubeOffsetMs(this.currentYoutubeItem);
-                this.correctYoutubeDriftTo(expectedMs);
-            },
-
-            correctYoutubeDriftTo(expectedMs) {
-                if (!this.currentYoutubeItem || this.currentYoutubeItem.isStream) {
-                    return;
-                }
-                if (!this.ytPlayer || !this.ytPlayer.getCurrentTime || !this.ytPlayer.seekTo) {
-                    return;
-                }
-
-                const now = Date.now();
-                if (now - this.lastYoutubeSeekAt < 5000) {
-                    return;
-                }
-
-                const actualMs = Math.floor(this.ytPlayer.getCurrentTime() * 1000);
-                const driftMs = expectedMs - actualMs;
-                if (Math.abs(driftMs) < 2500) {
-                    return;
-                }
-
-                this.lastYoutubeSeekAt = now;
-                this.ytPlayer.seekTo(Math.max(0, expectedMs / 1000), true);
             },
 
             sendYoutubeState(state, error = null) {

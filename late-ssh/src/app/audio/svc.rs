@@ -26,9 +26,10 @@ const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 3;
 const SUBMISSION_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
 const FALLBACK_DEBOUNCE: Duration = Duration::from_secs(10);
-const PLAYBACK_SYNC_INTERVAL: Duration = Duration::from_secs(10);
-const PLAYBACK_END_GRACE: Duration = Duration::from_secs(5);
+const PLAYBACK_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
+const SKIP_VOTE_FRACTION: f32 = 0.3;
+const SKIP_VOTE_MIN: u32 = 2;
 
 #[derive(Clone)]
 pub struct AudioService {
@@ -74,12 +75,7 @@ pub enum AudioWsMessage {
     LoadVideo {
         item_id: Uuid,
         video_id: String,
-        started_at_ms: i64,
-        offset_ms: u64,
         is_stream: bool,
-    },
-    Seek {
-        offset_ms: u64,
     },
     SourceChanged {
         audio_mode: AudioMode,
@@ -112,6 +108,13 @@ pub enum AudioEvent {
         user_id: Uuid,
     },
     YoutubeFallbackFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    TrustedSkipFired {
+        user_id: Uuid,
+    },
+    TrustedSkipFailed {
         user_id: Uuid,
         message: String,
     },
@@ -699,6 +702,46 @@ impl AudioService {
         });
     }
 
+    /// Unconditionally skip the currently-playing track. Staff-only entry
+    /// point: bypasses the vote threshold and clears any pending skip-votes
+    /// so the next track starts with a clean slate.
+    pub async fn force_skip(&self) -> Result<()> {
+        let mut state = self.state.lock().await;
+        let Some(current_id) = state.current_item_id else {
+            anyhow::bail!("nothing is playing");
+        };
+        let client = self.db.get().await?;
+        let _ = MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
+            .await?;
+        drop(client);
+        state.current_item_id = None;
+        state.skip_votes.clear();
+        self.cancel_playback(&mut state);
+        self.advance_to_next_with_guard(&mut state).await
+    }
+
+    pub fn force_skip_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.force_skip().await {
+                Ok(()) => {
+                    service.publish_event(AudioEvent::TrustedSkipFired { user_id });
+                }
+                Err(err) => {
+                    let message = if format!("{err:#}")
+                        .to_ascii_lowercase()
+                        .contains("nothing is playing")
+                    {
+                        "Nothing is playing".to_string()
+                    } else {
+                        "Failed to skip audio".to_string()
+                    };
+                    service.publish_event(AudioEvent::TrustedSkipFailed { user_id, message });
+                }
+            }
+        });
+    }
+
     pub fn reevaluate_skip_threshold_task(&self) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -773,14 +816,10 @@ impl AudioService {
                 skip_progress,
             },
         ];
-        if let Some(current) = &snapshot.current
-            && let Some(started_at_ms) = current.started_at_ms
-        {
+        if let Some(current) = &snapshot.current {
             events.push(AudioWsMessage::LoadVideo {
                 item_id: current.id,
                 video_id: current.video_id.clone(),
-                started_at_ms,
-                offset_ms: offset_from_started_at_ms(started_at_ms),
                 is_stream: current.is_stream,
             });
         } else if snapshot.audio_mode == AudioMode::Youtube {
@@ -839,47 +878,13 @@ impl AudioService {
         self.record_browser_duration(report.item_id, report.duration_ms)
             .await?;
 
-        let state = self.state.lock().await;
-        if state.current_item_id != Some(report.item_id) {
-            return Ok(());
+        {
+            let state = self.state.lock().await;
+            if state.current_item_id != Some(report.item_id) {
+                return Ok(());
+            }
         }
 
-        let client = self.db.get().await?;
-        let Some(item) = MediaQueueItem::find_by_id(&client, report.item_id).await? else {
-            return Ok(());
-        };
-        let Some(started_at) = item.started_at else {
-            return Ok(());
-        };
-
-        let elapsed = Utc::now()
-            .signed_duration_since(started_at)
-            .to_std()
-            .unwrap_or_default();
-        let Some(duration) = playback_known_duration(&item) else {
-            tracing::debug!(
-                item_id = %report.item_id,
-                elapsed_ms = elapsed.as_millis() as u64,
-                offset_ms = ?report.offset_ms,
-                "ignoring browser ended report; server-known duration missing - server timer is authoritative"
-            );
-            self.publish_seek_for_started_at(started_at);
-            return Ok(());
-        };
-
-        if elapsed.saturating_add(PLAYBACK_END_GRACE) < duration {
-            tracing::debug!(
-                item_id = %report.item_id,
-                elapsed_ms = elapsed.as_millis() as u64,
-                duration_ms = duration.as_millis() as u64,
-                offset_ms = ?report.offset_ms,
-                "ignoring early browser ended report"
-            );
-            self.publish_seek_for_started_at(started_at);
-            return Ok(());
-        }
-
-        drop(state);
         self.finish_item(report.item_id).await
     }
 
@@ -1015,26 +1020,15 @@ impl AudioService {
     }
 
     fn publish_load_video(&self, item: &MediaQueueItem) {
-        let Some(started_at) = item.started_at else {
-            return;
-        };
         let _ = self.ws_tx.send(AudioWsMessage::LoadVideo {
             item_id: item.id,
             video_id: item.external_id.clone(),
-            started_at_ms: started_at.timestamp_millis(),
-            offset_ms: offset_for_started_at(started_at),
             is_stream: item.is_stream,
         });
     }
 
     fn publish_load_fallback(&self, source: &MediaSource) {
         let _ = self.ws_tx.send(fallback_load_event(source));
-    }
-
-    fn publish_seek_for_started_at(&self, started_at: DateTime<Utc>) {
-        let _ = self.ws_tx.send(AudioWsMessage::Seek {
-            offset_ms: offset_for_started_at(started_at),
-        });
     }
 
     async fn publish_youtube_fallback_with_guard(&self, state: &mut QueueState) -> Result<bool> {
@@ -1069,12 +1063,13 @@ impl AudioService {
             .unwrap_or_default();
         let sleep_for = duration.saturating_sub(elapsed);
         let item_id = item.id;
+        let item_for_heartbeat = item.clone();
         let service = self.clone();
         let (tx, rx) = oneshot::channel();
         state.playback_cancel = Some(tx);
         tokio::spawn(async move {
-            let mut sync = tokio::time::interval(PLAYBACK_SYNC_INTERVAL);
-            sync.tick().await;
+            let mut heartbeat = tokio::time::interval(PLAYBACK_HEARTBEAT_INTERVAL);
+            heartbeat.tick().await;
             tokio::select! {
                 _ = tokio::time::sleep(sleep_for) => {
                     if let Err(err) = service.finish_item_due_to_timer(item_id).await {
@@ -1086,10 +1081,14 @@ impl AudioService {
                         );
                     }
                 }
+                // Safety-net heartbeat: re-broadcast `LoadVideo` for the
+                // current item. Browsers already showing the right item
+                // no-op; browsers that missed an event or got stuck on the
+                // wrong track force-swap.
                 _ = async {
                     loop {
-                        sync.tick().await;
-                        service.publish_seek_for_started_at(started_at);
+                        heartbeat.tick().await;
+                        service.publish_load_video(&item_for_heartbeat);
                     }
                 } => {}
                 _ = rx => {}
@@ -1209,27 +1208,10 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
-fn offset_for_started_at(started_at: DateTime<Utc>) -> u64 {
-    Utc::now()
-        .signed_duration_since(started_at)
-        .to_std()
-        .unwrap_or_default()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
-}
-
-fn offset_from_started_at_ms(started_at_ms: i64) -> u64 {
-    Utc::now()
-        .timestamp_millis()
-        .saturating_sub(started_at_ms)
-        .try_into()
-        .unwrap_or_default()
-}
-
 fn skip_threshold(paired_total: usize) -> u32 {
     let total = paired_total as f32;
-    let value = (total * 0.1).ceil() as u32;
-    value.max(1)
+    let value = (total * SKIP_VOTE_FRACTION).ceil() as u32;
+    value.max(SKIP_VOTE_MIN)
 }
 
 fn booth_submit_error_message(err: &anyhow::Error) -> String {
@@ -1284,8 +1266,6 @@ fn fallback_load_event(source: &MediaSource) -> AudioWsMessage {
     AudioWsMessage::LoadVideo {
         item_id: source.id,
         video_id: source.external_id.clone(),
-        started_at_ms: Utc::now().timestamp_millis(),
-        offset_ms: 0,
         is_stream: source.is_stream,
     }
 }
@@ -1317,22 +1297,20 @@ mod tests {
     use super::skip_threshold;
 
     #[test]
-    fn skip_threshold_floors_at_one_and_uses_ten_percent_ceil() {
-        // No pairings → still need one vote to skip (avoids divide-by-zero
-        // making the threshold trivially satisfiable).
-        assert_eq!(skip_threshold(0), 1);
-        // Small rooms collapse to threshold 1: any paired listener can skip.
-        assert_eq!(skip_threshold(1), 1);
-        assert_eq!(skip_threshold(5), 1);
-        assert_eq!(skip_threshold(9), 1);
-        assert_eq!(skip_threshold(10), 1);
-        // 10% ceil kicks in above 10 paired clients.
-        assert_eq!(skip_threshold(11), 2);
-        assert_eq!(skip_threshold(20), 2);
-        assert_eq!(skip_threshold(21), 3);
-        assert_eq!(skip_threshold(25), 3);
-        assert_eq!(skip_threshold(91), 10);
-        assert_eq!(skip_threshold(100), 10);
-        assert_eq!(skip_threshold(101), 11);
+    fn skip_threshold_floors_at_two_and_uses_thirty_percent_ceil() {
+        // Small rooms collapse to the floor: at least two paired listeners
+        // must agree before a skip fires.
+        assert_eq!(skip_threshold(0), 2);
+        assert_eq!(skip_threshold(1), 2);
+        assert_eq!(skip_threshold(5), 2);
+        assert_eq!(skip_threshold(6), 2);
+        // 30% ceil kicks in above 6 paired clients.
+        assert_eq!(skip_threshold(7), 3);
+        assert_eq!(skip_threshold(10), 3);
+        assert_eq!(skip_threshold(11), 4);
+        assert_eq!(skip_threshold(20), 6);
+        assert_eq!(skip_threshold(21), 7);
+        assert_eq!(skip_threshold(100), 30);
+        assert_eq!(skip_threshold(101), 31);
     }
 }

@@ -1989,7 +1989,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
     }
 }
 
-fn try_open_icon_picker(app: &mut App) {
+pub(crate) fn try_open_icon_picker(app: &mut App) {
     let ctx = InputContext::from_app(app);
     // Only chat composers can receive icons.
     if !matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) {

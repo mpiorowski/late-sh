@@ -262,9 +262,12 @@ pub struct ChatState {
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
+    requested_icon_picker: bool,
+    requested_open_profile: Option<(Uuid, String)>,
     requested_quit: bool,
     requested_audio_url: Option<String>,
     requested_audio_fallback_url: Option<String>,
+    requested_audio_skip: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
     // image upload
@@ -398,9 +401,12 @@ impl ChatState {
             requested_help_topic: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
+            requested_icon_picker: false,
+            requested_open_profile: None,
             requested_quit: false,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
+            requested_audio_skip: false,
             pending_mod_outputs: VecDeque::new(),
             image_upload_rx: None,
             image_upload_pending: false,
@@ -605,6 +611,14 @@ impl ChatState {
         std::mem::take(&mut self.requested_mod_modal)
     }
 
+    pub fn take_requested_icon_picker(&mut self) -> bool {
+        std::mem::take(&mut self.requested_icon_picker)
+    }
+
+    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String)> {
+        self.requested_open_profile.take()
+    }
+
     pub fn take_requested_quit(&mut self) -> bool {
         std::mem::take(&mut self.requested_quit)
     }
@@ -615,6 +629,10 @@ impl ChatState {
 
     pub fn take_requested_audio_fallback_url(&mut self) -> Option<String> {
         self.requested_audio_fallback_url.take()
+    }
+
+    pub fn take_requested_audio_skip(&mut self) -> bool {
+        std::mem::take(&mut self.requested_audio_skip)
     }
 
     pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
@@ -1340,6 +1358,33 @@ impl ChatState {
             return None;
         }
 
+        if body.trim() == "/icons" {
+            self.clear_composer_after_submit();
+            self.requested_icon_picker = true;
+            return None;
+        }
+
+        if let Some(target) = parse_user_command(&body, "/profile") {
+            self.clear_composer_after_submit();
+            match target {
+                None => {
+                    let username = self
+                        .usernames
+                        .get(&self.user_id)
+                        .map(|name| name.trim())
+                        .filter(|name| !name.is_empty())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| short_user_id(self.user_id));
+                    self.requested_open_profile = Some((self.user_id, username));
+                }
+                Some(name) => {
+                    self.service
+                        .open_profile_by_username_task(self.user_id, name.to_string());
+                }
+            }
+            return None;
+        }
+
         if body.trim().starts_with("/mod ") {
             self.clear_composer_after_submit();
             return Some(Banner::error(
@@ -1350,6 +1395,15 @@ impl ChatState {
         if body.trim() == "/exit" {
             self.clear_composer_after_submit();
             self.requested_quit = true;
+            return None;
+        }
+
+        if body.trim() == "/audio skip" {
+            self.clear_composer_after_submit();
+            if !self.is_admin && !self.is_moderator {
+                return Some(Banner::error("/audio is staff-only"));
+            }
+            self.requested_audio_skip = true;
             return None;
         }
 
@@ -2336,6 +2390,18 @@ impl ChatState {
                 ChatEvent::DmFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::OpenProfileResolved {
+                    user_id,
+                    target_user_id,
+                    target_username,
+                } if self.user_id == user_id => {
+                    self.requested_open_profile = Some((target_user_id, target_username));
+                }
+                ChatEvent::OpenProfileFailed { user_id, message }
+                    if self.user_id == user_id =>
+                {
+                    banner = Some(Banner::error(&message));
+                }
                 ChatEvent::RoomJoined {
                     user_id,
                     room_id,
@@ -3168,6 +3234,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("binds", "chat guide"),
     ("dm", "open DM"),
     ("exit", "quit confirm"),
+    ("icons", "open icon picker"),
     ("ignore", "mute user"),
     ("invite", "add user"),
     ("leave", "leave room"),
@@ -3176,6 +3243,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("music", "music help"),
     ("paste-image", "upload image from CLI clipboard"),
     ("private", "new private room"),
+    ("profile", "view user profile"),
     ("public", "open public room for everyone"),
     ("settings", "open settings"),
     ("unignore", "unmute user"),

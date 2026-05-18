@@ -47,6 +47,10 @@ impl AudioState {
             .set_trusted_youtube_fallback_task(self.user_id, url);
     }
 
+    pub fn skip_trusted(&self) {
+        self.service.force_skip_task(self.user_id);
+    }
+
     pub fn booth_submit_enabled(&self) -> bool {
         self.service.booth_submit_enabled()
     }
@@ -97,6 +101,12 @@ impl AudioState {
                 AudioEvent::YoutubeFallbackFailed { user_id, message }
                     if user_id == self.user_id =>
                 {
+                    banner = Some(Banner::error(&message));
+                }
+                AudioEvent::TrustedSkipFired { user_id } if user_id == self.user_id => {
+                    banner = Some(Banner::success("Skipped audio"));
+                }
+                AudioEvent::TrustedSkipFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 AudioEvent::BoothSubmitQueued { user_id, position } if user_id == self.user_id => {

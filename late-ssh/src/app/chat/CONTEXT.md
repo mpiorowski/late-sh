@@ -231,6 +231,7 @@ User commands:
 - `/binds` opens the Chat help topic.
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
+- `/icons` opens the icon picker (same as `Ctrl+]`).
 - `/ignore [@user]` mutes a user or lists muted users.
 - `/invite @user` adds a user to the selected non-DM room.
 - `/leave` leaves the selected non-permanent room.
@@ -240,6 +241,7 @@ User commands:
 - `/music` opens music help.
 - `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
 - `/private #room` creates a private topic room and joins the caller.
+- `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
 - `/settings` opens settings.
 - `/unignore [@user]` removes an ignored user.
