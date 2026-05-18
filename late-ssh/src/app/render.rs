@@ -950,6 +950,7 @@ impl App {
                 ctx.booth_modal_state,
                 &ctx.booth_snapshot,
                 ctx.booth_submit_enabled,
+                ctx.is_admin || ctx.is_moderator,
             );
         }
 
