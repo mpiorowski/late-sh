@@ -74,6 +74,7 @@ pub struct PokerSeat {
     pub street_bet: i64,
     pub all_in: bool,
     pub pending: bool,
+    pub last_payout: i64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -669,6 +670,7 @@ struct SharedState {
     auto_check_fold: [bool; MAX_SEATS],
     committed: [i64; MAX_SEATS],
     street_bet: [i64; MAX_SEATS],
+    last_payout: [i64; MAX_SEATS],
     pending_commit: [Option<PendingCommit>; MAX_SEATS],
     community: Vec<PlayingCard>,
     deck: Vec<PlayingCard>,
@@ -720,6 +722,7 @@ impl SharedState {
             auto_check_fold: [false; MAX_SEATS],
             committed: [0; MAX_SEATS],
             street_bet: [0; MAX_SEATS],
+            last_payout: [0; MAX_SEATS],
             pending_commit: [None; MAX_SEATS],
             community: Vec::new(),
             deck: Vec::new(),
@@ -926,6 +929,7 @@ impl SharedState {
             street_bet: self.street_bet[index],
             all_in: self.all_in[index],
             pending: self.pending_commit[index].is_some(),
+            last_payout: self.last_payout[index],
         }
     }
 
@@ -1061,6 +1065,7 @@ impl SharedState {
         self.leave_after_hand = [false; MAX_SEATS];
         self.committed = [0; MAX_SEATS];
         self.street_bet = [0; MAX_SEATS];
+        self.last_payout = [0; MAX_SEATS];
         self.pending_commit = [None; MAX_SEATS];
         self.winners.clear();
         self.winning_rank = None;
@@ -1564,6 +1569,7 @@ impl SharedState {
         self.winners = vec![winner];
         self.winning_rank = None;
         self.showdown_reveals = false;
+        self.last_payout[winner] = self.pot() - self.committed[winner];
 
         let settlements = self.settlements_for_single_winner(winner);
         self.settlement_pending = !settlements.is_empty();
@@ -1609,7 +1615,13 @@ impl SharedState {
         self.clear_action_countdown();
         self.showdown_reveals = true;
 
-        let settlements = self.settlements_from_awards(&awards);
+        let credits = Self::credits_from_awards(&awards);
+        for index in 0..MAX_SEATS {
+            if credits[index] > 0 {
+                self.last_payout[index] = credits[index] - self.committed[index];
+            }
+        }
+        let settlements = self.settlements_from_credits(&credits);
         self.settlement_pending = !settlements.is_empty();
 
         let winners = seat_list(&self.winners);
@@ -1686,7 +1698,7 @@ impl SharedState {
         pots
     }
 
-    fn settlements_from_awards(&self, awards: &[PotAward]) -> Vec<PokerSettlement> {
+    fn credits_from_awards(awards: &[PotAward]) -> [i64; MAX_SEATS] {
         let mut credits = [0; MAX_SEATS];
         for award in awards {
             if award.amount <= 0 || award.winners.is_empty() {
@@ -1701,7 +1713,10 @@ impl SharedState {
                 credits[winner] += share + odd_chip;
             }
         }
+        credits
+    }
 
+    fn settlements_from_credits(&self, credits: &[i64; MAX_SEATS]) -> Vec<PokerSettlement> {
         (0..MAX_SEATS)
             .filter_map(|index| {
                 let user_id = self.seats[index]?;

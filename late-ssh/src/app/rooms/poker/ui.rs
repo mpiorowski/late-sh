@@ -656,17 +656,18 @@ fn seat_badge_line(
 ) -> Line<'static> {
     let mut spans = Vec::new();
     if is_winner {
+        let label = if seat.last_payout > 0 {
+            format!("WIN +{}", seat.last_payout)
+        } else {
+            "WIN".to_string()
+        };
         spans.push(Span::styled(
-            "WINNER",
+            label,
             Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
         ));
-    }
-    if snapshot.dealer_button == Some(seat.index) {
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
-        }
+    } else if snapshot.dealer_button == Some(seat.index) {
         spans.push(Span::styled(
             "button",
             Style::default()
