@@ -296,7 +296,7 @@ File: `late-web/src/pages/connect/page.html`. The audio source is decided in the
 - `app/tick.rs` turns `Visualizer::procedural_active` on whenever this SSH
   session has a paired browser (`paired_client_state().client_kind == Browser`).
   This is source-agnostic: Icecast and YouTube render the same procedural bars.
-- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"P install · pair"` (last only when height ≥ 5). Procedural live draws dim amber 1-cell bars with 1-cell gaps using linear resample plus tilt `(0.65 + 0.35·t)·γ^1.1`.
+- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"P install · pair"` (last only when height ≥ 5). Procedural live draws dim amber 1-cell-wide bars with 1-cell gaps at **sub-cell vertical resolution** (`▁▂▃▄▅▆▇█`, 9-step). Bar heights come from layered sines — a primary traveling wave, a faster per-band shimmer, and a slow global breath term (incommensurate frequencies so the pattern doesn't visibly repeat in a few seconds). No spectrum-style tilt is applied on the procedural path; the wave shape is decorative, not a frequency analog.
 - The old `VizFrame`/`Visualizer::update` path is still present for compatibility
   with existing payload parsing and tests, but browser web playback no longer
   drives it.

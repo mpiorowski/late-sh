@@ -90,12 +90,26 @@ impl Visualizer {
     }
 
     fn procedural_bands(&self) -> [f32; 8] {
+        // Layered sines: a primary traveling wave, a faster shimmer offset
+        // per-band, and a slow global breath. The phases multiply (1.0, 1.7,
+        // 0.35) are deliberately incommensurate so the pattern doesn't repeat
+        // visibly inside a few seconds.
         let mut out = [0.0f32; 8];
+        let breath = 0.05 * (self.procedural_phase * 0.35).sin();
         for (i, slot) in out.iter_mut().enumerate() {
-            let phase = self.procedural_phase + (i as f32) * 0.55;
-            *slot = 0.5 + 0.25 * phase.sin();
+            let p = self.procedural_phase + (i as f32) * 0.55;
+            let primary = 0.20 * p.sin();
+            let shimmer = 0.07 * (p * 1.7 + (i as f32) * 0.31).sin();
+            *slot = (0.5 + primary + shimmer + breath).clamp(0.05, 0.95);
         }
         out
+    }
+
+    fn procedural_block(fill: f32) -> &'static str {
+        // 9-step sub-cell vertical block: ' ' through '█' in 1/8 increments.
+        const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+        let idx = (fill.clamp(0.0, 1.0) * 8.0).round() as usize;
+        BLOCKS[idx.min(8)]
     }
 
     /// Borderless visualizer for the merged shell. Renders bars only when
@@ -197,34 +211,32 @@ impl Visualizer {
         }
 
         let band_count = width.div_ceil(2).max(1);
-        let band_width = 1usize;
         let gap = 1usize;
 
+        // No tilt — the procedural pattern is decorative, not a frequency
+        // spectrum. Tilting it would lean the whole wave to one side and read
+        // as broken rather than stylized.
         let source = self.procedural_bands();
-        let mut bands = self.resample(&source, band_count);
-        let len = bands.len();
-        for (i, band) in bands.iter_mut().enumerate() {
-            *band = Self::tilt(*band, i, len);
-        }
+        let bands = self.resample(&source, band_count);
+        let style = Style::default().fg(theme::AMBER_DIM());
 
         let mut lines = Vec::with_capacity(height);
         for row in 0..height {
-            let level = height - row;
+            // Vertical cell index measured from the bottom (0 = bottom row).
+            let cell_from_bottom = (height - row - 1) as f32;
             let mut spans: Vec<Span> = Vec::with_capacity(band_count * 2);
 
             for (i, &band) in bands.iter().enumerate().take(band_count) {
-                let band = band.clamp(0.0, 1.0);
-                let bar_height = (band * height as f32).floor() as usize;
-                let bar_height = bar_height.min(height);
-                let filled = level <= bar_height;
+                let bar_height_cells = band.clamp(0.0, 1.0) * height as f32;
+                // How much of THIS cell is filled by the bar (0..1).
+                let fill = (bar_height_cells - cell_from_bottom).clamp(0.0, 1.0);
 
-                let (ch, style) = if filled {
-                    ('█', Style::default().fg(theme::AMBER_DIM()))
+                if fill <= 0.0 {
+                    spans.push(Span::raw(" "));
                 } else {
-                    (' ', Style::default())
-                };
+                    spans.push(Span::styled(Self::procedural_block(fill), style));
+                }
 
-                spans.push(Span::styled(ch.to_string().repeat(band_width), style));
                 if gap > 0 && i + 1 < band_count {
                     spans.push(Span::raw(" ".repeat(gap)));
                 }
