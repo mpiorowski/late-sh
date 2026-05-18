@@ -432,7 +432,12 @@ mod tests {
             viz.tick_procedural();
         }
         let later = viz.procedural_bands();
-        assert!(first.iter().zip(later.iter()).any(|(a, b)| (a - b).abs() > 0.01));
+        assert!(
+            first
+                .iter()
+                .zip(later.iter())
+                .any(|(a, b)| (a - b).abs() > 0.01)
+        );
     }
 
     #[test]
