@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, Icecast visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-18 (server sync timeline ripped out; `Seek` protocol gone, browser drift correction gone, ended-rebuttal gone; `LoadVideo` is now a heartbeat — re-broadcast every 10s as the safety net that forces stuck browsers to swap. Each browser plays its own timeline; server still owns when tracks change. See §4 timers + §5 protocol + §9.)
+- Last updated: 2026-05-18 (skip-vote eligibility narrowed to YouTube listeners only — paired browsers with `audio_source = Youtube`. CLI-only and Icecast-pinned browsers don't count toward numerator or denominator. Flipping away from YouTube drops your pending vote. `SessionRegistry` and `PairedClientRegistry` now track `user_id` + cached `audio_source` per entry. Sidebar title-bar tags now show live listener counts on both blocks ("youtube ── 5" / "icecast ── 12"), browsers-only, lowercase labels. See §4 constants + §6 + §12.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -91,7 +91,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `FALLBACK_DEBOUNCE = 10s`
 - `PLAYBACK_HEARTBEAT_INTERVAL = 10s` — periodic `LoadVideo` re-broadcast for the current item. Safety net: browsers already showing the right item no-op; stuck/disconnected/wrong-item browsers force-swap. Replaces the old `Seek`-based sync.
 - `STREAM_CAP = 1h` — hard cap on any single playing row's wall-clock lifetime.
-- `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(paired_total) = max(ceil(0.3 * paired_total), 2)`. Floor of 2 means a lone listener can't skip; the 30% ceil kicks in above 6 paired clients.
+- `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(youtube_total) = max(ceil(0.3 * youtube_total), 2)`. **Denominator is YouTube listeners only** (`PairedClientRegistry::total_youtube_listeners()`) — paired browsers whose user has `audio_source = Youtube`. CLI-only or Icecast-pinned browsers don't count in either numerator or denominator. Floor of 2 means a lone listener can't solo-skip; the 30% ceil kicks in above 6 YouTube listeners.
 
 ### Public API
 - `new(db, youtube_api_key)` — `main.rs:123`.
@@ -198,6 +198,27 @@ Triggers (`paired_clients.rs:217-297`, `:88-150`):
 Both decisions run under the same `PairedClientRegistry` lock to close the TOCTOU window where a new browser could register between removal and sender collection.
 
 CLI side: `late-cli/src/ws.rs:155-171` swaps the shared mute atomic — `Arc::clone(&audio.muted)` (`late-cli/src/main.rs:148`) — the same atomic used by the local mute keybind (`late-cli/src/audio/output.rs:166-193`). After applying it, the CLI re-sends `client_state` so the server sees the new `muted` value.
+
+### Skip-vote eligibility — only YouTube listeners
+
+Each `PairControlEntry` carries `user_id: Uuid` (resolved from `SessionRegistry::user_for(token)` during the pair-WS upgrade) and `audio_source: AudioSource` (cached from `users.settings.audio_source`, read at registration time).
+
+Helpers used by the skip-vote path:
+- `has_youtube_listener(token) -> bool` — any browser on this token with `audio_source == Youtube`.
+- `total_youtube_listeners() -> usize` — count of such entries across all tokens.
+- `set_audio_source(user_id, source) -> bool` — updates every entry for the user; returns `true` when at least one entry transitioned **away from** `Youtube`. Called from `AudioService::persist_audio_source` after the DB write succeeds.
+
+Vote-strip on flip-away: when `set_audio_source` returns `true`, `AudioService::persist_audio_source` removes the user from `state.skip_votes` and runs `reevaluate_skip_threshold` (which may fire a skip if the threshold dropped to meet remaining votes).
+
+Eligibility table:
+
+| Has paired browser | Browser's `audio_source` | Can skip-vote? | Counts toward threshold? |
+|--------------------|--------------------------|----------------|--------------------------|
+| no                 | n/a                      | no             | no                       |
+| yes                | Icecast                  | no             | no                       |
+| yes                | Youtube                  | yes            | yes                      |
+
+A user with multiple browser tabs in YouTube mode counts each tab toward the denominator but still only contributes one vote (HashSet on `user_id`). Staff `/audio skip` (`force_skip`) bypasses the threshold entirely.
 
 ---
 
@@ -306,10 +327,14 @@ Pure preference-based. Does **not** gate on `is_browser`. The saved preference (
 
 The volume row stays honest about pairing (`vol  —` when nothing paired), so users aren't misled about whether their preference is currently audible.
 
+### Title-bar listener tags
+
+Both blocks always show their live listener count in the title-bar tag slot — `youtube  ────  5` / `icecast  ────  12`. Active vs inactive is communicated by color/weight (amber bold vs italic faint), not by case (label is always lowercase) and not by tag presence. The counts are sourced live from `PairedClientRegistry::total_youtube_listeners()` / `total_icecast_listeners()` via `AudioService` accessors; both filter to paired browsers — CLI is intentionally excluded.
+
 ### Fallback-not-empty semantics
 
 The widget treats "no submitted track" and "fallback playing" as the same state. When `queue.current.is_none()`:
-- Title tag is `loop` (was `fallback` — didn't fit on narrow rails after dropping `▶ ` prefix).
+- Title tag still shows the YouTube listener count (no separate "loop"/"fallback" badge anymore — the body row carries that information).
 - Body renders `fallback stream` / `YouTube · 24/7` plus a `queue with v+v` hint.
 - When a track is playing but queue is otherwise empty, the trailing "next" row says `· fallback next`, not "queue ends".
 
@@ -319,13 +344,14 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 
 - `queue_snapshot: &QueueSnapshot` — from `AudioState::queue_snapshot()` watch channel.
 - `vote: VoteCardView<'_>` — from the genre vote state.
-- `paired_client: Option<&ClientAudioState>` — for `volume_percent` and `muted` (vol row).
+- `paired_client: Option<&ClientAudioState>` — for `volume_percent` and `muted` (vol row only).
 - `paired_browser_source: AudioSource` — App's per-user mirror.
+- `youtube_listener_count: usize` / `icecast_listener_count: usize` — live counts from the registry via `AudioService::{youtube,icecast}_listener_count()`. Browsers only; refreshed every render tick.
 - `now_playing: Option<&NowPlaying>` — Icecast title + duration source, from `NowPlayingService` (§11). Drives the icecast track and progress rows.
 
 ### Internal helpers (all in `sidebar.rs`)
 
-- `stage_title_line(area_w, label, tag, active)` — shared title-bar renderer. Active → uppercase amber bold + amber tag; inactive → lowercase italic faint + dropped tag. No `▶ ` glyph prefix on the tag (color + position read as a state badge; the prefix was eating cells on narrow rails).
+- `stage_title_line(area_w, label, tag, active)` — shared title-bar renderer. Label is always lowercase. Active → amber bold label + amber-dim tag; inactive → italic faint label + tag. No `▶ ` glyph prefix on the tag (color + position read as a state badge; the prefix was eating cells on narrow rails).
 - `draw_volume_row` — the vol bar.
 - `draw_keybind_row(frame, area, &[(key, label), ...])` — adaptive hint renderer; drops trailing groups when the rail is too narrow rather than mid-word truncating.
 - `draw_youtube_block` / `draw_icecast_block` — fixed-size block renderers.

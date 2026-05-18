@@ -431,7 +431,9 @@ async fn delete_account_terminates_active_sessions() {
     let token = "delete-session-token".to_string();
     let (tx, mut rx) = mpsc::channel(1);
 
-    registry.register(token.clone(), tx).await;
+    registry
+        .register(token.clone(), tx, uuid::Uuid::now_v7())
+        .await;
     active_users.lock().expect("active users").insert(
         user.id,
         ActiveUser {

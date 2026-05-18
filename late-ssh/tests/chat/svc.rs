@@ -1808,7 +1808,9 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -1889,7 +1891,9 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -2007,7 +2011,9 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -2408,7 +2414,9 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -2476,7 +2484,9 @@ async fn grant_mod_command_updates_active_session_permissions() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),

@@ -9,6 +9,7 @@ use std::{
     },
 };
 use tokio::sync::mpsc::UnboundedSender;
+use uuid::Uuid;
 
 use crate::app::audio::client_state::{ClientAudioState, ClientKind};
 use crate::metrics;
@@ -50,6 +51,8 @@ struct PairControlEntry {
     tx: UnboundedSender<PairControlMessage>,
     state: ClientAudioState,
     usage_total_recorded: bool,
+    user_id: Uuid,
+    audio_source: AudioSource,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -70,7 +73,13 @@ impl PairedClientRegistry {
         Self::default()
     }
 
-    pub fn register(&self, token: String, tx: UnboundedSender<PairControlMessage>) -> u64 {
+    pub fn register(
+        &self,
+        token: String,
+        tx: UnboundedSender<PairControlMessage>,
+        user_id: Uuid,
+        audio_source: AudioSource,
+    ) -> u64 {
         let registration_id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let mut clients = self.clients.lock_recover();
         let entries = clients.entry(token.clone()).or_default();
@@ -85,6 +94,8 @@ impl PairedClientRegistry {
             tx,
             state: ClientAudioState::default(),
             usage_total_recorded: false,
+            user_id,
+            audio_source,
         });
         registration_id
     }
@@ -378,6 +389,74 @@ impl PairedClientRegistry {
             .map(|entries| !entries.is_empty())
             .unwrap_or(false)
     }
+
+    /// True when at least one paired browser on `token` is currently pinned to
+    /// the YouTube audio source. Used to gate skip-vote: only listeners
+    /// actually hearing the YouTube track have skin in the game.
+    pub fn has_youtube_listener(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)
+            .map(|entries| {
+                entries.iter().any(|entry| {
+                    entry.state.client_kind == ClientKind::Browser
+                        && entry.audio_source == AudioSource::Youtube
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// Count of paired browser entries across all tokens whose user has
+    /// `audio_source = Youtube` cached. Drives the skip-vote threshold
+    /// denominator and the sidebar's YouTube listener tally.
+    pub fn total_youtube_listeners(&self) -> usize {
+        self.total_browser_listeners_by_source(AudioSource::Youtube)
+    }
+
+    /// Count of paired browser entries across all tokens whose user has
+    /// `audio_source = Icecast` cached. Drives the sidebar's Icecast
+    /// listener tally. CLI entries are intentionally not counted — only
+    /// browsers in Icecast mode (the iframe is pre-cued but the radio
+    /// `<audio>` element is what's making sound).
+    pub fn total_icecast_listeners(&self) -> usize {
+        self.total_browser_listeners_by_source(AudioSource::Icecast)
+    }
+
+    fn total_browser_listeners_by_source(&self, source: AudioSource) -> usize {
+        let clients = self.clients.lock_recover();
+        clients
+            .values()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|entry| {
+                        entry.state.client_kind == ClientKind::Browser
+                            && entry.audio_source == source
+                    })
+                    .count()
+            })
+            .sum()
+    }
+
+    /// Update the cached `audio_source` for every entry owned by `user_id`.
+    /// Returns true when at least one entry's value transitioned away from
+    /// `Youtube` — caller uses this to drop the user's pending skip-vote.
+    pub fn set_audio_source(&self, user_id: Uuid, source: AudioSource) -> bool {
+        let mut clients = self.clients.lock_recover();
+        let mut left_youtube = false;
+        for entries in clients.values_mut() {
+            for entry in entries.iter_mut() {
+                if entry.user_id != user_id {
+                    continue;
+                }
+                if entry.audio_source == AudioSource::Youtube && source != AudioSource::Youtube {
+                    left_youtube = true;
+                }
+                entry.audio_source = source;
+            }
+        }
+        left_youtube
+    }
 }
 
 fn token_hint(token: &str) -> String {
@@ -394,7 +473,12 @@ mod tests {
     fn paired_client_send_control_delivers_message() {
         let registry = PairedClientRegistry::new();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        registry.register("tok1".to_string(), tx);
+        registry.register(
+            "tok1".to_string(),
+            tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        );
 
         assert!(registry.send_control("tok1", PairControlMessage::ToggleMute));
         assert_eq!(rx.try_recv().unwrap(), PairControlMessage::ToggleMute);
@@ -405,8 +489,18 @@ mod tests {
         let registry = PairedClientRegistry::new();
         let (tx1, mut rx1) = tokio::sync::mpsc::unbounded_channel();
         let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel();
-        let first = registry.register("tok1".to_string(), tx1);
-        let second = registry.register("tok1".to_string(), tx2);
+        let first = registry.register(
+            "tok1".to_string(),
+            tx1,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        );
+        let second = registry.register(
+            "tok1".to_string(),
+            tx2,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        );
 
         registry.unregister_if_match("tok1", first);
 
@@ -423,7 +517,12 @@ mod tests {
     fn paired_client_snapshot_tracks_latest_state() {
         let registry = PairedClientRegistry::new();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let registration_id = registry.register("tok1".to_string(), tx);
+        let registration_id = registry.register(
+            "tok1".to_string(),
+            tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        );
         registry.update_state_and_enforce_mute_policy(
             "tok1",
             registration_id,
@@ -451,7 +550,12 @@ mod tests {
         let registry = PairedClientRegistry::new();
 
         let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli_id = registry.register("tok1".to_string(), cli_tx);
+        let cli_id = registry.register(
+            "tok1".to_string(),
+            cli_tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        );
         registry.update_state_and_enforce_mute_policy(
             "tok1",
             cli_id,
@@ -466,7 +570,12 @@ mod tests {
         );
 
         let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
-        let browser_id = registry.register("tok1".to_string(), browser_tx);
+        let browser_id = registry.register(
+            "tok1".to_string(),
+            browser_tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        );
         registry.update_state_and_enforce_mute_policy(
             "tok1",
             browser_id,
@@ -496,7 +605,12 @@ mod tests {
     fn paired_client_request_clipboard_image_false_when_only_browser() {
         let registry = PairedClientRegistry::new();
         let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
-        let browser_id = registry.register("tok1".to_string(), browser_tx);
+        let browser_id = registry.register(
+            "tok1".to_string(),
+            browser_tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        );
         registry.update_state_and_enforce_mute_policy(
             "tok1",
             browser_id,

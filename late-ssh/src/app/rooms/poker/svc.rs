@@ -1616,9 +1616,9 @@ impl SharedState {
         self.showdown_reveals = true;
 
         let credits = Self::credits_from_awards(&awards);
-        for index in 0..MAX_SEATS {
-            if credits[index] > 0 {
-                self.last_payout[index] = credits[index] - self.committed[index];
+        for (index, &credit) in credits.iter().enumerate() {
+            if credit > 0 {
+                self.last_payout[index] = credit - self.committed[index];
             }
         }
         let settlements = self.settlements_from_credits(&credits);

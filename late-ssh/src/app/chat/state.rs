@@ -2397,9 +2397,7 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.requested_open_profile = Some((target_user_id, target_username));
                 }
-                ChatEvent::OpenProfileFailed { user_id, message }
-                    if self.user_id == user_id =>
-                {
+                ChatEvent::OpenProfileFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::RoomJoined {

@@ -48,9 +48,14 @@ pub enum SessionMessage {
     BrowserPaired,
 }
 
+struct SessionEntry {
+    tx: Sender<SessionMessage>,
+    user_id: Uuid,
+}
+
 #[derive(Clone, Default)]
 pub struct SessionRegistry {
-    sessions: Arc<RwLock<HashMap<String, Sender<SessionMessage>>>>,
+    sessions: Arc<RwLock<HashMap<String, SessionEntry>>>,
 }
 
 pub fn new_session_token() -> String {
@@ -66,10 +71,10 @@ impl SessionRegistry {
         Self::default()
     }
 
-    pub async fn register(&self, token: String, tx: Sender<SessionMessage>) {
+    pub async fn register(&self, token: String, tx: Sender<SessionMessage>, user_id: Uuid) {
         tracing::info!(token_hint = %token_hint(&token), "registered cli session token");
         let mut sessions = self.sessions.write().await;
-        sessions.insert(token, tx);
+        sessions.insert(token, SessionEntry { tx, user_id });
     }
 
     pub async fn unregister(&self, token: &str) {
@@ -83,11 +88,19 @@ impl SessionRegistry {
         sessions.contains_key(token)
     }
 
+    /// Look up the user_id associated with a paired session token. Returns
+    /// None if the session has disconnected since the WS pair handshake
+    /// started.
+    pub async fn user_for(&self, token: &str) -> Option<Uuid> {
+        let sessions = self.sessions.read().await;
+        sessions.get(token).map(|entry| entry.user_id)
+    }
+
     pub async fn send_message(&self, token: &str, msg: SessionMessage) -> bool {
         // 1. Get the Sender (holding read lock)
         let tx = {
             let sessions = self.sessions.read().await;
-            sessions.get(token).cloned()
+            sessions.get(token).map(|entry| entry.tx.clone())
         }; // Lock dropped here
 
         // 2. Send (async, no lock held)
@@ -122,7 +135,9 @@ mod tests {
     async fn register_and_send() {
         let registry = SessionRegistry::new();
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
-        registry.register("tok1".to_string(), tx).await;
+        registry
+            .register("tok1".to_string(), tx, Uuid::now_v7())
+            .await;
 
         let sent = registry
             .send_message("tok1", SessionMessage::Heartbeat)
@@ -148,7 +163,9 @@ mod tests {
         assert!(!registry.has_session("tok1").await);
 
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        registry.register("tok1".to_string(), tx).await;
+        registry
+            .register("tok1".to_string(), tx, Uuid::now_v7())
+            .await;
         assert!(registry.has_session("tok1").await);
 
         registry.unregister("tok1").await;
@@ -159,7 +176,9 @@ mod tests {
     async fn unregister_removes_session() {
         let registry = SessionRegistry::new();
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        registry.register("tok1".to_string(), tx).await;
+        registry
+            .register("tok1".to_string(), tx, Uuid::now_v7())
+            .await;
         registry.unregister("tok1").await;
 
         let sent = registry
@@ -173,8 +192,12 @@ mod tests {
         let registry = SessionRegistry::new();
         let (tx1, _rx1) = tokio::sync::mpsc::channel(10);
         let (tx2, mut rx2) = tokio::sync::mpsc::channel(10);
-        registry.register("tok1".to_string(), tx1).await;
-        registry.register("tok1".to_string(), tx2).await;
+        registry
+            .register("tok1".to_string(), tx1, Uuid::now_v7())
+            .await;
+        registry
+            .register("tok1".to_string(), tx2, Uuid::now_v7())
+            .await;
 
         let sent = registry
             .send_message("tok1", SessionMessage::Heartbeat)
@@ -188,7 +211,9 @@ mod tests {
     async fn send_viz_frame() {
         let registry = SessionRegistry::new();
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
-        registry.register("tok1".to_string(), tx).await;
+        registry
+            .register("tok1".to_string(), tx, Uuid::now_v7())
+            .await;
 
         let frame = VizFrame {
             bands: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
@@ -213,7 +238,9 @@ mod tests {
     async fn send_fails_when_receiver_dropped() {
         let registry = SessionRegistry::new();
         let (tx, rx) = tokio::sync::mpsc::channel(10);
-        registry.register("tok1".to_string(), tx).await;
+        registry
+            .register("tok1".to_string(), tx, Uuid::now_v7())
+            .await;
         drop(rx);
 
         let sent = registry

@@ -452,11 +452,16 @@ impl ClientHandler {
             return Ok(token);
         }
 
+        let user_id =
+            self.user.as_ref().map(|u| u.id).ok_or_else(|| {
+                anyhow::anyhow!("cli session requested before user authenticated")
+            })?;
+
         let session_token = crate::session::new_session_token();
         let (session_tx, session_rx) = tokio::sync::mpsc::channel(64);
         self.state
             .session_registry
-            .register(session_token.clone(), session_tx)
+            .register(session_token.clone(), session_tx, user_id)
             .await;
         self.session_token = Some(session_token.clone());
         self.session_rx = Some(session_rx);

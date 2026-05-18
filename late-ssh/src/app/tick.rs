@@ -58,6 +58,10 @@ impl App {
             self.chat.pending_chat_screen_switch = false;
             self.set_screen(Screen::Dashboard);
         }
+        if let Some((user_id, username)) = self.chat.take_requested_open_profile() {
+            self.profile_modal_state.open(user_id, username);
+            self.show_profile_modal = true;
+        }
         if let Some(b) = self.vote.tick() {
             self.banner = Some(b);
         }

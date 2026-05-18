@@ -30,6 +30,14 @@ impl AudioState {
         self.snapshot_rx.borrow().clone()
     }
 
+    pub fn youtube_listener_count(&self) -> usize {
+        self.service.youtube_listener_count()
+    }
+
+    pub fn icecast_listener_count(&self) -> usize {
+        self.service.icecast_listener_count()
+    }
+
     pub fn user_id(&self) -> Uuid {
         self.user_id
     }

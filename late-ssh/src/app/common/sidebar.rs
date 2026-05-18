@@ -41,6 +41,12 @@ pub struct SidebarProps<'a> {
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
     pub queue_snapshot: &'a QueueSnapshot,
+    /// Live count of paired browsers pinned to YouTube. Rendered as the
+    /// YouTube block's title-bar tag.
+    pub youtube_listener_count: usize,
+    /// Live count of paired browsers pinned to Icecast. Rendered as the
+    /// Icecast block's title-bar tag. CLI is not counted.
+    pub icecast_listener_count: usize,
     /// Per-user paired-browser audio source preference (mirrors
     /// `users.settings.audio_source`, flipped by v+x). When set to
     /// `Icecast` the user has opted out of YouTube even if the global queue
@@ -132,6 +138,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         &props.vote,
         props.queue_snapshot,
         props.paired_browser_source,
+        props.youtube_listener_count,
+        props.icecast_listener_count,
     );
 
     draw_horizontal_rule(frame, inset(layout[5]));
@@ -321,6 +329,7 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
 /// actually hearing) gets bold amber chrome; the other gets dim italic.
 /// The `▌` accent bar carries the active signal, content widgets keep
 /// their own coloring so the data stays legible on both sides.
+#[allow(clippy::too_many_arguments)]
 fn draw_music_stage(
     frame: &mut Frame,
     area: Rect,
@@ -329,6 +338,8 @@ fn draw_music_stage(
     vote: &VoteCardView<'_>,
     queue: &QueueSnapshot,
     paired_browser_source: AudioSource,
+    youtube_listener_count: usize,
+    icecast_listener_count: usize,
 ) {
     if area.width == 0 || area.height < 4 {
         return;
@@ -365,13 +376,14 @@ fn draw_music_stage(
         [rows[2], rows[3], rows[4], rows[5], rows[6], rows[7]],
         queue,
         yt_active,
+        youtube_listener_count,
     );
     draw_keybind_row(frame, rows[8], &[("v+v", "queue"), ("v+x", "swap")]);
     draw_icecast_block(
         frame,
         [rows[9], rows[10], rows[11], rows[12], rows[13]],
         vote,
-        paired_client,
+        icecast_listener_count,
         now_playing,
         !yt_active,
     );
@@ -462,7 +474,7 @@ fn draw_keybind_row(frame: &mut Frame, area: Rect, groups: &[(&str, &str)]) {
 /// uppercase amber bold label, amber tag. Inactive: dim bar, lowercase
 /// italic faint label, no tag. The trailing rule fills to the right edge.
 fn stage_title_line(area_w: u16, label: &str, tag: Option<&str>, active: bool) -> Line<'static> {
-    let (bar_style, label_style, tag_style, label_text) = if active {
+    let (bar_style, label_style, tag_style) = if active {
         (
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -471,7 +483,6 @@ fn stage_title_line(area_w: u16, label: &str, tag: Option<&str>, active: bool) -
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
             Style::default().fg(theme::AMBER_DIM()),
-            label.to_uppercase(),
         )
     } else {
         (
@@ -482,9 +493,11 @@ fn stage_title_line(area_w: u16, label: &str, tag: Option<&str>, active: bool) -
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
-            label.to_lowercase(),
         )
     };
+    // Label is always lowercase — the active state badge is communicated
+    // through color/weight + the listener-count tag on the right, not case.
+    let label_text = label.to_lowercase();
 
     // Tag has no glyph prefix; color + position already reads as a state
     // badge and the prefix was eating cells on a narrow rail.
@@ -514,20 +527,27 @@ fn stage_title_line(area_w: u16, label: &str, tag: Option<&str>, active: bool) -
 /// YouTube block. Fixed 6-row footprint: title, track (`channel - title`
 /// combined on one line, mirrors icecast's track row), progress, skip meter,
 /// `next ⌄` header, queue list.
-fn draw_youtube_block(frame: &mut Frame, rows: [Rect; 6], queue: &QueueSnapshot, active: bool) {
+fn draw_youtube_block(
+    frame: &mut Frame,
+    rows: [Rect; 6],
+    queue: &QueueSnapshot,
+    active: bool,
+    listener_count: usize,
+) {
     let width = rows[0].width as usize;
 
-    // No submitted track always means the fallback stream is on; there is
-    // no silent "empty queue" state. Tag stays on both sides when fallback
-    // is playing so the state is visible; with a real track, the inactive
-    // side drops its tag (track title in the body carries the signal).
-    let tag = match (queue.current.is_some(), active) {
-        (true, true) => Some("live"),
-        (true, false) => None,
-        (false, _) => Some("loop"),
-    };
+    // Always show the live listener count as the tag — both blocks display
+    // it regardless of active state so users can see room composition at a
+    // glance. The track body still carries fallback-state copy when
+    // `queue.current.is_none()`.
+    let tag_string = listener_count.to_string();
     frame.render_widget(
-        Paragraph::new(stage_title_line(rows[0].width, "youtube", tag, active)),
+        Paragraph::new(stage_title_line(
+            rows[0].width,
+            "youtube",
+            Some(&tag_string),
+            active,
+        )),
         rows[0],
     );
 
@@ -654,21 +674,21 @@ fn draw_icecast_block(
     frame: &mut Frame,
     rows: [Rect; 5],
     vote: &VoteCardView<'_>,
-    paired_client: Option<&ClientAudioState>,
+    listener_count: usize,
     now_playing: Option<&NowPlaying>,
     active: bool,
 ) {
-    let tag = if active {
-        match paired_client {
-            Some(state) if state.muted => Some("muted"),
-            Some(_) => Some("live"),
-            None => Some("off"),
-        }
-    } else {
-        None
-    };
+    // Mute/off status is communicated by the volume row above; the title
+    // tag here is always the live listener count, matching the YouTube
+    // block's behavior.
+    let tag_string = listener_count.to_string();
     frame.render_widget(
-        Paragraph::new(stage_title_line(rows[0].width, "icecast", tag, active)),
+        Paragraph::new(stage_title_line(
+            rows[0].width,
+            "icecast",
+            Some(&tag_string),
+            active,
+        )),
         rows[0],
     );
 

@@ -231,9 +231,26 @@ async fn ws_handler(
 async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     let token_hint = token_hint(&token);
     let (control_tx, mut control_rx) = tokio::sync::mpsc::unbounded_channel();
-    let registration_id = state
-        .paired_client_registry
-        .register(token.clone(), control_tx);
+    // The session must still be live (we just checked `has_session`). The
+    // race window where the SSH session disconnects between the check and
+    // this lookup is closed by giving up the WS upgrade if user_for returns
+    // None — we don't want a paired entry with no owning user.
+    let Some(user_id) = state.session_registry.user_for(&token).await else {
+        tracing::warn!(
+            token_hint = %token_hint,
+            "ws pair aborted: session disappeared before user lookup"
+        );
+        return;
+    };
+    let audio_source = state
+        .audio_service
+        .read_audio_source(user_id)
+        .await
+        .unwrap_or_default();
+    let registration_id =
+        state
+            .paired_client_registry
+            .register(token.clone(), control_tx, user_id, audio_source);
     let mut audio_rx = state.audio_service.subscribe_ws();
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");

@@ -495,7 +495,23 @@ impl AudioService {
         source: late_core::models::user::AudioSource,
     ) -> Result<()> {
         let client = self.db.get().await?;
-        late_core::models::user::User::set_audio_source(&client, user_id, source).await
+        late_core::models::user::User::set_audio_source(&client, user_id, source).await?;
+        drop(client);
+        // Mirror the new value into the paired-client registry so
+        // `total_youtube_listeners` / `has_youtube_listener` stay in sync.
+        let left_youtube = self.paired_clients.set_audio_source(user_id, source);
+        if left_youtube {
+            // The user is no longer hearing YouTube — strip any pending
+            // skip-vote they cast, then re-evaluate in case the threshold
+            // dropped to meet remaining votes.
+            let mut state = self.state.lock().await;
+            let was_present = state.skip_votes.remove(&user_id);
+            drop(state);
+            if was_present {
+                self.reevaluate_skip_threshold().await?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn read_audio_source(
@@ -504,6 +520,19 @@ impl AudioService {
     ) -> Result<late_core::models::user::AudioSource> {
         let client = self.db.get().await?;
         late_core::models::user::User::audio_source(&client, user_id).await
+    }
+
+    /// Live count of paired browsers currently pinned to YouTube. Drives the
+    /// sidebar's youtube-block listener tag.
+    pub fn youtube_listener_count(&self) -> usize {
+        self.paired_clients.total_youtube_listeners()
+    }
+
+    /// Live count of paired browsers currently pinned to Icecast. CLI is
+    /// excluded by design — only counts browsers that are actively rendering
+    /// the radio.
+    pub fn icecast_listener_count(&self) -> usize {
+        self.paired_clients.total_icecast_listeners()
     }
 
     /// Spawn a background persist for the user's audio-source preference.
@@ -565,17 +594,17 @@ impl AudioService {
     /// Cast a skip-vote for the currently-playing track. Returns the new
     /// progress; if the threshold has been hit, advances the queue.
     ///
-    /// Gated on the caller's session having at least one paired client. An
-    /// SSH-only user can't influence what paired listeners hear, otherwise a
-    /// coordinated unpaired group could grief the threshold (which is
-    /// computed against `paired_clients.total_pairings()`).
+    /// Gated on the caller having at least one paired browser actively pinned
+    /// to the YouTube source — only listeners hearing the track can vote to
+    /// skip it. Threshold denominator is also restricted to YouTube
+    /// listeners across all tokens.
     pub async fn cast_skip_vote(
         &self,
         user_id: Uuid,
         session_token: &str,
     ) -> Result<CastSkipResult> {
-        if !self.paired_clients.is_paired(session_token) {
-            anyhow::bail!("pair a client to skip-vote");
+        if !self.paired_clients.has_youtube_listener(session_token) {
+            anyhow::bail!("switch to youtube to skip-vote");
         }
 
         let mut state = self.state.lock().await;
@@ -585,7 +614,7 @@ impl AudioService {
 
         state.skip_votes.insert(user_id);
         let votes = state.skip_votes.len() as u32;
-        let threshold = skip_threshold(self.paired_clients.total_pairings());
+        let threshold = skip_threshold(self.paired_clients.total_youtube_listeners());
         let fired = votes >= threshold;
 
         if fired {
@@ -609,8 +638,9 @@ impl AudioService {
     }
 
     /// Re-evaluate whether the pending skip-votes already meet the threshold.
-    /// Called from the disconnect path when the paired-client total drops; if
-    /// the threshold fell to or below the existing vote count, fire a skip.
+    /// Called from the disconnect path AND from `set_audio_source` when a
+    /// user flips away from YouTube (their vote is dropped first). If the
+    /// threshold fell to or below the existing vote count, fire a skip.
     pub async fn reevaluate_skip_threshold(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         let Some(current_id) = state.current_item_id else {
@@ -620,7 +650,7 @@ impl AudioService {
             return Ok(());
         }
         let votes = state.skip_votes.len() as u32;
-        let threshold = skip_threshold(self.paired_clients.total_pairings());
+        let threshold = skip_threshold(self.paired_clients.total_youtube_listeners());
         if votes < threshold {
             self.publish_queue_update_with_guard(&mut state).await?;
             return Ok(());
@@ -981,7 +1011,7 @@ impl AudioService {
             return None;
         }
         let votes = state.skip_votes.len() as u32;
-        let threshold = skip_threshold(self.paired_clients.total_pairings());
+        let threshold = skip_threshold(self.paired_clients.total_youtube_listeners());
         Some(SkipProgress { votes, threshold })
     }
 

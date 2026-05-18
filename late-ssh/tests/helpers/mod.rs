@@ -336,7 +336,12 @@ pub fn make_app_with_paired_client(
 ) {
     let registry = PairedClientRegistry::new();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    registry.register(session_token.to_string(), tx);
+    registry.register(
+        session_token.to_string(),
+        tx,
+        uuid::Uuid::now_v7(),
+        late_core::models::user::AudioSource::default(),
+    );
 
     let mut app = App::new(SessionConfig {
         cols: 100,
