@@ -2398,7 +2398,7 @@ impl ChatState {
                     self.requested_open_profile = Some((target_user_id, target_username));
                 }
                 ChatEvent::OpenProfileFailed { user_id, message } if self.user_id == user_id => {
-                    banner = Some(Banner::error(&message));
+                    banner = Some(Banner::error(&sentence_case(&message)));
                 }
                 ChatEvent::RoomJoined {
                     user_id,
@@ -3380,6 +3380,14 @@ fn parse_user_command<'a>(input: &'a str, command: &str) -> Option<Option<&'a st
 fn short_user_id(user_id: Uuid) -> String {
     let id = user_id.to_string();
     id[..id.len().min(8)].to_string()
+}
+
+fn sentence_case(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// Given a message list containing `current`, return the id of the message

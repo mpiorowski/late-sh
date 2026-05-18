@@ -80,14 +80,12 @@ impl AudioState {
             .cast_skip_vote_task(self.user_id, self.session_token.clone());
     }
 
-    pub fn booth_delete(&self, item_id: Uuid, is_staff: bool) {
-        self.service
-            .delete_queue_item_task(self.user_id, item_id, is_staff);
+    pub fn booth_delete(&self, item_id: Uuid) {
+        self.service.delete_queue_item_task(self.user_id, item_id);
     }
 
-    pub fn booth_toggle_unskippable(&self, item_id: Uuid, is_staff: bool) {
-        self.service
-            .toggle_unskippable_task(self.user_id, item_id, is_staff);
+    pub fn booth_toggle_unskippable(&self, item_id: Uuid) {
+        self.service.toggle_unskippable_task(self.user_id, item_id);
     }
 
     /// Spawn an audio-source persist task that surfaces failures as banners

@@ -118,8 +118,7 @@ fn delete_selected(app: &mut App) {
     let Some(item_id) = app.booth_modal_state.selected_item_id(&snapshot.queue) else {
         return;
     };
-    let is_staff = app.is_admin || app.is_moderator;
-    app.audio.booth_delete(item_id, is_staff);
+    app.audio.booth_delete(item_id);
 }
 
 fn toggle_unskippable_selected(app: &mut App) {
@@ -127,6 +126,5 @@ fn toggle_unskippable_selected(app: &mut App) {
     let Some(item_id) = app.booth_modal_state.selected_item_id(&snapshot.queue) else {
         return;
     };
-    let is_staff = app.is_admin || app.is_moderator;
-    app.audio.booth_toggle_unskippable(item_id, is_staff);
+    app.audio.booth_toggle_unskippable(item_id);
 }

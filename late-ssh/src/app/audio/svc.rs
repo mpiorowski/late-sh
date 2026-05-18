@@ -820,12 +820,7 @@ impl AudioService {
     /// restricts the DB write to `status = 'queued'`, and the booth UI only
     /// selects from the queue list anyway. Use `/audio skip` to remove the
     /// playing item.
-    pub async fn delete_queue_item(
-        &self,
-        user_id: Uuid,
-        item_id: Uuid,
-        is_staff: bool,
-    ) -> Result<()> {
+    pub async fn delete_queue_item(&self, user_id: Uuid, item_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         let item = MediaQueueItem::find_by_id(&client, item_id)
             .await?
@@ -833,7 +828,8 @@ impl AudioService {
         if item.status != MediaQueueItem::STATUS_QUEUED {
             anyhow::bail!("track is no longer queued");
         }
-        if !is_staff && item.submitter_id != user_id {
+        let is_owner = item.submitter_id == user_id;
+        if !is_owner && !user_is_staff(&client, user_id).await? {
             anyhow::bail!("not allowed");
         }
         let deleted = MediaQueueItem::delete_queued(&client, item_id).await?;
@@ -850,16 +846,11 @@ impl AudioService {
     /// get to lock a track. The DB write also restricts to `status = 'queued'`,
     /// so a track already promoted to playing keeps whatever value it carried
     /// when it left the queue.
-    pub async fn toggle_unskippable(
-        &self,
-        user_id: Uuid,
-        item_id: Uuid,
-        is_staff: bool,
-    ) -> Result<bool> {
-        if !is_staff {
+    pub async fn toggle_unskippable(&self, user_id: Uuid, item_id: Uuid) -> Result<bool> {
+        let client = self.db.get().await?;
+        if !user_is_staff(&client, user_id).await? {
             anyhow::bail!("not allowed");
         }
-        let client = self.db.get().await?;
         let updated = MediaQueueItem::toggle_unskippable_queued(&client, item_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("track is no longer queued"))?;
@@ -867,8 +858,6 @@ impl AudioService {
         let new_value = updated.unskippable;
         let mut state = self.state.lock().await;
         self.publish_queue_update_with_guard(&mut state).await?;
-        // Acknowledge the user_id so we don't emit a warning about an unused
-        // variable in release builds; the user_id is also useful in tracing.
         tracing::debug!(
             %user_id,
             %item_id,
@@ -878,10 +867,10 @@ impl AudioService {
         Ok(new_value)
     }
 
-    pub fn toggle_unskippable_task(&self, user_id: Uuid, item_id: Uuid, is_staff: bool) {
+    pub fn toggle_unskippable_task(&self, user_id: Uuid, item_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
-            match service.toggle_unskippable(user_id, item_id, is_staff).await {
+            match service.toggle_unskippable(user_id, item_id).await {
                 Ok(unskippable) => {
                     service.publish_event(AudioEvent::BoothItemUnskippableToggled {
                         user_id,
@@ -898,10 +887,10 @@ impl AudioService {
         });
     }
 
-    pub fn delete_queue_item_task(&self, user_id: Uuid, item_id: Uuid, is_staff: bool) {
+    pub fn delete_queue_item_task(&self, user_id: Uuid, item_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
-            match service.delete_queue_item(user_id, item_id, is_staff).await {
+            match service.delete_queue_item(user_id, item_id).await {
                 Ok(()) => {
                     service.publish_event(AudioEvent::BoothItemDeleted { user_id });
                 }
@@ -1459,7 +1448,7 @@ fn trusted_submit_error_message(err: &anyhow::Error) -> String {
     {
         "Invalid YouTube URL".to_string()
     } else if text.contains("rate limit") {
-        "Slow down — too many submissions".to_string()
+        "Slow down - too many submissions".to_string()
     } else {
         "Failed to queue audio".to_string()
     }
@@ -1471,6 +1460,15 @@ fn fallback_load_event(source: &MediaSource) -> AudioWsMessage {
         video_id: source.external_id.clone(),
         is_stream: source.is_stream,
     }
+}
+
+/// Resolve staff status from the database. Used by booth actions that gate
+/// on admin/moderator role — caller-supplied booleans aren't trusted.
+async fn user_is_staff(client: &tokio_postgres::Client, user_id: Uuid) -> Result<bool> {
+    let user = User::get(client, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+    Ok(user.is_admin || user.is_moderator)
 }
 
 fn queue_item_view(

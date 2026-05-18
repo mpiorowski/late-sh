@@ -902,9 +902,9 @@ mod tests {
         let lines = mod_help_lines(Some("ban"));
 
         assert!(
-            lines
-                .iter()
-                .any(|line| line == "ban <server|#room|artboard> @name [duration] [reason...]")
+            lines.iter().any(
+                |line| line == "ban <server|#room|artboard|audio> @name [duration] [reason...]"
+            )
         );
         assert!(
             lines.iter().any(|line| line.contains("s/m/h/d")),
@@ -931,7 +931,8 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "ban    <server|#room|artboard> @name [duration] [reason...]"),
+                .any(|line| line
+                    == "ban    <server|#room|artboard|audio> @name [duration] [reason...]"),
             "top-level help should show verb-primary ban form: {lines:?}"
         );
     }
