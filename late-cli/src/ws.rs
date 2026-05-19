@@ -3,8 +3,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use std::process::{Child, Command, Stdio};
 use std::{
+    fs::OpenOptions,
+    process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     time::Duration,
 };
@@ -47,6 +48,7 @@ pub(super) struct WebviewPlaybackController {
     api_base_url: String,
     token: String,
     child: Option<Child>,
+    wants_youtube: bool,
 }
 
 impl WebviewPlaybackController {
@@ -55,7 +57,12 @@ impl WebviewPlaybackController {
             api_base_url,
             token,
             child: None,
+            wants_youtube: false,
         }
+    }
+
+    fn wants_youtube(&self) -> bool {
+        self.wants_youtube
     }
 
     fn apply_playback_source(&mut self, source: &str, muted: &AtomicBool) -> Result<bool> {
@@ -70,6 +77,7 @@ impl WebviewPlaybackController {
     }
 
     fn enter_youtube(&mut self, muted: &AtomicBool) -> Result<bool> {
+        self.wants_youtube = true;
         let was_muted = muted.swap(true, Ordering::Relaxed);
         let muted_changed = !was_muted;
         if self.helper_is_running() {
@@ -77,13 +85,14 @@ impl WebviewPlaybackController {
         }
 
         let exe = std::env::current_exe().context("failed to locate current late executable")?;
+        let stderr = webview_helper_stderr()?;
         let child = match Command::new(exe)
             .arg("webview-pair")
             .arg(&self.token)
             .env("LATE_API_BASE_URL", &self.api_base_url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(stderr)
             .spawn()
         {
             Ok(child) => child,
@@ -98,6 +107,7 @@ impl WebviewPlaybackController {
     }
 
     fn enter_icecast(&mut self, muted: &AtomicBool) -> Result<bool> {
+        self.wants_youtube = false;
         self.stop_helper();
         let muted_changed = muted.swap(false, Ordering::Relaxed);
         if muted_changed {
@@ -136,6 +146,16 @@ impl WebviewPlaybackController {
         let _ = child.wait();
         info!("stopped embedded YouTube webview helper");
     }
+}
+
+fn webview_helper_stderr() -> Result<Stdio> {
+    let path = std::env::temp_dir().join("late-webview.log");
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("failed to open webview helper log at {}", path.display()))?;
+    Ok(Stdio::from(file))
 }
 
 impl Drop for WebviewPlaybackController {
@@ -259,6 +279,10 @@ async fn handle_pair_control(
             Ok(true)
         }
         PairControlMessage::ForceMute { mute } => {
+            if !mute && webview.wants_youtube() {
+                debug!("ignoring force-unmute while YouTube webview is selected");
+                return Ok(false);
+            }
             apply_force_mute(muted, mute);
             Ok(true)
         }
