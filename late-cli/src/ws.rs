@@ -3,7 +3,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-#[cfg(feature = "webview")]
 use std::process::{Child, Command, Stdio};
 use std::{
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
@@ -38,42 +37,23 @@ enum PairControlMessage {
     SetPlaybackSource { source: String },
 }
 
-#[cfg(all(
-    feature = "webview",
-    any(target_os = "linux", target_os = "macos", target_os = "windows")
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube"];
-
-#[cfg(all(
-    not(feature = "webview"),
-    any(target_os = "linux", target_os = "macos", target_os = "windows")
-))]
-const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const CLIENT_CAPABILITIES: &[&str] = &[];
 
 pub(super) struct WebviewPlaybackController {
-    #[cfg(feature = "webview")]
     api_base_url: String,
-    #[cfg(feature = "webview")]
     token: String,
-    #[cfg(feature = "webview")]
     child: Option<Child>,
 }
 
 impl WebviewPlaybackController {
     pub(super) fn new(api_base_url: String, token: String) -> Self {
-        #[cfg(not(feature = "webview"))]
-        {
-            let _ = (api_base_url, token);
-        }
         Self {
-            #[cfg(feature = "webview")]
             api_base_url,
-            #[cfg(feature = "webview")]
             token,
-            #[cfg(feature = "webview")]
             child: None,
         }
     }
@@ -89,7 +69,6 @@ impl WebviewPlaybackController {
         }
     }
 
-    #[cfg(feature = "webview")]
     fn enter_youtube(&mut self, muted: &AtomicBool) -> Result<bool> {
         let was_muted = muted.swap(true, Ordering::Relaxed);
         let muted_changed = !was_muted;
@@ -118,13 +97,6 @@ impl WebviewPlaybackController {
         Ok(true)
     }
 
-    #[cfg(not(feature = "webview"))]
-    fn enter_youtube(&mut self, _muted: &AtomicBool) -> Result<bool> {
-        warn!("server selected YouTube, but this late binary was built without webview support");
-        Ok(false)
-    }
-
-    #[cfg(feature = "webview")]
     fn enter_icecast(&mut self, muted: &AtomicBool) -> Result<bool> {
         self.stop_helper();
         let muted_changed = muted.swap(false, Ordering::Relaxed);
@@ -134,12 +106,6 @@ impl WebviewPlaybackController {
         Ok(muted_changed)
     }
 
-    #[cfg(not(feature = "webview"))]
-    fn enter_icecast(&mut self, _muted: &AtomicBool) -> Result<bool> {
-        Ok(false)
-    }
-
-    #[cfg(feature = "webview")]
     fn helper_is_running(&mut self) -> bool {
         let Some(child) = self.child.as_mut() else {
             return false;
@@ -159,7 +125,6 @@ impl WebviewPlaybackController {
         }
     }
 
-    #[cfg(feature = "webview")]
     fn stop_helper(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
@@ -173,7 +138,6 @@ impl WebviewPlaybackController {
     }
 }
 
-#[cfg(feature = "webview")]
 impl Drop for WebviewPlaybackController {
     fn drop(&mut self) {
         self.stop_helper();

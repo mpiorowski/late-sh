@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-19 (CLI-side embedded YouTube webview v1 is wired behind the `late-cli` `webview` feature: native CLI advertises `youtube`, `set_playback_source` drives lazy helper spawn/teardown, and the helper registers as a browser only while YouTube is selected.)
+- Last updated: 2026-05-19 (CLI-side embedded YouTube webview v1 is wired into the normal `late-cli` build: native CLI advertises `youtube`, `set_playback_source` drives lazy helper spawn/teardown, and the helper registers as a browser only while YouTube is selected.)
 - Previously: booth modal now surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Two submit paths diverge in metadata: booth (`booth_submit_public_task` → `submit_url` → Data API) inserts rows with title/channel/`duration_ms`/`is_stream` already populated; staff `/audio` (`submit_trusted_url_task`) inserts NULL metadata and the browser backfills `duration_ms` on first play via `record_browser_duration`. See §4 Public API + §2 booth/ui.rs note.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -263,11 +263,11 @@ The unrelated bare `/music` command (`state.rs:1325`) opens a help topic, not a 
 
 ## 8. CLI Integration
 
-Goal: the native CLI is the always-on control plane. It plays Icecast by default, obeys server force-mute, and when built with `--features webview` can lazily launch an embedded YouTube webview helper only while the user's persisted playback source is YouTube.
+Goal: the native CLI is the always-on control plane. It plays Icecast by default, obeys server force-mute, and can lazily launch an embedded YouTube webview helper only while the user's persisted playback source is YouTube.
 
 - **Unknown audio events ignored by the native CLI** (`late-cli/src/ws.rs`). Inbound text is parsed as `PairControlMessage`; `load_video`, `source_changed`, and `queue_update` still fail to deserialize in the native CLI and are ignored. The webview helper (`late webview-pair <token>`) is the thing that consumes those audio events while YouTube is selected.
 - **`set_playback_source` is the lifecycle signal.** `late-cli/src/ws.rs::WebviewPlaybackController` reacts to `PairControlMessage::SetPlaybackSource`: `youtube` mutes native Icecast and spawns one `late webview-pair <token>` child; `icecast` kills the helper and resumes native Icecast. Do **not** spawn the helper from global `source_changed`.
-- **Feature-gated YouTube capability.** Native CLI `client_state.capabilities` includes `"youtube"` only when built with the `webview` feature. The server sends playback-source controls to browsers plus CLI entries that advertise this capability. Older/non-webview CLIs keep Icecast-only behavior.
+- **YouTube capability.** Native CLI `client_state.capabilities` includes `"youtube"` on desktop platforms. The server sends playback-source controls to browsers plus CLI entries that advertise this capability.
 - **`force_mute` applied to shared atomic** (`late-cli/src/ws.rs` → `apply_force_mute` → `muted.swap(mute, Relaxed)`). When the helper registers as a browser, the existing browser-priority policy force-mutes the native CLI path; when the helper exits, unregister relaxes it.
 - **CLI identifies itself.** First native `client_state` emitted by `late-cli/src/ws.rs` carries `"client_kind": "cli"`. The helper sends `"client_kind": "browser"` for v1 so existing source arbitration, listener counts, and skip-vote eligibility work without a new enum.
 
@@ -444,13 +444,13 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 
 ## 17. CLI Embedded Webview for YouTube
 
-**Status: v1 wired behind the `late-cli` `webview` feature.** Goal: legal YouTube playback inside the `late` CLI without shelling out to mpv/yt-dlp/etc. The CLI hosts the official YouTube IFrame Player inside an embedded system webview; the player fetches and decodes audio identically to today's connect page (§9). late.sh still ships only `video_id` over the pair WS.
+**Status: v1 wired into the normal `late-cli` build.** Goal: legal YouTube playback inside the `late` CLI without shelling out to mpv/yt-dlp/etc. The CLI hosts the official YouTube IFrame Player inside an embedded system webview; the player fetches and decodes audio identically to today's connect page (§9). late.sh still ships only `video_id` over the pair WS.
 
 ### Process model
 
 - Native `late` remains the always-on SSH/audio control process.
 - Native `late` opens the normal pair WS as `client_kind = "cli"`.
-- With `--features webview`, native `late` advertises `capabilities: ["clipboard_image", "youtube"]` on desktop platforms.
+- Native `late` advertises `capabilities: ["clipboard_image", "youtube"]` on desktop platforms.
 - `set_playback_source: youtube` spawns a helper child: `late webview-pair <token>`.
 - `set_playback_source: icecast` kills the helper and resumes native Icecast.
 - The helper opens its own pair WS and reports `client_kind = "browser"` for v1, so existing browser force-mute, listener counts, and skip-vote eligibility work.
@@ -463,7 +463,7 @@ This lazy lifecycle is intentional. A normal CLI run does not open a webview. A 
 
 ### Webview backend
 
-`late-cli` uses `wry` + `tao` behind the `webview` feature:
+`late-cli` uses `wry` + `tao`:
 
 - Linux: WebKitGTK 4.1 dev/runtime packages.
 - macOS: WKWebView.

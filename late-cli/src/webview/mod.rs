@@ -1,6 +1,6 @@
 //! Embedded webview for CLI-side YouTube playback.
 //!
-//! Feature-gated (`--features webview`); see late-ssh/src/app/audio/CONTEXT.md §17.
+//! See late-ssh/src/app/audio/CONTEXT.md §17.
 //!
 //! The webview is owned by the CLI: it never opens its own WebSocket.
 //! Rust pushes commands (LoadVideo, SourceChanged, Shutdown) into the JS

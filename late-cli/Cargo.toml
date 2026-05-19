@@ -6,7 +6,6 @@ edition = "2024"
 [features]
 default = []
 otel = []
-webview = ["dep:wry", "dep:tao"]
 
 [[bin]]
 name = "late"
@@ -34,9 +33,9 @@ symphonia = { workspace = true, features = ["mp3"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 
 # Embedded webview for CLI-side YouTube (see late-ssh/src/app/audio/CONTEXT.md §17).
-# Optional — enable with `--features webview`. Linux requires WebKitGTK 4.1 dev headers.
-wry = { version = "0.55", optional = true }
-tao = { version = "0.34", optional = true }
+# Linux requires WebKitGTK 4.1 dev headers.
+wry = "0.55"
+tao = "0.34"
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["term", "process", "signal", "fs"] }

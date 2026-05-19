@@ -15,7 +15,6 @@ mod identity;
 mod pty;
 mod raw_mode;
 mod ssh;
-#[cfg(feature = "webview")]
 mod webview;
 mod ws;
 
@@ -108,58 +107,38 @@ async fn main() -> Result<()> {
 }
 
 fn run_webview_spike_subcommand(args: &[String]) -> Result<()> {
-    #[cfg(feature = "webview")]
-    {
-        let video_id = args
-            .first()
-            .context("usage: late webview-spike <video_id>")?;
-        init_logging(true)?;
-        webview::run_spike(video_id)
-    }
-    #[cfg(not(feature = "webview"))]
-    {
-        let _ = args;
-        anyhow::bail!(
-            "webview spike requires a build with `--features webview` (and WebKitGTK 4.1 dev headers on linux)"
-        );
-    }
+    let video_id = args
+        .first()
+        .context("usage: late webview-spike <video_id>")?;
+    init_logging(true)?;
+    webview::run_spike(video_id)
 }
 
 fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
-    #[cfg(feature = "webview")]
-    {
-        let token = args
-            .first()
-            .context("usage: late webview-pair <token>")?
-            .clone();
-        let api_base_url = env::var("LATE_API_BASE_URL")
-            .unwrap_or_else(|_| config::DEFAULT_API_BASE_URL.to_string());
-        init_logging(true)?;
-        webview::run_relay(None, move |proxy, ipc_rx| {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(err) => {
-                    error!(error = %err, "failed to build webview pair runtime");
-                    return;
-                }
-            };
-            rt.block_on(async move {
-                if let Err(err) = webview::pair::run(&api_base_url, &token, proxy, ipc_rx).await {
-                    error!(error = %err, "webview pair task ended with error");
-                }
-            });
-        })
-    }
-    #[cfg(not(feature = "webview"))]
-    {
-        let _ = args;
-        anyhow::bail!(
-            "webview pair requires a build with `--features webview` (and WebKitGTK 4.1 dev headers on linux)"
-        );
-    }
+    let token = args
+        .first()
+        .context("usage: late webview-pair <token>")?
+        .clone();
+    let api_base_url =
+        env::var("LATE_API_BASE_URL").unwrap_or_else(|_| config::DEFAULT_API_BASE_URL.to_string());
+    init_logging(true)?;
+    webview::run_relay(None, move |proxy, ipc_rx| {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(err) => {
+                error!(error = %err, "failed to build webview pair runtime");
+                return;
+            }
+        };
+        rt.block_on(async move {
+            if let Err(err) = webview::pair::run(&api_base_url, &token, proxy, ipc_rx).await {
+                error!(error = %err, "webview pair task ended with error");
+            }
+        });
+    })
 }
 
 async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBuf>) -> Result<()> {

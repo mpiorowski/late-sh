@@ -102,10 +102,7 @@ pub async fn run(
     Ok(())
 }
 
-async fn handle_server_text(
-    text: &str,
-    proxy: &EventLoopProxy<WebviewCommand>,
-) -> Option<String> {
+async fn handle_server_text(text: &str, proxy: &EventLoopProxy<WebviewCommand>) -> Option<String> {
     let Ok(message) = serde_json::from_str::<ServerMessage>(text) else {
         debug!(payload = %text, "ignoring unrecognized pair ws message");
         return None;
@@ -133,8 +130,14 @@ async fn handle_server_text(
             }
             None
         }
-        ServerMessage::QueueUpdate(_) => None,
-        ServerMessage::ForceMute { .. } => None,
+        ServerMessage::QueueUpdate(payload) => {
+            let _ = payload;
+            None
+        }
+        ServerMessage::ForceMute { mute } => {
+            let _ = mute;
+            None
+        }
         ServerMessage::SetPlaybackSource { source } => {
             debug!(%source, "server requested playback source (ignored in pair test)");
             None
