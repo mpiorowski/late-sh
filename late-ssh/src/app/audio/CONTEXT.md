@@ -93,7 +93,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `PLAYBACK_HEARTBEAT_INTERVAL = 10s` — periodic `LoadVideo` re-broadcast for the current item. Safety net: browsers already showing the right item no-op; stuck/disconnected/wrong-item browsers force-swap. Replaces the old `Seek`-based sync.
 - `RECONCILE_INTERVAL = 60s` — background DB reconcile safety net. If memory drifts from the singleton `playing` row (e.g. rollout overlap), the service adopts the DB current, cancels/re-arms timers, and republishes state.
 - `STREAM_CAP = 1h` — hard cap on any single playing row's wall-clock lifetime.
-- `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(youtube_total) = max(ceil(0.3 * youtube_total), 2)`. **Denominator is YouTube listeners only** (`PairedClientRegistry::total_youtube_listeners()`) — paired browsers whose user has `audio_source = Youtube`. CLI-only or Icecast-pinned browsers don't count in either numerator or denominator. Floor of 2 means a lone listener can't solo-skip; the 30% ceil kicks in above 6 YouTube listeners.
+- `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(youtube_total) = max(ceil(0.3 * youtube_total), 2)`. **Denominator is users whose persisted `users.settings.audio_source` is `youtube`**, not paired-client/browser presence. Floor of 2 means a lone YouTube-pref user can't solo-skip; the 30% ceil kicks in above 6 YouTube-pref users.
 
 ### Public API
 - `new(db, youtube_api_key)` — `main.rs:123`.
@@ -208,26 +208,25 @@ Mechanics:
 - Native CLI spawns the embedded webview only for `source=Youtube && embedded_webview_enabled=true`; `false` kills the helper while leaving YouTube selected so the real browser can play.
 - Browser stores `webIcecastEnabled`; `source=Icecast && webIcecastEnabled=false` pauses YouTube and stops the web Icecast element. If the CLI disconnects, the server replays the same source with `web_icecast_enabled=true` so a browser-only token can resume web Icecast.
 
-### Skip-vote eligibility — only YouTube listeners
+### Skip-vote eligibility — YouTube source preference
 
-Each `PairControlEntry` carries `user_id: Uuid` (resolved from `SessionRegistry::user_for(token)` during the pair-WS upgrade) and `audio_source: AudioSource` (cached from `users.settings.audio_source`, read at registration time).
+Skip-vote uses the persisted user preference directly. If `users.settings.audio_source = "youtube"`, the user can cast a skip vote and counts toward the threshold. Pairing shape is intentionally ignored: CLI-only, embedded-webview, real-browser, and disconnected users with the same saved preference all count the same.
 
 Helpers used by the skip-vote path:
-- `has_youtube_listener(token) -> bool` — any browser on this token with `audio_source == Youtube`.
-- `total_youtube_listeners() -> usize` — count of such entries across all tokens.
-- `set_audio_source(user_id, source) -> bool` — updates every entry for the user; returns `true` when at least one entry transitioned **away from** `Youtube`. Called from `AudioService::persist_audio_source` after the DB write succeeds.
+- `User::audio_source(user_id)` — gates the caller: only users whose saved preference is `Youtube` can vote.
+- `User::audio_source_counts()` — counts saved YouTube/Icecast preferences and feeds both the sidebar tags and skip threshold.
+- `PairedClientRegistry::set_audio_source(user_id, source)` — only mirrors the new preference to connected clients via `SetPlaybackSource`; it no longer defines listener counts.
 
-Vote-strip on flip-away: when `set_audio_source` returns `true`, `AudioService::persist_audio_source` removes the user from `state.skip_votes` and runs `reevaluate_skip_threshold` (which may fire a skip if the threshold dropped to meet remaining votes).
+Vote-strip on flip-away: when the DB value transitions from `Youtube` to `Icecast`, `AudioService::persist_audio_source` removes the user from `state.skip_votes` and runs `reevaluate_skip_threshold` (which may fire a skip if the threshold dropped to meet remaining votes).
 
 Eligibility table:
 
-| Has paired browser | Browser's `audio_source` | Can skip-vote? | Counts toward threshold? |
-|--------------------|--------------------------|----------------|--------------------------|
-| no                 | n/a                      | no             | no                       |
-| yes                | Icecast                  | no             | no                       |
-| yes                | Youtube                  | yes            | yes                      |
+| Saved `audio_source` | Can skip-vote? | Counts toward threshold? |
+|----------------------|----------------|--------------------------|
+| Icecast/default      | no             | no                       |
+| Youtube              | yes            | yes                      |
 
-A user with multiple browser tabs in YouTube mode counts each tab toward the denominator but still only contributes one vote (HashSet on `user_id`). Staff `/audio skip` (`force_skip`) bypasses the threshold entirely.
+A user always contributes at most one vote (`HashSet<Uuid>` on `user_id`) and counts once in the denominator. Staff `/audio skip` (`force_skip`) bypasses the threshold entirely.
 
 ---
 
@@ -257,7 +256,7 @@ The unrelated bare `/music` command (`state.rs:1325`) opens a help topic, not a 
 4. On success, banner via `AudioEvent::YoutubeFallbackSet` — "Set YouTube fallback". On failure, banner via `AudioEvent::YoutubeFallbackFailed` carrying the classified message from `trusted_submit_error_message`.
 
 `/audio skip` flow:
-1. Routes through `AudioService::force_skip` — unconditional, bypasses the vote threshold (the threshold is a *listener* signal; staff can skip directly).
+1. Routes through `AudioService::force_skip` — unconditional, bypasses the vote threshold; staff can skip directly.
 2. Marks the current playing row `skipped` via `MediaQueueItem::mark_skipped` (`WHERE status='playing'`), clears `current_item_id` and any pending `skip_votes`, cancels the playback timer, and runs `advance_to_next_with_guard` to bring up the next queued item (or arm the fallback debounce).
 3. If the row was already no longer `playing`, the service reconciles from DB instead of mutating the stale row and asks the caller to retry. On success, banner via `AudioEvent::TrustedSkipFired` — "Skipped audio". On failure (nothing playing, state changed, DB error), banner via `AudioEvent::TrustedSkipFailed` — "Nothing is playing" or "Failed to skip audio".
 
@@ -343,14 +342,14 @@ Pure preference-based. Does **not** gate on `is_browser`. The saved preference (
 
 The volume row stays honest about pairing (`vol  —` when nothing paired), so users aren't misled about whether their preference is currently audible.
 
-### Title-bar listener tags
+### Title-bar source tags
 
-Both blocks always show their live listener count in the title-bar tag slot — `youtube  ────  5` / `icecast  ────  12`. Active vs inactive is communicated by color/weight (amber bold vs italic faint), not by case (label is always lowercase) and not by tag presence. The counts are sourced live from `PairedClientRegistry::total_youtube_listeners()` / `total_icecast_listeners()` via `AudioService` accessors; both filter to paired browsers — CLI is intentionally excluded.
+Both blocks always show the saved source-preference count in the title-bar tag slot — `youtube  ────  5` / `icecast  ────  12`. Active vs inactive is communicated by color/weight (amber bold vs italic faint), not by case (label is always lowercase) and not by tag presence. The counts come from `users.settings.audio_source` via `User::audio_source_counts()` and ignore whether those users are currently paired/listening.
 
 ### Fallback-not-empty semantics
 
 The widget treats "no submitted track" and "fallback playing" as the same state. When `queue.current.is_none()`:
-- Title tag still shows the YouTube listener count (no separate "loop"/"fallback" badge anymore — the body row carries that information).
+- Title tag still shows the YouTube source count (no separate "loop"/"fallback" badge anymore — the body row carries that information).
 - Body renders `fallback stream` / `YouTube · 24/7` plus a `queue with v+v` hint.
 - When a track is playing but queue is otherwise empty, the trailing "next" row says `· fallback next`, not "queue ends".
 
@@ -362,7 +361,7 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 - `vote: VoteCardView<'_>` — from the genre vote state.
 - `paired_client: Option<&ClientAudioState>` — for `volume_percent` and `muted` (vol row only).
 - `paired_browser_source: AudioSource` — App's per-user mirror.
-- `youtube_listener_count: usize` / `icecast_listener_count: usize` — live counts from the registry via `AudioService::{youtube,icecast}_listener_count()`. Browsers only; refreshed every render tick.
+- `youtube_source_count: usize` / `icecast_source_count: usize` — cached counts from `users.settings.audio_source` via `AudioService::{youtube,icecast}_source_count()`. Pair/browser presence is ignored.
 - `now_playing: Option<&NowPlaying>` — Icecast title + duration source, from `NowPlayingService` (§11). Drives the icecast track and progress rows.
 
 ### Internal helpers (all in `sidebar.rs`)

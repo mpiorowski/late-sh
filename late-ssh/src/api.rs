@@ -444,7 +444,6 @@ fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry
         .broadcast_playback_source_for_token(token);
-    state.audio_service.reevaluate_skip_threshold_task();
 }
 
 async fn send_json_ws<T: serde::Serialize>(

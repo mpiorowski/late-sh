@@ -1,6 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -13,7 +16,7 @@ use late_core::{
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
-        user::User,
+        user::{AudioSource, AudioSourceCounts, User},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -42,6 +45,7 @@ pub struct AudioService {
     snapshot_tx: watch::Sender<QueueSnapshot>,
     state: Arc<Mutex<QueueState>>,
     paired_clients: PairedClientRegistry,
+    audio_source_counts: Arc<AudioSourceCountCache>,
 }
 
 #[derive(Default)]
@@ -52,6 +56,27 @@ struct QueueState {
     playback_cancel: Option<oneshot::Sender<()>>,
     fallback_cancel: Option<oneshot::Sender<()>>,
     skip_votes: HashSet<Uuid>,
+}
+
+#[derive(Default)]
+struct AudioSourceCountCache {
+    youtube: AtomicUsize,
+    icecast: AtomicUsize,
+}
+
+impl AudioSourceCountCache {
+    fn store(&self, counts: AudioSourceCounts) {
+        self.youtube.store(counts.youtube, Ordering::Relaxed);
+        self.icecast.store(counts.icecast, Ordering::Relaxed);
+    }
+
+    fn youtube(&self) -> usize {
+        self.youtube.load(Ordering::Relaxed)
+    }
+
+    fn icecast(&self) -> usize {
+        self.icecast.load(Ordering::Relaxed)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -261,6 +286,7 @@ impl AudioService {
             snapshot_tx,
             state: Arc::new(Mutex::new(QueueState::default())),
             paired_clients,
+            audio_source_counts: Arc::new(AudioSourceCountCache::default()),
         }
     }
 
@@ -283,7 +309,21 @@ impl AudioService {
         self.event_tx.subscribe()
     }
 
+    async fn refresh_audio_source_counts(&self) -> Result<AudioSourceCounts> {
+        let client = self.db.get().await?;
+        let counts = User::audio_source_counts(&client).await?;
+        self.audio_source_counts.store(counts);
+        Ok(counts)
+    }
+
     pub async fn start_background_task(self, shutdown: late_core::shutdown::CancellationToken) {
+        if let Err(err) = self.refresh_audio_source_counts().await {
+            late_core::error_span!(
+                "audio_source_count_refresh_failed",
+                error = ?err,
+                "failed to refresh audio-source counts"
+            );
+        }
         if let Err(err) = self.sweep_orphan_playing().await {
             late_core::error_span!(
                 "audio_orphan_sweep_failed",
@@ -305,6 +345,13 @@ impl AudioService {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 _ = reconcile.tick() => {
+                    if let Err(err) = self.refresh_audio_source_counts().await {
+                        late_core::error_span!(
+                            "audio_source_count_refresh_failed",
+                            error = ?err,
+                            "failed to refresh audio-source counts"
+                        );
+                    }
                     if let Err(err) = self.periodic_reconcile().await {
                         late_core::error_span!(
                             "audio_periodic_reconcile_failed",
@@ -526,18 +573,23 @@ impl AudioService {
     /// Cast or change a vote (+1/-1) on a queued item. Rejects votes against
     /// the currently-playing track and against non-queued items. Returns the
     /// new aggregate score on success.
-    pub async fn persist_audio_source(
-        &self,
-        user_id: Uuid,
-        source: late_core::models::user::AudioSource,
-    ) -> Result<()> {
+    pub async fn persist_audio_source(&self, user_id: Uuid, source: AudioSource) -> Result<()> {
         let client = self.db.get().await?;
-        late_core::models::user::User::set_audio_source(&client, user_id, source).await?;
+        let previous = User::audio_source(&client, user_id).await?;
+        User::set_audio_source(&client, user_id, source).await?;
         drop(client);
-        // Mirror the new value into the paired-client registry so
-        // `total_youtube_listeners` / `has_youtube_listener` stay in sync.
-        let left_youtube = self.paired_clients.set_audio_source(user_id, source);
-        if left_youtube {
+        if let Err(err) = self.refresh_audio_source_counts().await {
+            late_core::error_span!(
+                "audio_source_count_refresh_failed",
+                error = ?err,
+                "failed to refresh audio-source counts after preference change"
+            );
+        }
+        // Mirror the new value into the paired-client registry so connected
+        // clients receive SetPlaybackSource. Counts/thresholds come from the
+        // persisted user preference, not from paired-client presence.
+        self.paired_clients.set_audio_source(user_id, source);
+        if previous == AudioSource::Youtube && source != AudioSource::Youtube {
             // The user is no longer hearing YouTube — strip any pending
             // skip-vote they cast, then re-evaluate in case the threshold
             // dropped to meet remaining votes.
@@ -551,35 +603,35 @@ impl AudioService {
         Ok(())
     }
 
-    pub async fn read_audio_source(
-        &self,
-        user_id: Uuid,
-    ) -> Result<late_core::models::user::AudioSource> {
+    pub async fn read_audio_source(&self, user_id: Uuid) -> Result<AudioSource> {
         let client = self.db.get().await?;
-        late_core::models::user::User::audio_source(&client, user_id).await
+        let source = User::audio_source(&client, user_id).await?;
+        drop(client);
+        if let Err(err) = self.refresh_audio_source_counts().await {
+            late_core::error_span!(
+                "audio_source_count_refresh_failed",
+                error = ?err,
+                "failed to refresh audio-source counts after preference read"
+            );
+        }
+        Ok(source)
     }
 
-    /// Live count of paired browsers currently pinned to YouTube. Drives the
-    /// sidebar's youtube-block listener tag.
-    pub fn youtube_listener_count(&self) -> usize {
-        self.paired_clients.total_youtube_listeners()
+    /// Count of users whose persisted audio source is YouTube. This drives the
+    /// sidebar badge and skip-vote denominator; connection shape is ignored.
+    pub fn youtube_source_count(&self) -> usize {
+        self.audio_source_counts.youtube()
     }
 
-    /// Live count of paired browsers currently pinned to Icecast. CLI is
-    /// excluded by design — only counts browsers that are actively rendering
-    /// the radio.
-    pub fn icecast_listener_count(&self) -> usize {
-        self.paired_clients.total_icecast_listeners()
+    /// Count of users whose persisted audio source is Icecast/default.
+    pub fn icecast_source_count(&self) -> usize {
+        self.audio_source_counts.icecast()
     }
 
     /// Spawn a background persist for the user's audio-source preference.
     /// On failure publishes `AudioSourcePersistFailed` so the session's
     /// `AudioState::tick` can surface a banner.
-    pub fn persist_audio_source_task(
-        &self,
-        user_id: Uuid,
-        source: late_core::models::user::AudioSource,
-    ) {
+    pub fn persist_audio_source_task(&self, user_id: Uuid, source: AudioSource) {
         let service = self.clone();
         tokio::spawn(async move {
             if let Err(err) = service.persist_audio_source(user_id, source).await {
@@ -631,20 +683,15 @@ impl AudioService {
     /// Cast a skip-vote for the currently-playing track. Returns the new
     /// progress; if the threshold has been hit, advances the queue.
     ///
-    /// Gated on the caller having at least one paired browser actively pinned
-    /// to the YouTube source — only listeners hearing the track can vote to
-    /// skip it. Threshold denominator is also restricted to YouTube
-    /// listeners across all tokens.
-    pub async fn cast_skip_vote(
-        &self,
-        user_id: Uuid,
-        session_token: &str,
-    ) -> Result<CastSkipResult> {
-        if !self.paired_clients.has_youtube_listener(session_token) {
-            anyhow::bail!("switch to youtube to skip-vote");
-        }
+    /// Gated on the caller's persisted audio source being YouTube. Threshold
+    /// denominator is the persisted YouTube-source user count, not live
+    /// pair/browser presence.
+    pub async fn cast_skip_vote(&self, user_id: Uuid) -> Result<CastSkipResult> {
         {
             let client = self.db.get().await?;
+            if User::audio_source(&client, user_id).await? != AudioSource::Youtube {
+                anyhow::bail!("switch to youtube to skip-vote");
+            }
             if AudioBan::is_active_for_user(&client, user_id).await? {
                 anyhow::bail!("audio ban: skip-vote blocked");
             }
@@ -676,7 +723,7 @@ impl AudioService {
 
         state.skip_votes.insert(user_id);
         let votes = state.skip_votes.len() as u32;
-        let threshold = skip_threshold(self.paired_clients.total_youtube_listeners());
+        let threshold = skip_threshold(self.youtube_source_count());
         let fired = votes >= threshold;
 
         if fired {
@@ -718,7 +765,7 @@ impl AudioService {
             return Ok(());
         }
         let votes = state.skip_votes.len() as u32;
-        let threshold = skip_threshold(self.paired_clients.total_youtube_listeners());
+        let threshold = skip_threshold(self.youtube_source_count());
         if votes < threshold {
             self.publish_queue_update_with_guard(&mut state).await?;
             return Ok(());
@@ -788,10 +835,10 @@ impl AudioService {
         });
     }
 
-    pub fn cast_skip_vote_task(&self, user_id: Uuid, session_token: String) {
+    pub fn cast_skip_vote_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
-            match service.cast_skip_vote(user_id, &session_token).await {
+            match service.cast_skip_vote(user_id).await {
                 Ok(result) => {
                     if result.fired {
                         service.publish_event(AudioEvent::BoothSkipFired { user_id });
@@ -956,19 +1003,6 @@ impl AudioService {
                         message: booth_delete_error_message(&err),
                     });
                 }
-            }
-        });
-    }
-
-    pub fn reevaluate_skip_threshold_task(&self) {
-        let service = self.clone();
-        tokio::spawn(async move {
-            if let Err(err) = service.reevaluate_skip_threshold().await {
-                late_core::error_span!(
-                    "audio_skip_reeval_failed",
-                    error = ?err,
-                    "failed to re-evaluate skip threshold"
-                );
             }
         });
     }
@@ -1352,7 +1386,7 @@ impl AudioService {
             return None;
         }
         let votes = state.skip_votes.len() as u32;
-        let threshold = skip_threshold(self.paired_clients.total_youtube_listeners());
+        let threshold = skip_threshold(self.youtube_source_count());
         Some(SkipProgress { votes, threshold })
     }
 
@@ -1581,8 +1615,10 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
-fn skip_threshold(paired_total: usize) -> u32 {
-    let value = paired_total.saturating_mul(SKIP_VOTE_PERCENT).div_ceil(100) as u32;
+fn skip_threshold(youtube_source_total: usize) -> u32 {
+    let value = youtube_source_total
+        .saturating_mul(SKIP_VOTE_PERCENT)
+        .div_ceil(100) as u32;
     value.max(SKIP_VOTE_MIN)
 }
 
@@ -1625,8 +1661,8 @@ fn booth_vote_error_message(err: &anyhow::Error) -> String {
         "Banned from voting".to_string()
     } else if text.contains("voting closed") {
         "Voting closed - track started".to_string()
-    } else if text.contains("pair a client") {
-        "Pair a client to skip-vote".to_string()
+    } else if text.contains("switch to youtube") {
+        "Switch to YouTube to skip-vote".to_string()
     } else if text.contains("nothing is playing") {
         "Nothing is playing".to_string()
     } else if text.contains("queue item not found")
@@ -1722,7 +1758,7 @@ mod tests {
 
     #[test]
     fn skip_threshold_floors_at_two_and_uses_thirty_percent_ceil() {
-        // Small rooms collapse to the floor: at least two paired listeners
+        // Small rooms collapse to the floor: at least two YouTube-pref users
         // must agree before a skip fires.
         assert_eq!(skip_threshold(0), 2);
         assert_eq!(skip_threshold(1), 2);

@@ -344,63 +344,12 @@ impl PairedClientRegistry {
         true
     }
 
-    /// True when at least one paired browser on `token` is currently pinned to
-    /// the YouTube audio source. Used to gate skip-vote: only listeners
-    /// actually hearing the YouTube track have skin in the game.
-    pub fn has_youtube_listener(&self, token: &str) -> bool {
-        let clients = self.clients.lock_recover();
-        clients
-            .get(token)
-            .map(|entries| {
-                entries.iter().any(|entry| {
-                    entry.state.client_kind == ClientKind::Browser
-                        && entry.audio_source == AudioSource::Youtube
-                })
-            })
-            .unwrap_or(false)
-    }
-
-    /// Count of paired browser entries across all tokens whose user has
-    /// `audio_source = Youtube` cached. Drives the skip-vote threshold
-    /// denominator and the sidebar's YouTube listener tally.
-    pub fn total_youtube_listeners(&self) -> usize {
-        self.total_browser_listeners_by_source(AudioSource::Youtube)
-    }
-
-    /// Count of paired browser entries across all tokens whose user has
-    /// `audio_source = Icecast` cached. Drives the sidebar's Icecast
-    /// listener tally. CLI entries are intentionally not counted — only
-    /// browsers in Icecast mode (the iframe is pre-cued but the radio
-    /// `<audio>` element is what's making sound).
-    pub fn total_icecast_listeners(&self) -> usize {
-        self.total_browser_listeners_by_source(AudioSource::Icecast)
-    }
-
-    fn total_browser_listeners_by_source(&self, source: AudioSource) -> usize {
-        let clients = self.clients.lock_recover();
-        clients
-            .values()
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter(|entry| {
-                        entry.state.client_kind == ClientKind::Browser
-                            && entry.audio_source == source
-                    })
-                    .count()
-            })
-            .sum()
-    }
-
     /// Update every entry for `user_id` to the new audio source and push
     /// `SetPlaybackSource` to each (CLI and browser alike). The CLI uses it to
     /// gate its Icecast decoder; the browser uses it to swap playback element.
-    /// Browser Icecast is disabled whenever a CLI is present on the token, so
-    /// Icecast has only one surface. Returns true when at least one entry's
-    /// value transitioned away from `Youtube` — caller uses this to drop the
-    /// user's pending skip-vote.
-    pub fn set_audio_source(&self, user_id: Uuid, source: AudioSource) -> bool {
-        let mut left_youtube = false;
+    /// Browser Icecast is disabled whenever a CLI is present on the token, and
+    /// embedded CLI webview is disabled whenever a real browser is present.
+    pub fn set_audio_source(&self, user_id: Uuid, source: AudioSource) {
         let mut targets = Vec::new();
         {
             let mut clients = self.clients.lock_recover();
@@ -410,10 +359,6 @@ impl PairedClientRegistry {
                 for entry in entries.iter_mut() {
                     if entry.user_id != user_id {
                         continue;
-                    }
-                    if entry.audio_source == AudioSource::Youtube && source != AudioSource::Youtube
-                    {
-                        left_youtube = true;
                     }
                     entry.audio_source = source;
                     targets.push((
@@ -437,8 +382,6 @@ impl PairedClientRegistry {
                 tracing::warn!("failed to push SetPlaybackSource after audio source change");
             }
         }
-
-        left_youtube
     }
 }
 
@@ -689,7 +632,7 @@ mod tests {
             },
         );
 
-        assert!(!registry.set_audio_source(user_id, AudioSource::Youtube));
+        registry.set_audio_source(user_id, AudioSource::Youtube);
         assert_eq!(
             cli_rx.try_recv().unwrap(),
             PairControlMessage::SetPlaybackSource {
@@ -707,7 +650,7 @@ mod tests {
             }
         );
 
-        assert!(registry.set_audio_source(user_id, AudioSource::Icecast));
+        registry.set_audio_source(user_id, AudioSource::Icecast);
         assert_eq!(
             cli_rx.try_recv().unwrap(),
             PairControlMessage::SetPlaybackSource {
@@ -751,7 +694,7 @@ mod tests {
             },
         );
 
-        assert!(registry.set_audio_source(user_id, AudioSource::Icecast));
+        registry.set_audio_source(user_id, AudioSource::Icecast);
         assert_eq!(
             browser_rx.try_recv().unwrap(),
             PairControlMessage::SetPlaybackSource {
@@ -802,7 +745,7 @@ mod tests {
             },
         );
 
-        assert!(!registry.set_audio_source(user_id, AudioSource::Youtube));
+        registry.set_audio_source(user_id, AudioSource::Youtube);
         assert_eq!(
             cli_rx.try_recv().unwrap(),
             PairControlMessage::SetPlaybackSource {

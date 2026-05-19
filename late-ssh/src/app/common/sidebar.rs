@@ -41,12 +41,12 @@ pub struct SidebarProps<'a> {
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
     pub queue_snapshot: &'a QueueSnapshot,
-    /// Live count of paired browsers pinned to YouTube. Rendered as the
-    /// YouTube block's title-bar tag.
-    pub youtube_listener_count: usize,
-    /// Live count of paired browsers pinned to Icecast. Rendered as the
-    /// Icecast block's title-bar tag. CLI is not counted.
-    pub icecast_listener_count: usize,
+    /// Count of users whose saved audio source is YouTube. Rendered as the
+    /// YouTube block's title-bar tag; connection shape is ignored.
+    pub youtube_source_count: usize,
+    /// Count of users whose saved audio source is Icecast/default. Rendered
+    /// as the Icecast block's title-bar tag.
+    pub icecast_source_count: usize,
     /// Per-user paired-browser audio source preference (mirrors
     /// `users.settings.audio_source`, flipped by v+x). When set to
     /// `Icecast` the user has opted out of YouTube even if the global queue
@@ -138,8 +138,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         &props.vote,
         props.queue_snapshot,
         props.paired_browser_source,
-        props.youtube_listener_count,
-        props.icecast_listener_count,
+        props.youtube_source_count,
+        props.icecast_source_count,
     );
 
     draw_horizontal_rule(frame, inset(layout[5]));
@@ -338,8 +338,8 @@ fn draw_music_stage(
     vote: &VoteCardView<'_>,
     queue: &QueueSnapshot,
     paired_browser_source: AudioSource,
-    youtube_listener_count: usize,
-    icecast_listener_count: usize,
+    youtube_source_count: usize,
+    icecast_source_count: usize,
 ) {
     if area.width == 0 || area.height < 4 {
         return;
@@ -376,14 +376,14 @@ fn draw_music_stage(
         [rows[2], rows[3], rows[4], rows[5], rows[6], rows[7]],
         queue,
         yt_active,
-        youtube_listener_count,
+        youtube_source_count,
     );
     draw_keybind_row(frame, rows[8], &[("v+v", "queue"), ("v+x", "swap")]);
     draw_icecast_block(
         frame,
         [rows[9], rows[10], rows[11], rows[12], rows[13]],
         vote,
-        icecast_listener_count,
+        icecast_source_count,
         now_playing,
         !yt_active,
     );
@@ -496,7 +496,7 @@ fn stage_title_line(area_w: u16, label: &str, tag: Option<&str>, active: bool) -
         )
     };
     // Label is always lowercase — the active state badge is communicated
-    // through color/weight + the listener-count tag on the right, not case.
+    // through color/weight + the source-count tag on the right, not case.
     let label_text = label.to_lowercase();
 
     // Tag has no glyph prefix; color + position already reads as a state
@@ -532,15 +532,15 @@ fn draw_youtube_block(
     rows: [Rect; 6],
     queue: &QueueSnapshot,
     active: bool,
-    listener_count: usize,
+    source_count: usize,
 ) {
     let width = rows[0].width as usize;
 
-    // Always show the live listener count as the tag — both blocks display
-    // it regardless of active state so users can see room composition at a
-    // glance. The track body still carries fallback-state copy when
+    // Always show the saved-source count as the tag — both blocks display it
+    // regardless of active state so users can see source preference split at
+    // a glance. The track body still carries fallback-state copy when
     // `queue.current.is_none()`.
-    let tag_string = listener_count.to_string();
+    let tag_string = source_count.to_string();
     frame.render_widget(
         Paragraph::new(stage_title_line(
             rows[0].width,
@@ -674,14 +674,14 @@ fn draw_icecast_block(
     frame: &mut Frame,
     rows: [Rect; 5],
     vote: &VoteCardView<'_>,
-    listener_count: usize,
+    source_count: usize,
     now_playing: Option<&NowPlaying>,
     active: bool,
 ) {
     // Mute/off status is communicated by the volume row above; the title
-    // tag here is always the live listener count, matching the YouTube
-    // block's behavior.
-    let tag_string = listener_count.to_string();
+    // tag here is always the saved-source count, matching the YouTube block's
+    // behavior.
+    let tag_string = source_count.to_string();
     frame.render_widget(
         Paragraph::new(stage_title_line(
             rows[0].width,

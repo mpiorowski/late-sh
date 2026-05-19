@@ -297,6 +297,8 @@ impl User {
     }
 
     pub async fn audio_source_counts(client: &Client) -> Result<AudioSourceCounts> {
+        let default_source = AudioSource::Icecast.as_str();
+        let youtube_source = AudioSource::Youtube.as_str();
         let row = client
             .query_one(
                 "SELECT
@@ -307,7 +309,7 @@ impl User {
                         WHERE COALESCE(settings->>$1, $2) <> $3
                     )::bigint AS icecast_count
                  FROM users",
-                &[&AUDIO_SOURCE_KEY, &AudioSource::Icecast.as_str(), &AudioSource::Youtube.as_str()],
+                &[&AUDIO_SOURCE_KEY, &default_source, &youtube_source],
             )
             .await?;
         let youtube: i64 = row.get("youtube_count");

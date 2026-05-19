@@ -630,11 +630,7 @@ impl App {
             active_users: active_users.clone(),
             activity_feed_rx: config.activity_feed_rx,
             activity,
-            audio: crate::app::audio::state::AudioState::new(
-                config.audio_service,
-                config.user_id,
-                config.session_token,
-            ),
+            audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
