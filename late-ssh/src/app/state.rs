@@ -920,24 +920,26 @@ impl App {
         );
     }
 
-    pub fn toggle_paired_playback_source(
-        &mut self,
-    ) -> Option<late_core::models::user::AudioSource> {
+    /// Flip the per-user audio source preference. Persisted server-side and
+    /// pushed to any paired browser; the CLI mute follows from the source via
+    /// `set_audio_source`. Works whether a browser is paired or not — the
+    /// preference is meaningful even with only a CLI, because Youtube means
+    /// "mute the CLI" and Icecast means "let the CLI play."
+    pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
         use late_core::models::user::AudioSource;
-        let registry = self.paired_client_registry.as_ref()?;
         let next = match self.paired_browser_source {
             AudioSource::Icecast => AudioSource::Youtube,
             AudioSource::Youtube => AudioSource::Icecast,
         };
-        if !registry.send_control_to_browsers(
-            &self.session_token,
-            PairControlMessage::SetPlaybackSource { source: next },
-        ) {
-            return None;
+        if let Some(registry) = self.paired_client_registry.as_ref() {
+            registry.send_control_to_browsers(
+                &self.session_token,
+                PairControlMessage::SetPlaybackSource { source: next },
+            );
         }
         self.paired_browser_source = next;
         self.audio.persist_audio_source(next);
-        Some(next)
+        next
     }
 
     pub fn request_paired_clipboard_image_upload(&mut self, room_id: Option<Uuid>) -> bool {
