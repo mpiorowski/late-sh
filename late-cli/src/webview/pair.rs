@@ -21,6 +21,7 @@ use crate::ws::client_platform_label;
 /// today; a future `"embedded_webview"` variant slots in here without
 /// touching the protocol.
 const CLIENT_KIND: &str = "browser";
+const DEFAULT_VOLUME_PERCENT: u8 = 30;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -62,7 +63,7 @@ impl Default for AudioSettings {
     fn default() -> Self {
         Self {
             muted: false,
-            volume_percent: 100,
+            volume_percent: DEFAULT_VOLUME_PERCENT,
         }
     }
 }

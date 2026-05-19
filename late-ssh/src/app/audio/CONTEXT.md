@@ -475,7 +475,7 @@ This lazy lifecycle is intentional. A normal CLI run does not open a webview. A 
 
 The helper serves `late-cli/src/webview/page.html` from a loopback-only ephemeral HTTP origin (`http://127.0.0.1:<port>/`) and loads that URL in the webview. Do not switch this back to `WebViewBuilder::with_html`: Wry's HTML string path gives the page a null origin, and YouTube can reject the iframe with player error 153. The page passes `window.location.origin` into the IFrame Player `origin` parameter, posts `player_state` back through wry IPC, and Rust relays those events to `/api/ws/pair` while pushing `load_video` / `source_changed` into JS via `evaluate_script`.
 
-The helper owns its own mute/volume state. It registers as a browser, so pair-WS `toggle_mute`, `volume_up`, and `volume_down` controls must be applied inside `late-cli/src/webview/pair.rs` and forwarded into `page.html`; changing only the native CLI Icecast atom is not enough because YouTube audio is emitted by WebKit/GStreamer.
+The helper owns its own mute/volume state, starting at the same 30% default as native CLI Icecast. It registers as a browser, so pair-WS `toggle_mute`, `volume_up`, and `volume_down` controls must be applied inside `late-cli/src/webview/pair.rs` and forwarded into `page.html`; changing only the native CLI Icecast atom is not enough because YouTube audio is emitted by WebKit/GStreamer.
 
 ### Window UX
 
