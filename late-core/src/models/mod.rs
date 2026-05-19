@@ -10,6 +10,7 @@ pub mod chat_message_reaction;
 pub mod chat_room;
 pub mod chat_room_member;
 pub mod chips;
+pub mod friendship;
 pub mod game_room;
 pub mod leaderboard;
 pub mod media_queue_item;

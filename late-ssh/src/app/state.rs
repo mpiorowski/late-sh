@@ -176,6 +176,7 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
+    pub friends_service: crate::app::friends::svc::FriendsService,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
@@ -304,6 +305,9 @@ pub struct App {
     /// Bonsai
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
+
+    /// Friends
+    pub(crate) friends_state: crate::app::friends::state::FriendsState,
 
     /// Arcade Hub
     pub(crate) game_selection: usize,
@@ -558,6 +562,10 @@ impl App {
                 config.permissions.is_admin(),
             )
         };
+        let friends_state = crate::app::friends::state::FriendsState::new(
+            config.friends_service.clone(),
+            config.user_id,
+        );
         let bonsai_care_state = config
             .initial_bonsai_care
             .map(|care| {
@@ -677,6 +685,7 @@ impl App {
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
+            friends_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,

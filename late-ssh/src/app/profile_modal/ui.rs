@@ -23,7 +23,13 @@ const MODAL_HEIGHT: u16 = 28;
 const BONSAI_CARD_WIDTH: u16 = 24;
 const FETCH_STRIP_HEIGHT: u16 = 5;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+pub fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ProfileModalState,
+    friend_status: late_core::models::friendship::FriendshipStatus,
+    is_self: bool,
+) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
@@ -38,27 +44,55 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     if wide {
         let body = Layout::horizontal([Constraint::Min(50), Constraint::Length(BONSAI_CARD_WIDTH)])
             .split(layout[0]);
-        draw_profile_card(frame, body[0], state);
+        draw_profile_card(frame, body[0], state, friend_status, is_self);
         draw_bonsai_card(frame, body[1], state.bonsai());
     } else {
-        draw_profile_card(frame, layout[0], state);
+        draw_profile_card(frame, layout[0], state, friend_status, is_self);
     }
 
     draw_late_fetch_strip(frame, layout[1], state);
-    draw_footer(frame, layout[2]);
+    draw_footer(frame, layout[2], friend_status, is_self);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect) {
-    let footer = Line::from(vec![
+fn draw_footer(
+    frame: &mut Frame,
+    area: Rect,
+    friend_status: late_core::models::friendship::FriendshipStatus,
+    is_self: bool,
+) {
+    use late_core::models::friendship::FriendshipStatus;
+    let mut spans = vec![
         Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
-    ]);
-    frame.render_widget(Paragraph::new(footer), area);
+    ];
+    if !is_self {
+        let (key, label): (&str, &str) = match friend_status {
+            FriendshipStatus::None => ("r", " send request  "),
+            FriendshipStatus::OutgoingPending => ("x", " cancel request  "),
+            FriendshipStatus::IncomingPending => ("a/x", " accept/decline  "),
+            FriendshipStatus::Friends => ("u", " unfriend  "),
+        };
+        spans.push(Span::styled(key, Style::default().fg(theme::AMBER_DIM())));
+        spans.push(Span::styled(label, Style::default().fg(theme::TEXT_DIM())));
+    }
+    spans.push(Span::styled(
+        "Esc/q",
+        Style::default().fg(theme::AMBER_DIM()),
+    ));
+    spans.push(Span::styled(
+        " close",
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_profile_card(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+fn draw_profile_card(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ProfileModalState,
+    friend_status: late_core::models::friendship::FriendshipStatus,
+    is_self: bool,
+) {
     let block = Block::default()
         .title(" profile ")
         .title_style(
@@ -75,7 +109,7 @@ fn draw_profile_card(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         horizontal: 1,
         vertical: 0,
     });
-    let lines = build_profile_lines(state, content.width as usize);
+    let lines = build_profile_lines(state, content.width as usize, friend_status, is_self);
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -239,7 +273,37 @@ fn format_created_at(created_at: &chrono::DateTime<Utc>) -> String {
     created_at.format("%Y-%m-%d").to_string()
 }
 
-fn build_profile_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'static>> {
+fn friend_status_badge(
+    status: late_core::models::friendship::FriendshipStatus,
+) -> (&'static str, Style) {
+    use late_core::models::friendship::FriendshipStatus;
+    match status {
+        FriendshipStatus::None => ("Not connected", Style::default().fg(theme::TEXT_DIM())),
+        FriendshipStatus::OutgoingPending => (
+            "Request sent — awaiting response",
+            Style::default().fg(theme::AMBER_DIM()),
+        ),
+        FriendshipStatus::IncomingPending => (
+            "Wants to be friends — press `a` to accept",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ),
+        FriendshipStatus::Friends => (
+            "Friends",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ),
+    }
+}
+
+fn build_profile_lines(
+    state: &ProfileModalState,
+    width: usize,
+    friend_status: late_core::models::friendship::FriendshipStatus,
+    is_self: bool,
+) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let text = Style::default().fg(theme::TEXT());
 
@@ -257,11 +321,20 @@ fn build_profile_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'sta
         profile.username.trim()
     };
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("Username: ", dim),
-            Span::styled(username.to_string(), text),
-        ]),
+    let mut lines = vec![Line::from(vec![
+        Span::styled("Username: ", dim),
+        Span::styled(username.to_string(), text),
+    ])];
+
+    if !is_self {
+        let (label, style) = friend_status_badge(friend_status);
+        lines.push(Line::from(vec![
+            Span::styled("Friendship: ", dim),
+            Span::styled(label, style),
+        ]));
+    }
+
+    lines.extend(vec![
         Line::from(vec![
             Span::styled("Country:  ", dim),
             Span::styled(country_label(profile.country.as_deref()), text),
@@ -273,7 +346,7 @@ fn build_profile_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'sta
                 text,
             ),
         ]),
-    ];
+    ]);
 
     if let Some(current_time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
         lines.push(Line::from(vec![

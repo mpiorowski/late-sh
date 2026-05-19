@@ -467,6 +467,7 @@ late-sh/
 │   │       ├── ai/             # AI services: bot/graybeard + summarization
 │   │       ├── artboard/       # Shared ASCII Artboard; see app/artboard/CONTEXT.md
 │   │       ├── bonsai/         # Persistent bonsai tree state, service, and UI
+│   │       ├── friends/        # Mutual friendships: requests/accept/decline/unfriend
 │   │       ├── chat/           # Chat implementation; see app/chat/CONTEXT.md
 │   │       ├── dashboard/      # Landing screen layout + shortcuts
 │   │       ├── arcade/         # Arcade hub, leaderboards, shared card/chip helpers, and game subdomains
@@ -569,6 +570,7 @@ late-sh/
 | BonsaiTree | `bonsai_trees` | `user_id` UNIQUE, growth_points, last_watered DATE, seed BIGINT, is_alive BOOLEAN |
 | BonsaiGrave | `bonsai_graveyard` | `user_id` FK (not unique — multiple deaths), survived_days, died_at |
 | BonsaiDailyCare | `bonsai_daily_care` | `UNIQUE(user_id, care_date)`, UTC daily care row with watered flag, generated branch goal, cut branch ids, and one-shot water/prune penalty flags |
+| Friendship | `friendships` | `(requester_id, addressee_id)` UNIQUE, plus `UNIQUE(LEAST, GREATEST)` so reverse pairs collapse to one row; `accepted_at` nullable (NULL = pending, non-NULL = mutual). Reverse-pending send auto-accepts. Profile modal keys: `r` request, `a` accept, `x` decline/cancel, `u` unfriend |
 | UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (new users start at 1000; busted-player floor restore is 100), `last_stipend_date` DATE |
 | Showcase | `showcases` | `user_id` FK; `title` 1-120, `url` 1-2000, `description` 1-800, `tags` TEXT[] (lowercased, ≤8). Listed newest-first, edit/delete restricted to author or admin |
 | ShowcaseFeedRead | `showcase_feed_reads` | `user_id` PK/FK, `last_read_at` timestamp cursor for per-user Showcase unread counts |

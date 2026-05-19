@@ -180,6 +180,7 @@ struct DrawContext<'a> {
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
+    friends_state: &'a crate::app::friends::state::FriendsState,
     show_bonsai_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_help: bool,
@@ -556,6 +557,7 @@ impl App {
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
+                        friends_state: &self.friends_state,
                         show_bonsai_modal: self.show_bonsai_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_help: self.show_help,
@@ -889,7 +891,11 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
+            let (status, is_self) = match ctx.profile_modal_state.viewed_user_id() {
+                Some(id) => (ctx.friends_state.local_status(id), id == ctx.user_id),
+                None => (late_core::models::friendship::FriendshipStatus::None, false),
+            };
+            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state, status, is_self);
         }
 
         if ctx.show_bonsai_modal {

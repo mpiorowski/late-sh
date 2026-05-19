@@ -24,6 +24,7 @@ use late_ssh::app::bonsai::svc::BonsaiService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
+use late_ssh::app::friends::svc::FriendsService;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
@@ -164,6 +165,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let minesweeper_service =
         MinesweeperService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
+    let friends_service = FriendsService::new(db.clone());
     let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
     State {
@@ -194,6 +196,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         solitaire_service,
         minesweeper_service,
         bonsai_service,
+        friends_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
         rooms_service,
@@ -298,6 +301,7 @@ pub fn make_app_with_chat_service(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
+        friends_service: FriendsService::new(db.clone()),
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
@@ -413,6 +417,7 @@ pub fn make_app_with_paired_client(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
+        friends_service: FriendsService::new(db.clone()),
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,

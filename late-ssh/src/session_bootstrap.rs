@@ -183,6 +183,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,
         initial_bonsai_care,
+        friends_service: state.friends_service.clone(),
         nonogram_library: state.nonogram_library.clone(),
         initial_chip_balance,
         web_url: state.config.web_url.clone(),

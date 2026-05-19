@@ -73,6 +73,9 @@ impl App {
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
         }
+        if let Some(b) = self.friends_state.tick() {
+            self.banner = Some(b);
+        }
         self.chat
             .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
         if let Some(b) = self.settings_modal_state.tick() {

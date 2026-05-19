@@ -33,7 +33,98 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
             let step = (app.size.1 / 2).max(1) as i16;
             app.profile_modal_state.scroll_by(-step);
         }
+        ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
+            send_friend_request(app);
+        }
+        ParsedInput::Byte(b'a' | b'A') | ParsedInput::Char('a' | 'A') => {
+            accept_friend_request(app);
+        }
+        ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
+            decline_or_cancel(app);
+        }
+        ParsedInput::Byte(b'u' | b'U') | ParsedInput::Char('u' | 'U') => {
+            unfriend(app);
+        }
         _ => {}
+    }
+}
+
+fn viewed_target(app: &App) -> Option<(uuid::Uuid, String)> {
+    let target = app.profile_modal_state.viewed_user_id()?;
+    if target == app.user_id {
+        return None;
+    }
+    Some((target, app.profile_modal_state.viewed_name()))
+}
+
+fn send_friend_request(app: &mut App) {
+    use crate::app::common::primitives::Banner;
+    use late_core::models::friendship::FriendshipStatus;
+    let Some((target, name)) = viewed_target(app) else {
+        return;
+    };
+    match app.friends_state.local_status(target) {
+        FriendshipStatus::None => {
+            app.friends_state
+                .service()
+                .send_request_task(app.user_id, target, name);
+        }
+        FriendshipStatus::OutgoingPending => {
+            app.banner = Some(Banner::success(&format!(
+                "Already waiting on {name} to accept."
+            )));
+        }
+        FriendshipStatus::IncomingPending => {
+            // Press `a` to accept, not `r` to spam another request.
+            app.banner = Some(Banner::success(&format!(
+                "{name} already sent you a request — press `a` to accept."
+            )));
+        }
+        FriendshipStatus::Friends => {
+            app.banner = Some(Banner::success(&format!(
+                "You and {name} are already friends."
+            )));
+        }
+    }
+}
+
+fn accept_friend_request(app: &mut App) {
+    use late_core::models::friendship::FriendshipStatus;
+    let Some((target, name)) = viewed_target(app) else {
+        return;
+    };
+    if app.friends_state.local_status(target) == FriendshipStatus::IncomingPending {
+        app.friends_state
+            .service()
+            .accept_task(app.user_id, target, name);
+    }
+}
+
+fn decline_or_cancel(app: &mut App) {
+    use late_core::models::friendship::FriendshipStatus;
+    let Some((target, name)) = viewed_target(app) else {
+        return;
+    };
+    let status = app.friends_state.local_status(target);
+    if matches!(
+        status,
+        FriendshipStatus::IncomingPending | FriendshipStatus::OutgoingPending
+    ) {
+        app.friends_state
+            .service()
+            .decline_or_cancel_task(app.user_id, target, name);
+    }
+}
+
+fn unfriend(app: &mut App) {
+    use late_core::models::friendship::FriendshipStatus;
+    let Some((target, name)) = viewed_target(app) else {
+        return;
+    };
+    if app.friends_state.local_status(target) == FriendshipStatus::Friends {
+        app.friends_state
+            .service()
+            .unfriend_task(app.user_id, target, name);
     }
 }
 
