@@ -13,6 +13,7 @@ use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::audio::svc::AudioService;
 use crate::app::bonsai::svc::BonsaiService;
 use crate::app::cat::svc::CatService;
+use crate::app::goldfish::svc::GoldfishService;
 use crate::app::chat::feeds::svc::FeedService;
 use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
@@ -82,6 +83,7 @@ pub struct State {
     pub minesweeper_service: MinesweeperService,
     pub bonsai_service: BonsaiService,
     pub cat_service: CatService,
+    pub goldfish_service: GoldfishService,
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
     pub rooms_service: RoomsService,

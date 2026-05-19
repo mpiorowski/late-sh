@@ -20,7 +20,7 @@ use super::{
     bonsai, chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
-        sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
+        sidebar::{SidebarPetView, SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
     },
     dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_search_modal,
@@ -166,6 +166,8 @@ struct DrawContext<'a> {
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     cat: &'a crate::app::cat::state::CatState,
+    goldfish: &'a crate::app::goldfish::state::GoldfishState,
+    sidebar_pet: crate::app::state::SidebarPet,
     activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
@@ -184,6 +186,7 @@ struct DrawContext<'a> {
     show_bonsai_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_cat_modal: bool,
+    show_goldfish_modal: bool,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_terminal_help: bool,
@@ -544,6 +547,8 @@ impl App {
                         online_count,
                         bonsai: &self.bonsai_state,
                         cat: &self.cat_state,
+                        goldfish: &self.goldfish_state,
+                        sidebar_pet: self.sidebar_pet,
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
@@ -562,6 +567,7 @@ impl App {
                         show_bonsai_modal: self.show_bonsai_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_cat_modal: self.show_cat_modal,
+                        show_goldfish_modal: self.show_goldfish_modal,
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_terminal_help: self.show_terminal_help,
@@ -835,7 +841,12 @@ impl App {
                     },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
-                    cat: ctx.cat,
+                    pet: match ctx.sidebar_pet {
+                        crate::app::state::SidebarPet::Cat => SidebarPetView::Cat(ctx.cat),
+                        crate::app::state::SidebarPet::Goldfish => {
+                            SidebarPetView::Goldfish(ctx.goldfish)
+                        }
+                    },
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
@@ -909,6 +920,10 @@ impl App {
 
         if ctx.show_cat_modal {
             crate::app::cat::modal_ui::draw(frame, ctx.cat);
+        }
+
+        if ctx.show_goldfish_modal {
+            crate::app::goldfish::modal_ui::draw(frame, ctx.goldfish);
         }
 
         if ctx.show_help {

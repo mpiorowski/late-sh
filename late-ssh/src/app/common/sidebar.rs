@@ -19,7 +19,13 @@ use crate::app::audio::{
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::cat::state::CatState;
+use crate::app::goldfish::state::GoldfishState;
 use crate::app::dashboard::ui::DashboardRoomCard;
+
+pub enum SidebarPetView<'a> {
+    Cat(&'a CatState),
+    Goldfish(&'a GoldfishState),
+}
 use crate::app::vote::ui::VoteCardView;
 use late_core::models::user::AudioSource;
 
@@ -32,7 +38,7 @@ pub struct SidebarProps<'a> {
     pub vote: VoteCardView<'a>,
     pub online_count: usize,
     pub bonsai: &'a BonsaiState,
-    pub cat: &'a CatState,
+    pub pet: SidebarPetView<'a>,
     pub audio_beat: f32,
     pub connect_url: &'a str,
     pub activity: &'a VecDeque<ActivityEvent>,
@@ -162,7 +168,18 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         next_idx += 2;
     }
     if show_cat {
-        crate::app::cat::ui::draw_cat_inline(frame, inset(layout[next_idx]), props.cat);
+        match &props.pet {
+            SidebarPetView::Cat(cat) => {
+                crate::app::cat::ui::draw_cat_inline(frame, inset(layout[next_idx]), cat);
+            }
+            SidebarPetView::Goldfish(fish) => {
+                crate::app::goldfish::ui::draw_goldfish_inline(
+                    frame,
+                    inset(layout[next_idx]),
+                    fish,
+                );
+            }
+        }
         draw_horizontal_rule(frame, inset(layout[next_idx + 1]));
         next_idx += 2;
     }

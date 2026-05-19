@@ -5,6 +5,7 @@ pub mod artboard;
 pub mod audio;
 pub mod bonsai;
 pub mod cat;
+pub mod goldfish;
 pub mod chat;
 pub mod common;
 pub mod dashboard;
