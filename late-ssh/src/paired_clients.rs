@@ -30,12 +30,11 @@ pub enum PairControlMessage {
     VolumeUp,
     VolumeDown,
     RequestClipboardImage,
-    ForceMute {
-        mute: bool,
-    },
-    /// Per-user setting: tell the paired browser which audio source to use.
-    /// Server is the source of truth (persisted in `users.settings.audio_source`)
-    /// so the browser does not toggle locally; it applies whatever it receives.
+    /// Per-user setting: tell paired clients which audio source the user wants
+    /// to hear. Server is the source of truth (persisted in
+    /// `users.settings.audio_source`). Browsers swap their playback element;
+    /// CLIs gate their Icecast decoder on this — `youtube` means silence
+    /// because the CLI can only play Icecast.
     SetPlaybackSource {
         source: AudioSource,
     },
@@ -175,90 +174,49 @@ impl PairedClientRegistry {
         delivered
     }
 
-    /// Apply a state update for a single entry and atomically enforce the
-    /// source-driven mute policy. Returns the update outcome for callers that
-    /// need it; the force-mute side-effect is dispatched after the lock is
-    /// released.
-    ///
-    /// Policy: any CLI state update where `audio_source == Youtube` and the
-    /// CLI reports `muted == false` re-imposes `ForceMute { mute: true }`.
-    /// The CLI can only decode Icecast, so a Youtube preference means the CLI
-    /// must stay silent — unmute attempts via `m` are intentionally
-    /// short-circuited (the user sees a brief flicker, then mute is back).
-    /// Source flips are handled in `set_audio_source`; browser state updates
-    /// are recorded but never trigger a mute.
+    /// Record a state update for an entry and return the kind transition for
+    /// the caller. Pure state bookkeeping — playback gating lives on the
+    /// client side (CLI gates on `audio_source`, browser swaps its player on
+    /// `SetPlaybackSource`).
     pub fn update_state_and_enforce_mute_policy(
         &self,
         token: &str,
         registration_id: u64,
         new_state: ClientAudioState,
     ) -> Option<UpdateStateResult> {
-        let (result, mute_target) = {
-            let mut clients = self.clients.lock_recover();
-            let entries = clients.get_mut(token)?;
-            let entry = entries
-                .iter_mut()
-                .find(|entry| entry.registration_id == registration_id)?;
+        let mut clients = self.clients.lock_recover();
+        let entries = clients.get_mut(token)?;
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.registration_id == registration_id)?;
 
-            let previous_kind = entry.state.client_kind;
-            let previous_labels = entry.state.cli_usage_labels();
-            let new_labels = new_state.cli_usage_labels();
+        let previous_kind = entry.state.client_kind;
+        let previous_labels = entry.state.cli_usage_labels();
+        let new_labels = new_state.cli_usage_labels();
 
-            if previous_labels != new_labels {
-                if let Some((ssh_mode, platform)) = previous_labels {
-                    metrics::add_cli_pair_active(-1, ssh_mode, platform);
-                }
-                if let Some((ssh_mode, platform)) = new_labels {
-                    metrics::add_cli_pair_active(1, ssh_mode, platform);
-                }
+        if previous_labels != new_labels {
+            if let Some((ssh_mode, platform)) = previous_labels {
+                metrics::add_cli_pair_active(-1, ssh_mode, platform);
             }
-
-            if !entry.usage_total_recorded
-                && let Some((ssh_mode, platform)) = new_labels
-            {
-                metrics::record_cli_pair_usage(ssh_mode, platform);
-                entry.usage_total_recorded = true;
+            if let Some((ssh_mode, platform)) = new_labels {
+                metrics::add_cli_pair_active(1, ssh_mode, platform);
             }
-
-            let new_kind = new_state.client_kind;
-            let new_muted = new_state.muted;
-            let entry_audio_source = entry.audio_source;
-            // CLI on Youtube source must stay silent. If the CLI reports
-            // unmuted, slap the mute back. The loop is intentional: it makes
-            // `m` a no-op on Youtube so the user is funneled toward v+x
-            // instead of getting Icecast through a CLI they thought was on
-            // Youtube.
-            let mute_target = if new_kind == ClientKind::Cli
-                && entry_audio_source == AudioSource::Youtube
-                && !new_muted
-            {
-                Some(entry.tx.clone())
-            } else {
-                None
-            };
-            entry.state = new_state;
-
-            (
-                UpdateStateResult {
-                    previous_kind,
-                    new_kind,
-                },
-                mute_target,
-            )
-        };
-
-        if let Some(tx) = mute_target
-            && tx
-                .send(PairControlMessage::ForceMute { mute: true })
-                .is_err()
-        {
-            tracing::warn!(
-                token_hint = %token_hint(token),
-                "failed to enforce CLI force-mute"
-            );
         }
 
-        Some(result)
+        if !entry.usage_total_recorded
+            && let Some((ssh_mode, platform)) = new_labels
+        {
+            metrics::record_cli_pair_usage(ssh_mode, platform);
+            entry.usage_total_recorded = true;
+        }
+
+        let new_kind = new_state.client_kind;
+        entry.state = new_state;
+
+        Some(UpdateStateResult {
+            previous_kind,
+            new_kind,
+        })
     }
 
     /// Snapshot the state of the most recently registered entry, preferring a
@@ -353,12 +311,15 @@ impl PairedClientRegistry {
     }
 
     /// Update the cached `audio_source` for every entry owned by `user_id`.
-    /// Returns true when at least one entry's value transitioned away from
-    /// `Youtube` — caller uses this to drop the user's pending skip-vote.
+    /// Update every entry for `user_id` to the new audio source and push
+    /// `SetPlaybackSource { source }` to each (CLI and browser alike). The
+    /// CLI uses it to gate its Icecast decoder; the browser uses it to swap
+    /// playback element. Returns true when at least one entry's value
+    /// transitioned away from `Youtube` — caller uses this to drop the
+    /// user's pending skip-vote.
     pub fn set_audio_source(&self, user_id: Uuid, source: AudioSource) -> bool {
-        let mute = source == AudioSource::Youtube;
         let mut left_youtube = false;
-        let mut cli_senders = Vec::new();
+        let mut targets = Vec::new();
         {
             let mut clients = self.clients.lock_recover();
             for entries in clients.values_mut() {
@@ -371,16 +332,17 @@ impl PairedClientRegistry {
                         left_youtube = true;
                     }
                     entry.audio_source = source;
-                    if entry.state.client_kind == ClientKind::Cli {
-                        cli_senders.push(entry.tx.clone());
-                    }
+                    targets.push(entry.tx.clone());
                 }
             }
         }
 
-        for tx in cli_senders {
-            if tx.send(PairControlMessage::ForceMute { mute }).is_err() {
-                tracing::warn!("failed to update CLI force-mute after audio source change");
+        for tx in targets {
+            if tx
+                .send(PairControlMessage::SetPlaybackSource { source })
+                .is_err()
+            {
+                tracing::warn!("failed to push SetPlaybackSource after audio source change");
             }
         }
 
@@ -554,7 +516,11 @@ mod tests {
     }
 
     #[test]
-    fn cli_with_youtube_source_is_muted_on_first_state_update() {
+    fn state_update_never_sends_pair_control_message() {
+        // CLI playback gating now lives on the CLI side (it reads
+        // SetPlaybackSource and silences the Icecast decoder when source !=
+        // Icecast). The server's state-update path is pure bookkeeping and
+        // must not push anything back at the client.
         let registry = PairedClientRegistry::new();
         let user_id = Uuid::now_v7();
 
@@ -572,15 +538,11 @@ mod tests {
                 volume_percent: 30,
             },
         );
-
-        assert_eq!(
-            cli_rx.try_recv().unwrap(),
-            PairControlMessage::ForceMute { mute: true }
-        );
+        assert!(cli_rx.try_recv().is_err());
     }
 
     #[test]
-    fn cli_with_icecast_source_is_not_muted() {
+    fn set_audio_source_pushes_playback_source_to_every_entry() {
         let registry = PairedClientRegistry::new();
         let user_id = Uuid::now_v7();
 
@@ -598,101 +560,52 @@ mod tests {
                 volume_percent: 30,
             },
         );
-
-        assert!(cli_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn cli_manual_unmute_is_preserved_on_subsequent_state_updates() {
-        let registry = PairedClientRegistry::new();
-        let user_id = Uuid::now_v7();
-
-        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Youtube);
-        // First state update: Unknown -> Cli with Youtube source -> server
-        // sends the initial ForceMute{true}.
+        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+        let browser_id = registry.register(
+            "tok1".to_string(),
+            browser_tx,
+            user_id,
+            AudioSource::Icecast,
+        );
         registry.update_state_and_enforce_mute_policy(
             "tok1",
-            cli_id,
+            browser_id,
             ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Unknown,
+                platform: ClientPlatform::Unknown,
                 capabilities: Vec::new(),
                 muted: false,
                 volume_percent: 30,
             },
         );
-        assert_eq!(
-            cli_rx.try_recv().unwrap(),
-            PairControlMessage::ForceMute { mute: true }
-        );
-
-        // CLI acknowledges by re-reporting muted=true. Server must NOT
-        // re-fire ForceMute on this subsequent update.
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            cli_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
-                capabilities: Vec::new(),
-                muted: true,
-                volume_percent: 30,
-            },
-        );
-        assert!(cli_rx.try_recv().is_err());
-
-        // User presses `m` to unmute -> CLI reports muted=false. Server must
-        // NOT re-impose mute; otherwise the user can never escape the silence.
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            cli_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
-                capabilities: Vec::new(),
-                muted: false,
-                volume_percent: 30,
-            },
-        );
-        assert!(cli_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn set_audio_source_toggles_cli_force_mute() {
-        let registry = PairedClientRegistry::new();
-        let user_id = Uuid::now_v7();
-
-        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Icecast);
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            cli_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
-                capabilities: Vec::new(),
-                muted: false,
-                volume_percent: 30,
-            },
-        );
-        // No mute on the Icecast-source CLI registration.
-        assert!(cli_rx.try_recv().is_err());
 
         assert!(!registry.set_audio_source(user_id, AudioSource::Youtube));
         assert_eq!(
             cli_rx.try_recv().unwrap(),
-            PairControlMessage::ForceMute { mute: true }
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube
+            }
+        );
+        assert_eq!(
+            browser_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube
+            }
         );
 
         assert!(registry.set_audio_source(user_id, AudioSource::Icecast));
         assert_eq!(
             cli_rx.try_recv().unwrap(),
-            PairControlMessage::ForceMute { mute: false }
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Icecast
+            }
+        );
+        assert_eq!(
+            browser_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Icecast
+            }
         );
     }
 }

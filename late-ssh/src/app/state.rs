@@ -920,23 +920,17 @@ impl App {
         );
     }
 
-    /// Flip the per-user audio source preference. Persisted server-side and
-    /// pushed to any paired browser; the CLI mute follows from the source via
-    /// `set_audio_source`. Works whether a browser is paired or not — the
-    /// preference is meaningful even with only a CLI, because Youtube means
-    /// "mute the CLI" and Icecast means "let the CLI play."
+    /// Flip the per-user audio source preference. Persisted server-side; the
+    /// `persist_audio_source` task then pushes `SetPlaybackSource` to every
+    /// paired entry (CLI and browser) for this user. Works whether a browser
+    /// is paired or not — the preference is meaningful even with only a CLI,
+    /// because the CLI gates its Icecast decoder on the received source.
     pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
         use late_core::models::user::AudioSource;
         let next = match self.paired_browser_source {
             AudioSource::Icecast => AudioSource::Youtube,
             AudioSource::Youtube => AudioSource::Icecast,
         };
-        if let Some(registry) = self.paired_client_registry.as_ref() {
-            registry.send_control_to_browsers(
-                &self.session_token,
-                PairControlMessage::SetPlaybackSource { source: next },
-            );
-        }
         self.paired_browser_source = next;
         self.audio.persist_audio_source(next);
         next

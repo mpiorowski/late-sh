@@ -23,6 +23,7 @@ pub(super) struct PlaybackState<'a> {
     pub(super) sample_rate: u32,
     pub(super) muted: &'a AtomicBool,
     pub(super) volume_percent: &'a AtomicU8,
+    pub(super) source_is_icecast: &'a AtomicBool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,7 +33,14 @@ enum PairControlMessage {
     VolumeUp,
     VolumeDown,
     RequestClipboardImage,
-    ForceMute { mute: bool },
+    SetPlaybackSource { source: PairAudioSource },
+}
+
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum PairAudioSource {
+    Icecast,
+    Youtube,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -94,6 +102,7 @@ pub(super) async fn run_viz_ws(
                             &mut ws,
                             playback.muted,
                             playback.volume_percent,
+                            playback.source_is_icecast,
                         )
                         .await?;
                         if should_send_state {
@@ -137,6 +146,7 @@ async fn handle_pair_control(
     >,
     muted: &AtomicBool,
     volume_percent: &AtomicU8,
+    source_is_icecast: &AtomicBool,
 ) -> Result<bool> {
     let control = match serde_json::from_str::<PairControlMessage>(text) {
         Ok(control) => control,
@@ -152,21 +162,21 @@ async fn handle_pair_control(
             apply_audio_pair_control(audio_control, muted, volume_percent);
             Ok(true)
         }
-        PairControlMessage::ForceMute { mute } => {
-            apply_force_mute(muted, mute);
-            Ok(true)
+        PairControlMessage::SetPlaybackSource { source } => {
+            let is_icecast = matches!(source, PairAudioSource::Icecast);
+            let previous = source_is_icecast.swap(is_icecast, Ordering::Relaxed);
+            if previous != is_icecast {
+                info!(
+                    source = ?source,
+                    "applied playback source change"
+                );
+            }
+            Ok(false)
         }
         PairControlMessage::RequestClipboardImage => {
             send_clipboard_image(ws).await?;
             Ok(false)
         }
-    }
-}
-
-fn apply_force_mute(muted: &AtomicBool, mute: bool) {
-    let previous = muted.swap(mute, Ordering::Relaxed);
-    if previous != mute {
-        info!(muted = mute, "applied server-forced mute");
     }
 }
 
@@ -188,7 +198,8 @@ fn apply_audio_pair_control(
             let new_volume = bump_volume(volume_percent, -5);
             info!(volume_percent = new_volume, "applied paired volume down");
         }
-        PairControlMessage::ForceMute { .. } | PairControlMessage::RequestClipboardImage => {}
+        PairControlMessage::SetPlaybackSource { .. }
+        | PairControlMessage::RequestClipboardImage => {}
     }
 }
 
