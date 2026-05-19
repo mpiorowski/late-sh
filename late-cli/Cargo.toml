@@ -33,7 +33,8 @@ symphonia = { workspace = true, features = ["mp3"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 
 # Embedded webview for CLI-side YouTube (see late-ssh/src/app/audio/CONTEXT.md §17).
-# Linux requires WebKitGTK 4.1 dev headers.
+# Linux requires WebKitGTK 4.1 dev/runtime packages plus GStreamer plugins
+# including gst-plugins-good (`autoaudiosink`) for media playback.
 wry = "0.55"
 tao = "0.34"
 

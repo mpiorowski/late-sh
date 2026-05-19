@@ -2,6 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
+    <meta name="referrer" content="origin">
     <title>late.sh — YouTube</title>
     <style>
       html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #fff; font-family: monospace; }
@@ -31,7 +32,8 @@
         currentItem: null,   // { itemId, videoId, isStream }
         pendingItem: null,   // queued while api/player loads
         autoplayBlocked: false,
-        unmuteOnNextPlay: false,
+        userMuted: false,
+        volumePercent: 100,
         sourceMode: null,    // "icecast" | "youtube" | null
       };
 
@@ -62,10 +64,17 @@
         if (state.player) return;
         if (!window.YT || !window.YT.Player) { loadYoutubeApi(); return; }
         state.player = new window.YT.Player("player", {
-          playerVars: { playsinline: 1, modestbranding: 1, rel: 0 },
+          playerVars: {
+            enablejsapi: 1,
+            playsinline: 1,
+            modestbranding: 1,
+            rel: 0,
+            origin: window.location.origin
+          },
           events: {
             onReady: function () {
               state.playerReady = true;
+              applyAudioSettings();
               if (state.pendingItem) playItem(state.pendingItem);
             },
             onStateChange: function (event) {
@@ -76,9 +85,9 @@
                 const d = state.player.getDuration();
                 if (Number.isFinite(d) && d > 0) durationMs = Math.floor(d * 1000);
               } catch (e) {}
-              if (label === "playing" && state.unmuteOnNextPlay) {
-                state.unmuteOnNextPlay = false;
-                try { state.player.unMute(); } catch (e) {}
+              if (label === "playing") {
+                state.autoplayBlocked = false;
+                applyAudioSettings();
               }
               setStatus(label);
               send({
@@ -112,6 +121,17 @@
         try { return state.player.getVideoData().video_id || null; } catch (e) { return null; }
       }
 
+      function applyAudioSettings() {
+        if (!state.player) return;
+        try {
+          if (state.player.setVolume) state.player.setVolume(state.volumePercent);
+        } catch (e) {}
+        try {
+          if (state.userMuted || state.volumePercent === 0) state.player.mute();
+          else state.player.unMute();
+        } catch (e) {}
+      }
+
       function playItem(item) {
         if (!state.player || !state.playerReady || !state.player.loadVideoById) return;
         const switching = state.currentItem && !isSameItem(state.currentItem, item);
@@ -120,6 +140,7 @@
         state.currentItem = item;
         state.pendingItem = null;
         state.autoplayBlocked = false;
+        applyAudioSettings();
         if (alreadyLoaded && state.player.playVideo) {
           state.player.playVideo();
         } else {
@@ -133,12 +154,9 @@
           if (!isSameItem(state.currentItem, item)) return;
           if (!state.player || !state.player.getPlayerState) return;
           const ps = state.player.getPlayerState();
-          if (ps === -1 || ps === 5) {
-            // Mute-and-retry — Chrome's MEI gates audible autoplay but always
-            // permits muted autoplay; unmute on the first PLAYING event.
+          if (ps === -1 || ps === 2 || ps === 5) {
             try {
-              state.unmuteOnNextPlay = true;
-              state.player.mute();
+              applyAudioSettings();
               state.player.playVideo();
             } catch (e) {}
             window.setTimeout(function () {
@@ -153,6 +171,14 @@
           }
         }, 1500);
       }
+
+      document.body.addEventListener("click", function () {
+        state.autoplayBlocked = false;
+        applyAudioSettings();
+        if (state.player && state.player.playVideo) {
+          try { state.player.playVideo(); } catch (e) {}
+        }
+      });
 
       // Public bridge — called by Rust via webview.evaluate_script.
       window.lateBridge = {
@@ -178,6 +204,18 @@
             try { state.player.pauseVideo(); } catch (e) {}
           }
           send({ type: "source_ack", audio_mode: state.sourceMode });
+        },
+
+        audioSettings: function (payload) {
+          state.userMuted = !!payload.muted;
+          const nextVolume = Number(payload.volume_percent);
+          if (Number.isFinite(nextVolume)) {
+            state.volumePercent = Math.max(0, Math.min(100, Math.round(nextVolume)));
+          }
+          applyAudioSettings();
+          if (state.player && state.player.playVideo && state.sourceMode === "youtube") {
+            try { state.player.playVideo(); } catch (e) {}
+          }
         },
 
         shutdown: function () {

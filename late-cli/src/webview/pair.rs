@@ -25,6 +25,9 @@ const CLIENT_KIND: &str = "browser";
 #[derive(Debug, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 enum ServerMessage {
+    ToggleMute,
+    VolumeUp,
+    VolumeDown,
     LoadVideo {
         item_id: String,
         video_id: String,
@@ -35,13 +38,33 @@ enum ServerMessage {
         audio_mode: String,
     },
     QueueUpdate(serde_json::Value),
-    ForceMute {
-        #[serde(default)]
-        mute: bool,
-    },
     SetPlaybackSource {
-        source: String,
+        source: PairAudioSource,
+        #[serde(default)]
+        web_icecast_enabled: bool,
     },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PairAudioSource {
+    Icecast,
+    Youtube,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AudioSettings {
+    muted: bool,
+    volume_percent: u8,
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            muted: false,
+            volume_percent: 100,
+        }
+    }
 }
 
 pub async fn run(
@@ -58,7 +81,8 @@ pub async fn run(
         .with_context(|| format!("failed to connect to pair websocket at {ws_url}"))?;
     info!("webview pair websocket established");
 
-    send_client_state(&mut ws).await?;
+    let mut audio_settings = AudioSettings::default();
+    send_client_state(&mut ws, audio_settings).await?;
     let mut heartbeat = interval(Duration::from_secs(1));
     heartbeat.tick().await;
 
@@ -84,7 +108,11 @@ pub async fn run(
                 let Some(inbound) = inbound else { break; };
                 match inbound? {
                     Message::Text(text) => {
-                        if let Some(item_id) = handle_server_text(text.as_str(), &proxy).await {
+                        let result = handle_server_text(text.as_str(), &proxy, &mut audio_settings).await;
+                        if result.send_client_state {
+                            send_client_state(&mut ws, audio_settings).await?;
+                        }
+                        if let Some(item_id) = result.current_item_id {
                             current_item_id = Some(item_id);
                         }
                     }
@@ -102,17 +130,58 @@ pub async fn run(
     Ok(())
 }
 
-async fn handle_server_text(text: &str, proxy: &EventLoopProxy<WebviewCommand>) -> Option<String> {
+#[derive(Default)]
+struct ServerTextResult {
+    current_item_id: Option<String>,
+    send_client_state: bool,
+}
+
+async fn handle_server_text(
+    text: &str,
+    proxy: &EventLoopProxy<WebviewCommand>,
+    audio_settings: &mut AudioSettings,
+) -> ServerTextResult {
     let Ok(message) = serde_json::from_str::<ServerMessage>(text) else {
         debug!(payload = %text, "ignoring unrecognized pair ws message");
-        return None;
+        return ServerTextResult::default();
     };
     match message {
+        ServerMessage::ToggleMute => {
+            audio_settings.muted = !audio_settings.muted;
+            send_audio_settings(proxy, *audio_settings);
+            ServerTextResult {
+                send_client_state: true,
+                ..ServerTextResult::default()
+            }
+        }
+        ServerMessage::VolumeUp => {
+            audio_settings.volume_percent = bump_volume(audio_settings.volume_percent, 5);
+            audio_settings.muted = false;
+            send_audio_settings(proxy, *audio_settings);
+            ServerTextResult {
+                send_client_state: true,
+                ..ServerTextResult::default()
+            }
+        }
+        ServerMessage::VolumeDown => {
+            audio_settings.volume_percent = bump_volume(audio_settings.volume_percent, -5);
+            send_audio_settings(proxy, *audio_settings);
+            ServerTextResult {
+                send_client_state: true,
+                ..ServerTextResult::default()
+            }
+        }
         ServerMessage::LoadVideo {
             item_id,
             video_id,
             is_stream,
         } => {
+            debug!(
+                %item_id,
+                %video_id,
+                is_stream,
+                "dispatching load_video to embedded webview"
+            );
             let id_for_state = item_id.clone();
             if let Err(err) = proxy.send_event(WebviewCommand::LoadVideo {
                 item_id,
@@ -120,29 +189,55 @@ async fn handle_server_text(text: &str, proxy: &EventLoopProxy<WebviewCommand>) 
                 is_stream,
             }) {
                 warn!(error = %err, "event loop closed while sending load_video");
-                return None;
+                return ServerTextResult::default();
             }
-            Some(id_for_state)
+            ServerTextResult {
+                current_item_id: Some(id_for_state),
+                ..ServerTextResult::default()
+            }
         }
         ServerMessage::SourceChanged { audio_mode } => {
+            debug!(%audio_mode, "dispatching source_changed to embedded webview");
             if let Err(err) = proxy.send_event(WebviewCommand::SourceChanged { audio_mode }) {
                 warn!(error = %err, "event loop closed while sending source_changed");
             }
-            None
+            ServerTextResult::default()
         }
         ServerMessage::QueueUpdate(payload) => {
             let _ = payload;
-            None
+            ServerTextResult::default()
         }
-        ServerMessage::ForceMute { mute } => {
-            let _ = mute;
-            None
-        }
-        ServerMessage::SetPlaybackSource { source } => {
-            debug!(%source, "server requested playback source (ignored in pair test)");
-            None
+        ServerMessage::SetPlaybackSource {
+            source,
+            web_icecast_enabled,
+        } => {
+            debug!(
+                ?source,
+                web_icecast_enabled,
+                "server requested playback source (ignored by embedded webview)"
+            );
+            ServerTextResult::default()
         }
     }
+}
+
+fn send_audio_settings(proxy: &EventLoopProxy<WebviewCommand>, settings: AudioSettings) {
+    debug!(
+        muted = settings.muted,
+        volume_percent = settings.volume_percent,
+        "dispatching audio settings to embedded webview"
+    );
+    if let Err(err) = proxy.send_event(WebviewCommand::AudioSettings {
+        muted: settings.muted,
+        volume_percent: settings.volume_percent,
+    }) {
+        warn!(error = %err, "event loop closed while sending audio settings");
+    }
+}
+
+fn bump_volume(volume_percent: u8, delta: i16) -> u8 {
+    let next = volume_percent as i16 + delta;
+    next.clamp(0, 100) as u8
 }
 
 async fn handle_webview_event(
@@ -214,6 +309,7 @@ async fn send_client_state(
     ws: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
+    audio_settings: AudioSettings,
 ) -> Result<()> {
     let payload = json!({
         "event": "client_state",
@@ -221,8 +317,8 @@ async fn send_client_state(
         "ssh_mode": "webview",
         "platform": client_platform_label(),
         "capabilities": ["youtube"],
-        "muted": false,
-        "volume_percent": 100u8,
+        "muted": audio_settings.muted,
+        "volume_percent": audio_settings.volume_percent,
     });
     ws.send(Message::Text(payload.to_string().into()))
         .await

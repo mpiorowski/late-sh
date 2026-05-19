@@ -469,11 +469,13 @@ This lazy lifecycle is intentional. A normal CLI run does not open a webview. A 
 
 `late-cli` uses `wry` + `tao`:
 
-- Linux: WebKitGTK 4.1 dev/runtime packages.
+- Linux: WebKitGTK 4.1 dev/runtime packages plus GStreamer playback plugins. On Arch/EndeavourOS, `gst-plugins-good` is required for `autoaudiosink`; without it WebKit logs `GStreamer element autoaudiosink not found` and the YouTube iframe can remain black/unstarted even though pair/load events succeeded. `gst-libav` is also recommended for codec coverage.
 - macOS: WKWebView.
 - Windows: WebView2.
 
-The helper loads `late-cli/src/webview/page.html`, which embeds the YouTube IFrame API and posts `player_state` back through wry IPC. Rust relays those events to `/api/ws/pair` and pushes `load_video` / `source_changed` into JS via `evaluate_script`.
+The helper serves `late-cli/src/webview/page.html` from a loopback-only ephemeral HTTP origin (`http://127.0.0.1:<port>/`) and loads that URL in the webview. Do not switch this back to `WebViewBuilder::with_html`: Wry's HTML string path gives the page a null origin, and YouTube can reject the iframe with player error 153. The page passes `window.location.origin` into the IFrame Player `origin` parameter, posts `player_state` back through wry IPC, and Rust relays those events to `/api/ws/pair` while pushing `load_video` / `source_changed` into JS via `evaluate_script`.
+
+The helper owns its own mute/volume state. It registers as a browser, so pair-WS `toggle_mute`, `volume_up`, and `volume_down` controls must be applied inside `late-cli/src/webview/pair.rs` and forwarded into `page.html`; changing only the native CLI Icecast atom is not enough because YouTube audio is emitted by WebKit/GStreamer.
 
 ### Window UX
 

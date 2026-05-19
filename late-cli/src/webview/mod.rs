@@ -10,6 +10,12 @@
 
 use anyhow::{Context, Result};
 use serde_json::json;
+use std::{
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
+    sync::Arc,
+    time::Duration,
+};
 use tao::{
     dpi::LogicalSize,
     event::{Event, WindowEvent},
@@ -19,6 +25,11 @@ use tao::{
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use wry::{WebView, WebViewBuilder};
+
+#[cfg(target_os = "linux")]
+use tao::platform::unix::{EventLoopBuilderExtUnix, WindowExtUnix};
+#[cfg(target_os = "linux")]
+use wry::WebViewBuilderExtUnix;
 
 pub mod commands;
 pub mod pair;
@@ -49,18 +60,17 @@ where
         + Send
         + 'static,
 {
-    let event_loop: EventLoop<WebviewCommand> = EventLoopBuilder::with_user_event().build();
+    let mut event_loop_builder = EventLoopBuilder::<WebviewCommand>::with_user_event();
+    #[cfg(target_os = "linux")]
+    event_loop_builder.with_app_id("sh.late.youtube");
+    let event_loop: EventLoop<WebviewCommand> = event_loop_builder.build();
     let proxy = event_loop.create_proxy();
     let (ipc_tx, ipc_rx) = mpsc::unbounded_channel::<WebviewEvent>();
-
-    std::thread::Builder::new()
-        .name("late-webview-bridge".into())
-        .spawn(move || on_setup(proxy, ipc_rx))
-        .context("failed to spawn webview bridge thread")?;
 
     let window = WindowBuilder::new()
         .with_title("late.sh — YouTube")
         .with_inner_size(LogicalSize::new(480.0, 320.0))
+        .with_resizable(false)
         .build(&event_loop)
         .context("failed to build webview window")?;
 
@@ -76,10 +86,16 @@ where
             payload
         ));
     }
+    let page_server = PageServer::spawn(html).context("failed to start webview page server")?;
+    info!(
+        target: "late_cli::webview",
+        url = %page_server.url,
+        "serving embedded webview page"
+    );
 
     let ipc_tx_handler = ipc_tx.clone();
     let webview = WebViewBuilder::new()
-        .with_html(html)
+        .with_url(page_server.url.clone())
         .with_ipc_handler(move |req| {
             let body = req.body();
             match serde_json::from_str::<WebviewEvent>(body) {
@@ -90,13 +106,32 @@ where
                     warn!(payload = %body, error = %err, "failed to parse webview event");
                 }
             }
-        })
-        .build(&window)
+        });
+
+    #[cfg(target_os = "linux")]
+    let webview = webview
+        .build_gtk(
+            window
+                .default_vbox()
+                .context("tao window did not provide a GTK vbox")?,
+        )
         .context("failed to build webview")?;
+    #[cfg(not(target_os = "linux"))]
+    let webview = webview.build(&window).context("failed to build webview")?;
+
+    std::thread::Builder::new()
+        .name("late-webview-bridge".into())
+        .spawn(move || on_setup(proxy, ipc_rx))
+        .context("failed to spawn webview bridge thread")?;
 
     info!(target: "late_cli::webview", "webview runtime ready");
 
     event_loop.run(move |event, _, control_flow| {
+        // `build_gtk` mounts into Tao's GTK container; keep the Tao window
+        // owned by the event-loop closure for the lifetime of the webview.
+        let _keep_window_alive = &window;
+        let _keep_page_server = &page_server;
+
         *control_flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(cmd) => {
@@ -116,6 +151,130 @@ where
     });
 }
 
+struct PageServer {
+    url: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl PageServer {
+    fn spawn(html: String) -> Result<Self> {
+        let listener =
+            TcpListener::bind(("127.0.0.1", 0)).context("failed to bind local page server")?;
+        let addr = listener
+            .local_addr()
+            .context("failed to resolve local page server address")?;
+        let html = Arc::new(html.into_bytes());
+        let server_html = Arc::clone(&html);
+        let thread = std::thread::Builder::new()
+            .name("late-webview-page".into())
+            .spawn(move || {
+                for stream in listener.incoming() {
+                    match stream {
+                        Ok(stream) => {
+                            if let Err(err) = serve_page_request(stream, server_html.as_slice()) {
+                                warn!(error = %err, "failed to serve embedded webview page");
+                            }
+                        }
+                        Err(err) => {
+                            warn!(error = %err, "local webview page server stopped accepting");
+                            break;
+                        }
+                    }
+                }
+            })
+            .context("failed to spawn local page server")?;
+
+        Ok(Self {
+            url: format!("http://{addr}/"),
+            _thread: thread,
+        })
+    }
+}
+
+fn serve_page_request(mut stream: TcpStream, html: &[u8]) -> Result<()> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let mut request = Vec::with_capacity(1024);
+    let mut buf = [0_u8; 1024];
+    loop {
+        let len = stream
+            .read(&mut buf)
+            .context("failed to read local page request")?;
+        if len == 0 {
+            break;
+        }
+        request.extend_from_slice(&buf[..len]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") || request.len() > 8192 {
+            break;
+        }
+    }
+
+    let request = String::from_utf8_lossy(&request);
+    let Some((method, path)) = request.lines().next().and_then(parse_request_line) else {
+        return write_http_response(
+            stream,
+            "400 Bad Request",
+            "text/plain; charset=utf-8",
+            b"bad request",
+            true,
+        );
+    };
+    let include_body = method != "HEAD";
+    match (method, path) {
+        ("GET" | "HEAD", "/" | "/index.html") => write_http_response(
+            stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            html,
+            include_body,
+        ),
+        ("GET" | "HEAD", "/favicon.ico") => {
+            write_http_response(stream, "204 No Content", "text/plain", b"", false)
+        }
+        _ => write_http_response(
+            stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            b"not found",
+            include_body,
+        ),
+    }
+}
+
+fn parse_request_line(line: &str) -> Option<(&str, &str)> {
+    let mut parts = line.split_whitespace();
+    let method = parts.next()?;
+    let path = parts.next()?;
+    Some((method, path))
+}
+
+fn write_http_response(
+    mut stream: TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+    include_body: bool,
+) -> Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: {content_type}\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\
+         \r\n",
+        body.len()
+    )
+    .context("failed to write local page response headers")?;
+    if include_body {
+        stream
+            .write_all(body)
+            .context("failed to write local page response body")?;
+    }
+    stream
+        .flush()
+        .context("failed to flush local page response")
+}
+
 fn apply_command(webview: &WebView, cmd: WebviewCommand) -> Result<()> {
     let js = match cmd {
         WebviewCommand::LoadVideo {
@@ -133,6 +292,16 @@ fn apply_command(webview: &WebView, cmd: WebviewCommand) -> Result<()> {
         WebviewCommand::SourceChanged { audio_mode } => format!(
             "window.lateBridge.sourceChanged({});",
             json!({ "audio_mode": audio_mode })
+        ),
+        WebviewCommand::AudioSettings {
+            muted,
+            volume_percent,
+        } => format!(
+            "window.lateBridge.audioSettings({});",
+            json!({
+                "muted": muted,
+                "volume_percent": volume_percent,
+            })
         ),
         WebviewCommand::Shutdown => "window.lateBridge.shutdown();".to_string(),
     };
