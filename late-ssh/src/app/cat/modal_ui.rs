@@ -10,7 +10,7 @@ use super::state::{CatMood, CatState};
 use crate::app::common::theme;
 
 const MODAL_W: u16 = 36;
-const MODAL_H: u16 = 13;
+const MODAL_H: u16 = 15;
 
 pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
     let area = centered_rect(MODAL_W, MODAL_H, frame.area());
@@ -47,7 +47,9 @@ pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
         Constraint::Fill(1),   // spacer
         Constraint::Length(1), // f feed
         Constraint::Length(1), // w water
-        Constraint::Length(1), // p play / q close
+        Constraint::Length(1), // p play
+        Constraint::Length(1), // g groom
+        Constraint::Length(1), // t treat / q close
     ])
     .split(inner);
 
@@ -111,7 +113,9 @@ pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
 
     frame.render_widget(Paragraph::new(keybind("f", "feed")), rows[7]);
     frame.render_widget(Paragraph::new(keybind("w", "water")), rows[8]);
-    frame.render_widget(Paragraph::new(keybind("p", "play  ·  q close")), rows[9]);
+    frame.render_widget(Paragraph::new(keybind("p", "play")), rows[9]);
+    frame.render_widget(Paragraph::new(keybind("g", "groom")), rows[10]);
+    frame.render_widget(Paragraph::new(keybind("t", "treat  ·  q close")), rows[11]);
 }
 
 fn centered_rect(w: u16, h: u16, area: Rect) -> Rect {

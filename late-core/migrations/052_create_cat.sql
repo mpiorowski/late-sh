@@ -5,5 +5,7 @@ CREATE TABLE cat_companions (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
     last_fed TIMESTAMPTZ,
     last_watered TIMESTAMPTZ,
-    last_played TIMESTAMPTZ
+    last_played TIMESTAMPTZ,
+    last_groomed TIMESTAMPTZ,
+    last_treated TIMESTAMPTZ
 );

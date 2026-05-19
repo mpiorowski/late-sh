@@ -59,4 +59,32 @@ impl CatService {
         let client = self.db.get().await?;
         CatCompanion::touch_played(&client, user_id).await
     }
+
+    pub fn groom_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.groom(user_id).await {
+                tracing::error!(error = ?e, "failed to groom cat");
+            }
+        });
+    }
+
+    async fn groom(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        CatCompanion::touch_groomed(&client, user_id).await
+    }
+
+    pub fn treat_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.treat(user_id).await {
+                tracing::error!(error = ?e, "failed to give cat a treat");
+            }
+        });
+    }
+
+    async fn treat(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        CatCompanion::touch_treated(&client, user_id).await
+    }
 }

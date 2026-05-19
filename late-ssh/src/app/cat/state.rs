@@ -56,6 +56,8 @@ pub struct CatState {
     pub last_fed: Option<DateTime<Utc>>,
     pub last_watered: Option<DateTime<Utc>>,
     pub last_played: Option<DateTime<Utc>>,
+    pub last_groomed: Option<DateTime<Utc>>,
+    pub last_treated: Option<DateTime<Utc>>,
 
     pub action_feedback: Option<&'static str>,
     feedback_ticks: usize,
@@ -71,6 +73,8 @@ impl CatState {
             last_fed: companion.last_fed,
             last_watered: companion.last_watered,
             last_played: companion.last_played,
+            last_groomed: companion.last_groomed,
+            last_treated: companion.last_treated,
             action_feedback: None,
             feedback_ticks: 0,
         }
@@ -110,13 +114,33 @@ impl CatState {
         self.svc.play_task(self.user_id);
     }
 
+    pub fn groom(&mut self) {
+        self.last_groomed = Some(Utc::now());
+        self.action_feedback = Some("groomed!");
+        self.feedback_ticks = FEEDBACK_TICKS;
+        self.svc.groom_task(self.user_id);
+    }
+
+    pub fn treat(&mut self) {
+        self.last_treated = Some(Utc::now());
+        self.action_feedback = Some("treat given!");
+        self.feedback_ticks = FEEDBACK_TICKS;
+        self.svc.treat_task(self.user_id);
+    }
+
     fn hours_since_last_care(&self) -> i64 {
         let now = Utc::now();
-        let last = [self.last_fed, self.last_watered, self.last_played]
-            .iter()
-            .flatten()
-            .max()
-            .copied();
+        let last = [
+            self.last_fed,
+            self.last_watered,
+            self.last_played,
+            self.last_groomed,
+            self.last_treated,
+        ]
+        .iter()
+        .flatten()
+        .max()
+        .copied();
         last.map(|t| (now - t).num_hours()).unwrap_or(999)
     }
 }

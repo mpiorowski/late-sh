@@ -12,6 +12,12 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'p') | ParsedInput::Char('p') => {
             app.cat_state.play();
         }
+        ParsedInput::Byte(b'g') | ParsedInput::Char('g') => {
+            app.cat_state.groom();
+        }
+        ParsedInput::Byte(b't') | ParsedInput::Char('t') => {
+            app.cat_state.treat();
+        }
         ParsedInput::Byte(0x1B | b'q') | ParsedInput::Char('q') => {
             app.show_cat_modal = false;
         }

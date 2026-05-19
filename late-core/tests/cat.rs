@@ -14,6 +14,8 @@ async fn ensure_creates_default_companion_for_new_user() {
     assert_eq!(cat.last_fed, None);
     assert_eq!(cat.last_watered, None);
     assert_eq!(cat.last_played, None);
+    assert_eq!(cat.last_groomed, None);
+    assert_eq!(cat.last_treated, None);
 }
 
 #[tokio::test]
@@ -57,6 +59,12 @@ async fn touch_actions_record_independent_timestamps() {
     CatCompanion::touch_played(&client, user.id)
         .await
         .expect("played");
+    CatCompanion::touch_groomed(&client, user.id)
+        .await
+        .expect("groomed");
+    CatCompanion::touch_treated(&client, user.id)
+        .await
+        .expect("treated");
 
     let cat = CatCompanion::ensure(&client, user.id)
         .await
@@ -64,4 +72,6 @@ async fn touch_actions_record_independent_timestamps() {
     assert!(cat.last_fed.is_some());
     assert!(cat.last_watered.is_some());
     assert!(cat.last_played.is_some());
+    assert!(cat.last_groomed.is_some());
+    assert!(cat.last_treated.is_some());
 }

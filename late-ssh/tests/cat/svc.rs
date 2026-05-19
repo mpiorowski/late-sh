@@ -15,6 +15,8 @@ async fn ensure_cat_creates_default_companion_for_new_user() {
     assert_eq!(cat.last_fed, None);
     assert_eq!(cat.last_watered, None);
     assert_eq!(cat.last_played, None);
+    assert_eq!(cat.last_groomed, None);
+    assert_eq!(cat.last_treated, None);
 }
 
 #[tokio::test]

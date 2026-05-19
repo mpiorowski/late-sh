@@ -13,6 +13,8 @@ crate::user_scoped_model! {
         pub last_fed: Option<DateTime<Utc>>,
         pub last_watered: Option<DateTime<Utc>>,
         pub last_played: Option<DateTime<Utc>>,
+        pub last_groomed: Option<DateTime<Utc>>,
+        pub last_treated: Option<DateTime<Utc>>,
     }
 }
 
@@ -53,6 +55,26 @@ impl CatCompanion {
         client
             .execute(
                 "UPDATE cat_companions SET last_played = current_timestamp, updated = current_timestamp WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn touch_groomed(client: &Client, user_id: Uuid) -> Result<()> {
+        client
+            .execute(
+                "UPDATE cat_companions SET last_groomed = current_timestamp, updated = current_timestamp WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn touch_treated(client: &Client, user_id: Uuid) -> Result<()> {
+        client
+            .execute(
+                "UPDATE cat_companions SET last_treated = current_timestamp, updated = current_timestamp WHERE user_id = $1",
                 &[&user_id],
             )
             .await?;
