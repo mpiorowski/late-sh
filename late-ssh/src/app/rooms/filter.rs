@@ -12,8 +12,10 @@ impl RoomsFilter {
         match self {
             Self::All => "All",
             Self::Kind(GameKind::Blackjack) => "Blackjack",
+            Self::Kind(GameKind::Chess) => "Chess",
             Self::Kind(GameKind::Poker) => "Poker",
             Self::Kind(GameKind::TicTacToe) => "Tic-Tac-Toe",
+            Self::Kind(GameKind::Tron) => "Tron",
         }
     }
 
@@ -51,25 +53,33 @@ mod tests {
         );
         assert_eq!(
             RoomsFilter::Kind(GameKind::TicTacToe).cycle(true),
+            RoomsFilter::Kind(GameKind::Tron)
+        );
+        assert_eq!(
+            RoomsFilter::Kind(GameKind::Tron).cycle(true),
             RoomsFilter::All
         );
         assert_eq!(
             RoomsFilter::All.cycle(false),
-            RoomsFilter::Kind(GameKind::TicTacToe)
+            RoomsFilter::Kind(GameKind::Tron)
         );
     }
 
     #[test]
     fn all_matches_everything() {
         assert!(RoomsFilter::All.matches_real(GameKind::Blackjack));
+        assert!(RoomsFilter::All.matches_real(GameKind::Chess));
         assert!(RoomsFilter::All.matches_real(GameKind::Poker));
         assert!(RoomsFilter::All.matches_real(GameKind::TicTacToe));
+        assert!(RoomsFilter::All.matches_real(GameKind::Tron));
     }
 
     #[test]
     fn kind_filter_matches_only_that_kind() {
         assert!(RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Blackjack));
+        assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Chess));
         assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Poker));
         assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::TicTacToe));
+        assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Tron));
     }
 }

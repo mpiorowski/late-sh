@@ -172,14 +172,20 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new(
             activity_publisher.clone(),
         );
+    let chess_table_manager =
+        late_ssh::app::rooms::chess::manager::ChessTableManager::new(activity_publisher.clone());
     let poker_table_manager = late_ssh::app::rooms::poker::manager::PokerTableManager::new(
         chip_service.clone(),
         activity_publisher.clone(),
     );
+    let tron_table_manager =
+        late_ssh::app::rooms::tron::manager::TronTableManager::new(activity_publisher.clone());
     let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
         blackjack_table_manager.clone(),
+        chess_table_manager,
         poker_table_manager,
         tictactoe_table_manager,
+        tron_table_manager,
     );
     room_game_registry.start_general_seat_announcer_task(chat_service.clone());
     let sudoku_service = late_ssh::app::arcade::sudoku::svc::SudokuService::new(

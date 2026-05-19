@@ -8,18 +8,28 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GameKind {
     Blackjack,
+    Chess,
     Poker,
     TicTacToe,
+    Tron,
 }
 
 impl GameKind {
-    pub const ALL: [Self; 3] = [Self::Blackjack, Self::Poker, Self::TicTacToe];
+    pub const ALL: [Self; 5] = [
+        Self::Blackjack,
+        Self::Chess,
+        Self::Poker,
+        Self::TicTacToe,
+        Self::Tron,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Blackjack => "blackjack",
+            Self::Chess => "chess",
             Self::Poker => "poker",
             Self::TicTacToe => "tictactoe",
+            Self::Tron => "tron",
         }
     }
 }
@@ -43,8 +53,10 @@ impl TryFrom<&str> for GameKind {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "blackjack" => Ok(Self::Blackjack),
+            "chess" => Ok(Self::Chess),
             "poker" => Ok(Self::Poker),
             "tictactoe" => Ok(Self::TicTacToe),
+            "tron" => Ok(Self::Tron),
             _ => Err(anyhow::anyhow!("unknown game kind: {}", value)),
         }
     }

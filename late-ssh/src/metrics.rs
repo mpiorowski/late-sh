@@ -18,12 +18,14 @@ mod inner {
     fn game_label(game: ActivityGame) -> &'static str {
         match game {
             ActivityGame::Blackjack => "blackjack",
+            ActivityGame::Chess => "chess",
             ActivityGame::Minesweeper => "minesweeper",
             ActivityGame::Nonogram => "nonogram",
             ActivityGame::Poker => "poker",
             ActivityGame::Solitaire => "solitaire",
             ActivityGame::Sudoku => "sudoku",
             ActivityGame::TicTacToe => "tictactoe",
+            ActivityGame::Tron => "tron",
         }
     }
 

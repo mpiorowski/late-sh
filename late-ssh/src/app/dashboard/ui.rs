@@ -80,8 +80,10 @@ fn sort_dashboard_room_cards(rooms: &mut [DashboardRoomCard]) {
 fn dashboard_room_game_priority(kind: GameKind) -> u8 {
     match kind {
         GameKind::Poker => 0,
-        GameKind::Blackjack => 1,
-        GameKind::TicTacToe => 2,
+        GameKind::Chess => 1,
+        GameKind::Blackjack => 2,
+        GameKind::Tron => 3,
+        GameKind::TicTacToe => 4,
     }
 }
 

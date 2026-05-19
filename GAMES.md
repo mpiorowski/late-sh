@@ -2,7 +2,7 @@
 
 This guide is for contributors who want to add a new multiplayer game room to
 late.sh. By the end you should know what to write, where it lives, and which
-patterns the existing games (Blackjack, Poker, Tic-Tac-Toe) already prove out.
+patterns the existing games (Blackjack, Chess, Poker, Tic-Tac-Toe, Tron) already prove out.
 
 If anything here disagrees with the code, trust the code and please open a PR
 to fix this file.
@@ -16,7 +16,7 @@ and the room still exists, but the runtime starts fresh.
 
 Every game shares the same outer chrome:
 
-- A directory page that lists rooms (`Rooms` screen, key `4`)
+- A directory page that lists rooms (`Rooms` screen, key `3`)
 - A modal flow to create a new room
 - A two-pane active view: game on top, embedded chat on bottom
 
@@ -26,6 +26,8 @@ game's own runtime. You will not touch the rooms layer.
 Live reference implementations:
 
 - `late-ssh/src/app/rooms/tictactoe/` — minimal example, ~6 small files
+- `late-ssh/src/app/rooms/chess/` — two-seat timed board game using a rules crate
+- `late-ssh/src/app/rooms/tron/` — four-seat real-time light-cycle example
 - `late-ssh/src/app/rooms/poker/` — asymmetric-info example with public table
   state plus per-user private hole-card state
 - `late-ssh/src/app/rooms/blackjack/` — complex example with chips, settlements,
@@ -245,7 +247,10 @@ field and a footer.
    let your_game_table_manager = YourGameTableManager::new(/* deps */);
    let room_game_registry = RoomGameRegistry::new(
        blackjack_table_manager.clone(),
+       chess_table_manager,
+       poker_table_manager,
        tictactoe_table_manager,
+       tron_table_manager,
        your_game_table_manager,            // add this
    );
    ```

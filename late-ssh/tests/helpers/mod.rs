@@ -27,10 +27,12 @@ use late_ssh::app::chat::svc::ChatService;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
+use late_ssh::app::rooms::chess::manager::ChessTableManager;
 use late_ssh::app::rooms::poker::manager::PokerTableManager;
 use late_ssh::app::rooms::registry::RoomGameRegistry;
 use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
+use late_ssh::app::rooms::tron::manager::TronTableManager;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
 use late_ssh::authz::Permissions;
@@ -68,8 +70,10 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     );
     RoomGameRegistry::new(
         blackjack_table_manager,
+        ChessTableManager::new(activity_publisher.clone()),
         PokerTableManager::new(chip_service, activity_publisher.clone()),
-        TicTacToeTableManager::new(activity_publisher),
+        TicTacToeTableManager::new(activity_publisher.clone()),
+        TronTableManager::new(activity_publisher.clone()),
     )
 }
 
@@ -200,8 +204,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
             blackjack_table_manager,
+            ChessTableManager::new(activity_publisher.clone()),
             PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
-            TicTacToeTableManager::new(activity_publisher),
+            TicTacToeTableManager::new(activity_publisher.clone()),
+            TronTableManager::new(activity_publisher.clone()),
         ),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),

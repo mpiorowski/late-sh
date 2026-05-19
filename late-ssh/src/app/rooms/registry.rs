@@ -19,9 +19,11 @@ use super::{
         RoomGameManager,
     },
     blackjack::manager::BlackjackTableManager,
+    chess::manager::ChessTableManager,
     poker::manager::PokerTableManager,
     svc::{GameKind, RoomListItem, sanitize_room_display_name},
     tictactoe::manager::TicTacToeTableManager,
+    tron::manager::TronTableManager,
 };
 
 /// Window during which a repeat seat-announcement for the same
@@ -41,28 +43,36 @@ pub struct RoomDirectorySummary {
 #[derive(Clone)]
 pub struct RoomGameRegistry {
     blackjack: BlackjackTableManager,
+    chess: ChessTableManager,
     poker: PokerTableManager,
     tictactoe: TicTacToeTableManager,
+    tron: TronTableManager,
 }
 
 impl RoomGameRegistry {
     pub fn new(
         blackjack: BlackjackTableManager,
+        chess: ChessTableManager,
         poker: PokerTableManager,
         tictactoe: TicTacToeTableManager,
+        tron: TronTableManager,
     ) -> Self {
         Self {
             blackjack,
+            chess,
             poker,
             tictactoe,
+            tron,
         }
     }
 
     pub fn manager(&self, kind: GameKind) -> &dyn RoomGameManager {
         match kind {
             GameKind::Blackjack => &self.blackjack,
+            GameKind::Chess => &self.chess,
             GameKind::Poker => &self.poker,
             GameKind::TicTacToe => &self.tictactoe,
+            GameKind::Tron => &self.tron,
         }
     }
 

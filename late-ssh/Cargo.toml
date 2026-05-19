@@ -30,6 +30,7 @@ tikv-jemallocator = "0.6"
 
 # Database
 tokio-postgres = { workspace = true }
+cozy-chess.workspace = true
 crossterm.workspace = true
 dartboard-core.workspace = true
 dartboard-editor.workspace = true
