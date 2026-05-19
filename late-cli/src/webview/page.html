@@ -1,0 +1,203 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>late.sh — YouTube</title>
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #fff; font-family: monospace; }
+      #player { width: 100vw; height: 100vh; }
+      #status { position: fixed; left: 6px; bottom: 4px; font-size: 11px; opacity: 0.6; }
+    </style>
+  </head>
+  <body>
+    <div id="player"></div>
+    <div id="status">waiting for command</div>
+    <script>
+      const STATE_NAMES = {
+        "-1": "unstarted",
+        "0":  "ended",
+        "1":  "playing",
+        "2":  "paused",
+        "3":  "buffering",
+        "5":  "cued"
+      };
+
+      // Single source of truth for everything driven by the Rust side.
+      const state = {
+        apiLoading: false,
+        apiReady:   false,
+        player:     null,
+        playerReady: false,
+        currentItem: null,   // { itemId, videoId, isStream }
+        pendingItem: null,   // queued while api/player loads
+        autoplayBlocked: false,
+        unmuteOnNextPlay: false,
+        sourceMode: null,    // "icecast" | "youtube" | null
+      };
+
+      function send(payload) {
+        try { window.ipc.postMessage(JSON.stringify(payload)); }
+        catch (err) { console.error("ipc post failed", err); }
+      }
+
+      function setStatus(text) {
+        const el = document.getElementById("status");
+        if (el) el.textContent = text;
+      }
+
+      function loadYoutubeApi() {
+        if (state.apiReady || state.apiLoading) return;
+        state.apiLoading = true;
+        const tag = document.createElement("script");
+        tag.src = "https://www.youtube.com/iframe_api";
+        tag.onerror = function () {
+          state.apiLoading = false;
+          send({ type: "api_load_failed" });
+          setStatus("iframe api failed");
+        };
+        document.head.appendChild(tag);
+      }
+
+      function ensurePlayer() {
+        if (state.player) return;
+        if (!window.YT || !window.YT.Player) { loadYoutubeApi(); return; }
+        state.player = new window.YT.Player("player", {
+          playerVars: { playsinline: 1, modestbranding: 1, rel: 0 },
+          events: {
+            onReady: function () {
+              state.playerReady = true;
+              if (state.pendingItem) playItem(state.pendingItem);
+            },
+            onStateChange: function (event) {
+              const label = STATE_NAMES[String(event.data)] || "unknown";
+              let positionMs = 0, durationMs = null;
+              try { positionMs = Math.floor((state.player.getCurrentTime() || 0) * 1000); } catch (e) {}
+              try {
+                const d = state.player.getDuration();
+                if (Number.isFinite(d) && d > 0) durationMs = Math.floor(d * 1000);
+              } catch (e) {}
+              if (label === "playing" && state.unmuteOnNextPlay) {
+                state.unmuteOnNextPlay = false;
+                try { state.player.unMute(); } catch (e) {}
+              }
+              setStatus(label);
+              send({
+                type: "state",
+                item_id: state.currentItem ? state.currentItem.itemId : null,
+                state: label,
+                position_ms: positionMs,
+                duration_ms: durationMs,
+                autoplay_blocked: state.autoplayBlocked
+              });
+            },
+            onError: function (event) {
+              const code = String(event.data || "unknown");
+              setStatus("error " + code);
+              send({
+                type: "error",
+                item_id: state.currentItem ? state.currentItem.itemId : null,
+                code: code
+              });
+            }
+          }
+        });
+      }
+
+      function isSameItem(a, b) {
+        return !!a && !!b && a.itemId === b.itemId && a.videoId === b.videoId;
+      }
+
+      function loadedVideoId() {
+        if (!state.player || !state.player.getVideoData) return null;
+        try { return state.player.getVideoData().video_id || null; } catch (e) { return null; }
+      }
+
+      function playItem(item) {
+        if (!state.player || !state.playerReady || !state.player.loadVideoById) return;
+        const switching = state.currentItem && !isSameItem(state.currentItem, item);
+        if (switching && state.player.stopVideo) state.player.stopVideo();
+        const alreadyLoaded = !switching && loadedVideoId() === item.videoId;
+        state.currentItem = item;
+        state.pendingItem = null;
+        state.autoplayBlocked = false;
+        if (alreadyLoaded && state.player.playVideo) {
+          state.player.playVideo();
+        } else {
+          state.player.loadVideoById({ videoId: item.videoId });
+        }
+        detectAutoplayBlocked(item);
+      }
+
+      function detectAutoplayBlocked(item) {
+        window.setTimeout(function () {
+          if (!isSameItem(state.currentItem, item)) return;
+          if (!state.player || !state.player.getPlayerState) return;
+          const ps = state.player.getPlayerState();
+          if (ps === -1 || ps === 5) {
+            // Mute-and-retry — Chrome's MEI gates audible autoplay but always
+            // permits muted autoplay; unmute on the first PLAYING event.
+            try {
+              state.unmuteOnNextPlay = true;
+              state.player.mute();
+              state.player.playVideo();
+            } catch (e) {}
+            window.setTimeout(function () {
+              if (!isSameItem(state.currentItem, item)) return;
+              const ps2 = state.player.getPlayerState();
+              if (ps2 !== 1) {
+                state.autoplayBlocked = true;
+                setStatus("tap to play");
+                send({ type: "autoplay_blocked", item_id: item.itemId });
+              }
+            }, 1500);
+          }
+        }, 1500);
+      }
+
+      // Public bridge — called by Rust via webview.evaluate_script.
+      window.lateBridge = {
+        loadVideo: function (payload) {
+          const item = {
+            itemId:  payload.item_id,
+            videoId: payload.video_id,
+            isStream: !!payload.is_stream
+          };
+          // Heartbeat no-op: same item, same loaded video. Don't restart.
+          if (isSameItem(state.currentItem, item) && loadedVideoId() === item.videoId) {
+            return;
+          }
+          state.pendingItem = item;
+          ensurePlayer();
+          if (state.playerReady) playItem(item);
+        },
+
+        sourceChanged: function (payload) {
+          state.sourceMode = payload.audio_mode;
+          setStatus("source: " + state.sourceMode);
+          if (state.sourceMode === "icecast" && state.player && state.player.pauseVideo) {
+            try { state.player.pauseVideo(); } catch (e) {}
+          }
+          send({ type: "source_ack", audio_mode: state.sourceMode });
+        },
+
+        shutdown: function () {
+          if (state.player && state.player.stopVideo) {
+            try { state.player.stopVideo(); } catch (e) {}
+          }
+          send({ type: "shutdown_ack" });
+        }
+      };
+
+      // Called by the YT IFrame API once the script has loaded.
+      window.onYouTubeIframeAPIReady = function () {
+        state.apiReady = true;
+        state.apiLoading = false;
+        if (state.pendingItem) ensurePlayer();
+      };
+
+      // Optional: kick off API load eagerly so first load_video has less latency.
+      loadYoutubeApi();
+      send({ type: "ready" });
+    </script>
+  </body>
+</html>

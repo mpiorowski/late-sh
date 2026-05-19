@@ -414,7 +414,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 
 These are intentional non-goals. Reopen only if the constraint that put them here changes.
 
-- **CLI YouTube decoding.** CLI plays Icecast only. The YouTube path is browser-iframe-only. See §17 for the parked external-player alternative.
+- **CLI YouTube decoding via shell-out to an external player (mpv/vlc/yt-dlp wrapper).** Won't ship. The user-side ToS exposure (yt-dlp strips ads/branding) and the config burden (most users don't have a player wired up) put this firmly out of scope. The legal path for CLI-side YouTube is an embedded webview hosting the official IFrame Player.
 - **Server-side YouTube fetching.** Server routes `video_id` only; the iframe is the only thing that talks to googlevideo.com.
 - **Recording / persistent archive of YouTube audio.** Blocked by YouTube ToS.
 - **Ad stripping.** The iframe plays whatever YouTube serves.
@@ -441,61 +441,97 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 
 ---
 
-## 17. Parked: CLI external-player handoff for YouTube
+## 17. Plan: Embedded webview for CLI-side YouTube
 
-**Status: parked, not on the active build path.** Reason: the user-facing configuration burden is too high for current scale — most users won't have a suitable player installed and won't want to edit a TOML config. Revisit when the audience is technical enough or large enough to justify a setup guide.
+**Status: active plan, not yet implemented.** Goal: legal YouTube playback inside the `late` CLI without ever shelling out to mpv/yt-dlp/etc. The CLI hosts the official YouTube IFrame Player inside an embedded system webview; the player fetches and decodes audio identically to today's connect page (§9). late.sh still ships zero YouTube code beyond `video_id` over the pair WS — same legal posture as the browser, just hosted by the CLI process.
 
-### Idea
+### Why this and not the external-player handoff
 
-Instead of opening a browser for YouTube playback, `late` shells out to a local media player (mpv, vlc, FreeTube, mpsyt, anything) that already knows how to play YouTube. late.sh never touches YouTube audio; the CLI is a general external-player runner that the user wires up. Server still ships only `video_id` over `/api/ws/pair`.
+Ruled out in §15. yt-dlp / mpv shellout strips ads and branding, shifts the ToS exposure onto the user's machine, and demands a config-file setup most users won't do. The embedded webview runs the official IFrame Player verbatim — ads, branding, autoplay rules, all intact — exactly like a browser tab.
+
+### Architecture
 
 ```text
-server  → "play video_id at offset N" (WS, metadata only)
-late CLI → spawns or controls user-configured local player
-player  → fetches and decodes audio from YouTube (belongs to the user)
+server                → "play video_id" (WS, metadata only)
+late CLI              → embedded webview hosts youtube.com IFrame Player
+youtube.com (iframe)  → fetches and decodes audio (system browser engine)
+OS audio out          → user hears it through default audio device
 ```
 
-### Two control modes
+From the server's perspective the CLI becomes a paired *browser*: it consumes the same `load_video` / `source_changed` / `queue_update` (§5), reports `player_state` the same way, and counts as a browser for source arbitration (§6) and skip-vote eligibility (§6 last block). No server-side protocol changes assumed beyond optionally distinguishing CLI-hosted webviews from native browsers via a new `client_kind` (TBD; see Open questions).
 
-**Command mode** (~80 LOC of Rust):
-```toml
-[player.youtube]
-mode = "command"
-command = "<player> <flags> {url}"
-```
-Server says play → CLI spawns the command with `{url}` substituted → process exits when the track ends → CLI tells server `ended`. Skip = SIGTERM.
+### Webview backend — `wry` + `tao` (chosen)
 
-**IPC mode** (richer — sync/seek/pause):
-```toml
-[player.youtube]
-mode = "ipc"
-launch = "<player> --idle --input-ipc-server={socket}"
-protocol = "mpv"
-```
-Long-running player. CLI sends commands over a JSON/IPC socket. `protocol` is the only player-specific code shipped in `late`. Start with one adapter; community can add more.
+Cross-platform via [`wry`](https://github.com/tauri-apps/wry) (webview) and [`tao`](https://github.com/tauri-apps/tao) (windowing/event loop), both from the Tauri team. Uses the system browser engine on each platform:
 
-### Ship / don't ship boundary
+- **Linux**: WebKitGTK 4.1. Distro-supplied — no bundled engine.
+- **macOS**: WKWebView. Always present.
+- **Windows**: WebView2 (Chromium). System component on Win10 21H2+; older systems need the Evergreen bootstrapper.
 
-| Safe (ship)                                          | Unsafe (don't ship)                                       |
-|------------------------------------------------------|-----------------------------------------------------------|
-| Config slot for external player command              | Bundled mpv or yt-dlp binaries                            |
-| Template variables (`{url}`, `{socket}`)             | `late install-youtube` subcommand                         |
-| Generic IPC protocol adapter (mpv first)             | Auto-download of any extraction tool                      |
-| `late doctor` against a benign non-YouTube test URL  | `late doctor` testing against a real YouTube URL          |
-| Clear errors when no player is configured            | Naming a specific tool inside the binary                  |
-| Community-maintained `EXTERNAL_PLAYERS.md`           | Official "recommended player" in onboarding flow          |
+Why not the alternatives:
 
-### Posture
+| Lib | Why not |
+|-----|---------|
+| `webview-rs` / `Boscop/web-view` | Uses MSHTML (IE10/11) on Windows. Modern YouTube won't load. Stale. |
+| CEF | Bundles full Chromium — hundreds of MB. Overkill for an audio surface. |
+| Servo | Just hit crates.io 0.1.0 in Apr 2026. Rust-native and promising, but API is churning and media-site compatibility (YouTube specifically) is unproven. |
 
-late.sh ships zero yt-dlp code; every byte of YouTube audio is fetched by the user's machine, by a tool the user chose. A user-side mpv-with-yt-dlp setup still violates YouTube ToS on the user's machine (yt-dlp strips ads, branding, controls). If this is ever activated, docs must be explicit that the CLI is a generic external-player runner and that the user — not late.sh — is responsible for what their configured player does.
+A single small page is loaded (local file or `data:` URL) that includes the YouTube IFrame API. The JS largely mirrors `late-web/src/pages/connect/page.html`'s YouTube path — lazy-load the API, create the player on first `load_video`, force-switch on heartbeat, emit `player_state`. Reuse, don't fork: extract the connect page YouTube block into a shared template that both surfaces include.
 
-### Reactivation criteria
+### Per-platform caveats to validate in the spike
 
-- User base is large/technical enough that a setup guide is worth maintaining.
-- A stable, official YouTube-API-compliant CLI player emerges (none currently exists; closest options all use yt-dlp underneath).
-- We decide to make late.sh deliberately CLI-power-user-shaped, and a player slot fits the product identity.
+- **Linux / WebKitGTK version floor.** Older LTS distros ship WebKit versions that fail on modern YouTube. Set a minimum (TBD during spike — likely WebKitGTK 2.40+) and surface a clean error on too-old systems rather than a silent blank.
+- **Linux / Wayland.** wry historically required X11; Wayland support has been landing version-by-version. Confirm current state during the spike; X11-only is acceptable for v1 if necessary.
+- **Hidden-window audio.** WebKitGTK and WKWebView allow audio in offscreen/minimized webviews. WebView2 (Chromium) applies background-tab throttling that can affect audio in fully-hidden windows. If we pick hidden mode, validate per-platform; otherwise the companion-window UX sidesteps this.
+- **Windows / WebView2 Evergreen.** Present by default on Win10 21H2+ and Win11. Older Win10 / Win7 needs the WebView2 Runtime installer — bundle the standalone bootstrapper or surface a one-time install prompt. Don't ship full Chromium.
 
-Until then, YouTube playback goes through the browser iframe path (§4-§9).
+### Window UX
+
+Two viable shapes, decision deferred:
+
+- **Tiny companion window** (lean toward this). 320×200 floating panel showing the YouTube embed. User sees what's playing, ads/branding are visible, IFrame API ToS reads cleanly. Cost: a window opens beside the terminal.
+- **Hidden window**. Webview runs offscreen or minimized; only audio reaches the user. Closest to "the CLI plays YouTube" mental model, but Chromium/WebKit may throttle hidden iframes (background-tab throttling), ads play with no UI to surface them, and ToS posture is weaker. Validate per-platform before committing.
+
+### Process model
+
+- **Subprocess** (lean toward this). CLI spawns a `late-webview` helper, IPC over a local socket. Matches Tauri's pattern, satisfies macOS's "main thread must own UI" rule, and lets the webview crash/restart without taking the TUI down.
+- **In-process**. Webview on a dedicated thread inside the existing CLI. Simpler IPC and one binary, but the GUI event loop fights terminal handling on at least macOS.
+
+### Source arbitration
+
+A CLI with an active webview is effectively a browser for §6 purposes. Simplest wiring: when the webview is up, the CLI reports `client_kind = "browser"` (or a new `embedded_webview` variant) in its `client_state`. The existing browser-presence-force-mutes-CLI rule then mutes the CLI's own Icecast path automatically. New variant is cleaner for metrics / skip-vote denominator tuning; plain `browser` is one fewer enum to thread.
+
+The CLI must not also stream Icecast through the same audio device while the webview owns audio — guard the Icecast decoder thread on `audio_source == Icecast`.
+
+### Audio source preference
+
+Reuse the existing per-user `users.settings.audio_source` (§9). CLI subscribes to `set_playback_source` like the browser does: into `youtube`, spin the webview up; into `icecast`, tear it down and resume the symphonia decoder. TUI `v+x` still flips the value through `App::toggle_paired_playback_source` — no new keybind.
+
+### Viz hand-off (this is what unlocks §18)
+
+Once the CLI is the audio source, the cross-origin constraint that blocks real YouTube viz today disappears: the CLI captures its own OS-level output, FFTs locally, emits `VizFrame` directly. Procedural bars (§10) retire for the embedded-webview path. Browser-paired connect-page sessions keep procedural bars indefinitely (or until that surface is sunset).
+
+### Open questions
+
+- **`client_kind` granularity** — `browser` vs new `embedded_webview`. Affects sidebar listener tags (§12), skip-vote eligibility (§6), and any future "is this a real browser?" check.
+- **Autoplay gesture requirement.** IFrame API still gates autoplay on user interaction in some engines. CLI likely surfaces a one-time `[P] to authorize playback` prompt.
+- **TUI focus theft** when the companion window opens. Worst on Windows.
+- **Headless/SSH'd-into-server users.** Users who run `late` on a remote box without a display can't open a webview. Fall back to `audio_source = icecast` and surface a banner if they try YouTube; no silent failures.
+
+### Phasing
+
+1. Spike: `wry` minimal app that loads the YT IFrame Player, plays a hard-coded `video_id`, validates audio on all three OSes (hidden vs visible).
+2. WS integration: webview consumes the existing pair WS protocol; reuse the connect page's YouTube JS.
+3. Source arbitration: CLI promotes `client_kind` when webview is live; force-mute path stays unchanged.
+4. Wire `audio_source` preference; v+x toggle drives webview up/down.
+5. Land §18 (OS loopback viz) once the webview is the audio source on at least one platform.
+
+### What this does NOT change
+
+- Server-side protocol (modulo optional `client_kind` value).
+- Browser connect page.
+- Icecast CLI path — webview only spins up on `audio_source = youtube`.
+- Skip-vote semantics — embedded-webview CLIs count as YouTube listeners (§6), but only when the webview is actually up.
 
 ---
 
@@ -547,4 +583,5 @@ YouTube (§10).
 - YouTube IFrame Player API: https://developers.google.com/youtube/iframe_api_reference
 - YouTube Data API `videos.list`: https://developers.google.com/youtube/v3/docs/videos/list
 - Browser autoplay: https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay
-- mpv JSON IPC (for the parked plan): https://mpv.io/manual/master/#json-ipc
+- `wry` (webview): https://github.com/tauri-apps/wry
+- `tao` (windowing): https://github.com/tauri-apps/tao
