@@ -908,7 +908,7 @@ impl App {
         }
 
         if ctx.show_cat_modal {
-            crate::app::cat::modal_ui::draw_cat_modal(frame, ctx.cat);
+            crate::app::cat::modal_ui::draw(frame, ctx.cat);
         }
 
         if ctx.show_help {

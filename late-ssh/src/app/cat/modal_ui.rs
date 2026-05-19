@@ -12,7 +12,7 @@ use crate::app::common::theme;
 const MODAL_W: u16 = 36;
 const MODAL_H: u16 = 13;
 
-pub fn draw_cat_modal(frame: &mut Frame, state: &CatState) {
+pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
     let area = centered_rect(MODAL_W, MODAL_H, frame.area());
     frame.render_widget(Clear, area);
 
