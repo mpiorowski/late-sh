@@ -1122,7 +1122,12 @@ impl AudioService {
         state.sequence = state.sequence.saturating_add(1);
         let mut snapshot = self.load_snapshot(state.mode).await?;
         snapshot.skip_progress = self.compute_skip_progress(state, snapshot.current.as_ref());
-        let _ = self.snapshot_tx.send(snapshot.clone());
+        // `send` fails without active receivers and would leave the watch at
+        // its constructor's empty value. Startup often publishes before any
+        // SSH session has opened the booth, so replace the retained value even
+        // when receiver_count == 0; later subscribers then see the real DB
+        // queue immediately after a restart.
+        self.snapshot_tx.send_replace(snapshot.clone());
         let _ = self.ws_tx.send(AudioWsMessage::QueueUpdate {
             current: snapshot.current,
             queue: snapshot.queue,

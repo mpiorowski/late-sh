@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-18 (browser-pair visualizer is now synthetic-only for both Icecast and YouTube; the web page no longer creates a Web Audio analyzer or sends `viz` frames. §18 remains the parked plan for future real OS-loopback FFT.)
+- Last updated: 2026-05-19 (source arbitration simplified: no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Browser-pair visualizer remains synthetic-only for both Icecast and YouTube.)
 - Previously: booth modal now surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Two submit paths diverge in metadata: booth (`booth_submit_public_task` → `submit_url` → Data API) inserts rows with title/channel/`duration_ms`/`is_stream` already populated; staff `/audio` (`submit_trusted_url_task`) inserts NULL metadata and the browser backfills `duration_ms` on first play via `record_browser_duration`. See §4 Public API + §2 booth/ui.rs note.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -16,7 +16,7 @@ Owned by this domain:
 - Always-on Icecast house radio playback (the `<audio>` and CLI symphonia path).
 - Global, DB-backed YouTube queue: submission, persistence, single-playing invariant, server-driven track switching (per-browser playback timeline), fallback debounce.
 - The singleton "YouTube fallback" stream that plays when the queue is empty.
-- Audio source arbitration between paired CLI and paired browser clients on the same SSH token (`force_mute`).
+- Audio source arbitration between paired CLI and paired browser clients on the same SSH token (`set_playback_source` + browser Icecast gate).
 - Synthetic browser-pair visualizer used for both Icecast and YouTube.
 - Now-playing poller for the Icecast track title.
 - The `/audio` and `/audio fallback` SSH chat commands (staff-only).
@@ -57,10 +57,10 @@ Cross-crate touchpoints:
   `048_create_media_sources.sql`,
   `049_create_media_queue_votes.sql`.
 - `late-core/src/audio.rs` — `VizFrame { bands[8], rms, track_pos_ms }` shared between server and CLI.
-- `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::ForceMute`, mute-priority policy.
+- `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::SetPlaybackSource`, source/surface policy.
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
 - `late-ssh/src/app/chat/{state,input}.rs` — `/audio` and `/audio fallback` chat commands.
-- `late-cli/src/ws.rs`, `late-cli/src/main.rs`, `late-cli/src/audio/output.rs` — CLI tolerates unknown audio events, applies `force_mute` to the shared mute atomic.
+- `late-cli/src/ws.rs`, `late-cli/src/main.rs`, `late-cli/src/audio/output.rs` — CLI tolerates unknown audio events and gates Icecast output on `set_playback_source` without changing the user mute flag.
 - `late-web/src/pages/connect/page.html` + `connect/mod.rs` — browser IFrame player, force-switch on heartbeat, per-user v+x source toggle.
 
 ---
@@ -155,7 +155,7 @@ Routed by report `state` field:
 
 `api.rs` `handle_socket` (`api.rs:231-382`) drives three sources per connection with `tokio::select!`:
 - inbound `socket.recv()` — client → server
-- `control_rx` — `PairControlMessage` from `PairedClientRegistry` (mute/volume/force_mute/clipboard)
+- `control_rx` — `PairControlMessage` from `PairedClientRegistry` (mute/volume/source/clipboard)
 - `audio_rx` — `AudioWsMessage` from `AudioService::subscribe_ws()`
 
 On connect, `api.rs` sends the user's persisted `set_playback_source` first, then
@@ -169,9 +169,8 @@ YouTube item without entering the switching/playback path.
 - `queue_update { current, queue, sequence }`
 
 ### Server → client `PairControlMessage` (`paired_clients.rs:22-30`)
-- `toggle_mute`, `volume_up`, `volume_down`, `request_clipboard_image`, `force_mute { mute }`.
-- `set_playback_source { source: "icecast" | "youtube" }` — sent immediately on
-  pair-WS connect and re-sent by the SSH session on browser-pair notification.
+- `toggle_mute`, `volume_up`, `volume_down`, `request_clipboard_image`.
+- `set_playback_source { source: "icecast" | "youtube", web_icecast_enabled: bool }` — sent immediately on pair-WS connect, after persisted `v+x` source changes, and when CLI presence changes. CLI ignores `web_icecast_enabled`; browsers use it to avoid double Icecast when a CLI is paired.
 
 ### Client → server `WsPayload` (`api.rs:39-68`)
 - `heartbeat`
@@ -184,27 +183,25 @@ There is **one global broadcast**, no room scoping. Every paired browser on ever
 
 ---
 
-## 6. Source Arbitration and `force_mute`
+## 6. Source Arbitration (single audible surface)
 
-Policy lives entirely in `late-ssh/src/paired_clients.rs`. The audio domain does not own the registry; it only consumes the resulting per-token mute state via the browser's `client_state` reports.
+Policy lives in `late-ssh/src/paired_clients.rs` plus the browser/CLI followers. There is no `ForceMute` control message anymore; the server broadcasts `set_playback_source { source, web_icecast_enabled }` and clients gate themselves.
 
-Rule: **if any browser is paired on a token, every CLI on that token is force-muted.** The browser is the audio surface when present; the CLI is the audio surface only when alone.
+Rule: **Icecast belongs to the CLI when a CLI is paired; YouTube belongs to the browser.** When a CLI and browser are both paired and the user flips from YouTube back to Icecast, the browser pauses/silences YouTube and does **not** start its own Icecast `<audio>` element, preventing doubled radio streams.
 
-| CLI paired | Browser paired | Browser hears        | CLI behavior                          |
-|------------|----------------|----------------------|---------------------------------------|
-| yes        | no             | n/a                  | plays Icecast normally                |
-| yes        | yes            | Icecast or YouTube   | force-muted via `ForceMute { true }`  |
-| no         | yes            | Icecast or YouTube   | n/a                                   |
-| no         | no             | silent               | n/a                                   |
+| CLI paired | Browser paired | Source  | Audible surface                                      |
+|------------|----------------|---------|------------------------------------------------------|
+| yes        | no             | Icecast | CLI                                                  |
+| yes        | no             | YouTube | silent (CLI cannot decode YouTube)                   |
+| yes        | yes            | Icecast | CLI; browser web-Icecast disabled                    |
+| yes        | yes            | YouTube | browser iframe; CLI source gate emits silence        |
+| no         | yes            | Icecast | browser `<audio>` (`web_icecast_enabled = true`)     |
+| no         | yes            | YouTube | browser iframe                                       |
 
-Triggers (`paired_clients.rs:217-297`, `:88-150`):
-- Browser appears on a token, or CLI joins a token already holding a browser → broadcast `ForceMute { mute: true }` to every CLI sender on that token.
-- Last browser on a token disconnects → broadcast `ForceMute { mute: false }`.
-- The CLI's `!new_muted` guard preserves a user-initiated *unmute* across WS reconnect — the server does not re-impose mute on a still-paired browser if the user has manually opted into double audio.
-
-Both decisions run under the same `PairedClientRegistry` lock to close the TOCTOU window where a new browser could register between removal and sender collection.
-
-CLI side: `late-cli/src/ws.rs:155-171` swaps the shared mute atomic — `Arc::clone(&audio.muted)` (`late-cli/src/main.rs:148`) — the same atomic used by the local mute keybind (`late-cli/src/audio/output.rs:166-193`). After applying it, the CLI re-sends `client_state` so the server sees the new `muted` value.
+Mechanics:
+- `PairControlMessage::SetPlaybackSource { source, web_icecast_enabled }` is sent on pair-WS connect, on persisted `v+x` source changes, and when CLI presence changes for a token.
+- CLI stores `source_is_icecast`; output emits silence when `source != Icecast` without touching the user `muted` flag.
+- Browser stores `webIcecastEnabled`; `source=Icecast && webIcecastEnabled=false` pauses YouTube and stops the web Icecast element. If the CLI disconnects, the server replays the same source with `web_icecast_enabled=true` so a browser-only token can resume web Icecast.
 
 ### Skip-vote eligibility — only YouTube listeners
 
@@ -263,12 +260,12 @@ The unrelated bare `/music` command (`state.rs:1325`) opens a help topic, not a 
 
 ## 8. CLI Integration
 
-Goal: the CLI tolerates everything new the audio domain added, plays Icecast unchanged, and obeys server force-mute.
+Goal: the CLI tolerates everything new the audio domain added, plays Icecast when selected, and stays silent when the user selects YouTube.
 
 - **Unknown audio events ignored** (`late-cli/src/ws.rs`). Inbound text is parsed only as `PairControlMessage`. `load_video`, `source_changed`, `queue_update` fail to deserialize, the CLI logs `warn!("ignoring unsupported pair websocket event")`, and the select loop continues. **The CLI does not disconnect on audio events.** Note: each playing track now also produces a 10s `load_video` heartbeat — the CLI log noise budget should account for that.
-- **`force_mute` applied to shared atomic** (`late-cli/src/ws.rs:155-171` → `apply_force_mute` → `muted.swap(mute, Relaxed)`). Same atomic as the local mute keybind, so the server's force-mute and the user's manual mute coexist on one piece of state. After applying, CLI re-sends `client_state` so the server observes the new value.
+- **Source gate, not forced mute.** `set_playback_source` updates `source_is_icecast`; `late-cli/src/audio/output.rs` emits silence when it is false. The user-controlled `muted` atomic remains only the local mute keybind / paired mute control.
 - **No YouTube decoding in the CLI.** The CLI never receives audio frames for YouTube — only metadata it ignores. Icecast path: `late-cli/src/audio/decoder_thread.rs` runs a symphonia HTTP stream decoder with 2s reconnect retry.
-- **CLI identifies itself.** First `client_state` emitted by `late-cli/src/ws.rs:113-131` carries `"client_kind": "cli"`. That tag is what lets the registry decide who to force-mute.
+- **CLI identifies itself.** First `client_state` emitted by `late-cli/src/ws.rs:113-131` carries `"client_kind": "cli"`. That tag lets the registry disable browser Icecast for the token.
 
 ---
 
@@ -276,9 +273,9 @@ Goal: the CLI tolerates everything new the audio domain added, plays Icecast unc
 
 File: `late-web/src/pages/connect/page.html`. The audio source is decided in the browser; the YouTube API/player is lazy-loaded only when the browser actually enters YouTube mode.
 
-- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube`, default `icecast`). TUI `v+x` flips the value via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App::paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source }` to every paired browser. On pair-WS connect, `api.rs` sends the persisted source before the audio catch-up burst. On every browser pair-up (`api.rs` detects `previous_kind != Browser && new_kind == Browser`), the SSH session is also notified via `SessionMessage::BrowserPaired` and `App::replay_paired_browser_source` re-pushes the current value. The browser is a follower: `applyUserPlaybackSource(source)` stores `userOverrideMode` and applies. While the user is pinned to icecast, `loadYoutubeVideo` and `seekYoutube` early-return so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately).
+- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube`, default `icecast`). TUI `v+x` flips the value via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App::paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source, web_icecast_enabled }` to paired clients. On pair-WS connect, `api.rs` sends the persisted source before the audio catch-up burst. On browser pair-up the SSH session also replays the value; on CLI presence changes `api.rs` replays it for the token so browsers know whether web Icecast is allowed. The browser is a follower: `applyUserPlaybackSource(source, web_icecast_enabled)` stores `userOverrideMode` and applies. While the user is pinned to icecast, `loadYoutubeVideo` early-returns so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately).
 - **IFrame API load.** The page does not include the YouTube iframe API up front. `ensureYoutubePlayer()` calls `loadYoutubeApi()` on demand, which appends `https://www.youtube.com/iframe_api`; `window.lateYoutubeApiReady` / `onYouTubeIframeAPIReady` then create the player only if `audioMode === "youtube"`.
-- **`source_changed` swap** (`applySourceMode`). Into `youtube`: pause `<audio>`, ensure player exists, kick playback of pending item. Into `icecast`: `ytPlayer.pauseVideo()`, restart `startPlayback()` for the `<audio>` if audio is enabled. The `modeChanged` guard prevents repeated `source_changed: youtube` broadcasts during queue transitions from resetting the iframe.
+- **`source_changed` / `set_playback_source` swap** (`applySourceMode`). Into `youtube`: stop `<audio>`, ensure player exists, kick playback of pending item. Into `icecast`: `ytPlayer.pauseVideo()`; restart the web `<audio>` only when `webIcecastEnabled` is true. With a CLI paired, `webIcecastEnabled=false`, so the browser goes quiet and the CLI is the only Icecast surface. The `modeChanged` guard prevents repeated `source_changed: youtube` broadcasts during queue transitions from resetting the iframe.
 - **Icecast-pinned resource behavior.** While pinned to Icecast, `load_video` only stashes `pendingYoutubeItem`; it does not create the YouTube iframe or pre-cue the video. A later source flip to YouTube starts from the pending item, and the server's 10s `load_video` heartbeat remains the safety net.
 - **`load_video` → force-switch or no-op** (`loadYoutubeVideo`). New shape: payload is `{ item_id, video_id, is_stream }` — no offset, no started_at. Same `item_id` AND iframe is already showing the right `video_id` → no-op (this is the safety-net heartbeat path; a manual pause stays paused). Otherwise → `loadVideoById({ videoId })` from 0, swap `currentYoutubeItem`. `verifyYoutubeLoad` re-checks after 1s and reloads if the video id still mismatches.
 - **No drift correction.** Each browser plays its own timeline. Slow networks just lag behind — no `seekTo` jumps. The "everyone hears the same offset" invariant is dropped on purpose.
@@ -400,7 +397,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 ## 14. Known Gaps and Things to Watch
 
 - **`GET /api/queue` is intentionally not exposed.** `AudioService::snapshot()` and `QueueSnapshot` exist for in-process use only. The TUI booth modal reads the snapshot from `AudioState::queue_snapshot()` (a `watch::Receiver<QueueSnapshot>` populated by `publish_queue_update_with_guard`); browsers receive state via the `initial_ws_messages` catch-up burst and live `queue_update` events. An external route would only matter for non-paired observers, which we do not have today.
-- **Booth modal renders from `watch::Receiver<QueueSnapshot>`.** `AudioService` keeps a `snapshot_tx` watch sender alongside the broadcast channels; every `publish_queue_update_with_guard` pushes a snapshot into it, and `AudioState::queue_snapshot()` borrows the current value. Skip progress (`votes/threshold`) is folded into the snapshot before it ships.
+- **Booth modal renders from `watch::Receiver<QueueSnapshot>`.** `AudioService` keeps a `snapshot_tx` watch sender alongside the broadcast channels; every `publish_queue_update_with_guard` uses `send_replace` to store the latest snapshot even when zero receivers are alive (startup often publishes before any SSH booth exists), and `AudioState::queue_snapshot()` borrows the current value. Skip progress (`votes/threshold`) is folded into the snapshot before it ships.
 - **`liquidsoap.rs` lives here but is only used by `app/vote/svc.rs`.** AudioService does *not* drive Liquidsoap. Treat `AudioMode::Icecast` as a hint to the browser/CLI, not a Liquidsoap state change.
 - **`/music` ≠ `/audio`.** `/music` is a help-topic command. `/audio` (and `/audio fallback`) are the submit commands. Don't conflate.
 - **No `GET /api/queue` HTTP route.** Submit and visibility for end users happen through the SSH booth modal (submit + queue list) and the staff `/audio` chat command. Non-paired observers have no way to see the queue today.

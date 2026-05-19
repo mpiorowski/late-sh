@@ -907,7 +907,9 @@ impl App {
     }
 
     /// Push the currently-stored audio source to all paired browsers. Called
-    /// when a browser registers so a fresh page reflects the persisted choice.
+    /// when a browser registers so a fresh page reflects the persisted choice
+    /// plus whether the browser is allowed to play Icecast (only when no CLI
+    /// is paired).
     pub fn replay_paired_browser_source(&self) {
         let Some(registry) = self.paired_client_registry.as_ref() else {
             return;
@@ -916,6 +918,7 @@ impl App {
             &self.session_token,
             PairControlMessage::SetPlaybackSource {
                 source: self.paired_browser_source,
+                web_icecast_enabled: registry.web_icecast_enabled(&self.session_token),
             },
         );
     }

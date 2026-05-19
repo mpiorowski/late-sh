@@ -15,13 +15,15 @@ use crate::app::audio::client_state::{ClientAudioState, ClientKind};
 use crate::metrics;
 
 // Multiplexed outbound channel to every paired client (browser + CLI) for a
-// given SSH session token. Carries audio control (mute/volume/force-mute) and
-// clipboard fan-out. Mute policy is source-driven, not pair-driven: a CLI
-// entry is force-muted iff its user's audio_source is Youtube. The CLI can
-// only play Icecast, so a Youtube preference means the CLI must be silent.
-// Browser presence does not enter the decision — `update_state_and_enforce_
-// mute_policy` applies it when the CLI first reports state, and `set_audio_
-// source` re-applies it on v+x flips.
+// given SSH session token. Carries audio control (mute/volume/source) and
+// clipboard fan-out.
+//
+// Audio surface policy is intentionally small:
+// - CLI plays Icecast only when the user's source is Icecast.
+// - Browser plays YouTube when the user's source is YouTube.
+// - Browser plays Icecast only when no CLI is paired for the token; otherwise
+//   switching back to Icecast just pauses the web YouTube player so the CLI is
+//   the single Icecast surface.
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -37,6 +39,10 @@ pub enum PairControlMessage {
     /// because the CLI can only play Icecast.
     SetPlaybackSource {
         source: AudioSource,
+        /// Whether the browser should use its `<audio>` Icecast element when
+        /// `source == Icecast`. False when a CLI is paired, because the CLI is
+        /// then the single Icecast surface. CLI clients ignore this field.
+        web_icecast_enabled: bool,
     },
 }
 
@@ -94,9 +100,9 @@ impl PairedClientRegistry {
         registration_id
     }
 
-    /// Remove the matching entry. Mute policy is source-driven, so disconnect
-    /// doesn't change another entry's mute state — that only moves on
-    /// `set_audio_source`.
+    /// Remove the matching entry. The API disconnect path replays playback
+    /// source afterward so remaining browsers can react to CLI presence
+    /// changes.
     pub fn unregister_if_match(&self, token: &str, registration_id: u64) {
         let mut clients = self.clients.lock_recover();
         let Some(entries) = clients.get_mut(token) else {
@@ -130,13 +136,65 @@ impl PairedClientRegistry {
     }
 
     /// Send a control message only to browser entries on `token`. Used for
-    /// browser-only signals like `TogglePlaybackSource`.
+    /// browser-only signals.
     pub fn send_control_to_browsers(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, |kind| kind == ClientKind::Browser) > 0
     }
 
+    /// True when the browser should be allowed to play the Icecast `<audio>`
+    /// element for this token. A paired CLI owns Icecast, so the browser must
+    /// stay silent on Icecast to avoid doubled streams.
+    pub fn web_icecast_enabled(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        !clients
+            .get(token)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .any(|entry| entry.state.client_kind == ClientKind::Cli)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Re-send each paired entry's cached playback source for `token`, with a
+    /// fresh browser Icecast allowance derived from current CLI presence.
+    pub fn broadcast_playback_source_for_token(&self, token: &str) -> bool {
+        let targets: Vec<_> = {
+            let clients = self.clients.lock_recover();
+            let Some(entries) = clients.get(token) else {
+                return false;
+            };
+            let web_icecast_enabled = !entries
+                .iter()
+                .any(|entry| entry.state.client_kind == ClientKind::Cli);
+            entries
+                .iter()
+                .map(|entry| (entry.tx.clone(), entry.audio_source, web_icecast_enabled))
+                .collect()
+        };
+
+        let mut delivered = 0;
+        for (tx, source, web_icecast_enabled) in targets {
+            if tx
+                .send(PairControlMessage::SetPlaybackSource {
+                    source,
+                    web_icecast_enabled,
+                })
+                .is_ok()
+            {
+                delivered += 1;
+            } else {
+                tracing::warn!(
+                    token_hint = %token_hint(token),
+                    "failed to replay paired playback source"
+                );
+            }
+        }
+        delivered > 0
+    }
+
     /// Send a control message to paired entries whose `client_kind` matches the
-    /// predicate. Used to target CLI-only force-mute or browser-only controls.
+    /// predicate. Used to target browser-only controls.
     /// Returns the number of entries that accepted the message.
     fn send_control_filter<F>(&self, token: &str, msg: PairControlMessage, mut matches: F) -> usize
     where
@@ -310,12 +368,12 @@ impl PairedClientRegistry {
             .sum()
     }
 
-    /// Update the cached `audio_source` for every entry owned by `user_id`.
     /// Update every entry for `user_id` to the new audio source and push
-    /// `SetPlaybackSource { source }` to each (CLI and browser alike). The
-    /// CLI uses it to gate its Icecast decoder; the browser uses it to swap
-    /// playback element. Returns true when at least one entry's value
-    /// transitioned away from `Youtube` — caller uses this to drop the
+    /// `SetPlaybackSource` to each (CLI and browser alike). The CLI uses it to
+    /// gate its Icecast decoder; the browser uses it to swap playback element.
+    /// Browser Icecast is disabled whenever a CLI is present on the token, so
+    /// Icecast has only one surface. Returns true when at least one entry's
+    /// value transitioned away from `Youtube` — caller uses this to drop the
     /// user's pending skip-vote.
     pub fn set_audio_source(&self, user_id: Uuid, source: AudioSource) -> bool {
         let mut left_youtube = false;
@@ -323,6 +381,9 @@ impl PairedClientRegistry {
         {
             let mut clients = self.clients.lock_recover();
             for entries in clients.values_mut() {
+                let web_icecast_enabled = !entries
+                    .iter()
+                    .any(|entry| entry.state.client_kind == ClientKind::Cli);
                 for entry in entries.iter_mut() {
                     if entry.user_id != user_id {
                         continue;
@@ -332,14 +393,17 @@ impl PairedClientRegistry {
                         left_youtube = true;
                     }
                     entry.audio_source = source;
-                    targets.push(entry.tx.clone());
+                    targets.push((entry.tx.clone(), web_icecast_enabled));
                 }
             }
         }
 
-        for tx in targets {
+        for (tx, web_icecast_enabled) in targets {
             if tx
-                .send(PairControlMessage::SetPlaybackSource { source })
+                .send(PairControlMessage::SetPlaybackSource {
+                    source,
+                    web_icecast_enabled,
+                })
                 .is_err()
             {
                 tracing::warn!("failed to push SetPlaybackSource after audio source change");
@@ -584,13 +648,15 @@ mod tests {
         assert_eq!(
             cli_rx.try_recv().unwrap(),
             PairControlMessage::SetPlaybackSource {
-                source: AudioSource::Youtube
+                source: AudioSource::Youtube,
+                web_icecast_enabled: false,
             }
         );
         assert_eq!(
             browser_rx.try_recv().unwrap(),
             PairControlMessage::SetPlaybackSource {
-                source: AudioSource::Youtube
+                source: AudioSource::Youtube,
+                web_icecast_enabled: false,
             }
         );
 
@@ -598,13 +664,50 @@ mod tests {
         assert_eq!(
             cli_rx.try_recv().unwrap(),
             PairControlMessage::SetPlaybackSource {
-                source: AudioSource::Icecast
+                source: AudioSource::Icecast,
+                web_icecast_enabled: false,
             }
         );
         assert_eq!(
             browser_rx.try_recv().unwrap(),
             PairControlMessage::SetPlaybackSource {
-                source: AudioSource::Icecast
+                source: AudioSource::Icecast,
+                web_icecast_enabled: false,
+            }
+        );
+    }
+
+    #[test]
+    fn browser_only_token_can_play_web_icecast() {
+        let registry = PairedClientRegistry::new();
+        let user_id = Uuid::now_v7();
+
+        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+        let browser_id = registry.register(
+            "tok1".to_string(),
+            browser_tx,
+            user_id,
+            AudioSource::Youtube,
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            browser_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Unknown,
+                platform: ClientPlatform::Unknown,
+                capabilities: Vec::new(),
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        assert!(registry.set_audio_source(user_id, AudioSource::Icecast));
+        assert_eq!(
+            browser_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Icecast,
+                web_icecast_enabled: true,
             }
         );
     }
