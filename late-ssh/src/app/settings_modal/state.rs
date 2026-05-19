@@ -1411,6 +1411,8 @@ impl SettingsModalState {
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
+                birthday: self.draft.birthday.clone(),
+                tracked_user_ids: self.draft.tracked_user_ids.clone(),
             },
         );
     }

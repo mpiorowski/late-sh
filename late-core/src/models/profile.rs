@@ -6,13 +6,13 @@ use uuid::Uuid;
 
 use super::chips::INITIAL_CHIP_BALANCE;
 use super::user::{
-    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, extract_bio, extract_country,
-    extract_enable_background_color, extract_favorite_room_ids, extract_ide, extract_langs,
-    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_os, extract_right_sidebar_mode, extract_right_sidebar_screens,
+    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, extract_bio, extract_birthday,
+    extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
+    extract_langs, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
+    extract_notify_kinds, extract_os, extract_right_sidebar_mode, extract_right_sidebar_screens,
     extract_show_dashboard_header, extract_show_dashboard_wire, extract_show_right_sidebar,
     extract_show_room_list_sidebar, extract_show_settings_on_connect, extract_terminal,
-    extract_theme_id, extract_timezone,
+    extract_theme_id, extract_timezone, extract_tracked_user_ids,
 };
 
 #[derive(Clone, Debug)]
@@ -48,6 +48,10 @@ pub struct Profile {
     pub show_settings_on_connect: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
+    /// Year-less `MM-DD` birthday, or `None` if unset.
+    pub birthday: Option<String>,
+    /// One-way list of user ids whose birthdays this user tracks. Not mutual.
+    pub tracked_user_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +86,8 @@ impl Default for Profile {
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
+            birthday: None,
+            tracked_user_ids: Vec::new(),
         }
     }
 }
@@ -110,6 +116,10 @@ pub struct ProfileParams {
     pub show_room_list_sidebar: bool,
     pub show_settings_on_connect: bool,
     pub favorite_room_ids: Vec<Uuid>,
+    /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
+    pub birthday: Option<String>,
+    /// One-way list of user ids whose birthdays this user tracks.
+    pub tracked_user_ids: Vec<Uuid>,
 }
 
 impl Profile {
@@ -159,6 +169,13 @@ impl Profile {
                 .map(Uuid::to_string)
                 .collect::<Vec<_>>(),
         )?;
+        let tracked_user_ids_json = serde_json::to_value(
+            params
+                .tracked_user_ids
+                .iter()
+                .map(Uuid::to_string)
+                .collect::<Vec<_>>(),
+        )?;
         let right_sidebar_screens_json = serde_json::to_value(normalize_right_sidebar_screens(
             &params.right_sidebar_screens,
         ))?;
@@ -181,6 +198,10 @@ impl Profile {
         let os = normalize_profile_text(params.os.as_deref());
         let langs = normalize_profile_tags(params.langs.iter().map(String::as_str));
         let langs_json = serde_json::to_value(&langs)?;
+        let birthday = params
+            .birthday
+            .as_deref()
+            .and_then(crate::models::birthday::normalize_birthday);
         let current_user = User::get(client, user_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
@@ -226,7 +247,9 @@ impl Profile {
                          'terminal', $19::text,
                          'os', $20::text,
                          'langs', $21::jsonb,
-                         'show_dashboard_wire', $22::bool
+                         'show_dashboard_wire', $22::bool,
+                         'birthday', $24::text,
+                         'tracked_user_ids', $25::jsonb
                      ),
                      updated = current_timestamp
                  WHERE id = $23
@@ -255,6 +278,8 @@ impl Profile {
                     &langs_json,
                     &params.show_dashboard_wire,
                     &user_id,
+                    &birthday,
+                    &tracked_user_ids_json,
                 ],
             )
             .await?;
@@ -287,6 +312,8 @@ impl Profile {
             show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
             show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
+            birthday: extract_birthday(&user.settings),
+            tracked_user_ids: extract_tracked_user_ids(&user.settings),
         }
     }
 }

@@ -33,8 +33,29 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
             let step = (app.size.1 / 2).max(1) as i16;
             app.profile_modal_state.scroll_by(-step);
         }
+        ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T') => {
+            toggle_birthday_tracking(app);
+        }
         _ => {}
     }
+}
+
+fn toggle_birthday_tracking(app: &mut App) {
+    use crate::app::common::primitives::Banner;
+    let Some(target) = app.profile_modal_state.viewed_user_id() else {
+        return;
+    };
+    let name = app.profile_modal_state.viewed_name();
+    if target == app.user_id {
+        app.banner = Some(Banner::error("You can't track your own birthday."));
+        return;
+    }
+    let now_tracked = app.profile_state.toggle_tracked_user(target);
+    app.banner = Some(if now_tracked {
+        Banner::success(&format!("Tracking {name}'s birthday"))
+    } else {
+        Banner::success(&format!("Stopped tracking {name}'s birthday"))
+    });
 }
 
 pub fn handle_escape(app: &mut App) {

@@ -4,6 +4,7 @@ pub mod article;
 pub mod article_feed_read;
 pub mod asterion;
 pub mod audio_ban;
+pub mod birthday;
 pub mod blackjack;
 pub mod bonsai;
 pub mod cat;
