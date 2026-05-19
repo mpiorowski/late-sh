@@ -3,6 +3,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+#[cfg(feature = "webview")]
+use std::process::{Child, Command, Stdio};
 use std::{
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     time::Duration,
@@ -33,13 +35,150 @@ enum PairControlMessage {
     VolumeDown,
     RequestClipboardImage,
     ForceMute { mute: bool },
+    SetPlaybackSource { source: String },
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(all(
+    feature = "webview",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube"];
+
+#[cfg(all(
+    not(feature = "webview"),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const CLIENT_CAPABILITIES: &[&str] = &[];
+
+pub(super) struct WebviewPlaybackController {
+    #[cfg(feature = "webview")]
+    api_base_url: String,
+    #[cfg(feature = "webview")]
+    token: String,
+    #[cfg(feature = "webview")]
+    child: Option<Child>,
+}
+
+impl WebviewPlaybackController {
+    pub(super) fn new(api_base_url: String, token: String) -> Self {
+        #[cfg(not(feature = "webview"))]
+        {
+            let _ = (api_base_url, token);
+        }
+        Self {
+            #[cfg(feature = "webview")]
+            api_base_url,
+            #[cfg(feature = "webview")]
+            token,
+            #[cfg(feature = "webview")]
+            child: None,
+        }
+    }
+
+    fn apply_playback_source(&mut self, source: &str, muted: &AtomicBool) -> Result<bool> {
+        match source {
+            "youtube" => self.enter_youtube(muted),
+            "icecast" => self.enter_icecast(muted),
+            other => {
+                warn!(source = %other, "ignoring unknown playback source");
+                Ok(false)
+            }
+        }
+    }
+
+    #[cfg(feature = "webview")]
+    fn enter_youtube(&mut self, muted: &AtomicBool) -> Result<bool> {
+        let was_muted = muted.swap(true, Ordering::Relaxed);
+        let muted_changed = !was_muted;
+        if self.helper_is_running() {
+            return Ok(muted_changed);
+        }
+
+        let exe = std::env::current_exe().context("failed to locate current late executable")?;
+        let child = match Command::new(exe)
+            .arg("webview-pair")
+            .arg(&self.token)
+            .env("LATE_API_BASE_URL", &self.api_base_url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(err) => {
+                muted.store(was_muted, Ordering::Relaxed);
+                return Err(err).context("failed to spawn embedded YouTube webview helper");
+            }
+        };
+        self.child = Some(child);
+        info!("started embedded YouTube webview helper");
+        Ok(true)
+    }
+
+    #[cfg(not(feature = "webview"))]
+    fn enter_youtube(&mut self, _muted: &AtomicBool) -> Result<bool> {
+        warn!("server selected YouTube, but this late binary was built without webview support");
+        Ok(false)
+    }
+
+    #[cfg(feature = "webview")]
+    fn enter_icecast(&mut self, muted: &AtomicBool) -> Result<bool> {
+        self.stop_helper();
+        let muted_changed = muted.swap(false, Ordering::Relaxed);
+        if muted_changed {
+            info!("resumed native Icecast playback");
+        }
+        Ok(muted_changed)
+    }
+
+    #[cfg(not(feature = "webview"))]
+    fn enter_icecast(&mut self, _muted: &AtomicBool) -> Result<bool> {
+        Ok(false)
+    }
+
+    #[cfg(feature = "webview")]
+    fn helper_is_running(&mut self) -> bool {
+        let Some(child) = self.child.as_mut() else {
+            return false;
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                warn!(?status, "embedded YouTube webview helper exited");
+                self.child = None;
+                false
+            }
+            Ok(None) => true,
+            Err(err) => {
+                warn!(error = %err, "failed to inspect embedded YouTube webview helper");
+                self.child = None;
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "webview")]
+    fn stop_helper(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if let Err(err) = child.kill() {
+            warn!(error = %err, "failed to stop embedded YouTube webview helper");
+            return;
+        }
+        let _ = child.wait();
+        info!("stopped embedded YouTube webview helper");
+    }
+}
+
+#[cfg(feature = "webview")]
+impl Drop for WebviewPlaybackController {
+    fn drop(&mut self) {
+        self.stop_helper();
+    }
+}
 
 pub(super) async fn run_viz_ws(
     api_base_url: &str,
@@ -47,6 +186,7 @@ pub(super) async fn run_viz_ws(
     client: &PairClientInfo,
     frames: &mut broadcast::Receiver<VizSample>,
     playback: &PlaybackState<'_>,
+    webview: &mut WebviewPlaybackController,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!(%ws_url, "connecting pair websocket");
@@ -94,6 +234,7 @@ pub(super) async fn run_viz_ws(
                             &mut ws,
                             playback.muted,
                             playback.volume_percent,
+                            webview,
                         )
                         .await?;
                         if should_send_state {
@@ -137,6 +278,7 @@ async fn handle_pair_control(
     >,
     muted: &AtomicBool,
     volume_percent: &AtomicU8,
+    webview: &mut WebviewPlaybackController,
 ) -> Result<bool> {
     let control = match serde_json::from_str::<PairControlMessage>(text) {
         Ok(control) => control,
@@ -159,6 +301,9 @@ async fn handle_pair_control(
         PairControlMessage::RequestClipboardImage => {
             send_clipboard_image(ws).await?;
             Ok(false)
+        }
+        PairControlMessage::SetPlaybackSource { source } => {
+            webview.apply_playback_source(&source, muted)
         }
     }
 }
@@ -189,6 +334,7 @@ fn apply_audio_pair_control(
             info!(volume_percent = new_volume, "applied paired volume down");
         }
         PairControlMessage::ForceMute { .. } | PairControlMessage::RequestClipboardImage => {}
+        PairControlMessage::SetPlaybackSource { .. } => {}
     }
 }
 

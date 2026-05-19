@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-18 (browser-pair visualizer is now synthetic-only for both Icecast and YouTube; the web page no longer creates a Web Audio analyzer or sends `viz` frames. §18 remains the parked plan for future real OS-loopback FFT.)
+- Last updated: 2026-05-19 (CLI-side embedded YouTube webview v1 is wired behind the `late-cli` `webview` feature: native CLI advertises `youtube`, `set_playback_source` drives lazy helper spawn/teardown, and the helper registers as a browser only while YouTube is selected.)
 - Previously: booth modal now surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Two submit paths diverge in metadata: booth (`booth_submit_public_task` → `submit_url` → Data API) inserts rows with title/channel/`duration_ms`/`is_stream` already populated; staff `/audio` (`submit_trusted_url_task`) inserts NULL metadata and the browser backfills `duration_ms` on first play via `record_browser_duration`. See §4 Public API + §2 booth/ui.rs note.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -263,12 +263,13 @@ The unrelated bare `/music` command (`state.rs:1325`) opens a help topic, not a 
 
 ## 8. CLI Integration
 
-Goal: the CLI tolerates everything new the audio domain added, plays Icecast unchanged, and obeys server force-mute.
+Goal: the native CLI is the always-on control plane. It plays Icecast by default, obeys server force-mute, and when built with `--features webview` can lazily launch an embedded YouTube webview helper only while the user's persisted playback source is YouTube.
 
-- **Unknown audio events ignored** (`late-cli/src/ws.rs`). Inbound text is parsed only as `PairControlMessage`. `load_video`, `source_changed`, `queue_update` fail to deserialize, the CLI logs `warn!("ignoring unsupported pair websocket event")`, and the select loop continues. **The CLI does not disconnect on audio events.** Note: each playing track now also produces a 10s `load_video` heartbeat — the CLI log noise budget should account for that.
-- **`force_mute` applied to shared atomic** (`late-cli/src/ws.rs:155-171` → `apply_force_mute` → `muted.swap(mute, Relaxed)`). Same atomic as the local mute keybind, so the server's force-mute and the user's manual mute coexist on one piece of state. After applying, CLI re-sends `client_state` so the server observes the new value.
-- **No YouTube decoding in the CLI.** The CLI never receives audio frames for YouTube — only metadata it ignores. Icecast path: `late-cli/src/audio/decoder_thread.rs` runs a symphonia HTTP stream decoder with 2s reconnect retry.
-- **CLI identifies itself.** First `client_state` emitted by `late-cli/src/ws.rs:113-131` carries `"client_kind": "cli"`. That tag is what lets the registry decide who to force-mute.
+- **Unknown audio events ignored by the native CLI** (`late-cli/src/ws.rs`). Inbound text is parsed as `PairControlMessage`; `load_video`, `source_changed`, and `queue_update` still fail to deserialize in the native CLI and are ignored. The webview helper (`late webview-pair <token>`) is the thing that consumes those audio events while YouTube is selected.
+- **`set_playback_source` is the lifecycle signal.** `late-cli/src/ws.rs::WebviewPlaybackController` reacts to `PairControlMessage::SetPlaybackSource`: `youtube` mutes native Icecast and spawns one `late webview-pair <token>` child; `icecast` kills the helper and resumes native Icecast. Do **not** spawn the helper from global `source_changed`.
+- **Feature-gated YouTube capability.** Native CLI `client_state.capabilities` includes `"youtube"` only when built with the `webview` feature. The server sends playback-source controls to browsers plus CLI entries that advertise this capability. Older/non-webview CLIs keep Icecast-only behavior.
+- **`force_mute` applied to shared atomic** (`late-cli/src/ws.rs` → `apply_force_mute` → `muted.swap(mute, Relaxed)`). When the helper registers as a browser, the existing browser-priority policy force-mutes the native CLI path; when the helper exits, unregister relaxes it.
+- **CLI identifies itself.** First native `client_state` emitted by `late-cli/src/ws.rs` carries `"client_kind": "cli"`. The helper sends `"client_kind": "browser"` for v1 so existing source arbitration, listener counts, and skip-vote eligibility work without a new enum.
 
 ---
 
@@ -276,7 +277,7 @@ Goal: the CLI tolerates everything new the audio domain added, plays Icecast unc
 
 File: `late-web/src/pages/connect/page.html`. The audio source is decided in the browser; the YouTube API/player is lazy-loaded only when the browser actually enters YouTube mode.
 
-- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube`, default `icecast`). TUI `v+x` flips the value via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App::paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source }` to every paired browser. On pair-WS connect, `api.rs` sends the persisted source before the audio catch-up burst. On every browser pair-up (`api.rs` detects `previous_kind != Browser && new_kind == Browser`), the SSH session is also notified via `SessionMessage::BrowserPaired` and `App::replay_paired_browser_source` re-pushes the current value. The browser is a follower: `applyUserPlaybackSource(source)` stores `userOverrideMode` and applies. While the user is pinned to icecast, `loadYoutubeVideo` and `seekYoutube` early-return so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately).
+- **Per-user audio source (server-authoritative).** The choice is persisted in `users.settings.audio_source` (`icecast` | `youtube`, default `icecast`). TUI `v+x` flips the value via `App::toggle_paired_playback_source`: writes to DB through `AudioService::persist_audio_source`, updates the local mirror `App::paired_browser_source`, and broadcasts `PairControlMessage::SetPlaybackSource { source }` to every paired browser plus any paired CLI with `capabilities` containing `"youtube"`. On pair-WS connect, `api.rs` sends the persisted source before the audio catch-up burst. On every browser pair-up (`api.rs` detects `previous_kind != Browser && new_kind == Browser`), the SSH session is also notified via `SessionMessage::BrowserPaired` and `App::replay_paired_browser_source` re-pushes the current value. The browser is a follower: `applyUserPlaybackSource(source)` stores `userOverrideMode` and applies. While the user is pinned to icecast, `loadYoutubeVideo` and `seekYoutube` early-return so server queue events do not flip the iframe back on (the current item is still stashed as `pendingYoutubeItem` so a toggle to youtube starts playing immediately). The native CLI follows the same source message: it only spawns the embedded webview helper for `youtube`.
 - **IFrame API load.** The page does not include the YouTube iframe API up front. `ensureYoutubePlayer()` calls `loadYoutubeApi()` on demand, which appends `https://www.youtube.com/iframe_api`; `window.lateYoutubeApiReady` / `onYouTubeIframeAPIReady` then create the player only if `audioMode === "youtube"`.
 - **`source_changed` swap** (`applySourceMode`). Into `youtube`: pause `<audio>`, ensure player exists, kick playback of pending item. Into `icecast`: `ytPlayer.pauseVideo()`, restart `startPlayback()` for the `<audio>` if audio is enabled. The `modeChanged` guard prevents repeated `source_changed: youtube` broadcasts during queue transitions from resetting the iframe.
 - **Icecast-pinned resource behavior.** While pinned to Icecast, `load_video` only stashes `pendingYoutubeItem`; it does not create the YouTube iframe or pre-cue the video. A later source flip to YouTube starts from the pending item, and the server's 10s `load_video` heartbeat remains the safety net.
@@ -372,7 +373,7 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 ### Cross-cuts
 
 - Reuses `late-ssh/src/app/vote/ui.rs::draw_vote_inline` for the icecast vote rows. That helper uses `●`/`○` glyphs (matches the `seat_dot_spans` pattern), not block bars.
-- v+x dispatch goes through `app/state.rs::toggle_paired_playback_source` → persists `paired_browser_source` via `AudioService::persist_audio_source` and broadcasts `PairControlMessage::SetPlaybackSource`. Early-returns `None` (skipping local update + persist) when no browser is paired; the "No paired browser" banner is the user-visible feedback. The sidebar still reflects the saved preference from the DB at SSH bootstrap regardless, so the toggle silently no-op'ing doesn't desync the visual.
+- v+x dispatch goes through `app/state.rs::toggle_paired_playback_source` → persists `paired_browser_source` via `AudioService::persist_audio_source` and broadcasts `PairControlMessage::SetPlaybackSource` through `PairedClientRegistry::send_playback_source`. A paired browser or a paired CLI advertising `"youtube"` capability is enough to make the toggle actionable; plain Icecast-only CLI pairing still returns `None` and shows the "No paired browser" banner. The sidebar still reflects the saved preference from the DB at SSH bootstrap regardless, so a toggle no-op does not desync the visual.
 
 ---
 
@@ -441,97 +442,45 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 
 ---
 
-## 17. Plan: Embedded webview for CLI-side YouTube
+## 17. CLI Embedded Webview for YouTube
 
-**Status: active plan, not yet implemented.** Goal: legal YouTube playback inside the `late` CLI without ever shelling out to mpv/yt-dlp/etc. The CLI hosts the official YouTube IFrame Player inside an embedded system webview; the player fetches and decodes audio identically to today's connect page (§9). late.sh still ships zero YouTube code beyond `video_id` over the pair WS — same legal posture as the browser, just hosted by the CLI process.
-
-### Why this and not the external-player handoff
-
-Ruled out in §15. yt-dlp / mpv shellout strips ads and branding, shifts the ToS exposure onto the user's machine, and demands a config-file setup most users won't do. The embedded webview runs the official IFrame Player verbatim — ads, branding, autoplay rules, all intact — exactly like a browser tab.
-
-### Architecture
-
-```text
-server                → "play video_id" (WS, metadata only)
-late CLI              → embedded webview hosts youtube.com IFrame Player
-youtube.com (iframe)  → fetches and decodes audio (system browser engine)
-OS audio out          → user hears it through default audio device
-```
-
-From the server's perspective the CLI becomes a paired *browser*: it consumes the same `load_video` / `source_changed` / `queue_update` (§5), reports `player_state` the same way, and counts as a browser for source arbitration (§6) and skip-vote eligibility (§6 last block). No server-side protocol changes assumed beyond optionally distinguishing CLI-hosted webviews from native browsers via a new `client_kind` (TBD; see Open questions).
-
-### Webview backend — `wry` + `tao` (chosen)
-
-Cross-platform via [`wry`](https://github.com/tauri-apps/wry) (webview) and [`tao`](https://github.com/tauri-apps/tao) (windowing/event loop), both from the Tauri team. Uses the system browser engine on each platform:
-
-- **Linux**: WebKitGTK 4.1. Distro-supplied — no bundled engine.
-- **macOS**: WKWebView. Always present.
-- **Windows**: WebView2 (Chromium). System component on Win10 21H2+; older systems need the Evergreen bootstrapper.
-
-Why not the alternatives:
-
-| Lib | Why not |
-|-----|---------|
-| `webview-rs` / `Boscop/web-view` | Uses MSHTML (IE10/11) on Windows. Modern YouTube won't load. Stale. |
-| CEF | Bundles full Chromium — hundreds of MB. Overkill for an audio surface. |
-| Servo | Just hit crates.io 0.1.0 in Apr 2026. Rust-native and promising, but API is churning and media-site compatibility (YouTube specifically) is unproven. |
-
-A single small page is loaded (local file or `data:` URL) that includes the YouTube IFrame API. The JS largely mirrors `late-web/src/pages/connect/page.html`'s YouTube path — lazy-load the API, create the player on first `load_video`, force-switch on heartbeat, emit `player_state`. Reuse, don't fork: extract the connect page YouTube block into a shared template that both surfaces include.
-
-### Per-platform caveats to validate in the spike
-
-- **Linux / WebKitGTK version floor.** Older LTS distros ship WebKit versions that fail on modern YouTube. Set a minimum (TBD during spike — likely WebKitGTK 2.40+) and surface a clean error on too-old systems rather than a silent blank.
-- **Linux / Wayland.** wry historically required X11; Wayland support has been landing version-by-version. Confirm current state during the spike; X11-only is acceptable for v1 if necessary.
-- **Hidden-window audio.** WebKitGTK and WKWebView allow audio in offscreen/minimized webviews. WebView2 (Chromium) applies background-tab throttling that can affect audio in fully-hidden windows. If we pick hidden mode, validate per-platform; otherwise the companion-window UX sidesteps this.
-- **Windows / WebView2 Evergreen.** Present by default on Win10 21H2+ and Win11. Older Win10 / Win7 needs the WebView2 Runtime installer — bundle the standalone bootstrapper or surface a one-time install prompt. Don't ship full Chromium.
-
-### Window UX
-
-Two viable shapes, decision deferred:
-
-- **Tiny companion window** (lean toward this). 320×200 floating panel showing the YouTube embed. User sees what's playing, ads/branding are visible, IFrame API ToS reads cleanly. Cost: a window opens beside the terminal.
-- **Hidden window**. Webview runs offscreen or minimized; only audio reaches the user. Closest to "the CLI plays YouTube" mental model, but Chromium/WebKit may throttle hidden iframes (background-tab throttling), ads play with no UI to surface them, and ToS posture is weaker. Validate per-platform before committing.
+**Status: v1 wired behind the `late-cli` `webview` feature.** Goal: legal YouTube playback inside the `late` CLI without shelling out to mpv/yt-dlp/etc. The CLI hosts the official YouTube IFrame Player inside an embedded system webview; the player fetches and decodes audio identically to today's connect page (§9). late.sh still ships only `video_id` over the pair WS.
 
 ### Process model
 
-- **Subprocess** (lean toward this). CLI spawns a `late-webview` helper, IPC over a local socket. Matches Tauri's pattern, satisfies macOS's "main thread must own UI" rule, and lets the webview crash/restart without taking the TUI down.
-- **In-process**. Webview on a dedicated thread inside the existing CLI. Simpler IPC and one binary, but the GUI event loop fights terminal handling on at least macOS.
+- Native `late` remains the always-on SSH/audio control process.
+- Native `late` opens the normal pair WS as `client_kind = "cli"`.
+- With `--features webview`, native `late` advertises `capabilities: ["clipboard_image", "youtube"]` on desktop platforms.
+- `set_playback_source: youtube` spawns a helper child: `late webview-pair <token>`.
+- `set_playback_source: icecast` kills the helper and resumes native Icecast.
+- The helper opens its own pair WS and reports `client_kind = "browser"` for v1, so existing browser force-mute, listener counts, and skip-vote eligibility work.
 
-### Source arbitration
+This lazy lifecycle is intentional. A normal CLI run does not open a webview. A webview window exists only while the user's persisted playback source is YouTube, avoiding tiling-window-manager noise for Icecast users.
 
-A CLI with an active webview is effectively a browser for §6 purposes. Simplest wiring: when the webview is up, the CLI reports `client_kind = "browser"` (or a new `embedded_webview` variant) in its `client_state`. The existing browser-presence-force-mutes-CLI rule then mutes the CLI's own Icecast path automatically. New variant is cleaner for metrics / skip-vote denominator tuning; plain `browser` is one fewer enum to thread.
+### Source semantics
 
-The CLI must not also stream Icecast through the same audio device while the webview owns audio — guard the Icecast decoder thread on `audio_source == Icecast`.
+`set_playback_source` is the user's per-user preference and is the only signal that starts/stops the helper. `source_changed` is global queue/server mode and must not spawn the helper by itself. A user pinned to Icecast can still receive `source_changed: youtube` because the shared queue/fallback is globally active.
 
-### Audio source preference
+### Webview backend
 
-Reuse the existing per-user `users.settings.audio_source` (§9). CLI subscribes to `set_playback_source` like the browser does: into `youtube`, spin the webview up; into `icecast`, tear it down and resume the symphonia decoder. TUI `v+x` still flips the value through `App::toggle_paired_playback_source` — no new keybind.
+`late-cli` uses `wry` + `tao` behind the `webview` feature:
 
-### Viz hand-off (this is what unlocks §18)
+- Linux: WebKitGTK 4.1 dev/runtime packages.
+- macOS: WKWebView.
+- Windows: WebView2.
 
-Once the CLI is the audio source, the cross-origin constraint that blocks real YouTube viz today disappears: the CLI captures its own OS-level output, FFTs locally, emits `VizFrame` directly. Procedural bars (§10) retire for the embedded-webview path. Browser-paired connect-page sessions keep procedural bars indefinitely (or until that surface is sunset).
+The helper loads `late-cli/src/webview/page.html`, which embeds the YouTube IFrame API and posts `player_state` back through wry IPC. Rust relays those events to `/api/ws/pair` and pushes `load_video` / `source_changed` into JS via `evaluate_script`.
 
-### Open questions
+### Window UX
 
-- **`client_kind` granularity** — `browser` vs new `embedded_webview`. Affects sidebar listener tags (§12), skip-vote eligibility (§6), and any future "is this a real browser?" check.
-- **Autoplay gesture requirement.** IFrame API still gates autoplay on user interaction in some engines. CLI likely surfaces a one-time `[P] to authorize playback` prompt.
-- **TUI focus theft** when the companion window opens. Worst on Windows.
-- **Headless/SSH'd-into-server users.** Users who run `late` on a remote box without a display can't open a webview. Fall back to `audio_source = icecast` and surface a banner if they try YouTube; no silent failures.
-
-### Phasing
-
-1. Spike: `wry` minimal app that loads the YT IFrame Player, plays a hard-coded `video_id`, validates audio on all three OSes (hidden vs visible).
-2. WS integration: webview consumes the existing pair WS protocol; reuse the connect page's YouTube JS.
-3. Source arbitration: CLI promotes `client_kind` when webview is live; force-mute path stays unchanged.
-4. Wire `audio_source` preference; v+x toggle drives webview up/down.
-5. Land §18 (OS loopback viz) once the webview is the audio source on at least one platform.
+Current v1 opens a small companion window. Hidden/offscreen mode is not the default because embedded browser engines can throttle or unload hidden/minimized views, and the YouTube iframe's ads/branding/autoplay posture is cleaner with a visible surface. A future config can add `youtube_webview = "window" | "hidden" | "disabled"` once hidden-mode behavior is validated per platform.
 
 ### What this does NOT change
 
-- Server-side protocol (modulo optional `client_kind` value).
-- Browser connect page.
-- Icecast CLI path — webview only spins up on `audio_source = youtube`.
-- Skip-vote semantics — embedded-webview CLIs count as YouTube listeners (§6), but only when the webview is actually up.
+- Server queue state machine and YouTube `load_video` protocol.
+- Browser connect page behavior.
+- Native Icecast decoder path when `audio_source = icecast`.
+- External-player shell-outs remain out of scope; do not revive mpv/yt-dlp handoff unless the product/legal posture changes explicitly.
 
 ---
 

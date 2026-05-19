@@ -31,9 +31,10 @@ pub enum PairControlMessage {
     ForceMute {
         mute: bool,
     },
-    /// Per-user setting: tell the paired browser which audio source to use.
+    /// Per-user setting: tell the paired playback surface which audio source
+    /// to use.
     /// Server is the source of truth (persisted in `users.settings.audio_source`)
-    /// so the browser does not toggle locally; it applies whatever it receives.
+    /// so clients do not toggle locally; they apply whatever they receive.
     SetPlaybackSource {
         source: AudioSource,
     },
@@ -175,10 +176,23 @@ impl PairedClientRegistry {
         self.send_control_filter(token, msg, |_| true) > 0
     }
 
-    /// Send a control message only to browser entries on `token`. Used for
-    /// browser-only signals like `TogglePlaybackSource`.
+    /// Send a control message only to browser entries on `token`.
     pub fn send_control_to_browsers(&self, token: &str, msg: PairControlMessage) -> bool {
-        self.send_control_filter(token, msg, |kind| kind == ClientKind::Browser) > 0
+        self.send_control_filter(token, msg, |state| state.client_kind == ClientKind::Browser) > 0
+    }
+
+    /// Push the persisted playback-source preference to clients that can act
+    /// on it: browser pages, plus CLI control-plane clients that advertise a
+    /// YouTube-capable embedded webview.
+    pub fn send_playback_source(&self, token: &str, source: AudioSource) -> bool {
+        self.send_control_filter(
+            token,
+            PairControlMessage::SetPlaybackSource { source },
+            |state| {
+                state.client_kind == ClientKind::Browser
+                    || (state.client_kind == ClientKind::Cli && state.supports_youtube_playback())
+            },
+        ) > 0
     }
 
     /// Send a control message to paired entries whose `client_kind` matches the
@@ -186,7 +200,7 @@ impl PairedClientRegistry {
     /// Returns the number of entries that accepted the message.
     fn send_control_filter<F>(&self, token: &str, msg: PairControlMessage, mut matches: F) -> usize
     where
-        F: FnMut(ClientKind) -> bool,
+        F: FnMut(&ClientAudioState) -> bool,
     {
         let targets: Vec<UnboundedSender<PairControlMessage>> = {
             let clients = self.clients.lock_recover();
@@ -195,7 +209,7 @@ impl PairedClientRegistry {
                 .map(|entries| {
                     entries
                         .iter()
-                        .filter(|entry| matches(entry.state.client_kind))
+                        .filter(|entry| matches(&entry.state))
                         .map(|entry| entry.tx.clone())
                         .collect()
                 })
@@ -626,5 +640,90 @@ mod tests {
 
         assert!(!registry.request_clipboard_image("tok1"));
         assert!(browser_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn playback_source_reaches_browsers_and_youtube_capable_cli_only() {
+        let registry = PairedClientRegistry::new();
+        let user_id = Uuid::now_v7();
+
+        let (plain_cli_tx, mut plain_cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let plain_cli_id = registry.register(
+            "tok1".to_string(),
+            plain_cli_tx,
+            user_id,
+            AudioSource::default(),
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            plain_cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["clipboard_image".to_string()],
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        let (youtube_cli_tx, mut youtube_cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let youtube_cli_id = registry.register(
+            "tok1".to_string(),
+            youtube_cli_tx,
+            user_id,
+            AudioSource::default(),
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            youtube_cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Macos,
+                capabilities: vec!["youtube".to_string()],
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+        let browser_id = registry.register(
+            "tok1".to_string(),
+            browser_tx,
+            user_id,
+            AudioSource::default(),
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            browser_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Unknown,
+                platform: ClientPlatform::Unknown,
+                capabilities: Vec::new(),
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        // Drain force-mute messages caused by browser registration.
+        while plain_cli_rx.try_recv().is_ok() {}
+        while youtube_cli_rx.try_recv().is_ok() {}
+
+        assert!(registry.send_playback_source("tok1", AudioSource::Youtube));
+        assert!(plain_cli_rx.try_recv().is_err());
+        assert_eq!(
+            youtube_cli_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube
+            }
+        );
+        assert_eq!(
+            browser_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube
+            }
+        );
     }
 }

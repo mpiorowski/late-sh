@@ -99,6 +99,12 @@ impl ClientAudioState {
                 .any(|capability| capability == "clipboard_image")
     }
 
+    pub fn supports_youtube_playback(&self) -> bool {
+        self.capabilities
+            .iter()
+            .any(|capability| capability == "youtube")
+    }
+
     pub(crate) fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {
         if self.client_kind != ClientKind::Cli {
             return None;

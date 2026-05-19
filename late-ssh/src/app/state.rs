@@ -283,10 +283,11 @@ pub struct App {
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
-    /// Server-authoritative audio source for the paired browser. Mirrors
-    /// `users.settings.audio_source`. v+x flips this, persists it to the DB,
-    /// and pushes `SetPlaybackSource` to the browser. On browser pair-up the
-    /// current value is replayed so a refresh lands in the right mode.
+    /// Server-authoritative audio source for the paired playback surface.
+    /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
+    /// the DB, and pushes `SetPlaybackSource` to browsers and YouTube-capable
+    /// CLI control-plane clients. On browser pair-up the current value is
+    /// replayed so a refresh lands in the right mode.
     pub(crate) paired_browser_source: late_core::models::user::AudioSource,
 
     pub(crate) vote_prefix_armed: bool,
@@ -906,18 +907,15 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
     }
 
-    /// Push the currently-stored audio source to all paired browsers. Called
-    /// when a browser registers so a fresh page reflects the persisted choice.
+    /// Push the currently-stored audio source to all paired playback-source
+    /// clients. Called when a browser registers so a fresh page reflects the
+    /// persisted choice; YouTube-capable CLI clients also use this as their
+    /// webview lifecycle signal.
     pub fn replay_paired_browser_source(&self) {
         let Some(registry) = self.paired_client_registry.as_ref() else {
             return;
         };
-        registry.send_control_to_browsers(
-            &self.session_token,
-            PairControlMessage::SetPlaybackSource {
-                source: self.paired_browser_source,
-            },
-        );
+        registry.send_playback_source(&self.session_token, self.paired_browser_source);
     }
 
     pub fn toggle_paired_playback_source(
@@ -929,10 +927,7 @@ impl App {
             AudioSource::Icecast => AudioSource::Youtube,
             AudioSource::Youtube => AudioSource::Icecast,
         };
-        if !registry.send_control_to_browsers(
-            &self.session_token,
-            PairControlMessage::SetPlaybackSource { source: next },
-        ) {
+        if !registry.send_playback_source(&self.session_token, next) {
             return None;
         }
         self.paired_browser_source = next;

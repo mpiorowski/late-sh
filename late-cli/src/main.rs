@@ -24,7 +24,9 @@ use config::{Config, init_logging};
 use identity::ensure_client_identity_at;
 use raw_mode::RawModeGuard;
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
-use ws::{PairClientInfo, PlaybackState, client_platform_label, run_viz_ws};
+use ws::{
+    PairClientInfo, PlaybackState, WebviewPlaybackController, client_platform_label, run_viz_ws,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -215,6 +217,7 @@ fn spawn_ws_pairing(
     // borrowed AudioRuntime reference.
     let sample_rate = audio.sample_rate;
     let mut frames = audio.analyzer_tx.subscribe();
+    let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
 
     tokio::spawn(async move {
         let playback = PlaybackState {
@@ -226,8 +229,15 @@ fn spawn_ws_pairing(
         let mut retries = 0;
         const MAX_RETRIES: usize = 10;
         loop {
-            if let Err(err) =
-                run_viz_ws(&api_base_url, &token, &client, &mut frames, &playback).await
+            if let Err(err) = run_viz_ws(
+                &api_base_url,
+                &token,
+                &client,
+                &mut frames,
+                &playback,
+                &mut webview,
+            )
+            .await
             {
                 retries += 1;
                 if retries > MAX_RETRIES {
