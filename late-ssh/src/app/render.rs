@@ -165,6 +165,7 @@ struct DrawContext<'a> {
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
+    cat: &'a crate::app::cat::state::CatState,
     activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
@@ -182,6 +183,7 @@ struct DrawContext<'a> {
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_bonsai_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
+    show_cat_modal: bool,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_terminal_help: bool,
@@ -541,6 +543,7 @@ impl App {
                         sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
+                        cat: &self.cat_state,
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
@@ -558,6 +561,7 @@ impl App {
                         profile_modal_state: &self.profile_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
                         bonsai_care_state: &self.bonsai_care_state,
+                        show_cat_modal: self.show_cat_modal,
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_terminal_help: self.show_terminal_help,
@@ -831,6 +835,7 @@ impl App {
                     },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
+                    cat: ctx.cat,
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
@@ -900,6 +905,10 @@ impl App {
                 ctx.bonsai_care_state,
                 ctx.visualizer.beat(),
             );
+        }
+
+        if ctx.show_cat_modal {
+            crate::app::cat::modal_ui::draw_cat_modal(frame, ctx.cat);
         }
 
         if ctx.show_help {

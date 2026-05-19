@@ -131,6 +131,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             0
         }
     };
+    let initial_cat = match state.cat_service.ensure_cat(user_id).await {
+        Ok(cat) => Some(cat),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load/create cat companion");
+            None
+        }
+    };
     let artboard_ban = match state.db.get().await {
         Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
             Ok(ban) => ban,
@@ -183,6 +190,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,
         initial_bonsai_care,
+        cat_service: state.cat_service.clone(),
+        initial_cat,
         nonogram_library: state.nonogram_library.clone(),
         initial_chip_balance,
         web_url: state.config.web_url.clone(),

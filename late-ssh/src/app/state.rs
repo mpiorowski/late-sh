@@ -176,6 +176,8 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
+    pub cat_service: crate::app::cat::svc::CatService,
+    pub initial_cat: Option<late_core::models::cat::CatCompanion>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
@@ -305,6 +307,10 @@ pub struct App {
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
 
+    /// Cat companion
+    pub(crate) cat_state: crate::app::cat::state::CatState,
+    pub(crate) show_cat_modal: bool,
+
     /// Arcade Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
@@ -381,6 +387,7 @@ impl App {
         self.show_quit_confirm = false;
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
+        self.show_cat_modal = false;
     }
 
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
@@ -575,6 +582,28 @@ impl App {
                 )
             });
 
+        let cat_state = if let Some(companion) = config.initial_cat {
+            crate::app::cat::state::CatState::new(
+                config.user_id,
+                config.cat_service.clone(),
+                companion,
+            )
+        } else {
+            crate::app::cat::state::CatState::new(
+                config.user_id,
+                config.cat_service.clone(),
+                late_core::models::cat::CatCompanion {
+                    id: uuid::Uuid::nil(),
+                    created: chrono::Utc::now(),
+                    updated: chrono::Utc::now(),
+                    user_id: config.user_id,
+                    last_fed: None,
+                    last_watered: None,
+                    last_played: None,
+                },
+            )
+        };
+
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
         let initial_profile = Profile {
@@ -677,6 +706,8 @@ impl App {
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
+            cat_state,
+            show_cat_modal: false,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,
