@@ -11,7 +11,7 @@ use std::{
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
-use crate::app::audio::client_state::{ClientAudioState, ClientKind};
+use crate::app::audio::client_state::{ClientAudioState, ClientKind, ClientSshMode};
 use crate::metrics;
 
 // Multiplexed outbound channel to every paired client (browser + CLI) for a
@@ -20,7 +20,8 @@ use crate::metrics;
 //
 // Audio surface policy is intentionally small:
 // - CLI plays Icecast only when the user's source is Icecast.
-// - Browser plays YouTube when the user's source is YouTube.
+// - Real browser plays YouTube when paired; otherwise a capable CLI may spawn
+//   the embedded webview helper as its YouTube fallback.
 // - Browser plays Icecast only when no CLI is paired for the token; otherwise
 //   switching back to Icecast just pauses the web YouTube player so the CLI is
 //   the single Icecast surface.
@@ -43,6 +44,11 @@ pub enum PairControlMessage {
         /// `source == Icecast`. False when a CLI is paired, because the CLI is
         /// then the single Icecast surface. CLI clients ignore this field.
         web_icecast_enabled: bool,
+        /// Whether a YouTube-capable native CLI should spawn its embedded
+        /// webview helper when `source == Youtube`. False when a real browser
+        /// is paired for the token, because the browser is then the preferred
+        /// YouTube surface. Browser clients ignore this field.
+        embedded_webview_enabled: bool,
     },
 }
 
@@ -156,6 +162,17 @@ impl PairedClientRegistry {
             .unwrap_or(false)
     }
 
+    /// True when the native CLI should provide the YouTube webview fallback
+    /// for this token. A real browser wins over the embedded helper; an
+    /// existing webview-helper entry does not suppress itself.
+    pub fn embedded_webview_enabled(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        !clients
+            .get(token)
+            .map(|entries| entries.iter().any(|entry| entry.is_real_browser()))
+            .unwrap_or(false)
+    }
+
     /// Re-send each paired entry's cached playback source for `token`, with a
     /// fresh browser Icecast allowance derived from current CLI presence.
     pub fn broadcast_playback_source_for_token(&self, token: &str) -> bool {
@@ -164,21 +181,28 @@ impl PairedClientRegistry {
             let Some(entries) = clients.get(token) else {
                 return false;
             };
-            let web_icecast_enabled = !entries
-                .iter()
-                .any(|entry| entry.state.client_kind == ClientKind::Cli);
+            let web_icecast_enabled = web_icecast_enabled_for_entries(entries);
+            let embedded_webview_enabled = embedded_webview_enabled_for_entries(entries);
             entries
                 .iter()
-                .map(|entry| (entry.tx.clone(), entry.audio_source, web_icecast_enabled))
+                .map(|entry| {
+                    (
+                        entry.tx.clone(),
+                        entry.audio_source,
+                        web_icecast_enabled,
+                        embedded_webview_enabled,
+                    )
+                })
                 .collect()
         };
 
         let mut delivered = 0;
-        for (tx, source, web_icecast_enabled) in targets {
+        for (tx, source, web_icecast_enabled, embedded_webview_enabled) in targets {
             if tx
                 .send(PairControlMessage::SetPlaybackSource {
                     source,
                     web_icecast_enabled,
+                    embedded_webview_enabled,
                 })
                 .is_ok()
             {
@@ -381,9 +405,8 @@ impl PairedClientRegistry {
         {
             let mut clients = self.clients.lock_recover();
             for entries in clients.values_mut() {
-                let web_icecast_enabled = !entries
-                    .iter()
-                    .any(|entry| entry.state.client_kind == ClientKind::Cli);
+                let web_icecast_enabled = web_icecast_enabled_for_entries(entries);
+                let embedded_webview_enabled = embedded_webview_enabled_for_entries(entries);
                 for entry in entries.iter_mut() {
                     if entry.user_id != user_id {
                         continue;
@@ -393,16 +416,21 @@ impl PairedClientRegistry {
                         left_youtube = true;
                     }
                     entry.audio_source = source;
-                    targets.push((entry.tx.clone(), web_icecast_enabled));
+                    targets.push((
+                        entry.tx.clone(),
+                        web_icecast_enabled,
+                        embedded_webview_enabled,
+                    ));
                 }
             }
         }
 
-        for (tx, web_icecast_enabled) in targets {
+        for (tx, web_icecast_enabled, embedded_webview_enabled) in targets {
             if tx
                 .send(PairControlMessage::SetPlaybackSource {
                     source,
                     web_icecast_enabled,
+                    embedded_webview_enabled,
                 })
                 .is_err()
             {
@@ -412,6 +440,23 @@ impl PairedClientRegistry {
 
         left_youtube
     }
+}
+
+impl PairControlEntry {
+    fn is_real_browser(&self) -> bool {
+        self.state.client_kind == ClientKind::Browser
+            && self.state.ssh_mode != ClientSshMode::Webview
+    }
+}
+
+fn web_icecast_enabled_for_entries(entries: &[PairControlEntry]) -> bool {
+    !entries
+        .iter()
+        .any(|entry| entry.state.client_kind == ClientKind::Cli)
+}
+
+fn embedded_webview_enabled_for_entries(entries: &[PairControlEntry]) -> bool {
+    !entries.iter().any(PairControlEntry::is_real_browser)
 }
 
 fn token_hint(token: &str) -> String {
@@ -650,6 +695,7 @@ mod tests {
             PairControlMessage::SetPlaybackSource {
                 source: AudioSource::Youtube,
                 web_icecast_enabled: false,
+                embedded_webview_enabled: false,
             }
         );
         assert_eq!(
@@ -657,6 +703,7 @@ mod tests {
             PairControlMessage::SetPlaybackSource {
                 source: AudioSource::Youtube,
                 web_icecast_enabled: false,
+                embedded_webview_enabled: false,
             }
         );
 
@@ -666,6 +713,7 @@ mod tests {
             PairControlMessage::SetPlaybackSource {
                 source: AudioSource::Icecast,
                 web_icecast_enabled: false,
+                embedded_webview_enabled: false,
             }
         );
         assert_eq!(
@@ -673,6 +721,7 @@ mod tests {
             PairControlMessage::SetPlaybackSource {
                 source: AudioSource::Icecast,
                 web_icecast_enabled: false,
+                embedded_webview_enabled: false,
             }
         );
     }
@@ -708,6 +757,124 @@ mod tests {
             PairControlMessage::SetPlaybackSource {
                 source: AudioSource::Icecast,
                 web_icecast_enabled: true,
+                embedded_webview_enabled: false,
+            }
+        );
+    }
+
+    #[test]
+    fn embedded_webview_is_enabled_only_when_no_real_browser_is_paired() {
+        let registry = PairedClientRegistry::new();
+        let user_id = Uuid::now_v7();
+
+        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Icecast);
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["youtube".to_string()],
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        let (webview_tx, mut webview_rx) = tokio::sync::mpsc::unbounded_channel();
+        let webview_id = registry.register(
+            "tok1".to_string(),
+            webview_tx,
+            user_id,
+            AudioSource::Icecast,
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            webview_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Webview,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["youtube".to_string()],
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        assert!(!registry.set_audio_source(user_id, AudioSource::Youtube));
+        assert_eq!(
+            cli_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube,
+                web_icecast_enabled: false,
+                embedded_webview_enabled: true,
+            }
+        );
+        assert_eq!(
+            webview_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube,
+                web_icecast_enabled: false,
+                embedded_webview_enabled: true,
+            }
+        );
+
+        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+        let browser_id = registry.register(
+            "tok1".to_string(),
+            browser_tx,
+            user_id,
+            AudioSource::Youtube,
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            browser_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Unknown,
+                platform: ClientPlatform::Unknown,
+                capabilities: Vec::new(),
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        assert!(registry.broadcast_playback_source_for_token("tok1"));
+        assert_eq!(
+            cli_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube,
+                web_icecast_enabled: false,
+                embedded_webview_enabled: false,
+            }
+        );
+        assert_eq!(
+            webview_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube,
+                web_icecast_enabled: false,
+                embedded_webview_enabled: false,
+            }
+        );
+        assert_eq!(
+            browser_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube,
+                web_icecast_enabled: false,
+                embedded_webview_enabled: false,
+            }
+        );
+
+        registry.unregister_if_match("tok1", browser_id);
+
+        assert!(registry.broadcast_playback_source_for_token("tok1"));
+        assert_eq!(
+            cli_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Youtube,
+                web_icecast_enabled: false,
+                embedded_webview_enabled: true,
             }
         );
     }

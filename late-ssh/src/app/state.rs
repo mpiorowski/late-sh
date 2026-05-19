@@ -907,21 +907,16 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
     }
 
-    /// Push the currently-stored audio source to all paired browsers. Called
-    /// when a browser registers so a fresh page reflects the persisted choice
-    /// plus whether the browser is allowed to play Icecast (only when no CLI
-    /// is paired).
+    /// Push the currently-stored audio source to all paired entries. Called
+    /// when a browser registers so every playback surface reflects the
+    /// persisted choice plus the current surface policy: browser Icecast only
+    /// when no CLI is paired, and embedded CLI webview only when no real
+    /// browser is paired.
     pub fn replay_paired_browser_source(&self) {
         let Some(registry) = self.paired_client_registry.as_ref() else {
             return;
         };
-        registry.send_control_to_browsers(
-            &self.session_token,
-            PairControlMessage::SetPlaybackSource {
-                source: self.paired_browser_source,
-                web_icecast_enabled: registry.web_icecast_enabled(&self.session_token),
-            },
-        );
+        registry.broadcast_playback_source_for_token(&self.session_token);
     }
 
     /// Flip the per-user audio source preference. Persisted server-side; the

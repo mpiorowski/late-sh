@@ -1,8 +1,9 @@
 //! Pair-WS relay task used by `late webview-pair <token>`.
 //!
-//! Connects to /api/ws/pair?token=..., registers as `client_kind = "browser"`,
-//! relays inbound `load_video` / `source_changed` server messages to the
-//! webview, and forwards `player_state` events back to the server.
+//! Connects to /api/ws/pair?token=..., registers as `client_kind = "browser"`
+//! with `ssh_mode = "webview"`, relays inbound `load_video` / `source_changed`
+//! server messages to the webview, and forwards `player_state` events back to
+//! the server.
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -17,9 +18,8 @@ use tracing::{debug, info, warn};
 use super::commands::{WebviewCommand, WebviewEvent};
 use crate::ws::client_platform_label;
 
-/// Tag the webview sends on the wire. Server-side recognises `"browser"`
-/// today; a future `"embedded_webview"` variant slots in here without
-/// touching the protocol.
+/// Tag the webview sends on the wire. Server-side still treats the helper as a
+/// browser, but distinguishes it from a real browser through `ssh_mode`.
 const CLIENT_KIND: &str = "browser";
 const DEFAULT_VOLUME_PERCENT: u8 = 30;
 

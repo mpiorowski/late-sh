@@ -35,7 +35,11 @@ enum PairControlMessage {
     VolumeUp,
     VolumeDown,
     RequestClipboardImage,
-    SetPlaybackSource { source: PairAudioSource },
+    SetPlaybackSource {
+        source: PairAudioSource,
+        #[serde(default = "default_embedded_webview_enabled")]
+        embedded_webview_enabled: bool,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone, Copy)]
@@ -50,6 +54,10 @@ const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const CLIENT_CAPABILITIES: &[&str] = &[];
+
+const fn default_embedded_webview_enabled() -> bool {
+    true
+}
 
 pub(super) struct WebviewPlaybackController {
     api_base_url: String,
@@ -68,10 +76,15 @@ impl WebviewPlaybackController {
         }
     }
 
-    fn apply_playback_source(&mut self, source: PairAudioSource) -> Result<()> {
-        match source {
-            PairAudioSource::Youtube => self.enter_youtube(),
-            PairAudioSource::Icecast => self.enter_icecast(),
+    fn apply_playback_source(
+        &mut self,
+        source: PairAudioSource,
+        embedded_webview_enabled: bool,
+    ) -> Result<()> {
+        match (source, embedded_webview_enabled) {
+            (PairAudioSource::Youtube, true) => self.enter_youtube(),
+            (PairAudioSource::Youtube, false) => self.enter_browser_youtube(),
+            (PairAudioSource::Icecast, _) => self.enter_icecast(),
         }
     }
 
@@ -81,8 +94,20 @@ impl WebviewPlaybackController {
             return Ok(());
         }
 
-        let exe = std::env::current_exe().context("failed to locate current late executable")?;
-        let stderr = webview_helper_stderr()?;
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(err) => {
+                warn!(error = %err, "failed to locate current late executable for webview helper");
+                return Ok(());
+            }
+        };
+        let stderr = match webview_helper_stderr() {
+            Ok(stderr) => stderr,
+            Err(err) => {
+                warn!(error = %err, "failed to open embedded YouTube webview helper log");
+                return Ok(());
+            }
+        };
         let child = match Command::new(exe)
             .arg("webview-pair")
             .arg(&self.token)
@@ -94,11 +119,22 @@ impl WebviewPlaybackController {
         {
             Ok(child) => child,
             Err(err) => {
-                return Err(err).context("failed to spawn embedded YouTube webview helper");
+                warn!(error = %err, "failed to spawn embedded YouTube webview helper");
+                return Ok(());
             }
         };
         self.child = Some(child);
         info!("started embedded YouTube webview helper");
+        Ok(())
+    }
+
+    fn enter_browser_youtube(&mut self) -> Result<()> {
+        if !self.wants_youtube && self.child.is_none() {
+            return Ok(());
+        }
+        self.wants_youtube = false;
+        self.stop_helper();
+        info!("using paired browser for YouTube playback");
         Ok(())
     }
 
@@ -276,7 +312,10 @@ async fn handle_pair_control(
             apply_audio_pair_control(audio_control, muted, volume_percent);
             Ok(true)
         }
-        PairControlMessage::SetPlaybackSource { source } => {
+        PairControlMessage::SetPlaybackSource {
+            source,
+            embedded_webview_enabled,
+        } => {
             let is_icecast = matches!(source, PairAudioSource::Icecast);
             let previous = source_is_icecast.swap(is_icecast, Ordering::Relaxed);
             if previous != is_icecast {
@@ -285,7 +324,7 @@ async fn handle_pair_control(
                     "applied playback source change"
                 );
             }
-            webview.apply_playback_source(source)?;
+            webview.apply_playback_source(source, embedded_webview_enabled)?;
             Ok(false)
         }
         PairControlMessage::RequestClipboardImage => {

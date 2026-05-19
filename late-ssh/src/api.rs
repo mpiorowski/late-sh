@@ -260,6 +260,9 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         &crate::paired_clients::PairControlMessage::SetPlaybackSource {
             source: audio_source,
             web_icecast_enabled: state.paired_client_registry.web_icecast_enabled(&token),
+            embedded_webview_enabled: state
+                .paired_client_registry
+                .embedded_webview_enabled(&token),
         },
         &token_hint,
         "initial playback source",
@@ -432,8 +435,8 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
 }
 
 /// Drop a paired-client registration and refresh the remaining clients'
-/// playback-source view, because CLI presence controls whether the browser may
-/// play Icecast.
+/// playback-source view. CLI presence controls browser Icecast, and real
+/// browser presence controls the embedded CLI webview fallback.
 fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry
