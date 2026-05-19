@@ -36,6 +36,7 @@ pub(super) struct BuiltOutputStream {
     pub(super) sample_rate: u32,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_output_stream(
     spec: AudioSpec,
     queue: PlaybackQueueReader,
