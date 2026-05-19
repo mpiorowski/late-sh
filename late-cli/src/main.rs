@@ -192,6 +192,7 @@ fn spawn_ws_pairing(
     let played_samples = Arc::clone(&audio.played_samples);
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
+    let source_is_icecast = Arc::clone(&audio.source_is_icecast);
     // Copy scalar state before spawning so the task does not capture the
     // borrowed AudioRuntime reference.
     let sample_rate = audio.sample_rate;
@@ -204,6 +205,7 @@ fn spawn_ws_pairing(
             sample_rate,
             muted: &muted,
             volume_percent: &volume_percent,
+            source_is_icecast: &source_is_icecast,
         };
         let mut retries = 0;
         const MAX_RETRIES: usize = 10;

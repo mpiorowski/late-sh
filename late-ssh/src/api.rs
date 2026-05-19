@@ -259,6 +259,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         &mut socket,
         &crate::paired_clients::PairControlMessage::SetPlaybackSource {
             source: audio_source,
+            web_icecast_enabled: state.paired_client_registry.web_icecast_enabled(&token),
         },
         &token_hint,
         "initial playback source",
@@ -347,14 +348,22 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         volume_percent,
                                     },
                                 );
-                                if let Some(update) = result
-                                    && update.new_kind == ClientKind::Browser
-                                    && update.previous_kind != ClientKind::Browser
-                                {
-                                    state
-                                        .session_registry
-                                        .send_message(&token, SessionMessage::BrowserPaired)
-                                        .await;
+                                if let Some(update) = result {
+                                    if (update.previous_kind == ClientKind::Cli)
+                                        != (update.new_kind == ClientKind::Cli)
+                                    {
+                                        state
+                                            .paired_client_registry
+                                            .broadcast_playback_source_for_token(&token);
+                                    }
+                                    if update.new_kind == ClientKind::Browser
+                                        && update.previous_kind != ClientKind::Browser
+                                    {
+                                        state
+                                            .session_registry
+                                            .send_message(&token, SessionMessage::BrowserPaired)
+                                            .await;
+                                    }
                                 }
                                 continue;
                             }
@@ -422,13 +431,16 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     tracing::info!(token_hint = %token_hint, "websocket connection closed");
 }
 
-/// Drop a paired-client registration. The registry atomically relaxes any
-/// server-imposed CLI mute when this removal leaves the token with zero
-/// browsers, so callers don't need to manage that follow-up themselves.
+/// Drop a paired-client registration and refresh the remaining clients'
+/// playback-source view, because CLI presence controls whether the browser may
+/// play Icecast.
 fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry
         .unregister_if_match(token, registration_id);
+    state
+        .paired_client_registry
+        .broadcast_playback_source_for_token(token);
     state.audio_service.reevaluate_skip_threshold_task();
 }
 

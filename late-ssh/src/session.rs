@@ -8,7 +8,7 @@ use crate::authz::Permissions;
 
 // WebSocket → SSH session routing for browser-sent visualization data and
 // other inbound SSH-side effects. The matching outbound channel (mute,
-// volume, clipboard request, force-mute) lives in `paired_clients.rs`.
+// volume, clipboard request, source selection) lives in `paired_clients.rs`.
 //
 // Flow:
 //   Browser (WS) sends Heartbeat + Viz frames

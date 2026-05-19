@@ -248,8 +248,8 @@ pub struct App {
     pub(super) terminal: Terminal<CrosstermBackend<SharedBuffer>>,
     pub(super) shared: SharedBuffer,
     pub(super) visualizer: Visualizer,
-    pub(super) browser_viz_buffer: VecDeque<VizFrame>,
-    pub(super) last_browser_viz_at: Option<Instant>,
+    pub(super) viz_frame_buffer: VecDeque<VizFrame>,
+    pub(super) last_viz_frame_at: Option<Instant>,
 
     /// Session / connection
     pub(super) connect_url: String,
@@ -615,8 +615,8 @@ impl App {
             terminal,
             shared,
             visualizer: Visualizer::new(),
-            browser_viz_buffer: VecDeque::new(),
-            last_browser_viz_at: None,
+            viz_frame_buffer: VecDeque::new(),
+            last_viz_frame_at: None,
             connect_url: format!("{}/{}", config.web_url, config.session_token),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,
@@ -907,32 +907,37 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
     }
 
-    /// Push the currently-stored audio source to all paired playback-source
-    /// clients. Called when a browser registers so a fresh page reflects the
-    /// persisted choice; YouTube-capable CLI clients also use this as their
-    /// webview lifecycle signal.
+    /// Push the currently-stored audio source to all paired browsers. Called
+    /// when a browser registers so a fresh page reflects the persisted choice
+    /// plus whether the browser is allowed to play Icecast (only when no CLI
+    /// is paired).
     pub fn replay_paired_browser_source(&self) {
         let Some(registry) = self.paired_client_registry.as_ref() else {
             return;
         };
-        registry.send_playback_source(&self.session_token, self.paired_browser_source);
+        registry.send_control_to_browsers(
+            &self.session_token,
+            PairControlMessage::SetPlaybackSource {
+                source: self.paired_browser_source,
+                web_icecast_enabled: registry.web_icecast_enabled(&self.session_token),
+            },
+        );
     }
 
-    pub fn toggle_paired_playback_source(
-        &mut self,
-    ) -> Option<late_core::models::user::AudioSource> {
+    /// Flip the per-user audio source preference. Persisted server-side; the
+    /// `persist_audio_source` task then pushes `SetPlaybackSource` to every
+    /// paired entry (CLI and browser) for this user. Works whether a browser
+    /// is paired or not — the preference is meaningful even with only a CLI,
+    /// because the CLI gates its Icecast decoder on the received source.
+    pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
         use late_core::models::user::AudioSource;
-        let registry = self.paired_client_registry.as_ref()?;
         let next = match self.paired_browser_source {
             AudioSource::Icecast => AudioSource::Youtube,
             AudioSource::Youtube => AudioSource::Icecast,
         };
-        if !registry.send_playback_source(&self.session_token, next) {
-            return None;
-        }
         self.paired_browser_source = next;
         self.audio.persist_audio_source(next);
-        Some(next)
+        next
     }
 
     pub fn request_paired_clipboard_image_upload(&mut self, room_id: Option<Uuid>) -> bool {

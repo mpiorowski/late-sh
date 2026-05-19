@@ -28,6 +28,7 @@ const MAX_SUBMISSIONS_PER_WINDOW: i64 = 10;
 const SUBMISSION_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
 const FALLBACK_DEBOUNCE: Duration = Duration::from_secs(10);
 const PLAYBACK_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
 const SKIP_VOTE_PERCENT: usize = 30;
 const SKIP_VOTE_MIN: u32 = 2;
@@ -298,7 +299,22 @@ impl AudioService {
             );
         }
 
-        shutdown.cancelled().await;
+        let mut reconcile = tokio::time::interval(RECONCILE_INTERVAL);
+        reconcile.tick().await;
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = reconcile.tick() => {
+                    if let Err(err) = self.periodic_reconcile().await {
+                        late_core::error_span!(
+                            "audio_periodic_reconcile_failed",
+                            error = ?err,
+                            "failed to reconcile audio queue state from database"
+                        );
+                    }
+                }
+            }
+        }
         self.cancel_timers().await;
         tracing::info!("audio service shutting down");
     }
@@ -635,6 +651,16 @@ impl AudioService {
         }
 
         let mut state = self.state.lock().await;
+        if state.current_item_id.is_none()
+            && !self
+                .adopt_current_playing_from_db_with_guard(
+                    &mut state,
+                    "skip vote found empty memory",
+                )
+                .await?
+        {
+            anyhow::bail!("nothing is playing");
+        }
         let Some(current_id) = state.current_item_id else {
             anyhow::bail!("nothing is playing");
         };
@@ -655,10 +681,16 @@ impl AudioService {
 
         if fired {
             let client = self.db.get().await?;
-            let _ =
-                MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
-                    .await?;
+            let changed = MediaQueueItem::mark_skipped(&client, current_id, Utc::now()).await?;
             drop(client);
+            if changed == 0 {
+                self.reconcile_after_stale_current_with_guard(
+                    &mut state,
+                    "skip vote hit stale current",
+                )
+                .await?;
+                anyhow::bail!("track changed; try again");
+            }
             state.current_item_id = None;
             state.skip_votes.clear();
             self.cancel_playback(&mut state);
@@ -698,9 +730,16 @@ impl AudioService {
             self.publish_queue_update_with_guard(&mut state).await?;
             return Ok(());
         }
-        let _ = MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
-            .await?;
+        let changed = MediaQueueItem::mark_skipped(&client, current_id, Utc::now()).await?;
         drop(client);
+        if changed == 0 {
+            return self
+                .reconcile_after_stale_current_with_guard(
+                    &mut state,
+                    "skip threshold re-eval hit stale current",
+                )
+                .await;
+        }
         state.current_item_id = None;
         state.skip_votes.clear();
         self.cancel_playback(&mut state);
@@ -779,13 +818,30 @@ impl AudioService {
     /// so the next track starts with a clean slate.
     pub async fn force_skip(&self) -> Result<()> {
         let mut state = self.state.lock().await;
+        if state.current_item_id.is_none()
+            && !self
+                .adopt_current_playing_from_db_with_guard(
+                    &mut state,
+                    "force skip found empty memory",
+                )
+                .await?
+        {
+            anyhow::bail!("nothing is playing");
+        }
         let Some(current_id) = state.current_item_id else {
             anyhow::bail!("nothing is playing");
         };
         let client = self.db.get().await?;
-        let _ = MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
-            .await?;
+        let changed = MediaQueueItem::mark_skipped(&client, current_id, Utc::now()).await?;
         drop(client);
+        if changed == 0 {
+            self.reconcile_after_stale_current_with_guard(
+                &mut state,
+                "force skip hit stale current",
+            )
+            .await?;
+            anyhow::bail!("track changed; try again");
+        }
         state.current_item_id = None;
         state.skip_votes.clear();
         self.cancel_playback(&mut state);
@@ -1059,8 +1115,15 @@ impl AudioService {
         let client = self.db.get().await?;
         let changed = MediaQueueItem::mark_played(&client, item_id, Utc::now()).await?;
         if changed == 0 {
+            drop(client);
+            self.reconcile_after_stale_current_with_guard(
+                &mut state,
+                "finish item hit stale current",
+            )
+            .await?;
             return Ok(());
         }
+        drop(client);
         state.current_item_id = None;
         state.skip_votes.clear();
         self.cancel_playback(&mut state);
@@ -1076,8 +1139,15 @@ impl AudioService {
         let client = self.db.get().await?;
         let changed = MediaQueueItem::mark_failed(&client, item_id, Utc::now(), reason).await?;
         if changed == 0 {
+            drop(client);
+            self.reconcile_after_stale_current_with_guard(
+                &mut state,
+                "fail item hit stale current",
+            )
+            .await?;
             return Ok(());
         }
+        drop(client);
         state.current_item_id = None;
         state.skip_votes.clear();
         self.cancel_playback(&mut state);
@@ -1086,18 +1156,54 @@ impl AudioService {
 
     async fn advance_to_next_with_guard(&self, state: &mut QueueState) -> Result<()> {
         let client = self.db.get().await?;
+        if let Some(current) = MediaQueueItem::current_playing(&client).await? {
+            drop(client);
+            self.adopt_playing_item_with_guard(state, current, "advance found DB current")
+                .await?;
+            return Ok(());
+        }
+
         if let Some((next, _score)) = MediaQueueItem::first_queued(&client).await? {
             self.cancel_fallback(state);
-            let Some(item) = MediaQueueItem::mark_playing(&client, next.id, Utc::now()).await?
-            else {
-                tracing::warn!(
-                    item_id = %next.id,
-                    "mark_playing returned no row; another playing row likely holds the slot - skipping advance"
-                );
-                self.schedule_fallback(state);
-                self.publish_queue_update_with_guard(state).await?;
-                return Ok(());
+            let item = match MediaQueueItem::mark_playing(&client, next.id, Utc::now()).await {
+                Ok(Some(item)) => item,
+                Ok(None) => {
+                    tracing::warn!(
+                        item_id = %next.id,
+                        "mark_playing returned no row; reconciling before fallback"
+                    );
+                    drop(client);
+                    if self
+                        .adopt_current_playing_from_db_with_guard(state, "mark_playing lost race")
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                    self.schedule_fallback(state);
+                    self.publish_queue_update_with_guard(state).await?;
+                    return Ok(());
+                }
+                Err(err) if is_single_playing_unique_violation(&err) => {
+                    tracing::warn!(
+                        item_id = %next.id,
+                        error = ?err,
+                        "mark_playing hit singleton constraint; reconciling with DB current"
+                    );
+                    drop(client);
+                    if self
+                        .adopt_current_playing_from_db_with_guard(
+                            state,
+                            "mark_playing singleton conflict",
+                        )
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                    return Err(err);
+                }
+                Err(err) => return Err(err),
             };
+            drop(client);
             state.current_item_id = Some(item.id);
             state.skip_votes.clear();
             state.mode = AudioMode::Youtube;
@@ -1118,11 +1224,114 @@ impl AudioService {
         Ok(())
     }
 
+    async fn adopt_current_playing_from_db_with_guard(
+        &self,
+        state: &mut QueueState,
+        reason: &'static str,
+    ) -> Result<bool> {
+        let client = self.db.get().await?;
+        let current = MediaQueueItem::current_playing(&client).await?;
+        drop(client);
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        self.adopt_playing_item_with_guard(state, current, reason)
+            .await?;
+        Ok(true)
+    }
+
+    async fn adopt_playing_item_with_guard(
+        &self,
+        state: &mut QueueState,
+        item: MediaQueueItem,
+        reason: &'static str,
+    ) -> Result<()> {
+        let previous = state.current_item_id;
+        let same_current = previous == Some(item.id);
+        let needs_rebind =
+            !same_current || state.mode != AudioMode::Youtube || state.playback_cancel.is_none();
+        if !needs_rebind {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            reason,
+            previous_item_id = ?previous,
+            db_item_id = %item.id,
+            "reconciling audio queue state from database"
+        );
+        self.cancel_fallback(state);
+        if !same_current {
+            state.skip_votes.clear();
+        }
+        state.current_item_id = Some(item.id);
+        state.mode = AudioMode::Youtube;
+        self.schedule_playback_timer(state, &item);
+        self.publish_source_change(AudioMode::Youtube);
+        self.publish_load_video(&item);
+        self.publish_queue_update_with_guard(state).await
+    }
+
+    async fn reconcile_after_stale_current_with_guard(
+        &self,
+        state: &mut QueueState,
+        reason: &'static str,
+    ) -> Result<()> {
+        if self
+            .adopt_current_playing_from_db_with_guard(state, reason)
+            .await?
+        {
+            return Ok(());
+        }
+
+        let previous = state.current_item_id.take();
+        tracing::warn!(
+            reason,
+            previous_item_id = ?previous,
+            "clearing stale audio current; no playing row found in database"
+        );
+        state.skip_votes.clear();
+        self.cancel_playback(state);
+        self.advance_to_next_with_guard(state).await
+    }
+
+    async fn periodic_reconcile(&self) -> Result<()> {
+        let mut state = self.state.lock().await;
+        if self
+            .adopt_current_playing_from_db_with_guard(&mut state, "periodic reconcile")
+            .await?
+        {
+            return Ok(());
+        }
+
+        if state.current_item_id.is_some() {
+            return self
+                .reconcile_after_stale_current_with_guard(
+                    &mut state,
+                    "periodic reconcile found stale memory",
+                )
+                .await;
+        }
+
+        let client = self.db.get().await?;
+        let has_queued = MediaQueueItem::first_queued(&client).await?.is_some();
+        drop(client);
+        if has_queued {
+            self.advance_to_next_with_guard(&mut state).await?;
+        }
+        Ok(())
+    }
+
     async fn publish_queue_update_with_guard(&self, state: &mut QueueState) -> Result<()> {
         state.sequence = state.sequence.saturating_add(1);
         let mut snapshot = self.load_snapshot(state.mode).await?;
         snapshot.skip_progress = self.compute_skip_progress(state, snapshot.current.as_ref());
-        let _ = self.snapshot_tx.send(snapshot.clone());
+        // `send` fails without active receivers and would leave the watch at
+        // its constructor's empty value. Startup often publishes before any
+        // SSH session has opened the booth, so replace the retained value even
+        // when receiver_count == 0; later subscribers then see the real DB
+        // queue immediately after a restart.
+        self.snapshot_tx.send_replace(snapshot.clone());
         let _ = self.ws_tx.send(AudioWsMessage::QueueUpdate {
             current: snapshot.current,
             queue: snapshot.queue,
@@ -1375,6 +1584,19 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
 fn skip_threshold(paired_total: usize) -> u32 {
     let value = paired_total.saturating_mul(SKIP_VOTE_PERCENT).div_ceil(100) as u32;
     value.max(SKIP_VOTE_MIN)
+}
+
+fn is_single_playing_unique_violation(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .and_then(|pg| pg.as_db_error())
+            .is_some_and(|db| {
+                db.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION
+                    && db.constraint() == Some("idx_media_queue_single_playing")
+            })
+            || cause.to_string().contains("idx_media_queue_single_playing")
+    })
 }
 
 fn booth_submit_error_message(err: &anyhow::Error) -> String {

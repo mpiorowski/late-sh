@@ -25,6 +25,7 @@ pub(super) struct PlaybackState<'a> {
     pub(super) sample_rate: u32,
     pub(super) muted: &'a AtomicBool,
     pub(super) volume_percent: &'a AtomicU8,
+    pub(super) source_is_icecast: &'a AtomicBool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,8 +35,14 @@ enum PairControlMessage {
     VolumeUp,
     VolumeDown,
     RequestClipboardImage,
-    ForceMute { mute: bool },
-    SetPlaybackSource { source: String },
+    SetPlaybackSource { source: PairAudioSource },
+}
+
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum PairAudioSource {
+    Icecast,
+    Youtube,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -61,27 +68,17 @@ impl WebviewPlaybackController {
         }
     }
 
-    fn wants_youtube(&self) -> bool {
-        self.wants_youtube
-    }
-
-    fn apply_playback_source(&mut self, source: &str, muted: &AtomicBool) -> Result<bool> {
+    fn apply_playback_source(&mut self, source: PairAudioSource) -> Result<()> {
         match source {
-            "youtube" => self.enter_youtube(muted),
-            "icecast" => self.enter_icecast(muted),
-            other => {
-                warn!(source = %other, "ignoring unknown playback source");
-                Ok(false)
-            }
+            PairAudioSource::Youtube => self.enter_youtube(),
+            PairAudioSource::Icecast => self.enter_icecast(),
         }
     }
 
-    fn enter_youtube(&mut self, muted: &AtomicBool) -> Result<bool> {
+    fn enter_youtube(&mut self) -> Result<()> {
         self.wants_youtube = true;
-        let was_muted = muted.swap(true, Ordering::Relaxed);
-        let muted_changed = !was_muted;
         if self.helper_is_running() {
-            return Ok(muted_changed);
+            return Ok(());
         }
 
         let exe = std::env::current_exe().context("failed to locate current late executable")?;
@@ -97,23 +94,22 @@ impl WebviewPlaybackController {
         {
             Ok(child) => child,
             Err(err) => {
-                muted.store(was_muted, Ordering::Relaxed);
                 return Err(err).context("failed to spawn embedded YouTube webview helper");
             }
         };
         self.child = Some(child);
         info!("started embedded YouTube webview helper");
-        Ok(true)
+        Ok(())
     }
 
-    fn enter_icecast(&mut self, muted: &AtomicBool) -> Result<bool> {
+    fn enter_icecast(&mut self) -> Result<()> {
+        if !self.wants_youtube && self.child.is_none() {
+            return Ok(());
+        }
         self.wants_youtube = false;
         self.stop_helper();
-        let muted_changed = muted.swap(false, Ordering::Relaxed);
-        if muted_changed {
-            info!("resumed native Icecast playback");
-        }
-        Ok(muted_changed)
+        info!("resumed native Icecast playback");
+        Ok(())
     }
 
     fn helper_is_running(&mut self) -> bool {
@@ -218,6 +214,7 @@ pub(super) async fn run_viz_ws(
                             &mut ws,
                             playback.muted,
                             playback.volume_percent,
+                            playback.source_is_icecast,
                             webview,
                         )
                         .await?;
@@ -262,6 +259,7 @@ async fn handle_pair_control(
     >,
     muted: &AtomicBool,
     volume_percent: &AtomicU8,
+    source_is_icecast: &AtomicBool,
     webview: &mut WebviewPlaybackController,
 ) -> Result<bool> {
     let control = match serde_json::from_str::<PairControlMessage>(text) {
@@ -278,28 +276,22 @@ async fn handle_pair_control(
             apply_audio_pair_control(audio_control, muted, volume_percent);
             Ok(true)
         }
-        PairControlMessage::ForceMute { mute } => {
-            if !mute && webview.wants_youtube() {
-                debug!("ignoring force-unmute while YouTube webview is selected");
-                return Ok(false);
+        PairControlMessage::SetPlaybackSource { source } => {
+            let is_icecast = matches!(source, PairAudioSource::Icecast);
+            let previous = source_is_icecast.swap(is_icecast, Ordering::Relaxed);
+            if previous != is_icecast {
+                info!(
+                    source = ?source,
+                    "applied playback source change"
+                );
             }
-            apply_force_mute(muted, mute);
-            Ok(true)
+            webview.apply_playback_source(source)?;
+            Ok(false)
         }
         PairControlMessage::RequestClipboardImage => {
             send_clipboard_image(ws).await?;
             Ok(false)
         }
-        PairControlMessage::SetPlaybackSource { source } => {
-            webview.apply_playback_source(&source, muted)
-        }
-    }
-}
-
-fn apply_force_mute(muted: &AtomicBool, mute: bool) {
-    let previous = muted.swap(mute, Ordering::Relaxed);
-    if previous != mute {
-        info!(muted = mute, "applied server-forced mute");
     }
 }
 
@@ -321,8 +313,8 @@ fn apply_audio_pair_control(
             let new_volume = bump_volume(volume_percent, -5);
             info!(volume_percent = new_volume, "applied paired volume down");
         }
-        PairControlMessage::ForceMute { .. } | PairControlMessage::RequestClipboardImage => {}
-        PairControlMessage::SetPlaybackSource { .. } => {}
+        PairControlMessage::SetPlaybackSource { .. }
+        | PairControlMessage::RequestClipboardImage => {}
     }
 }
 

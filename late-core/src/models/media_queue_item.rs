@@ -212,17 +212,18 @@ impl MediaQueueItem {
         Ok(count)
     }
 
-    pub async fn update_status(client: &Client, id: Uuid, status: &str) -> Result<Option<Self>> {
-        let row = client
-            .query_opt(
+    pub async fn mark_skipped(client: &Client, id: Uuid, ended_at: DateTime<Utc>) -> Result<u64> {
+        let count = client
+            .execute(
                 "UPDATE media_queue_items
-                 SET status = $2, updated = current_timestamp
-                 WHERE id = $1
-                 RETURNING *",
-                &[&id, &status],
+                 SET status = 'skipped',
+                     ended_at = $2,
+                     updated = current_timestamp
+                 WHERE id = $1 AND status = 'playing'",
+                &[&id, &ended_at],
             )
             .await?;
-        Ok(row.map(Self::from))
+        Ok(count)
     }
 
     pub async fn set_duration_if_missing(
