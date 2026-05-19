@@ -576,6 +576,7 @@ impl russh::server::Handler for ClientHandler {
                 active.username = user.username.clone();
                 active.fingerprint = Some(fingerprint.clone());
                 active.peer_ip = self.peer_ip;
+                active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
                 active.last_login_at = std::time::Instant::now();
             } else {
                 active_users.insert(
@@ -584,6 +585,7 @@ impl russh::server::Handler for ClientHandler {
                         username: user.username.clone(),
                         fingerprint: Some(fingerprint.clone()),
                         peer_ip: self.peer_ip,
+                        audio_source: late_core::models::user::extract_audio_source(&user.settings),
                         sessions: Vec::new(),
                         connection_count: 1,
                         last_login_at: std::time::Instant::now(),

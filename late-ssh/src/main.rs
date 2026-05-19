@@ -125,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         config.youtube_api_key.clone(),
         paired_client_registry.clone(),
+        active_users.clone(),
     );
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(

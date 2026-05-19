@@ -584,6 +584,7 @@ fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token:
         active.username = user.username.clone();
         active.fingerprint = Some(user.fingerprint.clone());
         active.peer_ip = Some(peer_ip);
+        active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
         active.last_login_at = Instant::now();
         active.sessions.push(session);
     } else {
@@ -593,6 +594,7 @@ fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token:
                 username: user.username.clone(),
                 fingerprint: Some(user.fingerprint.clone()),
                 peer_ip: Some(peer_ip),
+                audio_source: late_core::models::user::extract_audio_source(&user.settings),
                 sessions: vec![session],
                 connection_count: 1,
                 last_login_at: Instant::now(),

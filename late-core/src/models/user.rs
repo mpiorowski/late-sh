@@ -31,12 +31,6 @@ impl AudioSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AudioSourceCounts {
-    pub youtube: usize,
-    pub icecast: usize,
-}
-
 crate::model! {
     table = "users";
     params = UserParams;
@@ -294,30 +288,6 @@ impl User {
     pub async fn audio_source(client: &Client, user_id: Uuid) -> Result<AudioSource> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_audio_source(&settings))
-    }
-
-    pub async fn audio_source_counts(client: &Client) -> Result<AudioSourceCounts> {
-        let default_source = AudioSource::Icecast.as_str();
-        let youtube_source = AudioSource::Youtube.as_str();
-        let row = client
-            .query_one(
-                "SELECT
-                    COUNT(*) FILTER (
-                        WHERE COALESCE(settings->>$1, $2) = $3
-                    )::bigint AS youtube_count,
-                    COUNT(*) FILTER (
-                        WHERE COALESCE(settings->>$1, $2) <> $3
-                    )::bigint AS icecast_count
-                 FROM users",
-                &[&AUDIO_SOURCE_KEY, &default_source, &youtube_source],
-            )
-            .await?;
-        let youtube: i64 = row.get("youtube_count");
-        let icecast: i64 = row.get("icecast_count");
-        Ok(AudioSourceCounts {
-            youtube: youtube.max(0) as usize,
-            icecast: icecast.max(0) as usize,
-        })
     }
 
     /// Atomically merge `audio_source` into `settings` without clobbering other keys.

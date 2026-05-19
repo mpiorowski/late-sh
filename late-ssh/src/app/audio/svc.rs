@@ -1,22 +1,20 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
     time::Duration,
 };
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use late_core::{
+    MutexRecover,
     db::Db,
     models::{
         audio_ban::AudioBan,
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
-        user::{AudioSource, AudioSourceCounts, User},
+        user::{AudioSource, User},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -24,7 +22,7 @@ use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
 
 use super::youtube::YoutubeClient;
-use crate::paired_clients::PairedClientRegistry;
+use crate::{paired_clients::PairedClientRegistry, state::ActiveUsers};
 
 const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 10;
@@ -45,7 +43,7 @@ pub struct AudioService {
     snapshot_tx: watch::Sender<QueueSnapshot>,
     state: Arc<Mutex<QueueState>>,
     paired_clients: PairedClientRegistry,
-    audio_source_counts: Arc<AudioSourceCountCache>,
+    active_users: ActiveUsers,
 }
 
 #[derive(Default)]
@@ -56,27 +54,6 @@ struct QueueState {
     playback_cancel: Option<oneshot::Sender<()>>,
     fallback_cancel: Option<oneshot::Sender<()>>,
     skip_votes: HashSet<Uuid>,
-}
-
-#[derive(Default)]
-struct AudioSourceCountCache {
-    youtube: AtomicUsize,
-    icecast: AtomicUsize,
-}
-
-impl AudioSourceCountCache {
-    fn store(&self, counts: AudioSourceCounts) {
-        self.youtube.store(counts.youtube, Ordering::Relaxed);
-        self.icecast.store(counts.icecast, Ordering::Relaxed);
-    }
-
-    fn youtube(&self) -> usize {
-        self.youtube.load(Ordering::Relaxed)
-    }
-
-    fn icecast(&self) -> usize {
-        self.icecast.load(Ordering::Relaxed)
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -269,6 +246,7 @@ impl AudioService {
         db: Db,
         youtube_api_key: Option<String>,
         paired_clients: PairedClientRegistry,
+        active_users: ActiveUsers,
     ) -> Self {
         let (ws_tx, _) = broadcast::channel(512);
         let (event_tx, _) = broadcast::channel(256);
@@ -286,7 +264,7 @@ impl AudioService {
             snapshot_tx,
             state: Arc::new(Mutex::new(QueueState::default())),
             paired_clients,
-            audio_source_counts: Arc::new(AudioSourceCountCache::default()),
+            active_users,
         }
     }
 
@@ -309,21 +287,7 @@ impl AudioService {
         self.event_tx.subscribe()
     }
 
-    async fn refresh_audio_source_counts(&self) -> Result<AudioSourceCounts> {
-        let client = self.db.get().await?;
-        let counts = User::audio_source_counts(&client).await?;
-        self.audio_source_counts.store(counts);
-        Ok(counts)
-    }
-
     pub async fn start_background_task(self, shutdown: late_core::shutdown::CancellationToken) {
-        if let Err(err) = self.refresh_audio_source_counts().await {
-            late_core::error_span!(
-                "audio_source_count_refresh_failed",
-                error = ?err,
-                "failed to refresh audio-source counts"
-            );
-        }
         if let Err(err) = self.sweep_orphan_playing().await {
             late_core::error_span!(
                 "audio_orphan_sweep_failed",
@@ -345,13 +309,6 @@ impl AudioService {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 _ = reconcile.tick() => {
-                    if let Err(err) = self.refresh_audio_source_counts().await {
-                        late_core::error_span!(
-                            "audio_source_count_refresh_failed",
-                            error = ?err,
-                            "failed to refresh audio-source counts"
-                        );
-                    }
                     if let Err(err) = self.periodic_reconcile().await {
                         late_core::error_span!(
                             "audio_periodic_reconcile_failed",
@@ -578,16 +535,10 @@ impl AudioService {
         let previous = User::audio_source(&client, user_id).await?;
         User::set_audio_source(&client, user_id, source).await?;
         drop(client);
-        if let Err(err) = self.refresh_audio_source_counts().await {
-            late_core::error_span!(
-                "audio_source_count_refresh_failed",
-                error = ?err,
-                "failed to refresh audio-source counts after preference change"
-            );
-        }
+        self.update_active_audio_source(user_id, source);
         // Mirror the new value into the paired-client registry so connected
         // clients receive SetPlaybackSource. Counts/thresholds come from the
-        // persisted user preference, not from paired-client presence.
+        // active user's persisted preference, not from paired-client presence.
         self.paired_clients.set_audio_source(user_id, source);
         if previous == AudioSource::Youtube && source != AudioSource::Youtube {
             // The user is no longer hearing YouTube — strip any pending
@@ -605,27 +556,24 @@ impl AudioService {
 
     pub async fn read_audio_source(&self, user_id: Uuid) -> Result<AudioSource> {
         let client = self.db.get().await?;
-        let source = User::audio_source(&client, user_id).await?;
-        drop(client);
-        if let Err(err) = self.refresh_audio_source_counts().await {
-            late_core::error_span!(
-                "audio_source_count_refresh_failed",
-                error = ?err,
-                "failed to refresh audio-source counts after preference read"
-            );
-        }
-        Ok(source)
+        User::audio_source(&client, user_id).await
     }
 
-    /// Count of users whose persisted audio source is YouTube. This drives the
-    /// sidebar badge and skip-vote denominator; connection shape is ignored.
+    /// Count of active users whose persisted audio source is YouTube. This
+    /// drives the sidebar badge and skip-vote denominator.
     pub fn youtube_source_count(&self) -> usize {
-        self.audio_source_counts.youtube()
+        active_audio_source_counts(&self.active_users).0
     }
 
-    /// Count of users whose persisted audio source is Icecast/default.
+    /// Count of active users whose persisted audio source is Icecast/default.
     pub fn icecast_source_count(&self) -> usize {
-        self.audio_source_counts.icecast()
+        active_audio_source_counts(&self.active_users).1
+    }
+
+    fn update_active_audio_source(&self, user_id: Uuid, source: AudioSource) {
+        if let Some(active) = self.active_users.lock_recover().get_mut(&user_id) {
+            active.audio_source = source;
+        }
     }
 
     /// Spawn a background persist for the user's audio-source preference.
@@ -1613,6 +1561,16 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .and_then(|duration_ms| u64::try_from(duration_ms).ok())
         .map(Duration::from_millis)
         .filter(|duration| !duration.is_zero())
+}
+
+fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize) {
+    let active_users = active_users.lock_recover();
+    let youtube = active_users
+        .values()
+        .filter(|user| user.audio_source == AudioSource::Youtube)
+        .count();
+    let icecast = active_users.len().saturating_sub(youtube);
+    (youtube, icecast)
 }
 
 fn skip_threshold(youtube_source_total: usize) -> u32 {

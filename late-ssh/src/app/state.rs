@@ -927,6 +927,11 @@ impl App {
             AudioSource::Youtube => AudioSource::Icecast,
         };
         self.paired_browser_source = next;
+        if let Some(active_users) = &self.active_users
+            && let Some(active) = active_users.lock_recover().get_mut(&self.user_id)
+        {
+            active.audio_source = next;
+        }
         self.audio.persist_audio_source(next);
         next
     }

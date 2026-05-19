@@ -93,7 +93,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `PLAYBACK_HEARTBEAT_INTERVAL = 10s` — periodic `LoadVideo` re-broadcast for the current item. Safety net: browsers already showing the right item no-op; stuck/disconnected/wrong-item browsers force-swap. Replaces the old `Seek`-based sync.
 - `RECONCILE_INTERVAL = 60s` — background DB reconcile safety net. If memory drifts from the singleton `playing` row (e.g. rollout overlap), the service adopts the DB current, cancels/re-arms timers, and republishes state.
 - `STREAM_CAP = 1h` — hard cap on any single playing row's wall-clock lifetime.
-- `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(youtube_total) = max(ceil(0.3 * youtube_total), 2)`. **Denominator is users whose persisted `users.settings.audio_source` is `youtube`**, not paired-client/browser presence. Floor of 2 means a lone YouTube-pref user can't solo-skip; the 30% ceil kicks in above 6 YouTube-pref users.
+- `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(youtube_total) = max(ceil(0.3 * youtube_total), 2)`. **Denominator is active users whose persisted `users.settings.audio_source` is `youtube`**, not paired-client/browser presence. Floor of 2 means a lone active YouTube-pref user can't solo-skip; the 30% ceil kicks in above 6 active YouTube-pref users.
 
 ### Public API
 - `new(db, youtube_api_key)` — `main.rs:123`.
@@ -210,11 +210,11 @@ Mechanics:
 
 ### Skip-vote eligibility — YouTube source preference
 
-Skip-vote uses the persisted user preference directly. If `users.settings.audio_source = "youtube"`, the user can cast a skip vote and counts toward the threshold. Pairing shape is intentionally ignored: CLI-only, embedded-webview, real-browser, and disconnected users with the same saved preference all count the same.
+Skip-vote uses the persisted preference cached on active users. If an active user's `users.settings.audio_source = "youtube"`, they can cast a skip vote and count toward the threshold. Pairing shape is intentionally ignored: CLI-only, embedded-webview, and real-browser users with the same saved preference all count the same. Offline users do not count.
 
 Helpers used by the skip-vote path:
 - `User::audio_source(user_id)` — gates the caller: only users whose saved preference is `Youtube` can vote.
-- `User::audio_source_counts()` — counts saved YouTube/Icecast preferences and feeds both the sidebar tags and skip threshold.
+- `ActiveUsers[*].audio_source` — cached from the user's settings on login and updated after `v+x`; feeds both the sidebar tags and skip threshold.
 - `PairedClientRegistry::set_audio_source(user_id, source)` — only mirrors the new preference to connected clients via `SetPlaybackSource`; it no longer defines listener counts.
 
 Vote-strip on flip-away: when the DB value transitions from `Youtube` to `Icecast`, `AudioService::persist_audio_source` removes the user from `state.skip_votes` and runs `reevaluate_skip_threshold` (which may fire a skip if the threshold dropped to meet remaining votes).
@@ -226,7 +226,7 @@ Eligibility table:
 | Icecast/default      | no             | no                       |
 | Youtube              | yes            | yes                      |
 
-A user always contributes at most one vote (`HashSet<Uuid>` on `user_id`) and counts once in the denominator. Staff `/audio skip` (`force_skip`) bypasses the threshold entirely.
+A user always contributes at most one vote (`HashSet<Uuid>` on `user_id`) and counts once in the denominator while active. Staff `/audio skip` (`force_skip`) bypasses the threshold entirely.
 
 ---
 
@@ -344,7 +344,7 @@ The volume row stays honest about pairing (`vol  —` when nothing paired), so u
 
 ### Title-bar source tags
 
-Both blocks always show the saved source-preference count in the title-bar tag slot — `youtube  ────  5` / `icecast  ────  12`. Active vs inactive is communicated by color/weight (amber bold vs italic faint), not by case (label is always lowercase) and not by tag presence. The counts come from `users.settings.audio_source` via `User::audio_source_counts()` and ignore whether those users are currently paired/listening.
+Both blocks always show the active users' saved source-preference count in the title-bar tag slot — `youtube  ────  5` / `icecast  ────  12`. Active vs inactive is communicated by color/weight (amber bold vs italic faint), not by case (label is always lowercase) and not by tag presence. The counts come from `ActiveUsers[*].audio_source` and ignore whether those users are currently paired/listening.
 
 ### Fallback-not-empty semantics
 
@@ -361,7 +361,7 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 - `vote: VoteCardView<'_>` — from the genre vote state.
 - `paired_client: Option<&ClientAudioState>` — for `volume_percent` and `muted` (vol row only).
 - `paired_browser_source: AudioSource` — App's per-user mirror.
-- `youtube_source_count: usize` / `icecast_source_count: usize` — cached counts from `users.settings.audio_source` via `AudioService::{youtube,icecast}_source_count()`. Pair/browser presence is ignored.
+- `youtube_source_count: usize` / `icecast_source_count: usize` — counts from active users' cached `audio_source` via `AudioService::{youtube,icecast}_source_count()`. Pair/browser presence is ignored; offline users are excluded.
 - `now_playing: Option<&NowPlaying>` — Icecast title + duration source, from `NowPlayingService` (§11). Drives the icecast track and progress rows.
 
 ### Internal helpers (all in `sidebar.rs`)
@@ -493,7 +493,7 @@ This feature is a real browser media stack inside a tiny helper process. Pair-WS
   `windowrulev2 = center, class:^(sh.late.youtube)$`.
 - **Linux X11** should be less fragile than Wayland because Wry's raw-handle path supports X11, but we still use the GTK builder on Linux so one code path covers both. WebKitGTK/GStreamer packages remain the main risk.
 - **Ubuntu/Debian/Fedora** are expected to work once package names and WebKitGTK versions line up. Older distros may not ship the WebKitGTK 4.1 stack this branch expects.
-- **NixOS** likely needs explicit packaging for WebKitGTK and GStreamer plugin paths; assume extra shell/flake work.
+- **NixOS** should get a first-class package/wrapper, not rely on a random Linux binary. Required runtime/build inputs are `webkitgtk_4_1`, `pkg-config`, `glib-networking`, and GStreamer packages (`gstreamer`, `gst-plugins-base/good/bad/ugly`, `gst-libav`). The wrapper/dev shell must expose `GST_PLUGIN_SYSTEM_PATH_1_0` for `lib/gstreamer-1.0` and `GIO_EXTRA_MODULES` for `glib-networking`; otherwise WebKit can open but media/TLS pieces may be invisible. If this fails, the normal browser connect page is the supported fallback and suppresses the embedded helper automatically.
 - **macOS** uses WKWebView and does not need GStreamer. Main risks are autoplay policy and ordinary macOS audio routing.
 - **Windows** uses WebView2. Modern Windows usually has the runtime; the Windows volume mixer may expose the helper as its own app stream.
 - **WSL/headless/container** are not supported unless there is a real desktop/webview runtime and working audio bridge.
