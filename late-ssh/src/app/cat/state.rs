@@ -36,6 +36,17 @@ impl CatMood {
             CatMood::Sad => "T.T",
         }
     }
+
+    pub fn from_hours(hours: i64) -> CatMood {
+        match hours {
+            ..=6 => CatMood::Happy,
+            7..=12 => CatMood::Content,
+            13..=24 => CatMood::Bored,
+            25..=48 => CatMood::Hungry,
+            49..=72 => CatMood::Thirsty,
+            _ => CatMood::Sad,
+        }
+    }
 }
 
 pub struct CatState {
@@ -75,15 +86,7 @@ impl CatState {
     }
 
     pub fn mood(&self) -> CatMood {
-        let hours = self.hours_since_last_care();
-        match hours {
-            0..=6 => CatMood::Happy,
-            7..=12 => CatMood::Content,
-            13..=24 => CatMood::Bored,
-            25..=48 => CatMood::Hungry,
-            49..=72 => CatMood::Thirsty,
-            _ => CatMood::Sad,
-        }
+        CatMood::from_hours(self.hours_since_last_care())
     }
 
     pub fn feed(&mut self) {
@@ -114,7 +117,38 @@ impl CatState {
             .flatten()
             .max()
             .copied();
-        last.map(|t| (now - t).num_hours())
-            .unwrap_or(999)
+        last.map(|t| (now - t).num_hours()).unwrap_or(999)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mood_maps_hours_to_each_band() {
+        assert_eq!(CatMood::from_hours(0), CatMood::Happy);
+        assert_eq!(CatMood::from_hours(6), CatMood::Happy);
+        assert_eq!(CatMood::from_hours(7), CatMood::Content);
+        assert_eq!(CatMood::from_hours(12), CatMood::Content);
+        assert_eq!(CatMood::from_hours(13), CatMood::Bored);
+        assert_eq!(CatMood::from_hours(24), CatMood::Bored);
+        assert_eq!(CatMood::from_hours(25), CatMood::Hungry);
+        assert_eq!(CatMood::from_hours(48), CatMood::Hungry);
+        assert_eq!(CatMood::from_hours(49), CatMood::Thirsty);
+        assert_eq!(CatMood::from_hours(72), CatMood::Thirsty);
+        assert_eq!(CatMood::from_hours(73), CatMood::Sad);
+        assert_eq!(CatMood::from_hours(999), CatMood::Sad);
+    }
+
+    #[test]
+    fn negative_hours_from_clock_skew_stay_happy_not_sad() {
+        assert_eq!(CatMood::from_hours(-3), CatMood::Happy);
+    }
+
+    #[test]
+    fn worst_mood_is_sad_never_dead() {
+        // The cat never dies — the lowest mood it can reach is Sad.
+        assert_eq!(CatMood::from_hours(i64::MAX), CatMood::Sad);
     }
 }

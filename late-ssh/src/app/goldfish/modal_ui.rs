@@ -68,7 +68,11 @@ pub(crate) fn draw(frame: &mut Frame, state: &GoldfishState) {
 
     // Main fish + bubbles
     let fish = format!("><((({}> ", mood.eye());
-    let bubbles = if mood == GoldfishMood::Happy { " o o" } else { "    " };
+    let bubbles = if mood == GoldfishMood::Happy {
+        " o o"
+    } else {
+        "    "
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("| ", Style::default().fg(theme::BORDER_DIM())),
@@ -80,11 +84,7 @@ pub(crate) fn draw(frame: &mut Frame, state: &GoldfishState) {
 
     // Friends row
     let friends: String = (0..state.friend_count).map(|_| "><> ").collect();
-    let empty_friends = format!(
-        "{}/{}",
-        state.friend_count,
-        MAX_FRIENDS
-    );
+    let empty_friends = format!("{}/{}", state.friend_count, MAX_FRIENDS);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("| ", Style::default().fg(theme::BORDER_DIM())),
@@ -116,9 +116,7 @@ pub(crate) fn draw(frame: &mut Frame, state: &GoldfishState) {
             Span::styled("mood: ", Style::default().fg(theme::TEXT_FAINT())),
             Span::styled(
                 mood.label(),
-                Style::default()
-                    .fg(mood_color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(mood_color).add_modifier(Modifier::BOLD),
             ),
         ])),
         rows[5],

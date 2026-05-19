@@ -35,6 +35,17 @@ impl GoldfishMood {
             GoldfishMood::Sad => '\'',
         }
     }
+
+    pub fn from_hours(hours: i64) -> GoldfishMood {
+        match hours {
+            ..=6 => GoldfishMood::Happy,
+            7..=12 => GoldfishMood::Content,
+            13..=24 => GoldfishMood::Bored,
+            25..=48 => GoldfishMood::Hungry,
+            49..=72 => GoldfishMood::Dirty,
+            _ => GoldfishMood::Sad,
+        }
+    }
 }
 
 pub struct GoldfishState {
@@ -78,15 +89,7 @@ impl GoldfishState {
     }
 
     pub fn mood(&self) -> GoldfishMood {
-        let hours = self.hours_since_last_care();
-        match hours {
-            0..=6 => GoldfishMood::Happy,
-            7..=12 => GoldfishMood::Content,
-            13..=24 => GoldfishMood::Bored,
-            25..=48 => GoldfishMood::Hungry,
-            49..=72 => GoldfishMood::Dirty,
-            _ => GoldfishMood::Sad,
-        }
+        GoldfishMood::from_hours(self.hours_since_last_care())
     }
 
     pub fn feed(&mut self) {
@@ -142,5 +145,37 @@ impl GoldfishState {
         .max()
         .copied();
         last.map(|t| (now - t).num_hours()).unwrap_or(999)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mood_maps_hours_to_each_band() {
+        assert_eq!(GoldfishMood::from_hours(0), GoldfishMood::Happy);
+        assert_eq!(GoldfishMood::from_hours(6), GoldfishMood::Happy);
+        assert_eq!(GoldfishMood::from_hours(7), GoldfishMood::Content);
+        assert_eq!(GoldfishMood::from_hours(12), GoldfishMood::Content);
+        assert_eq!(GoldfishMood::from_hours(13), GoldfishMood::Bored);
+        assert_eq!(GoldfishMood::from_hours(24), GoldfishMood::Bored);
+        assert_eq!(GoldfishMood::from_hours(25), GoldfishMood::Hungry);
+        assert_eq!(GoldfishMood::from_hours(48), GoldfishMood::Hungry);
+        assert_eq!(GoldfishMood::from_hours(49), GoldfishMood::Dirty);
+        assert_eq!(GoldfishMood::from_hours(72), GoldfishMood::Dirty);
+        assert_eq!(GoldfishMood::from_hours(73), GoldfishMood::Sad);
+        assert_eq!(GoldfishMood::from_hours(999), GoldfishMood::Sad);
+    }
+
+    #[test]
+    fn negative_hours_from_clock_skew_stay_happy_not_sad() {
+        assert_eq!(GoldfishMood::from_hours(-3), GoldfishMood::Happy);
+    }
+
+    #[test]
+    fn worst_mood_is_sad_never_dead() {
+        // Like the cat, the bowl never dies — Sad is the floor.
+        assert_eq!(GoldfishMood::from_hours(i64::MAX), GoldfishMood::Sad);
     }
 }

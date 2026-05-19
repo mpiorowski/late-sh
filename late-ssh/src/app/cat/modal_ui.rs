@@ -73,9 +73,7 @@ pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
             Span::styled("mood: ", Style::default().fg(theme::TEXT_FAINT())),
             Span::styled(
                 mood.label(),
-                Style::default()
-                    .fg(mood_color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(mood_color).add_modifier(Modifier::BOLD),
             ),
         ])),
         rows[4],

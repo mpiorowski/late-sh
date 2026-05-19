@@ -19,8 +19,8 @@ use crate::app::audio::{
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::cat::state::CatState;
-use crate::app::goldfish::state::GoldfishState;
 use crate::app::dashboard::ui::DashboardRoomCard;
+use crate::app::goldfish::state::GoldfishState;
 
 pub enum SidebarPetView<'a> {
     Cat(&'a CatState),
@@ -103,8 +103,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     let cat_budget = CAT_HEIGHT + RULE_HEIGHT;
     let show_active_tables =
         fixed_without_active + active_tables_budget + cat_budget + BONSAI_MIN_HEIGHT <= area.height;
-    let show_cat =
-        fixed_without_active + cat_budget + BONSAI_MIN_HEIGHT <= area.height;
+    let show_cat = fixed_without_active + cat_budget + BONSAI_MIN_HEIGHT <= area.height;
 
     // Vertical real estate, top to bottom. Active tables are lower priority
     // than bonsai: hide them before squeezing the tree below its visible size.
