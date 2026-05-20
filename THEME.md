@@ -101,6 +101,37 @@ Your palette should keep these states clearly distinguishable:
 - bonsai greens
 - badge colors
 
+A full list of configurable 'palette states':
+- <details open>
+  - bg_canvas
+  - bg_selection
+  - bg_highlight
+  - border_dim
+  - border
+  - border_active
+  - text_faint
+  - text_dim
+  - text_muted
+  - text
+  - text_bright
+  - amber
+  - amber_dim
+  - amber_glow
+  - chat_body
+  - chat_author
+  - mention
+  - success
+  - error
+  - bot
+  - bonsai_sprout
+  - bonsai_leaf
+  - bonsai_canopy
+  - bonsai_bloom
+  - badge_bronze
+  - badge_silver
+  - badge_gold
+  </details>
+
 ## Readability requirements
 
 Please test for real terminal usability, not just aesthetics.
@@ -113,6 +144,8 @@ At minimum:
 - the theme should still work when the terminal has background opacity/transparency enabled
 
 Avoid themes that rely on very subtle dark-on-dark contrast.
+
+A great resource for building and validating theme readability is the [late theme designer](https://wikked.info/late-theme-designer/). It does not reflect the current UI of `late.sh`, but it's a very helpful visual for seeing how your theme will look.
 
 ## Local verification
 
