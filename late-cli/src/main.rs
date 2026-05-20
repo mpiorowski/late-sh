@@ -21,7 +21,7 @@ mod ws;
 use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
 use identity::ensure_client_identity_at;
-use raw_mode::RawModeGuard;
+use raw_mode::{RawModeGuard, enable_ansi_output_if_tty};
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
 use ws::{
     PairClientInfo, PlaybackState, WebviewPlaybackController, client_platform_label, run_viz_ws,
@@ -49,6 +49,9 @@ async fn main() -> Result<()> {
     };
     // In OpenSSH mode the system ssh client owns the terminal, so PIN,
     // passphrase, and touch prompts keep OpenSSH's normal echo behavior.
+    if config.ssh_mode.uses_cli_raw_mode() {
+        enable_ansi_output_if_tty();
+    }
     let _raw_mode = config
         .ssh_mode
         .uses_cli_raw_mode()
