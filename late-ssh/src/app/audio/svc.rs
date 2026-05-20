@@ -31,6 +31,7 @@ const FALLBACK_DEBOUNCE: Duration = Duration::from_secs(10);
 const PLAYBACK_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
+const MIN_VIDEO_DURATION_MS: i32 = 30_000;
 const SKIP_VOTE_PERCENT: usize = 30;
 const SKIP_VOTE_MIN: u32 = 2;
 
@@ -217,14 +218,18 @@ pub struct SubmitQueueResponse {
     pub position_in_queue: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlayerPlaybackState {
     Playing,
     Paused,
     Buffering,
+    Unstarted,
+    Cued,
     Ended,
     Error,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -272,9 +277,8 @@ impl AudioService {
         self.snapshot_tx.subscribe()
     }
 
-    /// True once the YouTube Data API key is configured. The booth disables
-    /// public submissions when this returns false; staff `/audio` keeps
-    /// working through the trusted path.
+    /// True once the YouTube Data API key is configured. Server-side YouTube
+    /// metadata is required for both booth submissions and staff `/audio`.
     pub fn booth_submit_enabled(&self) -> bool {
         self.youtube.has_api_key()
     }
@@ -333,12 +337,12 @@ impl AudioService {
         user_id: Uuid,
         url: &str,
     ) -> Result<SubmitQueueResponse> {
-        let video = super::youtube::trusted_video_from_url(url)?;
+        let video = self.youtube.validate_url(url).await?;
         self.submit_video(user_id, video, false).await
     }
 
     pub async fn set_trusted_youtube_fallback(&self, user_id: Uuid, url: &str) -> Result<()> {
-        let video = super::youtube::trusted_video_from_url(url)?;
+        let video = self.youtube.validate_url(url).await?;
         let mut state = self.state.lock().await;
         let client = self.db.get().await?;
         let source = MediaSource::upsert_youtube_fallback(
@@ -369,6 +373,10 @@ impl AudioService {
         video: super::youtube::YoutubeVideo,
         enforce_rate_limit: bool,
     ) -> Result<SubmitQueueResponse> {
+        if !video.is_stream && video.duration_ms.is_none() {
+            anyhow::bail!("YouTube video duration is unavailable");
+        }
+
         let mut state = self.state.lock().await;
 
         let item = {
@@ -956,19 +964,36 @@ impl AudioService {
     }
 
     pub async fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
+        tracing::debug!(
+            item_id = %report.item_id,
+            state = ?report.state,
+            offset_ms = ?report.offset_ms,
+            duration_ms = ?report.duration_ms,
+            autoplay_blocked = report.autoplay_blocked,
+            error = ?report.error,
+            "received YouTube player_state report"
+        );
         match report.state {
-            PlayerPlaybackState::Ended => self.finish_item_from_player(report).await,
             PlayerPlaybackState::Error => {
-                let reason = report
-                    .error
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or("browser reported playback error");
-                self.fail_item(report.item_id, reason).await
+                tracing::warn!(
+                    item_id = %report.item_id,
+                    error = ?report.error,
+                    "browser reported playback error; server will not advance the shared queue"
+                );
+                Ok(())
             }
             PlayerPlaybackState::Playing
             | PlayerPlaybackState::Paused
-            | PlayerPlaybackState::Buffering => {
+            | PlayerPlaybackState::Buffering
+            | PlayerPlaybackState::Ended => {
+                if report.state == PlayerPlaybackState::Ended {
+                    tracing::debug!(
+                        item_id = %report.item_id,
+                        offset_ms = ?report.offset_ms,
+                        duration_ms = ?report.duration_ms,
+                        "browser reported ended; server playback timer owns queue advancement"
+                    );
+                }
                 if report.autoplay_blocked {
                     tracing::warn!(
                         item_id = %report.item_id,
@@ -976,10 +1001,19 @@ impl AudioService {
                         "browser reported autoplay blocked"
                     );
                 }
-                self.record_browser_duration(report.item_id, report.duration_ms)
-                    .await?;
                 Ok(())
             }
+            PlayerPlaybackState::Unstarted | PlayerPlaybackState::Cued => {
+                if report.autoplay_blocked {
+                    tracing::warn!(
+                        item_id = %report.item_id,
+                        offset_ms = ?report.offset_ms,
+                        "browser reported autoplay blocked"
+                    );
+                }
+                Ok(())
+            }
+            PlayerPlaybackState::Unknown => Ok(()),
         }
     }
 
@@ -1052,6 +1086,25 @@ impl AudioService {
         let now = Utc::now();
 
         if let Some(item) = MediaQueueItem::current_playing(&client).await? {
+            if !item_has_required_server_metadata(&item) {
+                tracing::warn!(
+                    item_id = %item.id,
+                    video_id = %item.external_id,
+                    duration_ms = ?item.duration_ms,
+                    is_stream = item.is_stream,
+                    "failing resumed media queue item without server-side YouTube duration"
+                );
+                let _ = MediaQueueItem::mark_failed(
+                    &client,
+                    item.id,
+                    now,
+                    "missing or invalid server-side YouTube duration",
+                )
+                .await?;
+                drop(client);
+                return self.advance_to_next_with_guard(&mut state).await;
+            }
+
             if item_is_still_playable(&item, now) {
                 state.current_item_id = Some(item.id);
                 state.skip_votes.clear();
@@ -1066,31 +1119,23 @@ impl AudioService {
             let _ = MediaQueueItem::mark_played(&client, item.id, now).await?;
         }
 
+        drop(client);
         self.advance_to_next_with_guard(&mut state).await
     }
 
     async fn finish_item_due_to_timer(&self, item_id: Uuid) -> Result<()> {
-        tracing::info!(%item_id, "media queue item reached playback limit");
+        tracing::info!(%item_id, "server playback timer reached media queue item limit");
         self.finish_item(item_id).await
-    }
-
-    async fn finish_item_from_player(&self, report: PlayerStateReport) -> Result<()> {
-        self.record_browser_duration(report.item_id, report.duration_ms)
-            .await?;
-
-        {
-            let state = self.state.lock().await;
-            if state.current_item_id != Some(report.item_id) {
-                return Ok(());
-            }
-        }
-
-        self.finish_item(report.item_id).await
     }
 
     async fn finish_item(&self, item_id: Uuid) -> Result<()> {
         let mut state = self.state.lock().await;
         if state.current_item_id != Some(item_id) {
+            tracing::debug!(
+                %item_id,
+                current_item_id = ?state.current_item_id,
+                "ignoring finish for non-current media queue item"
+            );
             return Ok(());
         }
 
@@ -1106,30 +1151,7 @@ impl AudioService {
             return Ok(());
         }
         drop(client);
-        state.current_item_id = None;
-        state.skip_votes.clear();
-        self.cancel_playback(&mut state);
-        self.advance_to_next_with_guard(&mut state).await
-    }
-
-    async fn fail_item(&self, item_id: Uuid, reason: &str) -> Result<()> {
-        let mut state = self.state.lock().await;
-        if state.current_item_id != Some(item_id) {
-            return Ok(());
-        }
-
-        let client = self.db.get().await?;
-        let changed = MediaQueueItem::mark_failed(&client, item_id, Utc::now(), reason).await?;
-        if changed == 0 {
-            drop(client);
-            self.reconcile_after_stale_current_with_guard(
-                &mut state,
-                "fail item hit stale current",
-            )
-            .await?;
-            return Ok(());
-        }
-        drop(client);
+        tracing::info!(%item_id, "marked media queue item played");
         state.current_item_id = None;
         state.skip_votes.clear();
         self.cancel_playback(&mut state);
@@ -1137,15 +1159,38 @@ impl AudioService {
     }
 
     async fn advance_to_next_with_guard(&self, state: &mut QueueState) -> Result<()> {
-        let client = self.db.get().await?;
-        if let Some(current) = MediaQueueItem::current_playing(&client).await? {
-            drop(client);
-            self.adopt_playing_item_with_guard(state, current, "advance found DB current")
-                .await?;
-            return Ok(());
-        }
+        loop {
+            let client = self.db.get().await?;
+            if let Some(current) = MediaQueueItem::current_playing(&client).await? {
+                if !item_has_required_server_metadata(&current) {
+                    tracing::warn!(
+                        item_id = %current.id,
+                        video_id = %current.external_id,
+                        duration_ms = ?current.duration_ms,
+                        is_stream = current.is_stream,
+                        "failing current media queue item without server-side YouTube duration"
+                    );
+                    let _ = MediaQueueItem::mark_failed(
+                        &client,
+                        current.id,
+                        Utc::now(),
+                        "missing or invalid server-side YouTube duration",
+                    )
+                    .await?;
+                    drop(client);
+                    continue;
+                }
+                drop(client);
+                self.adopt_playing_item_with_guard(state, current, "advance found DB current")
+                    .await?;
+                return Ok(());
+            }
 
-        if let Some((next, _score)) = MediaQueueItem::first_queued(&client).await? {
+            let Some((next, _score)) = MediaQueueItem::first_queued(&client).await? else {
+                drop(client);
+                break;
+            };
+
             self.cancel_fallback(state);
             let item = match MediaQueueItem::mark_playing(&client, next.id, Utc::now()).await {
                 Ok(Some(item)) => item,
@@ -1185,7 +1230,47 @@ impl AudioService {
                 }
                 Err(err) => return Err(err),
             };
+            if !item_has_required_server_metadata(&item) {
+                tracing::warn!(
+                    item_id = %item.id,
+                    video_id = %item.external_id,
+                    duration_ms = ?item.duration_ms,
+                    is_stream = item.is_stream,
+                    "failing media queue item without server-side YouTube duration"
+                );
+                let changed = MediaQueueItem::mark_failed(
+                    &client,
+                    item.id,
+                    Utc::now(),
+                    "missing or invalid server-side YouTube duration",
+                )
+                .await?;
+                drop(client);
+                if changed == 0 {
+                    tracing::warn!(
+                        item_id = %item.id,
+                        "failed invalid media queue item changed no rows; checking DB current"
+                    );
+                    if self
+                        .adopt_current_playing_from_db_with_guard(
+                            state,
+                            "invalid queued item failed stale current",
+                        )
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                }
+                continue;
+            }
             drop(client);
+            tracing::info!(
+                item_id = %item.id,
+                video_id = %item.external_id,
+                duration_ms = ?item.duration_ms,
+                is_stream = item.is_stream,
+                "promoted queued media item to playing"
+            );
             state.current_item_id = Some(item.id);
             state.skip_votes.clear();
             state.mode = AudioMode::Youtube;
@@ -1213,10 +1298,30 @@ impl AudioService {
     ) -> Result<bool> {
         let client = self.db.get().await?;
         let current = MediaQueueItem::current_playing(&client).await?;
-        drop(client);
         let Some(current) = current else {
+            drop(client);
             return Ok(false);
         };
+        if !item_has_required_server_metadata(&current) {
+            tracing::warn!(
+                item_id = %current.id,
+                video_id = %current.external_id,
+                duration_ms = ?current.duration_ms,
+                is_stream = current.is_stream,
+                reason,
+                "failing current media queue item without server-side YouTube duration"
+            );
+            let _ = MediaQueueItem::mark_failed(
+                &client,
+                current.id,
+                Utc::now(),
+                "missing or invalid server-side YouTube duration",
+            )
+            .await?;
+            drop(client);
+            return Ok(false);
+        }
+        drop(client);
         self.adopt_playing_item_with_guard(state, current, reason)
             .await?;
         Ok(true)
@@ -1240,6 +1345,9 @@ impl AudioService {
             reason,
             previous_item_id = ?previous,
             db_item_id = %item.id,
+            video_id = %item.external_id,
+            duration_ms = ?item.duration_ms,
+            is_stream = item.is_stream,
             "reconciling audio queue state from database"
         );
         self.cancel_fallback(state);
@@ -1407,6 +1515,12 @@ impl AudioService {
 
         let duration = playback_duration(item);
         if duration.is_zero() {
+            tracing::warn!(
+                item_id = %item.id,
+                duration_ms = item.duration_ms,
+                is_stream = item.is_stream,
+                "not scheduling zero-duration media queue timer"
+            );
             return;
         }
 
@@ -1416,6 +1530,15 @@ impl AudioService {
             .unwrap_or_default();
         let sleep_for = duration.saturating_sub(elapsed);
         let item_id = item.id;
+        tracing::info!(
+            %item_id,
+            duration_ms = duration.as_millis(),
+            elapsed_ms = elapsed.as_millis(),
+            sleep_for_ms = sleep_for.as_millis(),
+            db_duration_ms = item.duration_ms,
+            is_stream = item.is_stream,
+            "scheduling server media queue playback timer"
+        );
         let item_for_heartbeat = item.clone();
         let service = self.clone();
         let (tx, rx) = oneshot::channel();
@@ -1447,29 +1570,6 @@ impl AudioService {
                 _ = rx => {}
             }
         });
-    }
-
-    async fn record_browser_duration(&self, item_id: Uuid, duration_ms: Option<u64>) -> Result<()> {
-        let Some(duration_ms) = duration_ms.and_then(|value| i32::try_from(value).ok()) else {
-            return Ok(());
-        };
-        if duration_ms <= 0 {
-            return Ok(());
-        }
-
-        let client = self.db.get().await?;
-        if let Some(item) = MediaQueueItem::find_by_id(&client, item_id).await?
-            && item.duration_ms.is_none()
-            && item.status == MediaQueueItem::STATUS_PLAYING
-            && let Some(updated) =
-                MediaQueueItem::set_duration_if_missing(&client, item_id, duration_ms).await?
-        {
-            let mut state = self.state.lock().await;
-            if state.current_item_id == Some(item_id) {
-                self.schedule_playback_timer(&mut state, &updated);
-            }
-        }
-        Ok(())
     }
 
     fn schedule_fallback(&self, state: &mut QueueState) {
@@ -1556,8 +1656,13 @@ fn playback_duration(item: &MediaQueueItem) -> Duration {
         .unwrap_or(STREAM_CAP)
 }
 
+fn item_has_required_server_metadata(item: &MediaQueueItem) -> bool {
+    item.is_stream || playback_known_duration(item).is_some()
+}
+
 fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
     item.duration_ms
+        .filter(|duration_ms| *duration_ms >= MIN_VIDEO_DURATION_MS)
         .and_then(|duration_ms| u64::try_from(duration_ms).ok())
         .map(Duration::from_millis)
         .filter(|duration| !duration.is_zero())
@@ -1597,7 +1702,8 @@ fn booth_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
         "Banned from submitting audio".to_string()
-    } else if text.contains("invalid url") || text.contains("youtube") && text.contains("not found")
+    } else if text.contains("invalid url")
+        || (text.contains("youtube") && text.contains("not found"))
     {
         "Invalid YouTube URL".to_string()
     } else if text.contains("rate limit") || text.contains("submission rate limit") {
@@ -1606,7 +1712,10 @@ fn booth_submit_error_message(err: &anyhow::Error) -> String {
         "Video is not public".to_string()
     } else if text.contains("not embeddable") {
         "Video is not embeddable".to_string()
-    } else if text.contains("api key") || text.contains("youtube data api") {
+    } else if text.contains("api key")
+        || text.contains("api_key")
+        || text.contains("youtube data api")
+    {
         "YouTube validation failed - try again".to_string()
     } else {
         "Failed to submit".to_string()
@@ -1661,8 +1770,24 @@ fn trusted_submit_error_message(err: &anyhow::Error) -> String {
     } else if text.contains("invalid url")
         || text.contains("unsupported youtube url")
         || text.contains("invalid youtube video id")
+        || (text.contains("youtube") && text.contains("not found"))
     {
         "Invalid YouTube URL".to_string()
+    } else if text.contains("not public") {
+        "Video is not public".to_string()
+    } else if text.contains("not embeddable") {
+        "Video is not embeddable".to_string()
+    } else if text.contains("upcoming stream") {
+        "Upcoming streams are not supported".to_string()
+    } else if text.contains("duration is unavailable") {
+        "Video duration is unavailable".to_string()
+    } else if text.contains("at least 30 seconds") {
+        "Video must be at least 30 seconds".to_string()
+    } else if text.contains("api key")
+        || text.contains("api_key")
+        || text.contains("youtube data api")
+    {
+        "YouTube validation failed - check server API key".to_string()
     } else if text.contains("rate limit") {
         "Slow down - too many submissions".to_string()
     } else {

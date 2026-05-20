@@ -38,6 +38,7 @@ pub mod pair;
 pub use commands::{WebviewCommand, WebviewEvent};
 
 const PAGE_HTML: &str = include_str!("page.html");
+const WEBVIEW_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
 /// Legacy spike entry point. Opens the webview and autoloads a single
 /// hard-coded `video_id`. No WS connection.
@@ -72,6 +73,7 @@ where
         .with_title("late.sh — YouTube")
         .with_inner_size(LogicalSize::new(480.0, 320.0))
         .with_resizable(false)
+        .with_decorations(false)
         .build(&event_loop)
         .context("failed to build webview window")?;
 
@@ -96,6 +98,7 @@ where
 
     let ipc_tx_handler = ipc_tx.clone();
     let webview = WebViewBuilder::new()
+        .with_user_agent(WEBVIEW_USER_AGENT)
         .with_url(page_server.url.clone())
         .with_ipc_handler(move |req| {
             let body = req.body();

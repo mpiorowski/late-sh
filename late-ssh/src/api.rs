@@ -616,6 +616,39 @@ mod tests {
     }
 
     #[test]
+    fn ws_payload_player_transient_youtube_states_parse() {
+        use crate::app::audio::svc::PlayerPlaybackState;
+
+        for (state, expected) in [
+            ("unstarted", PlayerPlaybackState::Unstarted),
+            ("cued", PlayerPlaybackState::Cued),
+            ("future_state", PlayerPlaybackState::Unknown),
+        ] {
+            let json = format!(
+                r#"{{
+                    "event": "player_state",
+                    "item_id": "{}",
+                    "state": "{}",
+                    "offset_ms": 0,
+                    "duration_ms": null,
+                    "autoplay_blocked": false,
+                    "error": null
+                }}"#,
+                Uuid::nil(),
+                state
+            );
+            let payload: WsPayload = serde_json::from_str(&json).unwrap();
+            match payload {
+                WsPayload::PlayerState(report) => {
+                    assert_eq!(report.item_id, Uuid::nil());
+                    assert_eq!(report.state, expected);
+                }
+                _ => panic!("expected PlayerState"),
+            }
+        }
+    }
+
+    #[test]
     fn ws_payload_android_client_state_parses() {
         let json = r#"{
             "event": "client_state",

@@ -31,6 +31,7 @@
         playerReady: false,
         currentItem: null,   // { itemId, videoId, isStream }
         pendingItem: null,   // queued while api/player loads
+        currentItemStarted: false,
         autoplayBlocked: false,
         userMuted: false,
         volumePercent: 100,
@@ -68,8 +69,7 @@
             enablejsapi: 1,
             playsinline: 1,
             modestbranding: 1,
-            rel: 0,
-            origin: window.location.origin
+            rel: 0
           },
           events: {
             onReady: function () {
@@ -87,17 +87,20 @@
               } catch (e) {}
               if (label === "playing") {
                 state.autoplayBlocked = false;
+                state.currentItemStarted = true;
                 applyAudioSettings();
               }
               setStatus(label);
-              send({
-                type: "state",
-                item_id: state.currentItem ? state.currentItem.itemId : null,
-                state: label,
-                position_ms: positionMs,
-                duration_ms: durationMs,
-                autoplay_blocked: state.autoplayBlocked
-              });
+              if (shouldReportPlayerState(label)) {
+                send({
+                  type: "state",
+                  item_id: state.currentItem ? state.currentItem.itemId : null,
+                  state: label,
+                  position_ms: positionMs,
+                  duration_ms: durationMs,
+                  autoplay_blocked: state.autoplayBlocked
+                });
+              }
             },
             onError: function (event) {
               const code = String(event.data || "unknown");
@@ -105,6 +108,7 @@
               send({
                 type: "error",
                 item_id: state.currentItem ? state.currentItem.itemId : null,
+                video_id: state.currentItem ? state.currentItem.videoId : null,
                 code: code
               });
             }
@@ -132,6 +136,19 @@
         } catch (e) {}
       }
 
+      function shouldReportPlayerState(label) {
+        if (label === "unstarted" || label === "cued" || label === "unknown") {
+          return false;
+        }
+        if (label !== "ended") {
+          return true;
+        }
+        if (state.currentItemStarted) {
+          return true;
+        }
+        return false;
+      }
+
       function playItem(item) {
         if (!state.player || !state.playerReady || !state.player.loadVideoById) return;
         const switching = state.currentItem && !isSameItem(state.currentItem, item);
@@ -139,6 +156,7 @@
         const alreadyLoaded = !switching && loadedVideoId() === item.videoId;
         state.currentItem = item;
         state.pendingItem = null;
+        state.currentItemStarted = false;
         state.autoplayBlocked = false;
         applyAudioSettings();
         if (alreadyLoaded && state.player.playVideo) {

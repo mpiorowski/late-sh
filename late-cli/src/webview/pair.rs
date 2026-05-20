@@ -98,7 +98,7 @@ async fn run_inner(
     let mut heartbeat = interval(Duration::from_secs(1));
     heartbeat.tick().await;
 
-    let mut current_item_id: Option<String> = None;
+    let mut current_item: Option<CurrentItem> = None;
 
     loop {
         tokio::select! {
@@ -112,7 +112,9 @@ async fn run_inner(
                     debug!("webview ipc channel closed; stopping pair task");
                     break;
                 };
-                if let Err(err) = handle_webview_event(&mut ws, event, &current_item_id).await {
+                if let Err(err) =
+                    handle_webview_event(&mut ws, event, current_item.as_ref()).await
+                {
                     warn!(error = %err, "failed to forward webview event");
                 }
             }
@@ -124,8 +126,8 @@ async fn run_inner(
                         if result.send_client_state {
                             send_client_state(&mut ws, audio_settings).await?;
                         }
-                        if let Some(item_id) = result.current_item_id {
-                            current_item_id = Some(item_id);
+                        if let Some(item) = result.current_item {
+                            current_item = Some(item);
                         }
                     }
                     Message::Close(_) => {
@@ -143,8 +145,14 @@ async fn run_inner(
 
 #[derive(Default)]
 struct ServerTextResult {
-    current_item_id: Option<String>,
+    current_item: Option<CurrentItem>,
     send_client_state: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentItem {
+    item_id: String,
+    video_id: String,
 }
 
 async fn handle_server_text(
@@ -193,7 +201,10 @@ async fn handle_server_text(
                 is_stream,
                 "dispatching load_video to embedded webview"
             );
-            let id_for_state = item_id.clone();
+            let current_item = CurrentItem {
+                item_id: item_id.clone(),
+                video_id: video_id.clone(),
+            };
             if let Err(err) = proxy.send_event(WebviewCommand::LoadVideo {
                 item_id,
                 video_id,
@@ -203,7 +214,7 @@ async fn handle_server_text(
                 return ServerTextResult::default();
             }
             ServerTextResult {
-                current_item_id: Some(id_for_state),
+                current_item: Some(current_item),
                 ..ServerTextResult::default()
             }
         }
@@ -256,7 +267,7 @@ async fn handle_webview_event(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     event: WebviewEvent,
-    current_item_id: &Option<String>,
+    current_item: Option<&CurrentItem>,
 ) -> Result<()> {
     let payload = match event {
         WebviewEvent::State {
@@ -266,7 +277,7 @@ async fn handle_webview_event(
             duration_ms,
             autoplay_blocked,
         } => {
-            let resolved = item_id.or_else(|| current_item_id.clone());
+            let resolved = item_id.or_else(|| current_item.map(|item| item.item_id.clone()));
             json!({
                 "event": "player_state",
                 "item_id": resolved,
@@ -277,8 +288,28 @@ async fn handle_webview_event(
                 "error": serde_json::Value::Null,
             })
         }
-        WebviewEvent::Error { item_id, code } => {
-            let resolved = item_id.or_else(|| current_item_id.clone());
+        WebviewEvent::Error {
+            item_id,
+            video_id,
+            code,
+        } => {
+            let resolved = item_id.or_else(|| current_item.map(|item| item.item_id.clone()));
+            let resolved_video_id =
+                video_id.or_else(|| current_item.map(|item| item.video_id.clone()));
+            warn!(
+                item_id = ?resolved,
+                video_id = ?resolved_video_id,
+                error_code = %code,
+                "embedded YouTube player reported playback error"
+            );
+            if is_embed_rejection(&code) {
+                warn!(
+                    item_id = ?resolved,
+                    video_id = ?resolved_video_id,
+                    error_code = %code,
+                    "embedded YouTube playback rejected; staying on controlled helper page"
+                );
+            }
             json!({
                 "event": "player_state",
                 "item_id": resolved,
@@ -290,7 +321,11 @@ async fn handle_webview_event(
             })
         }
         WebviewEvent::AutoplayBlocked { item_id } => {
-            let resolved = item_id.or_else(|| current_item_id.clone());
+            let resolved = item_id.or_else(|| current_item.map(|item| item.item_id.clone()));
+            warn!(
+                item_id = ?resolved,
+                "embedded YouTube player appears autoplay-blocked"
+            );
             json!({
                 "event": "player_state",
                 "item_id": resolved,
@@ -314,6 +349,10 @@ async fn handle_webview_event(
         .await
         .context("failed to send player_state")?;
     Ok(())
+}
+
+fn is_embed_rejection(code: &str) -> bool {
+    matches!(code, "101" | "150" | "153")
 }
 
 async fn send_client_state(

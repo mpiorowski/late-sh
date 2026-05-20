@@ -4,7 +4,7 @@
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
 - Last updated: 2026-05-20 (post-incident queue reconciliation from main is preserved; CLI-side embedded YouTube webview v1 is wired into the normal `late-cli` build. Native CLI advertises `youtube`, `set_playback_source` gates Icecast and drives lazy helper spawn/teardown, real browser pairing suppresses the helper so users can fall back to the browser connect page when webview is flaky, and helper token/log handling is hardened.)
-- Previously: source arbitration simplified — no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Booth modal surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Two submit paths diverge in metadata: booth (`booth_submit_public_task` → `submit_url` → Data API) inserts rows with title/channel/`duration_ms`/`is_stream` already populated; staff `/audio` (`submit_trusted_url_task`) inserts NULL metadata and the browser backfills `duration_ms` on first play via `record_browser_duration`.
+- Previously: source arbitration simplified — no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Booth modal surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Both booth and staff `/audio` submit paths now validate through the YouTube Data API before insert, so queued rows carry server-side title/channel/`duration_ms`/`is_stream`. Browser/CLI player reports are diagnostics only; they never backfill duration or advance the shared queue.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -104,8 +104,8 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `snapshot()` — returns `QueueSnapshot { mode, current, queue }`. Type exists but no HTTP route exposes it (see §14).
 - `submit_url` / `submit_url_task` — un-trusted, rate-limited, validates via YouTube Data API. **Called by `booth_submit_public_task`** (the in-TUI booth modal submit). Requires `LATE_YOUTUBE_API_KEY`; when unset, `booth_submit_enabled()` returns false and the modal disables the submit row. Inserted rows carry `title`, `channel`, `duration_ms`, and `is_stream` from the Data API — so booth-queued items render their `m:ss` duration in the queue list immediately.
 - `booth_submit_public_task` — wraps `submit_url` for the booth modal: emits `AudioEvent::BoothSubmit{Queued,Failed}` (user-scoped banners) and shows "Disabled" if the API key is missing. **This is the user-facing submit path.**
-- `submit_trusted_url` / `submit_trusted_url_task` — used by `/audio` (staff). Bypasses rate limit and Data API; uses `youtube::trusted_video_from_url` to parse the ID only. Inserts `title=NULL`, `channel=NULL`, `duration_ms=NULL`, `is_stream=false` — duration is backfilled by the browser on first play via `record_browser_duration` (svc.rs:1261). Until then, the booth queue list shows a blank duration for staff-queued items.
-- `set_trusted_youtube_fallback` / `set_trusted_youtube_fallback_task` — used by `/audio fallback`. Upserts the singleton `media_sources` row.
+- `submit_trusted_url` / `submit_trusted_url_task` — used by `/audio` (staff). Bypasses rate limit but still validates via YouTube Data API. Normal videos require a server-side duration; live streams set `is_stream=true` and use the 1h cap.
+- `set_trusted_youtube_fallback` / `set_trusted_youtube_fallback_task` — used by `/audio fallback`. Also validates via YouTube Data API before upserting the singleton `media_sources` row.
 - `report_player_state` / `report_player_state_task` — `api.rs:329`, ingress for browser `player_state` reports.
 
 ### Startup lifecycle
@@ -118,8 +118,8 @@ DB statuses: `queued → playing → {played | skipped | failed}`.
 
 All transitions go through `svc.rs`:
 - `queued → playing`: `mark_playing` conditional `UPDATE … WHERE id=$1 AND status='queued'`. Before promoting, `advance_to_next_with_guard` first checks for an existing DB `playing` row and adopts it. If `mark_playing` races the singleton index (`idx_media_queue_single_playing`), the service treats that as a reconcile signal instead of surfacing a submit failure.
-- `playing → played`: `finish_item` or `finish_item_due_to_timer` via `mark_played` (`WHERE status='playing'`). If zero rows changed, memory was stale; reconcile from DB instead of returning with the old `current_item_id`.
-- `playing → failed`: `fail_item` via `mark_failed`. Only fired when the browser reports `player_state: error` for the active item; zero-row updates reconcile like `mark_played`.
+- `playing → played`: `finish_item_due_to_timer` via `mark_played` (`WHERE status='playing'`). Client `ended` reports no longer call this path. If zero rows changed, memory was stale; reconcile from DB instead of returning with the old `current_item_id`.
+- `playing → failed`: reserved for server-side cleanup/sweeps. Client `player_state: error` reports are informational and do **not** fail or advance the shared queue.
 - `playing → skipped`: staff `/audio skip` and threshold skip use `mark_skipped` (`WHERE status='playing'`). A stale pod cannot mutate an already-played row to `skipped`; zero-row updates reconcile and ask the caller to retry.
 
 `advance_to_next_with_guard` is the *only* advancer. It adopts a DB current first, otherwise picks `MediaQueueItem::first_queued()`, tries to flip it, on success broadcasts `SourceChanged: youtube` + `LoadVideo` + `QueueUpdate`. If the queue is empty it tries `publish_youtube_fallback_with_guard`; if no fallback row exists, `schedule_fallback` arms the 10s debounce, after which `finish_fallback_debounce` flips `mode = Icecast` (and re-checks `current_item_id.is_none()` to avoid races).
@@ -132,26 +132,27 @@ All transitions go through `svc.rs`:
 
 ### `playback_duration` rules (`svc.rs:1197-1205`)
 - `is_stream = true` → always `STREAM_CAP` (1h).
-- Non-stream with known `duration_ms` → `min(duration_ms, STREAM_CAP)` — **1h is a hard cap on every item, not a fallback.** A 2h video plays its first hour, server timer fires, queue advances.
-- Non-stream with unknown duration → `STREAM_CAP` (1h).
-- `record_browser_duration` (`svc.rs:1100-1121`) is the only path that backfills `duration_ms` from the browser, conditionally on the current playing item and only when the DB value is NULL. After write, it reschedules the playback timer to `min(real_duration, STREAM_CAP)`.
-- `playback_known_duration` (uncapped) is still used by `finish_item_from_player` (`svc.rs:859`) to reject premature browser `ended` reports — a 2h video that the browser claims ended at 30min is rebutted with a `Seek`, regardless of the 1h playback cap.
+- Non-stream with known `duration_ms >= 30s` → `min(duration_ms, STREAM_CAP)` — **1h is a hard cap on every item, not a fallback.** A 2h video plays its first hour, server timer fires, queue advances.
+- Non-stream with missing or implausibly short duration is rejected at submit time. Legacy rows in that shape are marked `failed` before promotion/adoption, so old client-backfilled bad durations cannot shorten the timer.
+- Client `ended`, `error`, and `duration_ms` reports are not used for advancement or timer scheduling. The server timer advances at `playback_duration`, so a 2h video is capped at 1h and a known 3min video advances at its server-validated duration even if the embedded player reports noisy startup/teardown states.
 
 ### `player_state` ingress
 Routed by report `state` field:
-- `ended` → `finish_item_from_player`. Drops the report if `current_item_id != report.item_id`. Otherwise trusts it and calls `finish_item` — no duration check, no grace gate, no seek rebuttal. Server's own playback timer is the redundant safety net for browsers that never report `ended`.
-- `error` → `fail_item`.
-- `playing` / `paused` / `buffering` → may carry `duration_ms` for `record_browser_duration`; otherwise logged. `autoplay_blocked = true` logs at `warn!`.
+- `ended` → report-only. It does **not** advance the queue and does not backfill duration. Queue advancement is owned by the server playback timer.
+- `error` → warn-only. Client/player errors are not trusted as global queue truth because one surface can fail while another surface plays the item correctly.
+- `playing` / `paused` / `buffering` → logged only. `autoplay_blocked = true` logs at `warn!`.
+- `unstarted` / `cued` → accepted but report-only. The YouTube IFrame emits them around `loadVideoById`; they must never fail, advance, or backfill duration.
+- Unknown future player states parse as `Unknown` and are ignored.
 
 ### Invariants
 1. **Singleton playing row.** Enforced both by the partial unique index `idx_media_queue_single_playing` and by conditional `mark_playing` updates. Two racing advancers cannot both succeed; losers reconcile to the DB current.
 2. **Server owns track *changes*, not playback positions.** Server picks which item is `playing` and broadcasts `LoadVideo` on changes + every 10s as a heartbeat. Each browser plays its own timeline from wherever YT happens to start. No more wall-clock-offset sync — slow networks no longer audibly skip mid-track.
 3. **Force-switch on heartbeat.** A browser receiving `LoadVideo` for a different `item_id` than what it's currently playing MUST swap, regardless of pause/buffer/error state. Same-`item_id` heartbeat with the right `video_id` loaded → no-op (respect a manual pause).
-4. **`ended` is trusted.** Server advances unconditionally when the playing item's browser reports `ended`. The own-timer is the backup for browsers that never report.
+4. **`ended` is not trusted for queue advancement.** Browsers and the CLI webview can report `ended`, but the server treats it as diagnostics only. The playback timer is the only normal `playing → played` path, which keeps embedded-webview startup/teardown state churn from skipping tracks.
 5. **Mode is server-managed.** Browser/CLI never write `mode`; they only receive `SourceChanged`.
 6. **Sequence monotonicity.** `state.sequence` is bumped before every `QueueUpdate` so clients can drop stale ones.
 7. **Banners are user-scoped.** `AudioEvent` carries `user_id` and `AudioState::tick` filters on it; one user's submission failure does not leak to others.
-8. **DB beats memory on drift.** Any zero-row terminal transition (`mark_played` / `mark_failed` / `mark_skipped`) or singleton conflict routes through reconcile. Reconcile never blindly clears `current_item_id` while DB still has a `playing` row.
+8. **DB beats memory on drift.** Any zero-row terminal transition (`mark_played` / `mark_skipped`) or singleton conflict routes through reconcile. Reconcile never blindly clears `current_item_id` while DB still has a `playing` row.
 
 ---
 
@@ -244,14 +245,15 @@ Dispatch: `late-ssh/src/app/chat/input.rs` `handle_post_submit_requests` calls `
 The unrelated bare `/music` command (`state.rs:1325`) opens a help topic, not a submission. Don't confuse the two — `/music` ≠ submit.
 
 `/audio` flow:
-1. `youtube::trusted_video_from_url(url)` extracts the 11-char ID. Accepted forms: `youtube.com/watch?v=…`, `youtu.be/…`, `youtube.com/embed/…`, `youtube.com/shorts/…`, `youtube.com/live/…`, subdomains via `host.ends_with(".youtube.com")`. Anything else returns an `anyhow` error (lowercase, per repo style).
-2. `MediaQueueItem::insert_youtube` writes the row with `status='queued'`, `media_kind='youtube'`, title/channel/duration as NULL, `is_stream=false`.
-3. If nothing is currently playing, `advance_to_next_with_guard` immediately flips it to `playing` and broadcasts.
-4. On success, banner via `AudioEvent::TrustedSubmitQueued` — "Queued audio — up next" or "Queued audio — #N in line" depending on position. On failure (URL parse, rate limit, DB), banner via `AudioEvent::TrustedSubmitFailed` carrying a classified message from `trusted_submit_error_message` (svc.rs:835) — one of "Invalid YouTube URL", "Slow down — too many submissions", or "Failed to queue audio".
+1. `YoutubeClient::validate_url(url)` extracts the ID and calls YouTube Data API. Accepted forms: `youtube.com/watch?v=…`, `youtu.be/…`, `youtube.com/embed/…`, `youtube.com/shorts/…`, `youtube.com/live/…`, subdomains via `host.ends_with(".youtube.com")`. Anything else returns an `anyhow` error (lowercase, per repo style).
+2. Validation rejects missing API key, not-found/non-public/non-embeddable videos, upcoming streams, normal videos without duration, and normal videos shorter than 30s. Live streams are accepted with `is_stream=true`.
+3. `MediaQueueItem::insert_youtube` writes the row with `status='queued'`, `media_kind='youtube'`, title/channel/duration/is_stream from the server-side metadata.
+4. If nothing is currently playing, `advance_to_next_with_guard` immediately flips it to `playing` and broadcasts.
+5. On success, banner via `AudioEvent::TrustedSubmitQueued` — "Queued audio — up next" or "Queued audio — #N in line" depending on position. On failure (URL parse, API key/validation, DB), banner via `AudioEvent::TrustedSubmitFailed` carrying a classified message from `trusted_submit_error_message`.
 
 `/audio fallback` flow:
-1. `youtube::trusted_video_from_url(url)` (same parser).
-2. `MediaSource::upsert_youtube_fallback` — `ON CONFLICT (source_kind) DO UPDATE`, always sets `is_stream=true`.
+1. `YoutubeClient::validate_url(url)` (same server-side validation as `/audio`).
+2. `MediaSource::upsert_youtube_fallback` — `ON CONFLICT (source_kind) DO UPDATE`, always sets `is_stream=true` because fallback playback is not a queue item with a completion timer.
 3. If the queue is empty *and* no item is playing, immediately broadcasts `SourceChanged: youtube` + `LoadVideo` for the fallback so paired browsers start it without waiting.
 4. On success, banner via `AudioEvent::YoutubeFallbackSet` — "Set YouTube fallback". On failure, banner via `AudioEvent::YoutubeFallbackFailed` carrying the classified message from `trusted_submit_error_message`.
 
@@ -284,7 +286,7 @@ File: `late-web/src/pages/connect/page.html`. The audio source is decided in the
 - **Icecast-pinned resource behavior.** While pinned to Icecast, `load_video` only stashes `pendingYoutubeItem`; it does not create the YouTube iframe or pre-cue the video. A later source flip to YouTube starts from the pending item, and the server's 10s `load_video` heartbeat remains the safety net.
 - **`load_video` → force-switch or no-op** (`loadYoutubeVideo`). New shape: payload is `{ item_id, video_id, is_stream }` — no offset, no started_at. Same `item_id` AND iframe is already showing the right `video_id` → no-op (this is the safety-net heartbeat path; a manual pause stays paused). Otherwise → `loadVideoById({ videoId })` from 0, swap `currentYoutubeItem`. `verifyYoutubeLoad` re-checks after 1s and reloads if the video id still mismatches.
 - **No drift correction.** Each browser plays its own timeline. Slow networks just lag behind — no `seekTo` jumps. The "everyone hears the same offset" invariant is dropped on purpose.
-- **`player_state` reports** (`sendYoutubeState`). Emits `{ event: 'player_state', item_id, state, offset_ms, duration_ms, autoplay_blocked, error }` on YT state transitions (PLAYING/PAUSED/BUFFERING/ENDED). No periodic loop. Server reads `duration_ms` for backfill via `record_browser_duration`; the rest is informational.
+- **`player_state` reports** (`sendYoutubeState`). Emits `{ event: 'player_state', item_id, state, offset_ms, duration_ms, autoplay_blocked, error }` on YT state transitions (PLAYING/PAUSED/BUFFERING/ENDED). No periodic loop. Server logs these for diagnostics only; player reports never backfill duration, reschedule timers, or advance the queue.
 - **Autoplay-blocked**. 1.5s after `loadVideoById`, if the YT state is still `CUED`/`UNSTARTED`, sets `autoplayBlocked = true`, emits `player_state: buffering` with the flag, and the UI swaps to `[ tap to play ]`. Tap routes through `startPlayback` → `ytPlayer.playVideo()`.
 - **`queue_update` is currently a no-op** in the browser (no UI to show it). The event ships so a future surface can use it.
 
@@ -396,7 +398,7 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 - Unique index on `source_kind` → singleton fallback row, upserted via `MediaSource::upsert_youtube_fallback`.
 
 Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
-- `MediaQueueItem::{insert_youtube, find_by_id, list_snapshot, queued_before_count, recent_submission_count, first_queued, current_playing, mark_playing, mark_played, mark_failed, mark_skipped, set_duration_if_missing, sweep_orphan_playing}`. Status/kind constants: `STATUS_QUEUED`, `STATUS_PLAYING`, `STATUS_PLAYED`, `STATUS_SKIPPED`, `STATUS_FAILED`, `KIND_YOUTUBE`.
+- `MediaQueueItem::{insert_youtube, find_by_id, list_snapshot, queued_before_count, recent_submission_count, first_queued, current_playing, mark_playing, mark_played, mark_failed, mark_skipped, sweep_orphan_playing}`. Status/kind constants: `STATUS_QUEUED`, `STATUS_PLAYING`, `STATUS_PLAYED`, `STATUS_SKIPPED`, `STATUS_FAILED`, `KIND_YOUTUBE`.
 - `MediaSource::{youtube_fallback, upsert_youtube_fallback}`. Constants: `KIND_YOUTUBE_FALLBACK`, `MEDIA_KIND_YOUTUBE`.
 
 ---
@@ -409,8 +411,8 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - **`/music` ≠ `/audio`.** `/music` is a help-topic command. `/audio` (and `/audio fallback`) are the submit commands. Don't conflate.
 - **No `GET /api/queue` HTTP route.** Submit and visibility for end users happen through the SSH booth modal (submit + queue list) and the staff `/audio` chat command. Non-paired observers have no way to see the queue today.
 - **Multi-tab double audio** is unsolved. Two browser tabs on the same token both play. Deferred until UI work.
-- **Region locks / embedding disabled** are not caught at submit time — `/audio` skips the YouTube Data API. The browser reports `error`, the server marks `failed`, queue advances. Pre-validation comes back with the public submit flow.
-- **`LATE_YOUTUBE_API_KEY` is optional today** (`config.rs:200`, `optional()`). Required only for `submit_url` (un-trusted), which has no caller. Set it before reviving public submit.
+- **Region locks / embedding disabled** may still be partly regional. `/audio` and booth both use the YouTube Data API now, so public/non-embeddable/upcoming/duration failures are caught at submit time. A client may still report `error`, but the server treats that as diagnostics only.
+- **`LATE_YOUTUBE_API_KEY` is optional at config load** (`config.rs:200`, `optional()`), but YouTube submissions and fallback updates require it at runtime. Without it, booth submit is disabled and staff `/audio` fails validation.
 - **Queue state-drift / singleton-violation stuck state.** Took down prod once already (2026-05-19). The class of bug is non-atomic two-write transitions (DB row status + in-memory `state.current_item_id`); any divergence is unrecoverable without a pod restart. The reconciliation contract in §19 is the active fix — any new code that flips `media_queue_items.status` or mutates `current_item_id` must route through it.
 
 ---
@@ -438,7 +440,7 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 - **TUI sidebar widget on Home for queue visibility.** Booth modal is the only surface today.
 - **Heartbeat cadence tuning.** 10s `LoadVideo` re-broadcast was carried over from the old `PLAYBACK_SYNC_INTERVAL`. Could be slower (30s) once we have confidence stuck browsers don't accumulate.
 - **Multi-tab dedupe.** Two browser tabs on the same token both play. Needs a "primary tab" election or a single-tab-per-token enforcement.
-- **Region-lock partial failure UX.** Staff `/audio` skips the Data API; region-locked items fail at the browser via `error` → server marks `failed` → queue advances. Pre-validation would catch it at submit time.
+- **Region-lock partial failure UX.** Data API validation catches public/embeddable metadata but not every playback-region failure. Client errors are warn-only today because one surface can fail while another succeeds.
 - **Better admin feedback** when DB insert fails after local URL validation succeeds.
 - **Browser-side voting UI.** Protocol already carries `vote_score` per item and `skip_progress` on the current item; no client renders them yet.
 - **Weighted votes by role** (admin/mod ≠ user) — currently 1 user = 1 vote.
@@ -476,7 +478,7 @@ This lazy lifecycle is intentional. A normal CLI run does not open a webview. A 
 - macOS: WKWebView.
 - Windows: WebView2.
 
-The helper serves `late-cli/src/webview/page.html` from a loopback-only ephemeral HTTP origin (`http://127.0.0.1:<port>/`) and loads that URL in the webview. Do not switch this back to `WebViewBuilder::with_html`: Wry's HTML string path gives the page a null origin, and YouTube can reject the iframe with player error 153. The page passes `window.location.origin` into the IFrame Player `origin` parameter, posts `player_state` back through wry IPC, and Rust relays those events to `/api/ws/pair` while pushing `load_video` / `source_changed` into JS via `evaluate_script`.
+The helper serves `late-cli/src/webview/page.html` from a loopback-only ephemeral HTTP origin (`http://127.0.0.1:<port>/`) and loads that URL in the webview. Do not switch this back to `WebViewBuilder::with_html`: Wry's HTML string path gives the page a null origin, and YouTube can reject the iframe with player error 153. The page passes `window.location.origin` into the IFrame Player `origin` parameter, posts `player_state` back through wry IPC, and Rust relays those events to `/api/ws/pair` while pushing `load_video` / `source_changed` into JS via `evaluate_script`. The helper suppresses transient `unstarted`/`cued` reports and ignores `ended` until the current item has first reached `playing`, because the IFrame can emit startup/teardown states during rapid loads. Even a valid `ended` report does not advance the queue; the server timer does.
 
 The helper owns its own mute/volume state, starting at the same 30% default as native CLI Icecast. It registers as a browser with `ssh_mode = "webview"`, so pair-WS `toggle_mute`, `volume_up`, and `volume_down` controls must be applied inside `late-cli/src/webview/pair.rs` and forwarded into `page.html`; changing only the native CLI Icecast atom is not enough because YouTube audio is emitted by WebKit/GStreamer.
 
@@ -487,10 +489,12 @@ This feature is a real browser media stack inside a tiny helper process. Pair-WS
 - **Manual fallback:** if the embedded webview fails on a machine, open the normal browser connect page for the same SSH session. The server treats that real browser as the YouTube surface and tells the native CLI to close/skip the helper until the browser disconnects.
 - **Arch/EndeavourOS + Wayland/Hyprland is proven** with WebKitGTK 4.1 plus GStreamer plugins. Known host package set:
   `sudo pacman -S --needed webkit2gtk-4.1 gst-plugins-good gst-libav`.
-- **Hyprland window routing.** The Wayland app id/class is `sh.late.youtube`; float rules can target it:
+- **Hyprland window routing.** The helper requests an undecorated window by default. The Wayland app id/class is `sh.late.youtube`; float/scratchpad rules can target it:
   `windowrulev2 = float, class:^(sh.late.youtube)$`,
   `windowrulev2 = size 480 320, class:^(sh.late.youtube)$`,
-  `windowrulev2 = center, class:^(sh.late.youtube)$`.
+  `windowrulev2 = center, class:^(sh.late.youtube)$`,
+  `windowrulev2 = workspace special:late silent, class:^(sh.late.youtube)$`,
+  plus a bind like `bind = SUPER, Y, togglespecialworkspace, late`.
 - **Linux X11** should be less fragile than Wayland because Wry's raw-handle path supports X11, but we still use the GTK builder on Linux so one code path covers both. WebKitGTK/GStreamer packages remain the main risk.
 - **Ubuntu/Debian/Fedora** are expected to work once package names and WebKitGTK versions line up. Older distros may not ship the WebKitGTK 4.1 stack this branch expects.
 - **NixOS** should get a first-class package/wrapper, not rely on a random Linux binary. Required runtime/build inputs are `webkitgtk_4_1`, `pkg-config`, `glib-networking`, and GStreamer packages (`gstreamer`, `gst-plugins-base/good/bad/ugly`, `gst-libav`). The wrapper/dev shell must expose `GST_PLUGIN_SYSTEM_PATH_1_0` for `lib/gstreamer-1.0` and `GIO_EXTRA_MODULES` for `glib-networking`; otherwise WebKit can open but media/TLS pieces may be invisible. If this fails, the normal browser connect page is the supported fallback and suppresses the embedded helper automatically.
@@ -509,7 +513,7 @@ Failure signatures:
 
 ### Window UX
 
-Current v1 opens a small companion window. Hidden/offscreen mode is not the default because embedded browser engines can throttle or unload hidden/minimized views, and the YouTube iframe's ads/branding/autoplay posture is cleaner with a visible surface. A future config can add `youtube_webview = "window" | "hidden" | "disabled"` once hidden-mode behavior is validated per platform.
+Current v1 opens a small undecorated companion window. Hidden/offscreen mode is not the default because embedded browser engines can throttle or unload hidden/minimized views, and the YouTube iframe's ads/branding/autoplay posture is cleaner with a visible surface. On compositors such as Hyprland, prefer routing the helper to a special workspace over manually parking it fully off-screen. A future config can add `youtube_webview = "window" | "hidden" | "disabled"` once hidden-mode behavior is validated per platform.
 
 ### What this does NOT change
 
@@ -644,7 +648,7 @@ old user sessions = stay connected but audio actions are rejected until they
 
 ### Mutation surface that has to honor the gate
 
-`submit_url`, `submit_trusted_url`, `submit_video`, `set_trusted_youtube_fallback`, `force_skip`, `cast_skip_vote`, `cast_vote`, `clear_vote`, `delete_queue_item`, `toggle_unskippable`, `record_browser_duration`, `report_player_state`, `finish_item`, `fail_item`, plus all the `*_task` spawners that call them. A `LeaderGuard` parameter on the inner sync methods catches this at compile time.
+`submit_url`, `submit_trusted_url`, `submit_video`, `set_trusted_youtube_fallback`, `force_skip`, `cast_skip_vote`, `cast_vote`, `clear_vote`, `delete_queue_item`, `toggle_unskippable`, `report_player_state`, `finish_item`, plus all the `*_task` spawners that call them. A `LeaderGuard` parameter on the inner sync methods catches this at compile time.
 
 ### Why not yet
 

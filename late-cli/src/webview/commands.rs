@@ -43,6 +43,8 @@ pub enum WebviewEvent {
     },
     Error {
         item_id: Option<String>,
+        #[serde(default)]
+        video_id: Option<String>,
         code: String,
     },
     SourceAck {
