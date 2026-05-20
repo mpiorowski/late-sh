@@ -21,6 +21,9 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Char('4') | ParsedInput::Byte(b'4') => {
             app.hub_state.open(HubTab::Events);
         }
+        ParsedInput::Char('5') | ParsedInput::Byte(b'5') => {
+            app.hub_state.open(HubTab::Guide);
+        }
         _ => {}
     }
 }

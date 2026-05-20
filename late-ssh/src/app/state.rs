@@ -539,7 +539,6 @@ impl App {
                 config.user_id,
                 config.bonsai_service.clone(),
                 tree,
-                config.permissions.is_admin(),
             )
         } else {
             // Fallback: create a default dead-ish state (should not happen in practice)
@@ -556,7 +555,6 @@ impl App {
                     seed: config.user_id.as_u128() as i64,
                     is_alive: true,
                 },
-                config.permissions.is_admin(),
             )
         };
         let bonsai_care_state = config
@@ -811,7 +809,6 @@ impl App {
         self.is_admin = permissions.is_admin();
         self.is_moderator = permissions.is_moderator();
         self.chat.set_permissions(permissions);
-        self.bonsai_state.is_admin = permissions.is_admin();
         self.banner = Some(Banner::success(&format!(
             "Permissions updated: admin={} moderator={}",
             permissions.is_admin(),

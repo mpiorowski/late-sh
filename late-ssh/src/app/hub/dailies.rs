@@ -32,7 +32,7 @@ pub fn draw(frame: &mut Frame, area: Rect) {
 
     let upcoming = vec![
         bullet("Today's puzzles", "sudoku · nonogram · solitaire · minesweeper status"),
-        bullet("Chips earned today", "50 easy · 100 medium · 150 hard, per puzzle"),
+        bullet("Chips earned today", "50 easy · 150 medium · 500 hard, per puzzle"),
         bullet("Win streaks", "running streak per game, longest streak this month"),
         bullet("Daily reset", "countdown to the next UTC rollover"),
     ];

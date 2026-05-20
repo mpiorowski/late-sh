@@ -55,6 +55,7 @@ pub fn draw(
         HubTab::Dailies => crate::app::hub::dailies::draw(frame, layout[3]),
         HubTab::Shop => crate::app::hub::shop::draw(frame, layout[3]),
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
+        HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3]),
     }
     draw_footer(frame, layout[4], state.selected_tab());
 }
@@ -87,7 +88,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, _tab: HubTab) {
         Span::raw("  "),
         Span::styled("Tab/S+Tab", key),
         Span::styled(" switch tabs  ", text),
-        Span::styled("1-4", key),
+        Span::styled("1-5", key),
         Span::styled(" jump  ", text),
         Span::styled("Esc/q", key),
         Span::styled(" close", text),

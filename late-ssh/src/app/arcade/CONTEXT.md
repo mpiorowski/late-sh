@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-05-14
+- Last updated: 2026-05-20
 - Purpose: local working context for The Arcade screen, single-player terminal games, and shared card/chip helpers.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -112,7 +112,7 @@ Testing guidance:
 - Daily puzzle services store board progress by `(user_id, difficulty_key, mode)`.
 - Daily win tables record one completion fact per user/date/difficulty, separate from board state.
 - `ChipService::ensure_chips(user_id)` creates new chip rows with 1000 chips.
-- `ChipService::grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips for daily puzzle completions.
+- `ChipService::grant_daily_bonus_task(user_id, difficulty_key)` awards 50/150/500 chips for easy/medium/hard daily puzzle completions. Solitaire `draw-1` maps to easy and `draw-3` maps to hard.
 - Daily services call `record_win_task()` on completion. That records the daily win, grants chips, and publishes a structured Activity event.
 - `hub::svc::LeaderboardService` refreshes from DB every 30s. Immediate win callouts come from Activity; Hub leaderboard surfaces lag until the next refresh.
 

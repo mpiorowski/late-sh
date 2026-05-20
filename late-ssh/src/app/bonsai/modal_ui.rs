@@ -155,26 +155,18 @@ fn action_hint(bonsai: &BonsaiState, care: &BonsaiCareState) -> (String, Color) 
     }
     let remaining = care.branch_goal.saturating_sub(care.branches_done());
     let branch_word = if remaining == 1 { "branch" } else { "branches" };
-    match (care.watered, remaining, bonsai.is_admin) {
-        (false, 0, _) => ("water today before midnight".to_string(), theme::AMBER()),
-        (false, n, _) => (
+    match (care.watered, remaining) {
+        (false, 0) => ("water today before midnight".to_string(), theme::AMBER()),
+        (false, n) => (
             format!("water today, cut {n} overgrown {branch_word}"),
             theme::AMBER(),
         ),
-        (true, 0, false) => (
+        (true, 0) => (
             "daily care done, next watering tomorrow".to_string(),
             theme::SUCCESS(),
         ),
-        (true, 0, true) => (
-            "daily care done, water again anytime".to_string(),
-            theme::SUCCESS(),
-        ),
-        (true, n, false) => (
+        (true, n) => (
             format!("cut {n} overgrown {branch_word} before midnight"),
-            theme::AMBER(),
-        ),
-        (true, n, true) => (
-            format!("water anytime, cut {n} overgrown {branch_word}"),
             theme::AMBER(),
         ),
     }
