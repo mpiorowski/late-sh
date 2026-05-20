@@ -1,10 +1,10 @@
 use late_core::models::leaderboard::{HighScoreEntry, LeaderboardData, RankedEntry};
 use ratatui::{
-    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
+    Frame,
 };
 use uuid::Uuid;
 
@@ -121,7 +121,10 @@ fn draw_ranked_panel(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedB
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw("  "),
-            Span::styled(view.hint.to_string(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                view.hint.to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ])),
         sections[1],
     );
@@ -181,7 +184,6 @@ fn draw_score_panel(
     }
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
-        Constraint::Length(1), // hint
         Constraint::Length(1), // breathing
         Constraint::Length(6), // monthly: subtitle + up to 5 rows
         Constraint::Length(1), // breathing
@@ -190,25 +192,15 @@ fn draw_score_panel(
     .split(area);
 
     frame.render_widget(Paragraph::new(section_heading(title)), sections[0]);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                "monthly resets the 1st · all-time persists",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ])),
-        sections[1],
-    );
 
     draw_score_list(
         frame,
-        sections[3],
+        sections[2],
         "monthly",
         monthly.iter().collect(),
         user_id,
     );
-    draw_score_list(frame, sections[5], "all-time", all_time, user_id);
+    draw_score_list(frame, sections[4], "all-time", all_time, user_id);
 }
 
 fn draw_score_list(
@@ -304,7 +296,9 @@ fn ranked_lines_from_rows(
         None => false,
     };
     let tail_cost = if needs_user_tail { 2 } else { 0 };
-    let top_count = top_limit.min(rows.len()).min(height.saturating_sub(tail_cost));
+    let top_count = top_limit
+        .min(rows.len())
+        .min(height.saturating_sub(tail_cost));
 
     let mut lines = Vec::with_capacity(height);
     for row in rows.iter().take(top_count) {
@@ -327,10 +321,7 @@ fn divider_line(width: usize) -> Line<'static> {
     let dots = "  …";
     let pad = width.saturating_sub(dots.chars().count());
     Line::from(vec![
-        Span::styled(
-            dots.to_string(),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ),
+        Span::styled(dots.to_string(), Style::default().fg(theme::TEXT_FAINT())),
         Span::raw(" ".repeat(pad)),
     ])
 }
@@ -513,9 +504,7 @@ mod tests {
         // Even a 3-row budget reserves room for divider + you so a low-rank
         // user always sees where they stand.
         let me = Uuid::now_v7();
-        let mut rows: Vec<RankedRow> = (1..=50)
-            .map(|n| row(n, &format!("u{n}"), 100))
-            .collect();
+        let mut rows: Vec<RankedRow> = (1..=50).map(|n| row(n, &format!("u{n}"), 100)).collect();
         rows.push(user_row(51, "me", 1, me));
         let lines = ranked_lines_from_rows(&rows, "chips", me, Some(50), 3, 40, 10);
         assert_eq!(lines.len(), 3);
