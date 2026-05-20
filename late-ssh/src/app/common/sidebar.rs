@@ -149,7 +149,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         if props.cat_available {
             crate::app::cat::ui::draw_cat_inline(frame, cat_area, props.cat);
         } else {
-            draw_cat_in_progress(frame, cat_area);
+            draw_cat_locked(frame, cat_area);
         }
         draw_horizontal_rule(frame, inset(layout[7]));
         bonsai_idx = 8;
@@ -162,7 +162,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     );
 }
 
-fn draw_cat_in_progress(frame: &mut Frame, area: Rect) {
+fn draw_cat_locked(frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -175,7 +175,7 @@ fn draw_cat_in_progress(frame: &mut Frame, area: Rect) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "cat in progress",
+            "cat locked / c shop",
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),

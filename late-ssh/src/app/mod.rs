@@ -26,4 +26,5 @@ pub(crate) mod terminal_help_modal;
 mod tick;
 pub mod vote;
 
+pub use hub::shop::svc::ShopService;
 pub use hub::svc::LeaderboardService;

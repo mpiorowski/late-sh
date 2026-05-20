@@ -25,6 +25,7 @@ pub fn draw(
     frame: &mut Frame,
     area: Rect,
     state: &HubState,
+    shop_state: &crate::app::hub::shop::state::ShopState,
     leaderboard: &LeaderboardData,
     user_id: Uuid,
 ) {
@@ -58,7 +59,7 @@ pub fn draw(
             crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id)
         }
         HubTab::Dailies => crate::app::hub::dailies::draw(frame, layout[3]),
-        HubTab::Shop => crate::app::hub::shop::draw(frame, layout[3]),
+        HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state),
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
         HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3]),
     }

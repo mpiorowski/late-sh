@@ -138,6 +138,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
+    if let Err(e) = state.shop_service.refresh_user(user_id).await {
+        tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+    }
     let artboard_ban = match state.db.get().await {
         Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
             Ok(ban) => ban,
@@ -192,6 +196,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_bonsai_care,
         cat_service: state.cat_service.clone(),
         initial_cat,
+        shop_service: state.shop_service.clone(),
+        shop_snapshot_rx,
         nonogram_library: state.nonogram_library.clone(),
         initial_chip_balance,
         web_url: state.config.web_url.clone(),

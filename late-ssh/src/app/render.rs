@@ -178,6 +178,7 @@ struct DrawContext<'a> {
     show_mod_modal: bool,
     show_hub_modal: bool,
     hub_state: &'a crate::app::hub::state::HubState,
+    shop_state: &'a crate::app::hub::shop::state::ShopState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
@@ -556,6 +557,7 @@ impl App {
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
                         hub_state: &self.hub_state,
+                        shop_state: &self.shop_state,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
@@ -835,7 +837,7 @@ impl App {
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
                     cat: ctx.cat,
-                    cat_available: ctx.is_admin || ctx.is_moderator,
+                    cat_available: ctx.shop_state.entitlements().has_cat_companion(),
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
@@ -889,7 +891,14 @@ impl App {
         }
 
         if ctx.show_hub_modal {
-            crate::app::hub::ui::draw(frame, inner, ctx.hub_state, ctx.leaderboard, ctx.user_id);
+            crate::app::hub::ui::draw(
+                frame,
+                inner,
+                ctx.hub_state,
+                ctx.shop_state,
+                ctx.leaderboard,
+                ctx.user_id,
+            );
         }
 
         if ctx.show_profile_modal {

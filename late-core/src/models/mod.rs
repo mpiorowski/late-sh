@@ -16,6 +16,7 @@ pub mod leaderboard;
 pub mod media_queue_item;
 pub mod media_queue_vote;
 pub mod media_source;
+pub mod marketplace;
 pub mod mention_feed_read;
 pub mod minesweeper;
 pub mod moderation_audit_log;

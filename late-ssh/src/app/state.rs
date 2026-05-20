@@ -178,6 +178,8 @@ pub struct SessionConfig {
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
     pub cat_service: crate::app::cat::svc::CatService,
     pub initial_cat: Option<late_core::models::cat::CatCompanion>,
+    pub shop_service: crate::app::hub::shop::svc::ShopService,
+    pub shop_snapshot_rx: tokio::sync::watch::Receiver<crate::app::hub::shop::svc::ShopSnapshot>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
@@ -311,6 +313,9 @@ pub struct App {
     /// Cat companion
     pub(crate) cat_state: crate::app::cat::state::CatState,
     pub(crate) show_cat_modal: bool,
+
+    /// Hub Shop
+    pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
 
     /// Arcade Hub
     pub(crate) game_selection: usize,
@@ -604,6 +609,11 @@ impl App {
                 },
             )
         };
+        let shop_state = crate::app::hub::shop::state::ShopState::new(
+            config.user_id,
+            config.shop_service.clone(),
+            config.shop_snapshot_rx,
+        );
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -705,6 +715,7 @@ impl App {
             bonsai_care_state,
             cat_state,
             show_cat_modal: false,
+            shop_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,
