@@ -31,13 +31,28 @@ pub fn draw(frame: &mut Frame, area: Rect) {
     );
 
     let categories = vec![
-        bullet("Chat presence", "username colors · titles · custom join lines"),
+        bullet(
+            "Chat presence",
+            "username colors · titles · custom join lines",
+        ),
         bullet("Profile", "frames · banners · portraits · bio styling"),
         bullet("Bonsai & aquarium", "tree species · pots · weather · fish"),
-        bullet("Game cosmetics", "card backs · felt · piece themes · tile skins"),
-        bullet("Music boosters", "force-vote · skip-vote · queue-jump (consumable)"),
-        bullet("Themes & dashboard", "premium themes · MOTD lines · palette tweaks"),
-        bullet("Seasonal drops", "monthly limited cosmetics · holiday badges"),
+        bullet(
+            "Game cosmetics",
+            "card backs · felt · piece themes · tile skins",
+        ),
+        bullet(
+            "Music boosters",
+            "force-vote · skip-vote · queue-jump (consumable)",
+        ),
+        bullet(
+            "Themes & dashboard",
+            "premium themes · MOTD lines · palette tweaks",
+        ),
+        bullet(
+            "Seasonal drops",
+            "monthly limited cosmetics · holiday badges",
+        ),
     ];
     frame.render_widget(Paragraph::new(categories), sections[3]);
 }

@@ -31,9 +31,18 @@ pub fn draw(frame: &mut Frame, area: Rect) {
     );
 
     let upcoming = vec![
-        bullet("Today's puzzles", "sudoku · nonogram · solitaire · minesweeper status"),
-        bullet("Chips earned today", "50 easy · 150 medium · 500 hard, per puzzle"),
-        bullet("Win streaks", "running streak per game, longest streak this month"),
+        bullet(
+            "Today's puzzles",
+            "sudoku · nonogram · solitaire · minesweeper status",
+        ),
+        bullet(
+            "Chips earned today",
+            "50 easy · 150 medium · 500 hard, per puzzle",
+        ),
+        bullet(
+            "Win streaks",
+            "running streak per game, longest streak this month",
+        ),
         bullet("Daily reset", "countdown to the next UTC rollover"),
     ];
     frame.render_widget(Paragraph::new(upcoming), sections[3]);
@@ -41,18 +50,12 @@ pub fn draw(frame: &mut Frame, area: Rect) {
 
 fn bullet(label: &str, hint: &str) -> Line<'static> {
     Line::from(vec![
-        Span::styled(
-            "   · ",
-            Style::default().fg(theme::TEXT_FAINT()),
-        ),
+        Span::styled("   · ", Style::default().fg(theme::TEXT_FAINT())),
         Span::styled(
             format!("{label:<22}"),
             Style::default().fg(theme::TEXT_BRIGHT()),
         ),
-        Span::styled(
-            hint.to_string(),
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
+        Span::styled(hint.to_string(), Style::default().fg(theme::TEXT_DIM())),
     ])
 }
 

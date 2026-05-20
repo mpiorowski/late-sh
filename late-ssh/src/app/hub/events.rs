@@ -31,10 +31,22 @@ pub fn draw(frame: &mut Frame, area: Rect) {
     );
 
     let upcoming = vec![
-        bullet("Monthly reset", "top 3 of each board freeze into permanent profile badges"),
-        bullet("Seasonal drops", "halloween · christmas · new year, monthly themed cosmetics"),
-        bullet("Tournaments", "live poker tables · arcade speedruns · scored events"),
-        bullet("Anniversary", "yearly returning cosmetics for long-time members"),
+        bullet(
+            "Monthly reset",
+            "top 3 of each board freeze into permanent profile badges",
+        ),
+        bullet(
+            "Seasonal drops",
+            "halloween · christmas · new year, monthly themed cosmetics",
+        ),
+        bullet(
+            "Tournaments",
+            "live poker tables · arcade speedruns · scored events",
+        ),
+        bullet(
+            "Anniversary",
+            "yearly returning cosmetics for long-time members",
+        ),
     ];
     frame.render_widget(Paragraph::new(upcoming), sections[3]);
 }

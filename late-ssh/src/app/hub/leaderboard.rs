@@ -1,10 +1,10 @@
 use late_core::models::leaderboard::{HighScoreEntry, LeaderboardData, RankedEntry};
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 use uuid::Uuid;
 
