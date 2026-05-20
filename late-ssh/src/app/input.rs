@@ -704,11 +704,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_goldfish_modal {
-        crate::app::goldfish::modal_input::handle_input(app, event);
-        return;
-    }
-
     // Picker intercepts all input when open (ESC is handled via dispatch_escape).
     if app.icon_picker_open {
         handle_icon_picker_input(app, event);
@@ -1157,11 +1152,8 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if app.show_cat_modal {
+        app.cat_state.cancel_play();
         app.show_cat_modal = false;
-        return;
-    }
-    if app.show_goldfish_modal {
-        app.show_goldfish_modal = false;
         return;
     }
     if app.icon_picker_open {
@@ -1673,8 +1665,8 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.cat_state.cancel_play();
     app.show_cat_modal = false;
-    app.show_goldfish_modal = false;
     app.show_settings = false;
     app.show_terminal_help = false;
     app.show_web_chat_qr = false;
@@ -1695,8 +1687,8 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.cat_state.cancel_play();
     app.show_cat_modal = false;
-    app.show_goldfish_modal = false;
     app.show_terminal_help = false;
     app.show_web_chat_qr = false;
     app.show_pair_modal = false;
@@ -1716,8 +1708,8 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_mod_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.cat_state.cancel_play();
     app.show_cat_modal = false;
-    app.show_goldfish_modal = false;
     app.show_settings = false;
     app.show_terminal_help = false;
     app.show_web_chat_qr = false;
@@ -1740,8 +1732,8 @@ fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.cat_state.cancel_play();
     app.show_cat_modal = false;
-    app.show_goldfish_modal = false;
     app.show_settings = false;
     app.show_web_chat_qr = false;
     app.show_pair_modal = false;
@@ -1971,23 +1963,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_hub_modal = false;
             app.show_quit_confirm = false;
             app.show_cat_modal = true;
-            app.sidebar_pet = crate::app::state::SidebarPet::Cat;
-            true
-        }
-        b'g' | b'G'
-            if !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing
-                && !ctx.showcase_composing
-                && !ctx.work_composing =>
-        {
-            app.show_help = false;
-            app.show_profile_modal = false;
-            app.show_settings = false;
-            app.show_hub_modal = false;
-            app.show_quit_confirm = false;
-            app.show_goldfish_modal = true;
-            app.sidebar_pet = crate::app::state::SidebarPet::Goldfish;
             true
         }
         b'1' if !artboard_blocks_page_switch => {

@@ -17,14 +17,26 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &CatState) {
     let mood = state.mood();
     let eyes = mood.eyes();
     let color = mood_color(mood);
+    let offset = if mood == CatMood::Happy && area.width > 10 && state.animation_ticks() % 18 < 9 {
+        1
+    } else {
+        0
+    };
+    let pad = " ".repeat(offset);
 
     let mut lines: Vec<Line<'_>> = vec![
-        Line::from(Span::styled(" /\\_/\\ ", Style::default().fg(color))),
         Line::from(Span::styled(
-            format!("( {} )", eyes),
+            format!("{pad} /\\_/\\ "),
             Style::default().fg(color),
         )),
-        Line::from(Span::styled(" >   < ", Style::default().fg(color))),
+        Line::from(Span::styled(
+            format!("{pad}( {} )", eyes),
+            Style::default().fg(color),
+        )),
+        Line::from(Span::styled(
+            format!("{pad} >   < "),
+            Style::default().fg(color),
+        )),
     ];
 
     if area.height >= 4 {
@@ -43,7 +55,7 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &CatState) {
         } else {
             footer.push(Span::raw("  "));
             footer.push(Span::styled(
-                "k care",
+                state.next_need_hint(),
                 Style::default()
                     .fg(theme::AMBER_DIM())
                     .add_modifier(Modifier::ITALIC),

@@ -60,12 +60,6 @@ pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SidebarPet {
-    Cat,
-    Goldfish,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DashboardGameToggleTarget {
     Arcade,
     Room,
@@ -184,8 +178,6 @@ pub struct SessionConfig {
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
     pub cat_service: crate::app::cat::svc::CatService,
     pub initial_cat: Option<late_core::models::cat::CatCompanion>,
-    pub goldfish_service: crate::app::goldfish::svc::GoldfishService,
-    pub initial_goldfish: Option<late_core::models::goldfish::GoldfishBowl>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
@@ -320,13 +312,6 @@ pub struct App {
     pub(crate) cat_state: crate::app::cat::state::CatState,
     pub(crate) show_cat_modal: bool,
 
-    /// Goldfish bowl
-    pub(crate) goldfish_state: crate::app::goldfish::state::GoldfishState,
-    pub(crate) show_goldfish_modal: bool,
-
-    /// Which pet is shown in the sidebar (last opened wins)
-    pub(crate) sidebar_pet: SidebarPet,
-
     /// Arcade Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
@@ -404,7 +389,6 @@ impl App {
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
         self.show_cat_modal = false;
-        self.show_goldfish_modal = false;
     }
 
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
@@ -597,30 +581,6 @@ impl App {
                 )
             });
 
-        let goldfish_state = if let Some(bowl) = config.initial_goldfish {
-            crate::app::goldfish::state::GoldfishState::new(
-                config.user_id,
-                config.goldfish_service.clone(),
-                bowl,
-            )
-        } else {
-            crate::app::goldfish::state::GoldfishState::new(
-                config.user_id,
-                config.goldfish_service.clone(),
-                late_core::models::goldfish::GoldfishBowl {
-                    id: uuid::Uuid::nil(),
-                    created: chrono::Utc::now(),
-                    updated: chrono::Utc::now(),
-                    user_id: config.user_id,
-                    last_fed: None,
-                    last_decorated: None,
-                    last_lit: None,
-                    last_water_changed: None,
-                    friend_count: 0,
-                },
-            )
-        };
-
         let cat_state = if let Some(companion) = config.initial_cat {
             crate::app::cat::state::CatState::new(
                 config.user_id,
@@ -745,9 +705,6 @@ impl App {
             bonsai_care_state,
             cat_state,
             show_cat_modal: false,
-            goldfish_state,
-            show_goldfish_modal: false,
-            sidebar_pet: SidebarPet::Cat,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,

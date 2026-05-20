@@ -799,13 +799,6 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        let initial_goldfish = match self.state.goldfish_service.ensure_bowl(user_id).await {
-            Ok(bowl) => Some(bowl),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create goldfish bowl");
-                None
-            }
-        };
 
         // Ensure the user's chip balance row exists.
         let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
@@ -874,8 +867,6 @@ impl russh::server::Handler for ClientHandler {
             initial_bonsai_care,
             cat_service: self.state.cat_service.clone(),
             initial_cat,
-            goldfish_service: self.state.goldfish_service.clone(),
-            initial_goldfish,
             nonogram_library,
             initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),

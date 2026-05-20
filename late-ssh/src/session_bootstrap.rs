@@ -138,13 +138,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
-    let initial_goldfish = match state.goldfish_service.ensure_bowl(user_id).await {
-        Ok(bowl) => Some(bowl),
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load/create goldfish bowl");
-            None
-        }
-    };
     let artboard_ban = match state.db.get().await {
         Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
             Ok(ban) => ban,
@@ -199,8 +192,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_bonsai_care,
         cat_service: state.cat_service.clone(),
         initial_cat,
-        goldfish_service: state.goldfish_service.clone(),
-        initial_goldfish,
         nonogram_library: state.nonogram_library.clone(),
         initial_chip_balance,
         web_url: state.config.web_url.clone(),

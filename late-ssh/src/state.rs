@@ -19,7 +19,6 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
-use crate::app::goldfish::svc::GoldfishService;
 use crate::app::hub::svc::LeaderboardService;
 use crate::app::profile::svc::ProfileService;
 use crate::app::rooms::blackjack::manager::BlackjackTableManager;
@@ -86,7 +85,6 @@ pub struct State {
     pub minesweeper_service: MinesweeperService,
     pub bonsai_service: BonsaiService,
     pub cat_service: CatService,
-    pub goldfish_service: GoldfishService,
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
     pub rooms_service: RoomsService,

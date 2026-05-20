@@ -25,7 +25,6 @@ use late_ssh::app::cat::svc::CatService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
-use late_ssh::app::goldfish::svc::GoldfishService;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
@@ -167,7 +166,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         MinesweeperService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
     let cat_service = CatService::new(db.clone());
-    let goldfish_service = GoldfishService::new(db.clone());
     let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
     State {
@@ -200,7 +198,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         minesweeper_service,
         bonsai_service,
         cat_service,
-        goldfish_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
         rooms_service,
@@ -308,8 +305,6 @@ pub fn make_app_with_chat_service(
         initial_bonsai_care: None,
         cat_service: CatService::new(db.clone()),
         initial_cat: None,
-        goldfish_service: GoldfishService::new(db.clone()),
-        initial_goldfish: None,
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
@@ -428,8 +423,6 @@ pub fn make_app_with_paired_client(
         initial_bonsai_care: None,
         cat_service: CatService::new(db.clone()),
         initial_cat: None,
-        goldfish_service: GoldfishService::new(db.clone()),
-        initial_goldfish: None,
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
