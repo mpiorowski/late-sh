@@ -97,7 +97,7 @@ pub struct DashboardRenderInput<'a> {
     pub chat_view: DashboardChatView<'a>,
 }
 
-/// Page-1 Home surface: top strip (activity/quest/shop), a wide wire feed, and
+/// Page-1 Home surface: top strip (activity/multiplayer/quest), a wide wire feed, and
 /// the selected room's chat. Non-general rooms bypass this and render as full
 /// chat in `render.rs`.
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
@@ -296,7 +296,7 @@ fn draw_top_strip(
 
     draw_box_activity(frame, cols[0], activity, online_count);
     draw_box_multiplayer_rooms(frame, cols[2], top_rooms);
-    draw_box_shop(frame, cols[4]);
+    draw_box_daily_quest(frame, cols[4]);
 
     crate::app::common::sidebar::paint_vertical_separator(
         frame,
@@ -341,7 +341,7 @@ fn draw_box_multiplayer_rooms(frame: &mut Frame, area: Rect, top_rooms: &[Dashbo
     );
 }
 
-fn draw_box_shop(frame: &mut Frame, area: Rect) {
+fn draw_box_daily_quest(frame: &mut Frame, area: Rect) {
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -350,10 +350,10 @@ fn draw_box_shop(frame: &mut Frame, area: Rect) {
     ])
     .split(area);
 
-    draw_box_label_with_hint(frame, rows[0], "shop", "(coming soon)");
+    draw_box_label_with_hint(frame, rows[0], "daily quest", "(coming soon)");
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "golden chips",
+            "win 3 hands",
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
@@ -362,16 +362,20 @@ fn draw_box_shop(frame: &mut Frame, area: Rect) {
     );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "new this week",
+            "any table",
             Style::default().fg(theme::TEXT_DIM()),
         ))),
         rows[2],
     );
+
+    let bar_w = (rows[3].width as usize).saturating_sub(6);
+    let filled = bar_w / 3;
+    let empty = bar_w.saturating_sub(filled);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("●", Style::default().fg(theme::AMBER())),
-            Span::styled(" 200", Style::default().fg(theme::AMBER())),
-            Span::styled("  to buy", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled("█".repeat(filled), Style::default().fg(theme::SUCCESS())),
+            Span::styled("░".repeat(empty), Style::default().fg(theme::BORDER_DIM())),
+            Span::styled(" 1/3", Style::default().fg(theme::TEXT_DIM())),
         ])),
         rows[3],
     );

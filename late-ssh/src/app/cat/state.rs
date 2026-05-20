@@ -449,7 +449,6 @@ mod tests {
                 food: CatNeedStatus::Overdue,
                 water: CatNeedStatus::Due,
                 play: CatNeedStatus::Due,
-                ..cared
             }),
             CatMood::Sad
         );

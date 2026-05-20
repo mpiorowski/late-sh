@@ -311,7 +311,7 @@ impl App {
             synthetic_selected,
         );
         let top_rooms =
-            dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 3);
+            dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 4);
         let online_count = self
             .active_users
             .as_ref()

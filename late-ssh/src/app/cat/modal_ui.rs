@@ -396,7 +396,7 @@ fn cat_left(needs: CatNeeds, mood: CatMood, tick: usize, width: usize, cat_w: us
     let sway = if cat_activity(mood) == 0 {
         0
     } else {
-        usize::from((tick / 14) % 5 == 0)
+        usize::from((tick / 14).is_multiple_of(5))
     };
     (parked + sway).min(travel)
 }
