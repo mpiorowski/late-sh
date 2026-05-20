@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::{
     env,
+    io::BufRead,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
@@ -118,10 +119,10 @@ fn run_webview_spike_subcommand(args: &[String]) -> Result<()> {
 }
 
 fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
-    let token = args
-        .first()
-        .context("usage: late webview-pair <token>")?
-        .clone();
+    if !args.is_empty() {
+        anyhow::bail!("usage: late webview-pair (token is read from stdin)");
+    }
+    let token = read_webview_pair_token_from_stdin()?;
     let api_base_url =
         env::var("LATE_API_BASE_URL").unwrap_or_else(|_| config::DEFAULT_API_BASE_URL.to_string());
     init_logging(true)?;
@@ -133,6 +134,7 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
             Ok(rt) => rt,
             Err(err) => {
                 error!(error = %err, "failed to build webview pair runtime");
+                let _ = proxy.send_event(webview::WebviewCommand::Shutdown);
                 return;
             }
         };
@@ -142,6 +144,22 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
             }
         });
     })
+}
+
+fn read_webview_pair_token_from_stdin() -> Result<String> {
+    let mut token = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut token)
+        .context("failed to read webview pair token from stdin")?;
+    let token = token.trim_end_matches(['\r', '\n']).to_string();
+    if token.is_empty() {
+        anyhow::bail!("webview pair token was empty");
+    }
+    if token.chars().any(char::is_whitespace) {
+        anyhow::bail!("webview pair token was invalid");
+    }
+    Ok(token)
 }
 
 async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBuf>) -> Result<()> {

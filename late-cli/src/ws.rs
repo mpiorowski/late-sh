@@ -3,8 +3,13 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
+    env, fs,
     fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     time::Duration,
@@ -110,9 +115,8 @@ impl WebviewPlaybackController {
         };
         let child = match Command::new(exe)
             .arg("webview-pair")
-            .arg(&self.token)
             .env("LATE_API_BASE_URL", &self.api_base_url)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(stderr)
             .spawn()
@@ -123,6 +127,13 @@ impl WebviewPlaybackController {
                 return Ok(());
             }
         };
+        let mut child = child;
+        if let Err(err) = write_helper_token(&mut child, &self.token) {
+            warn!(error = %err, "failed to pass token to embedded YouTube webview helper");
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
         self.child = Some(child);
         info!("started embedded YouTube webview helper");
         Ok(())
@@ -181,13 +192,117 @@ impl WebviewPlaybackController {
 }
 
 fn webview_helper_stderr() -> Result<Stdio> {
-    let path = std::env::temp_dir().join("late-webview.log");
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
+    let path = webview_helper_log_path();
+    ensure_webview_log_dir(&path)?;
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
+    }
+    let file = options
         .open(&path)
         .with_context(|| format!("failed to open webview helper log at {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+    }
     Ok(Stdio::from(file))
+}
+
+fn write_helper_token(child: &mut Child, token: &str) -> Result<()> {
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("webview helper stdin pipe was not available")?;
+    stdin
+        .write_all(token.as_bytes())
+        .context("failed to write webview helper token")?;
+    stdin
+        .write_all(b"\n")
+        .context("failed to terminate webview helper token")?;
+    Ok(())
+}
+
+fn webview_helper_log_path() -> PathBuf {
+    #[cfg(unix)]
+    {
+        if let Some(base) = nonempty_os_env("XDG_STATE_HOME") {
+            return PathBuf::from(base).join("late").join("webview.log");
+        }
+        if let Some(home) = nonempty_os_env("HOME") {
+            return PathBuf::from(home)
+                .join(".local")
+                .join("state")
+                .join("late")
+                .join("webview.log");
+        }
+        if let Some(base) = nonempty_os_env("XDG_RUNTIME_DIR") {
+            return PathBuf::from(base).join("late").join("webview.log");
+        }
+        env::temp_dir()
+            .join(format!("late-{}", effective_user_id()))
+            .join("webview.log")
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(base) = nonempty_os_env("LOCALAPPDATA") {
+            return PathBuf::from(base).join("late").join("webview.log");
+        }
+        if let Some(profile) = nonempty_os_env("USERPROFILE") {
+            return PathBuf::from(profile)
+                .join("AppData")
+                .join("Local")
+                .join("late")
+                .join("webview.log");
+        }
+        return env::temp_dir().join("late").join("webview.log");
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        env::temp_dir().join("late").join("webview.log")
+    }
+}
+
+fn nonempty_os_env(key: &str) -> Option<std::ffi::OsString> {
+    env::var_os(key).filter(|value| !value.is_empty())
+}
+
+fn ensure_webview_log_dir(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("webview helper log path has no parent directory")?;
+    fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create webview helper log directory at {}",
+            parent.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        let metadata = fs::symlink_metadata(parent).with_context(|| {
+            format!(
+                "failed to inspect webview helper log directory at {}",
+                parent.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            anyhow::bail!(
+                "webview helper log directory is not a real directory: {}",
+                parent.display()
+            );
+        }
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn effective_user_id() -> u32 {
+    // SAFETY: geteuid has no preconditions and does not modify memory.
+    unsafe { nix::libc::geteuid() }
 }
 
 impl Drop for WebviewPlaybackController {
@@ -205,11 +320,11 @@ pub(super) async fn run_viz_ws(
     webview: &mut WebviewPlaybackController,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
-    debug!(%ws_url, "connecting pair websocket");
+    debug!("connecting pair websocket");
     let (mut ws, _) = tokio::time::timeout(Duration::from_secs(10), connect_async(&ws_url))
         .await
-        .with_context(|| format!("timed out connecting to pair websocket at {ws_url}"))?
-        .with_context(|| format!("failed to connect to pair websocket at {ws_url}"))?;
+        .context("timed out connecting to pair websocket")?
+        .context("failed to connect to pair websocket")?;
     info!("pair websocket established");
     let mut heartbeat = interval(Duration::from_secs(1));
     send_client_state(&mut ws, client, playback).await?;

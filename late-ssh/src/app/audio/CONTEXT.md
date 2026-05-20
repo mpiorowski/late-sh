@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-19 (post-incident queue reconciliation from main is preserved; CLI-side embedded YouTube webview v1 is wired into the normal `late-cli` build. Native CLI advertises `youtube`, `set_playback_source` gates Icecast and drives lazy helper spawn/teardown, and real browser pairing suppresses the helper so users can fall back to the browser connect page when webview is flaky.)
+- Last updated: 2026-05-20 (post-incident queue reconciliation from main is preserved; CLI-side embedded YouTube webview v1 is wired into the normal `late-cli` build. Native CLI advertises `youtube`, `set_playback_source` gates Icecast and drives lazy helper spawn/teardown, real browser pairing suppresses the helper so users can fall back to the browser connect page when webview is flaky, and helper token/log handling is hardened.)
 - Previously: source arbitration simplified — no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Booth modal surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Two submit paths diverge in metadata: booth (`booth_submit_public_task` → `submit_url` → Data API) inserts rows with title/channel/`duration_ms`/`is_stream` already populated; staff `/audio` (`submit_trusted_url_task`) inserts NULL metadata and the browser backfills `duration_ms` on first play via `record_browser_duration`.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -268,7 +268,7 @@ Goal: the CLI tolerates everything new the audio domain added, plays Icecast whe
 
 - **Unknown audio events ignored** (`late-cli/src/ws.rs`). Inbound text is parsed only as `PairControlMessage`. `load_video`, `source_changed`, `queue_update` fail to deserialize, the CLI logs `warn!("ignoring unsupported pair websocket event")`, and the select loop continues. **The CLI does not disconnect on audio events.** Note: each playing track now also produces a 10s `load_video` heartbeat — the CLI log noise budget should account for that.
 - **Source gate, not forced mute.** `set_playback_source` updates `source_is_icecast`; `late-cli/src/audio/output.rs` emits silence when it is false. The user-controlled `muted` atomic remains only the local mute keybind / paired mute control.
-- **Embedded YouTube webview lifecycle.** The same `set_playback_source` message drives `late-cli/src/ws.rs::WebviewPlaybackController`: `youtube` spawns one `late webview-pair <token>` child only when `embedded_webview_enabled=true`; `icecast` or `embedded_webview_enabled=false` kills the helper. Do **not** spawn the helper from global `source_changed`.
+- **Embedded YouTube webview lifecycle.** The same `set_playback_source` message drives `late-cli/src/ws.rs::WebviewPlaybackController`: `youtube` spawns one `late webview-pair` child only when `embedded_webview_enabled=true` and writes the session token over the child's stdin pipe; `icecast` or `embedded_webview_enabled=false` kills the helper. Do **not** spawn the helper from global `source_changed`.
 - **YouTube capability.** Native CLI `client_state.capabilities` includes `"youtube"` on desktop platforms. The server still sends `set_playback_source` to every paired entry; older/plain CLIs simply gate Icecast, while YouTube-capable CLIs also launch the helper.
 - **CLI identifies itself.** First native `client_state` emitted by `late-cli/src/ws.rs` carries `"client_kind": "cli"`. The helper sends `"client_kind": "browser"` plus `"ssh_mode": "webview"` so existing browser paths still work, while the server can distinguish it from a real browser connect page.
 
@@ -455,7 +455,7 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 - Native `late` remains the always-on SSH/audio control process.
 - Native `late` opens the normal pair WS as `client_kind = "cli"`.
 - Native `late` advertises `capabilities: ["clipboard_image", "youtube"]` on desktop platforms.
-- `set_playback_source: youtube` spawns a helper child (`late webview-pair <token>`) only when `embedded_webview_enabled=true`.
+- `set_playback_source: youtube` spawns a helper child (`late webview-pair`, token on stdin) only when `embedded_webview_enabled=true`.
 - A real browser connect page paired on the same token sets `embedded_webview_enabled=false`, so browser YouTube is the escape hatch when the embedded webview stack fails on a user's machine.
 - `set_playback_source: icecast` kills the helper and resumes native Icecast.
 - The helper opens its own pair WS and reports `client_kind = "browser", ssh_mode = "webview"` so existing browser paths work while policy can distinguish it from a real browser tab.
@@ -482,7 +482,7 @@ The helper owns its own mute/volume state, starting at the same 30% default as n
 
 ### Runtime support / troubleshooting
 
-This feature is a real browser media stack inside a tiny helper process. Pair-WS protocol bugs show up in server logs; webview/browser/runtime bugs show up first in `/tmp/late-webview.log`.
+This feature is a real browser media stack inside a tiny helper process. Pair-WS protocol bugs show up in server logs; webview/browser/runtime bugs show up first in the per-user helper log (`$XDG_STATE_HOME/late/webview.log` or `~/.local/state/late/webview.log` on Unix, `%LOCALAPPDATA%\late\webview.log` on Windows).
 
 - **Manual fallback:** if the embedded webview fails on a machine, open the normal browser connect page for the same SSH session. The server treats that real browser as the YouTube surface and tells the native CLI to close/skip the helper until the browser disconnects.
 - **Arch/EndeavourOS + Wayland/Hyprland is proven** with WebKitGTK 4.1 plus GStreamer plugins. Known host package set:
@@ -500,7 +500,7 @@ This feature is a real browser media stack inside a tiny helper process. Pair-WS
 
 Failure signatures:
 
-- **No window:** check `/tmp/late-webview.log`. Past failures included Wayland raw-window-handle rejection and invalid GTK app id. Linux must use Wry's GTK build path (`build_gtk`) with Tao's `default_vbox()` container, and the GTK app id must remain valid reverse-DNS (`sh.late.youtube`).
+- **No window:** check the per-user helper log. Past failures included Wayland raw-window-handle rejection and invalid GTK app id. Linux must use Wry's GTK build path (`build_gtk`) with Tao's `default_vbox()` container, and the GTK app id must remain valid reverse-DNS (`sh.late.youtube`).
 - **White/blank window with GTK warning about `GtkApplicationWindow` already containing `GtkBox`:** the webview was mounted into the GTK window instead of Tao's default vbox. Use `window.default_vbox()` as the GTK container.
 - **YouTube error 153:** the IFrame Player rejected embed identity. The page must load from loopback HTTP and pass `window.location.origin`; do not use `with_html`.
 - **Black/unstarted player:** often missing GStreamer plugins. `GStreamer element autoaudiosink not found` means `gst-plugins-good` is absent.

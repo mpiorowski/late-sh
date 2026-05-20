@@ -272,9 +272,10 @@ fn cli_youtube_lines() -> Vec<String> {
         "",
         "Common Linux symptoms",
         "  No window:",
-        "    Check /tmp/late-webview.log. A GTK application-id panic or",
-        "    unsupported window handle means the helper is failing before WebKit",
-        "    starts.",
+        "    Check the webview helper log under $XDG_STATE_HOME/late/",
+        "    webview.log or ~/.local/state/late/webview.log. A GTK",
+        "    application-id panic or unsupported window handle means the",
+        "    helper is failing before WebKit starts.",
         "",
         "  White/blank window:",
         "    Usually a WebKitGTK construction problem. The Wayland path must use",
@@ -313,7 +314,7 @@ fn cli_youtube_lines() -> Vec<String> {
         "  takes over YouTube playback and closes the helper; closing the",
         "  browser lets the CLI helper act as fallback again.",
         "  Default webview volume is 30%, matching native CLI Icecast.",
-        "  /tmp/late-webview.log is the first place to look when it acts weird.",
+        "  The helper log is the first place to look when it acts weird.",
     ]
     .into_iter()
     .map(str::to_string)

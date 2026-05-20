@@ -6,7 +6,8 @@
 //! Rust pushes commands (LoadVideo, SourceChanged, Shutdown) into the JS
 //! bridge via tao's user-event mechanism; JS posts player state back through
 //! wry's IPC handler. See `commands.rs` for the payload shapes and
-//! `pair.rs` for the WS-relay task used by `late webview-pair <token>`.
+//! `pair.rs` for the WS-relay task used by `late webview-pair`, which reads
+//! the session token from stdin.
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -135,8 +136,12 @@ where
         *control_flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(cmd) => {
+                let should_exit = matches!(cmd, WebviewCommand::Shutdown);
                 if let Err(err) = apply_command(&webview, cmd) {
                     warn!(error = %err, "failed to apply webview command");
+                }
+                if should_exit {
+                    *control_flow = ControlFlow::Exit;
                 }
             }
             Event::WindowEvent {

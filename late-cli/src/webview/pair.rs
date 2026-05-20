@@ -1,4 +1,4 @@
-//! Pair-WS relay task used by `late webview-pair <token>`.
+//! Pair-WS relay task used by `late webview-pair`.
 //!
 //! Connects to /api/ws/pair?token=..., registers as `client_kind = "browser"`
 //! with `ssh_mode = "webview"`, relays inbound `load_video` / `source_changed`
@@ -74,12 +74,23 @@ pub async fn run(
     proxy: EventLoopProxy<WebviewCommand>,
     mut ipc_rx: mpsc::UnboundedReceiver<WebviewEvent>,
 ) -> Result<()> {
+    let result = run_inner(api_base_url, token, &proxy, &mut ipc_rx).await;
+    let _ = proxy.send_event(WebviewCommand::Shutdown);
+    result
+}
+
+async fn run_inner(
+    api_base_url: &str,
+    token: &str,
+    proxy: &EventLoopProxy<WebviewCommand>,
+    ipc_rx: &mut mpsc::UnboundedReceiver<WebviewEvent>,
+) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
-    debug!(%ws_url, "connecting webview pair websocket");
+    debug!("connecting webview pair websocket");
     let (mut ws, _) = tokio::time::timeout(Duration::from_secs(10), connect_async(&ws_url))
         .await
-        .with_context(|| format!("timed out connecting to pair websocket at {ws_url}"))?
-        .with_context(|| format!("failed to connect to pair websocket at {ws_url}"))?;
+        .context("timed out connecting to pair websocket")?
+        .context("failed to connect to pair websocket")?;
     info!("webview pair websocket established");
 
     let mut audio_settings = AudioSettings::default();
@@ -109,7 +120,7 @@ pub async fn run(
                 let Some(inbound) = inbound else { break; };
                 match inbound? {
                     Message::Text(text) => {
-                        let result = handle_server_text(text.as_str(), &proxy, &mut audio_settings).await;
+                        let result = handle_server_text(text.as_str(), proxy, &mut audio_settings).await;
                         if result.send_client_state {
                             send_client_state(&mut ws, audio_settings).await?;
                         }
@@ -127,7 +138,6 @@ pub async fn run(
         }
     }
 
-    let _ = proxy.send_event(WebviewCommand::Shutdown);
     Ok(())
 }
 
