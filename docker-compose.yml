@@ -45,6 +45,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      service-ssh:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/${LATE_WEB_PORT}' || exit 1"]
       interval: 30s

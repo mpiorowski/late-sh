@@ -656,17 +656,18 @@ fn seat_badge_line(
 ) -> Line<'static> {
     let mut spans = Vec::new();
     if is_winner {
+        let label = if seat.last_payout > 0 {
+            format!("WIN +{}", seat.last_payout)
+        } else {
+            "WIN".to_string()
+        };
         spans.push(Span::styled(
-            "WINNER",
+            label,
             Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
         ));
-    }
-    if snapshot.dealer_button == Some(seat.index) {
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
-        }
+    } else if snapshot.dealer_button == Some(seat.index) {
         spans.push(Span::styled(
             "button",
             Style::default()
@@ -722,13 +723,6 @@ fn draw_table_compact(
     snapshot: &PokerPublicSnapshot,
     usernames: &HashMap<Uuid, String>,
 ) {
-    let block = Block::default()
-        .title(" Poker ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     let mut lines = vec![
         Line::from(vec![
             Span::styled("Board: ", Style::default().fg(theme::TEXT_DIM())),
@@ -769,7 +763,7 @@ fn draw_table_compact(
     )));
     lines.push(key_line(state, snapshot));
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn status_text(snapshot: &PokerPublicSnapshot) -> String {
@@ -904,18 +898,16 @@ fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {
                         "",
                     )
                 }
+            } else if state.can_raise() {
+                key_hint(
+                    &format!(
+                        "C check · B bet {} · A all-in · {auto_hint} · F fold · [/] bet",
+                        state.selected_raise().max(state.min_raise())
+                    ),
+                    "",
+                )
             } else {
-                if state.can_raise() {
-                    key_hint(
-                        &format!(
-                            "C check · B bet {} · A all-in · {auto_hint} · F fold · [/] bet",
-                            state.selected_raise().max(state.min_raise())
-                        ),
-                        "",
-                    )
-                } else {
-                    key_hint(&format!("C check · {auto_hint} · F fold"), "")
-                }
+                key_hint(&format!("C check · {auto_hint} · F fold"), "")
             }
         }
         PokerPhase::PreFlop | PokerPhase::Flop | PokerPhase::Turn | PokerPhase::River => key_hint(

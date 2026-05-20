@@ -9,7 +9,7 @@ use late_core::models::{
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::ServerBan,
-    user::User,
+    user::{RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User},
 };
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::chat::notifications::svc::NotificationService;
@@ -344,7 +344,8 @@ async fn admin_can_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(message.id, true);
+    let (pinned_tx, _pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    service.toggle_message_pin_task(message.id, true, pinned_tx);
 
     timeout(Duration::from_secs(2), async {
         loop {
@@ -386,7 +387,8 @@ async fn non_admin_cannot_toggle_message_pin() {
     .await
     .expect("message");
 
-    service.toggle_message_pin_task(message.id, false);
+    let (pinned_tx, _pinned_rx) = tokio::sync::watch::channel(Vec::new());
+    service.toggle_message_pin_task(message.id, false, pinned_tx);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let updated = ChatMessage::get(&client, message.id)
@@ -703,8 +705,11 @@ async fn room_tail_task_loads_favorite_room_history() {
             theme_id: Some("late".to_string()),
             enable_background_color: false,
             show_dashboard_header: true,
+            show_dashboard_wire: true,
             show_right_sidebar: true,
-            show_arcade_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: vec![favorite_room.id],
         },
@@ -1537,7 +1542,7 @@ async fn mod_room_ban_command_bans_kicks_and_audits() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "room ban #mod-ban-room @mod_ban_target 1h test cleanup".to_string(),
+        "ban #mod-ban-room @mod_ban_target 1h test cleanup".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1682,6 +1687,7 @@ async fn mod_rename_user_command_updates_username_active_user_and_audits() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: Vec::new(),
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -1792,6 +1798,7 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: Some(peer_ip),
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
@@ -1803,7 +1810,9 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -1817,7 +1826,7 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "server kick @server_kick_target cool off".to_string(),
+        "kick server @server_kick_target cool off".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1873,6 +1882,7 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: Some(peer_ip),
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
@@ -1884,7 +1894,9 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -1899,7 +1911,7 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "server ban @server_ban_target 1h test ban".to_string(),
+        "ban server @server_ban_target 1h test ban".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -1991,6 +2003,7 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
@@ -2002,7 +2015,9 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -2016,7 +2031,7 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "artboard ban @artboard_ban_target 1h paint cooldown".to_string(),
+        "ban artboard @artboard_ban_target 1h paint cooldown".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2232,9 +2247,9 @@ async fn mod_bans_command_lists_active_bans() {
         .expect("create room");
 
     for command in [
-        "server ban @list_server_target 1h server reason",
-        "artboard ban @list_artboard_target 1h art reason",
-        "room ban #list-bans-room @list_room_target 1h room reason",
+        "ban server @list_server_target 1h server reason",
+        "ban artboard @list_artboard_target 1h art reason",
+        "ban #list-bans-room @list_room_target 1h room reason",
     ] {
         service.run_mod_command_task(
             actor.id,
@@ -2257,7 +2272,7 @@ async fn mod_bans_command_lists_active_bans() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "bans 10".to_string(),
+        "view bans".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2326,7 +2341,7 @@ async fn mod_audit_command_lists_recent_audit_entries() {
         actor.id,
         Permissions::new(false, true),
         Uuid::now_v7(),
-        "server kick @list_audit_target audit reason".to_string(),
+        "kick server @list_audit_target audit reason".to_string(),
     );
     let event = timeout(Duration::from_secs(2), events.recv())
         .await
@@ -2342,7 +2357,7 @@ async fn mod_audit_command_lists_recent_audit_entries() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "audit 5".to_string(),
+        "view audit".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2361,7 +2376,7 @@ async fn mod_audit_command_lists_recent_audit_entries() {
             assert!(
                 lines
                     .iter()
-                    .any(|line| line == "recent audit log entries (limit 5)")
+                    .any(|line| line == "recent audit log entries (page 1, 15 per page)")
             );
             assert!(lines.iter().any(|line| line.contains("@list_audit_actor")
                 && line.contains("server_kick")
@@ -2392,6 +2407,7 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
@@ -2403,7 +2419,9 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -2417,7 +2435,7 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
         actor.id,
         Permissions::new(false, true),
         request_id,
-        "room ban #room-notify @room_notify_target 1h test".to_string(),
+        "ban #room-notify @room_notify_target 1h test".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())
@@ -2460,6 +2478,7 @@ async fn grant_mod_command_updates_active_session_permissions() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
@@ -2471,7 +2490,9 @@ async fn grant_mod_command_updates_active_session_permissions() {
     )])));
     let registry = SessionRegistry::new();
     let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(1);
-    registry.register(session_token, session_tx).await;
+    registry
+        .register(session_token, session_tx, uuid::Uuid::now_v7())
+        .await;
     let service = ChatService::new_with_active_users(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
@@ -2485,7 +2506,7 @@ async fn grant_mod_command_updates_active_session_permissions() {
         actor.id,
         Permissions::new(true, false),
         request_id,
-        "grant mod @grant_mod_target".to_string(),
+        "admin grant mod @grant_mod_target".to_string(),
     );
 
     let event = timeout(Duration::from_secs(2), events.recv())

@@ -106,11 +106,8 @@ fn open_help_modal(app: &mut App, topic: HelpTopic) {
 
 fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
-    app.settings_modal_state.open_from_profile(
-        app.profile_state.profile(),
-        app.chat.favorite_room_options(),
-        crate::app::settings_modal::ui::MODAL_WIDTH,
-    );
+    app.settings_modal_state
+        .open_from_profile(app.profile_state.profile());
     app.show_settings = true;
 }
 
@@ -131,6 +128,15 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
     }
+    if let Some(url) = app.chat.take_requested_audio_url() {
+        app.audio.submit_trusted(url);
+    }
+    if let Some(url) = app.chat.take_requested_audio_fallback_url() {
+        app.audio.set_youtube_fallback(url);
+    }
+    if app.chat.take_requested_audio_skip() {
+        app.audio.skip_trusted();
+    }
     if let Some(topic) = app.chat.take_requested_help_topic() {
         open_help_modal(app, topic);
     }
@@ -139,6 +145,24 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     }
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);
+    }
+    if app.chat.take_requested_icon_picker() {
+        crate::app::input::try_open_icon_picker(app);
+    }
+    if let Some(upload) = app.chat.take_requested_url_upload() {
+        crate::app::input::trigger_url_image_upload(app, upload.url, upload.room_id);
+    }
+    if let Some(upload) = app.chat.take_requested_clipboard_image_upload() {
+        if app.request_paired_clipboard_image_upload(upload.room_id) {
+            app.banner = Some(Banner::success(
+                "Reading image from paired CLI clipboard...",
+            ));
+        } else {
+            app.chat.clear_pending_clipboard_image_upload();
+            app.banner = Some(Banner::error(
+                "No paired CLI with clipboard image support. Update and run `late`.",
+            ));
+        }
     }
 }
 
@@ -172,6 +196,36 @@ fn switch_room(app: &mut App, delta: isize) {
         app.sync_visible_chat_room();
         app.chat.request_list();
     }
+}
+
+fn toggle_selected_room_favorite(app: &mut App) -> bool {
+    let Some(room_id) = app.chat.selected_favorite_room_id() else {
+        return false;
+    };
+    let added = app.profile_state.toggle_favorite_room(room_id);
+    app.chat
+        .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+    app.banner = Some(if added {
+        Banner::success("Room added to favorites")
+    } else {
+        Banner::success("Room removed from favorites")
+    });
+    true
+}
+
+fn move_selected_favorite(app: &mut App, delta: isize) -> bool {
+    let Some(room_id) = app.chat.selected_favorite_room_id() else {
+        return false;
+    };
+    if !app.chat.favorite_room_ids().contains(&room_id) {
+        return false;
+    }
+    if !app.profile_state.move_favorite_room(room_id, delta) {
+        return false;
+    }
+    app.chat
+        .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+    true
 }
 
 /// Shared message-list navigation and actions. Consumed by both the chat page
@@ -459,7 +513,18 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         return super::work::input::handle_byte(app, byte);
     }
 
+    if byte == b'[' && move_selected_favorite(app, -1) {
+        return true;
+    }
+    if byte == b']' && move_selected_favorite(app, 1) {
+        return true;
+    }
+
     if handle_message_action(app, byte) {
+        return true;
+    }
+
+    if matches!(byte, b'f' | b'F') && toggle_selected_room_favorite(app) {
         return true;
     }
 
@@ -485,7 +550,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                     .map_or(&*app.connect_url, |p| p.0);
                 let token = registry.create_link(app.user_id, username);
                 let url = format!("{}/chat/{}", base_url, token);
-                app.pending_clipboard = Some(url.clone());
                 app.web_chat_qr_url = Some(url);
                 app.show_web_chat_qr = true;
             }

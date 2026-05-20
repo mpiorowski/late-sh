@@ -1,102 +1,51 @@
 {% extends "pages/layout.html" %}
 
 {% block page %}
-<style>
-    @keyframes cursor-blink {
-
-        0%,
-        49% {
-            opacity: 1;
-        }
-
-        50%,
-        100% {
-            opacity: 0;
-        }
-    }
-
-    .cursor-blink {
-        animation: cursor-blink 1s step-end infinite;
-    }
-
-    @keyframes fade-up {
-        from {
-            opacity: 0;
-            transform: translateY(6px);
-        }
-
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    .stagger {
-        opacity: 0;
-        animation: fade-up 0.4s ease forwards;
-    }
-
-    .stagger-1 {
-        animation-delay: 0s;
-    }
-
-    .stagger-2 {
-        animation-delay: 0.07s;
-    }
-
-    .stagger-3 {
-        animation-delay: 0.14s;
-    }
-
-    .stagger-4 {
-        animation-delay: 0.21s;
-    }
-
-    .stagger-5 {
-        animation-delay: 0.28s;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .stagger {
-            opacity: 1;
-            animation: none;
-        }
-    }
-</style>
-
 <script>
+    window.lateYoutubeApiReady = false;
+    window.onYouTubeIframeAPIReady = function () {
+        window.lateYoutubeApiReady = true;
+        window.dispatchEvent(new Event('late-youtube-ready'));
+    };
+
     function player() {
         return {
             ws: null,
             status: 'connecting',
+            audioMode: 'icecast',
             token: '{{ token }}',
             apiUrl: '{{ api_url }}',
             audioUrl: '{{ audio_url }}',
-            audioCtx: null,
-            analyser: null,
-            sourceNode: null,
-            freqData: null,
-            timeData: null,
-            bandBins: null,
-            vizInterval: null,
-            heartbeatInterval: null,
+            ytPlayer: null,
+            ytReady: false,
+            pendingYoutubeItem: null,
+            currentYoutubeItem: null,
+            lastYoutubeReloadAt: 0,
             copied: null,
             volumePercent: 30,
+            muted: false,
+            audioEnabled: false,
+            autoplayBlocked: false,
             wsRetries: 0,
             audioRetries: 0,
+            userOverrideMode: 'icecast',
+            serverAudioMode: 'icecast',
+            webIcecastEnabled: true,
+            unmuteOnNextPlay: false,
 
             init() {
                 this.$refs.audio.src = this.audioUrl;
                 this.$refs.audio.volume = this.volumePercent / 100;
+                this.$refs.audio.muted = this.muted;
 
                 this.$refs.audio.addEventListener('error', (e) => {
-                    if (this.status === 'disconnected') return;
+                    if (this.status === 'disconnected' || !this.webIcecastEnabled) return;
                     console.error('Audio stream error', e);
                     this.handleAudioError();
                 });
 
                 this.$refs.audio.addEventListener('ended', () => {
-                    if (this.status === 'disconnected') return;
+                    if (this.status === 'disconnected' || !this.webIcecastEnabled) return;
                     console.warn('Audio stream ended unexpectedly');
                     this.handleAudioError();
                 });
@@ -104,36 +53,50 @@
                 if (this.token) {
                     this.connectWs();
                 }
+
+                const onYoutubeReady = () => {
+                    this.ytReady = true;
+                    if (this.audioMode === 'youtube') {
+                        this.ensureYoutubePlayer();
+                    }
+                };
+                window.addEventListener('late-youtube-ready', onYoutubeReady);
+                if (window.lateYoutubeApiReady) {
+                    onYoutubeReady();
+                }
             },
 
             handleAudioError() {
+                if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) {
+                    return;
+                }
                 this.audioRetries++;
                 if (this.audioRetries > 10) {
                     console.error('Audio stream failed 10 times consecutively, giving up.');
                     this.disconnect();
                     return;
                 }
-                
+
                 this.status = 'buffering';
                 console.log(`Reconnecting audio stream... (attempt ${this.audioRetries})`);
-                
+
                 setTimeout(() => {
-                    if (this.status !== 'disconnected') {
-                        const audio = this.$refs.audio;
-                        const separator = this.audioUrl.includes('?') ? '&' : '?';
-                        audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
-                        audio.load();
-                        audio.play().then(() => {
-                            this.audioRetries = 0;
-                            this.status = 'playing';
-                            if (!this.audioCtx || this.audioCtx.state !== 'running') {
-                                this.startAnalyzer();
-                            }
-                        }).catch(e => {
-                            console.error("Playback restart failed:", e);
-                            this.handleAudioError();
-                        });
+                    if (this.status === 'disconnected' || this.audioMode !== 'icecast' || !this.webIcecastEnabled) {
+                        return;
                     }
+                    const audio = this.$refs.audio;
+                    const separator = this.audioUrl.includes('?') ? '&' : '?';
+                    audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
+                    audio.load();
+                    audio.play().then(() => {
+                        if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) return;
+                        this.audioRetries = 0;
+                        this.status = 'playing';
+                    }).catch(e => {
+                        if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) return;
+                        console.error("Playback restart failed:", e);
+                        this.handleAudioError();
+                    });
                 }, 2000);
             },
 
@@ -180,12 +143,23 @@
                         case 'volume_down':
                             this.adjustLocalVolume(-5);
                             break;
+                        case 'source_changed':
+                            this.applyServerSourceMode(payload.audio_mode);
+                            break;
+                        case 'load_video':
+                            this.loadYoutubeVideo(payload);
+                            break;
+                        case 'queue_update':
+                            break;
+                        case 'set_playback_source':
+                            this.applyUserPlaybackSource(payload.source, payload.web_icecast_enabled);
+                            break;
                     }
                 };
 
                 this.ws.onclose = () => {
                     if (this.status === 'disconnected') return;
-                    
+
                     this.wsRetries++;
                     if (this.wsRetries > 10) {
                         console.error('WS failed 10 times consecutively, giving up.');
@@ -206,6 +180,7 @@
             },
 
             startPlayback() {
+                this.audioEnabled = true;
                 this.status = 'buffering';
 
                 // Reconnect WS if it was closed during disconnect
@@ -214,38 +189,34 @@
                     this.connectWs();
                 }
 
-                // Apple requires AudioContext creation/resume to be synchronous to user interaction
-                const AudioCtx = window.AudioContext || window.webkitAudioContext;
-                if (AudioCtx) {
-                    if (!this.audioCtx) {
-                        this.audioCtx = new AudioCtx();
-                        const audio = this.$refs.audio;
-                        this.sourceNode = this.audioCtx.createMediaElementSource(audio);
-                        this.analyser = this.audioCtx.createAnalyser();
-                        this.analyser.fftSize = 1024;
-                        this.analyser.minDecibels = -100;
-                        this.analyser.maxDecibels = -30;
-                        this.analyser.smoothingTimeConstant = 0.2;
-                        this.sourceNode.connect(this.analyser);
-                        this.analyser.connect(this.audioCtx.destination);
+                if (this.audioMode === 'youtube') {
+                    this.ensureYoutubePlayer();
+                    const itemToPlay = this.pendingYoutubeItem || this.currentYoutubeItem;
+                    if (itemToPlay) {
+                        this.playYoutubeItem(itemToPlay);
+                    } else if (this.autoplayBlocked && this.ytPlayer && this.ytPlayer.playVideo) {
+                        this.autoplayBlocked = false;
+                        this.status = 'buffering';
+                        this.ytPlayer.playVideo();
+                    }
+                    return;
+                }
 
-                        this.freqData = new Uint8Array(this.analyser.frequencyBinCount);
-                        this.timeData = new Float32Array(this.analyser.fftSize);
-                        this.bandBins = this.buildLogBands(this.audioCtx.sampleRate, this.analyser.fftSize, 8);
-                    }
-                    if (this.audioCtx.state === 'suspended') {
-                        this.audioCtx.resume();
-                    }
+                if (!this.webIcecastEnabled) {
+                    this.stopIcecastAudio();
+                    this.status = 'ready';
+                    return;
                 }
 
                 const audio = this.$refs.audio;
                 const separator = this.audioUrl.includes('?') ? '&' : '?';
                 audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
                 audio.play().then(() => {
+                    if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) return;
                     this.audioRetries = 0;
                     this.status = 'playing';
-                    this.startAnalyzer();
                 }).catch(e => {
+                    if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) return;
                     console.error("Playback failed:", e);
                     this.handleAudioError();
                 });
@@ -258,17 +229,8 @@
                     audio.src = '';
                 }
 
-                if (this.vizInterval) {
-                    clearInterval(this.vizInterval);
-                    this.vizInterval = null;
-                }
-                if (this.heartbeatInterval) {
-                    clearInterval(this.heartbeatInterval);
-                    this.heartbeatInterval = null;
-                }
-
-                if (this.audioCtx && this.audioCtx.state === 'running') {
-                    this.audioCtx.suspend();
+                if (this.ytPlayer && this.ytPlayer.stopVideo) {
+                    this.ytPlayer.stopVideo();
                 }
 
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -278,15 +240,40 @@
                 this.status = 'disconnected';
             },
 
-            toggleLocalMute() {
+            stopIcecastAudio() {
                 const audio = this.$refs.audio;
-                audio.muted = !audio.muted;
+                if (!audio) return;
+                audio.pause();
+                audio.removeAttribute('src');
+                audio.load();
+            },
+
+            toggleLocalMute() {
+                this.applyMuteState(!this.muted);
+            },
+
+            applyMuteState(muted) {
+                this.muted = !!muted;
+                const audio = this.$refs.audio;
+                if (audio) {
+                    audio.muted = this.muted;
+                }
+                if (this.ytPlayer) {
+                    if (this.muted && this.ytPlayer.mute) {
+                        this.ytPlayer.mute();
+                    } else if (!this.muted && this.ytPlayer.unMute) {
+                        this.ytPlayer.unMute();
+                    }
+                }
                 this.sendClientState();
             },
 
             adjustLocalVolume(delta) {
                 this.volumePercent = Math.max(0, Math.min(100, this.volumePercent + delta));
                 this.$refs.audio.volume = this.volumePercent / 100;
+                if (this.ytPlayer && this.ytPlayer.setVolume) {
+                    this.ytPlayer.setVolume(this.volumePercent);
+                }
                 this.sendClientState();
             },
 
@@ -297,316 +284,420 @@
                 this.ws.send(JSON.stringify({
                     event: 'client_state',
                     client_kind: 'browser',
-                    muted: this.$refs.audio ? this.$refs.audio.muted : false,
+                    muted: this.muted,
                     volume_percent: this.volumePercent,
                 }));
             },
 
-            startAnalyzer() {
-                // Resume existing AudioContext if suspended
-                if (this.audioCtx) {
-                    if (this.audioCtx.state === 'suspended') {
-                        this.audioCtx.resume();
-                    }
-                    this.startVizLoop();
+            // Apply a server-pushed user preference. The TUI's v+x keybind
+            // flips the value in the DB and broadcasts `set_playback_source`;
+            // we just apply whatever the server tells us, no local toggling.
+            applyUserPlaybackSource(source, webIcecastEnabled = null) {
+                if (source !== 'icecast' && source !== 'youtube') {
                     return;
                 }
+                const previousWebIcecastEnabled = this.webIcecastEnabled;
+                if (typeof webIcecastEnabled === 'boolean') {
+                    this.webIcecastEnabled = webIcecastEnabled;
+                }
+                this.userOverrideMode = source;
 
-                console.warn('Web Audio API not initialized or not supported; falling back to heartbeat only');
-                this.startFallbackHeartbeat();
+                const webIcecastPolicyChanged = previousWebIcecastEnabled !== this.webIcecastEnabled;
+                if (this.audioMode !== source || (source === 'icecast' && webIcecastPolicyChanged)) {
+                    this.applySourceMode(source);
+                } else if (source === 'icecast' && !this.webIcecastEnabled) {
+                    this.stopIcecastAudio();
+                    this.status = 'ready';
+                }
             },
 
-            startVizLoop() {
-                if (this.vizInterval) {
+            applyServerSourceMode(mode) {
+                if (mode !== 'youtube' && mode !== 'icecast') {
                     return;
                 }
-                this.vizInterval = setInterval(() => {
-                    if (this.status !== 'playing' || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                this.serverAudioMode = mode;
+                if (this.userOverrideMode !== null && this.userOverrideMode !== mode) {
+                    return;
+                }
+                if (this.audioMode === mode) {
+                    return;
+                }
+                this.applySourceMode(mode);
+            },
+
+            applySourceMode(mode) {
+                if (mode !== 'youtube' && mode !== 'icecast') {
+                    return;
+                }
+                const modeChanged = this.audioMode !== mode;
+                this.audioMode = mode;
+                if (mode === 'youtube') {
+                    if (modeChanged) {
+                        // Only tear down the Icecast audio element when actually
+                        // switching INTO youtube. Re-broadcasts of the same mode
+                        // (queue transitions) must not reset status — the iframe
+                        // is already showing/playing and we want loadYoutubeVideo
+                        // to take it from there.
+                        this.stopIcecastAudio();
+                        this.status = this.audioEnabled ? 'buffering' : 'ready';
+                    }
+                    this.ensureYoutubePlayer();
+                    // Prefer the freshest stashed item; fall back to whatever
+                    // we last had as current, so a switch-back to YouTube can
+                    // resume a paused video instead of doing nothing. Only
+                    // kick playback if the user has already gestured via
+                    // [ start audio ] — otherwise leave the item staged and
+                    // let that click drive the first play.
+                    const itemToPlay = this.pendingYoutubeItem || this.currentYoutubeItem;
+                    if (itemToPlay && this.audioEnabled) {
+                        this.playYoutubeItem(itemToPlay);
+                    }
+                } else {
+                    // Pause (don't stop) so a later v+x flip back to YouTube
+                    // can resume the same item with one playVideo() call.
+                    if (this.ytPlayer && this.ytPlayer.pauseVideo) {
+                        this.ytPlayer.pauseVideo();
+                    }
+                    this.autoplayBlocked = false;
+                    this.unmuteOnNextPlay = false;
+                    if (!this.webIcecastEnabled) {
+                        this.stopIcecastAudio();
+                        this.status = 'ready';
+                    } else if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
+                        this.startPlayback();
+                    } else {
+                        this.status = 'ready';
+                    }
+                }
+                this.sendClientState();
+            },
+
+            ensureYoutubePlayer() {
+                if (this.ytPlayer) {
+                    return;
+                }
+                if (!window.YT || !window.YT.Player) {
+                    this.loadYoutubeApi();
+                    return;
+                }
+                this.ytPlayer = new window.YT.Player('yt-player', {
+                    height: '180',
+                    width: '320',
+                    playerVars: {
+                        playsinline: 1,
+                        rel: 0,
+                    },
+                    events: {
+                        onReady: () => {
+                            this.ytReady = true;
+                            this.ytPlayer.setVolume(this.volumePercent);
+                            this.applyMuteState(this.muted);
+                            if (this.pendingYoutubeItem) {
+                                if (this.userOverrideMode !== 'icecast') {
+                                    this.playYoutubeItem(this.pendingYoutubeItem);
+                                }
+                            }
+                        },
+                        onStateChange: (event) => this.handleYoutubeStateChange(event.data),
+                        onError: (event) => this.sendYoutubeState('error', String(event.data || 'youtube error')),
+                    }
+                });
+            },
+
+            loadYoutubeApi() {
+                if (window.lateYoutubeApiReady || window.lateYoutubeApiLoading) {
+                    return;
+                }
+                window.lateYoutubeApiLoading = true;
+                const script = document.createElement('script');
+                script.src = 'https://www.youtube.com/iframe_api';
+                script.async = true;
+                document.head.appendChild(script);
+            },
+
+            loadYoutubeVideo(payload) {
+                const item = {
+                    itemId: payload.item_id,
+                    videoId: payload.video_id,
+                    isStream: !!payload.is_stream,
+                };
+
+                if (this.userOverrideMode === 'icecast') {
+                    this.pendingYoutubeItem = item;
+                    return;
+                }
+                this.audioMode = 'youtube';
+
+                // Safety-net heartbeat no-op: same queued item AND iframe is
+                // already showing the right video. Don't restart playback —
+                // a paused user stays paused.
+                if (
+                    this.isSameYoutubeItem(this.currentYoutubeItem, item)
+                    && this.loadedYoutubeVideoId() === item.videoId
+                ) {
+                    this.currentYoutubeItem = item;
+                    this.pendingYoutubeItem = null;
+                    return;
+                }
+
+                this.pendingYoutubeItem = item;
+                this.ensureYoutubePlayer();
+                // Once any youtube item is mounted in the iframe (fallback or
+                // a queue item) the player has the autoplay gesture it needs to
+                // load subsequent items. Don't gate switching on audioEnabled
+                // in that case — otherwise queue transitions get stuck as
+                // pending while the previous video keeps playing.
+                const youtubeActive = !!(this.ytPlayer && this.ytReady && this.currentYoutubeItem);
+                if (this.audioEnabled || youtubeActive || this.status === 'playing' || this.status === 'buffering') {
+                    this.playYoutubeItem(item);
+                } else {
+                    this.status = 'ready';
+                }
+            },
+
+            isSameYoutubeItem(a, b) {
+                return !!a && !!b && a.itemId === b.itemId && a.videoId === b.videoId;
+            },
+
+            playYoutubeItem(item) {
+                if (this.userOverrideMode === 'icecast') {
+                    this.pendingYoutubeItem = item;
+                    return;
+                }
+                if (!this.ytPlayer || !this.ytReady || !this.ytPlayer.loadVideoById) {
+                    return;
+                }
+                const switchingItems = this.currentYoutubeItem && !this.isSameYoutubeItem(this.currentYoutubeItem, item);
+                if (switchingItems && this.ytPlayer.stopVideo) {
+                    this.ytPlayer.stopVideo();
+                }
+                const alreadyLoaded = !switchingItems
+                    && this.loadedYoutubeVideoId() === item.videoId;
+                this.pendingYoutubeItem = null;
+                this.currentYoutubeItem = item;
+                this.status = 'buffering';
+                if (alreadyLoaded && this.ytPlayer.playVideo) {
+                    this.ytPlayer.playVideo();
+                } else {
+                    this.ytPlayer.loadVideoById({ videoId: item.videoId });
+                }
+                this.verifyYoutubeLoad(item);
+                this.detectAutoplayBlocked(item);
+                this.ytPlayer.setVolume(this.volumePercent);
+                this.applyMuteState(this.muted);
+            },
+
+            detectAutoplayBlocked(item) {
+                const flagBlocked = () => {
+                    if (this.userOverrideMode === 'icecast') {
                         return;
                     }
-                    const audio = this.$refs.audio;
-                    const bands = this.sampleBands();
-                    const rms = this.sampleRms();
-                    const payload = {
-                        event: 'viz',
-                        position_ms: Math.floor(audio.currentTime * 1000),
-                        bands: bands,
-                        rms: rms
-                    };
-                    this.ws.send(JSON.stringify(payload));
-                }, 100);
+                    if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                        return;
+                    }
+                    if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
+                        return;
+                    }
+                    if (this.autoplayBlocked || this.status === 'playing') {
+                        return;
+                    }
+                    this.autoplayBlocked = true;
+                    this.status = 'ready';
+                    this.sendYoutubeState('buffering');
+                    if (this.unmuteOnNextPlay) {
+                        this.unmuteOnNextPlay = false;
+                        this.applyMuteState(this.muted);
+                    }
+                };
+
+                const tryMutedRecovery = () => {
+                    if (this.userOverrideMode === 'icecast') {
+                        return;
+                    }
+                    if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                        return;
+                    }
+                    if (!this.ytPlayer || !this.ytPlayer.mute || !this.ytPlayer.playVideo) {
+                        flagBlocked();
+                        return;
+                    }
+                    // Chrome's per-origin Media Engagement Index gates audible
+                    // iframe autoplay. Muted autoplay is always allowed, so
+                    // mute → play → unmute on PLAYING is the universal escape.
+                    this.unmuteOnNextPlay = !this.muted;
+                    this.ytPlayer.mute();
+                    this.ytPlayer.playVideo();
+
+                    // If even muted autoplay doesn't get us to PLAYING within
+                    // 1.5s, fall back to the [ tap to play ] flow.
+                    window.setTimeout(() => {
+                        if (this.userOverrideMode === 'icecast') {
+                            return;
+                        }
+                        if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                            return;
+                        }
+                        if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
+                            return;
+                        }
+                        const state = this.ytPlayer.getPlayerState();
+                        if (state !== window.YT.PlayerState.PLAYING) {
+                            flagBlocked();
+                        }
+                    }, 1500);
+                };
+
+                // First pass: at 800ms, if the player isn't already PLAYING,
+                // attempt the muted-autoplay recovery before resorting to the
+                // tap-to-play button.
+                window.setTimeout(() => {
+                    if (this.userOverrideMode === 'icecast') {
+                        return;
+                    }
+                    if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
+                        return;
+                    }
+                    const state = this.ytPlayer.getPlayerState();
+                    if (state !== window.YT.PlayerState.PLAYING) {
+                        tryMutedRecovery();
+                    }
+                }, 800);
             },
 
-            startFallbackHeartbeat() {
-                if (this.heartbeatInterval) {
+            handleYoutubeStateChange(state) {
+                if (!window.YT) {
                     return;
                 }
-                this.heartbeatInterval = setInterval(() => {
-                    if (this.status === 'playing' && this.ws.readyState === WebSocket.OPEN) {
-                        const payload = {
-                            event: 'heartbeat',
-                            position_ms: Math.floor(this.$refs.audio.currentTime * 1000)
-                        };
-                        this.ws.send(JSON.stringify(payload));
+                if (!this.currentYoutubeItem && this.pendingYoutubeItem) {
+                    const loadedVideoId = this.loadedYoutubeVideoId();
+                    if (!loadedVideoId || loadedVideoId === this.pendingYoutubeItem.videoId) {
+                        this.currentYoutubeItem = this.pendingYoutubeItem;
+                        this.pendingYoutubeItem = null;
+                    }
+                }
+                if (!this.currentYoutubeItem) {
+                    return;
+                }
+                if (!this.youtubePlayerMatchesCurrent()) {
+                    this.reloadCurrentYoutubeItem();
+                    return;
+                }
+                if (this.userOverrideMode === 'icecast') {
+                    if ((state === window.YT.PlayerState.PLAYING || state === window.YT.PlayerState.BUFFERING)
+                        && this.ytPlayer && this.ytPlayer.pauseVideo
+                    ) {
+                        this.ytPlayer.pauseVideo();
+                    }
+                    if (!this.webIcecastEnabled) {
+                        this.status = 'ready';
+                    }
+                    return;
+                }
+                if (state === window.YT.PlayerState.PLAYING) {
+                    this.audioEnabled = true;
+                    this.autoplayBlocked = false;
+                    this.audioMode = 'youtube';
+                    this.status = 'playing';
+                    if (this.unmuteOnNextPlay) {
+                        this.unmuteOnNextPlay = false;
+                        this.applyMuteState(this.muted);
+                    }
+                    this.sendClientState();
+                    this.sendYoutubeState('playing');
+                } else if (state === window.YT.PlayerState.PAUSED) {
+                    this.sendYoutubeState('paused');
+                } else if (state === window.YT.PlayerState.BUFFERING) {
+                    this.status = 'buffering';
+                    this.sendYoutubeState('buffering');
+                } else if (state === window.YT.PlayerState.ENDED) {
+                    this.sendYoutubeState('ended');
+                    this.status = 'buffering';
+                }
+            },
+
+            loadedYoutubeVideoId() {
+                if (!this.ytPlayer || !this.ytPlayer.getVideoData) {
+                    return null;
+                }
+                const data = this.ytPlayer.getVideoData();
+                if (!data || !data.video_id) {
+                    return null;
+                }
+                return data.video_id;
+            },
+
+            youtubePlayerMatchesCurrent() {
+                const loadedVideoId = this.loadedYoutubeVideoId();
+                return !loadedVideoId || !this.currentYoutubeItem || loadedVideoId === this.currentYoutubeItem.videoId;
+            },
+
+            reloadCurrentYoutubeItem() {
+                if (this.userOverrideMode === 'icecast') {
+                    return;
+                }
+                if (!this.currentYoutubeItem || !this.ytPlayer || !this.ytPlayer.loadVideoById) {
+                    return;
+                }
+                const now = Date.now();
+                if (now - this.lastYoutubeReloadAt < 1000) {
+                    return;
+                }
+                this.lastYoutubeReloadAt = now;
+                const item = this.currentYoutubeItem;
+                if (this.ytPlayer.stopVideo) {
+                    this.ytPlayer.stopVideo();
+                }
+                this.ytPlayer.loadVideoById({ videoId: item.videoId });
+            },
+
+            verifyYoutubeLoad(item) {
+                window.setTimeout(() => {
+                    if (this.userOverrideMode === 'icecast') {
+                        return;
+                    }
+                    if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
+                        return;
+                    }
+                    if (!this.youtubePlayerMatchesCurrent()) {
+                        this.reloadCurrentYoutubeItem();
                     }
                 }, 1000);
             },
 
-            buildLogBands(sampleRate, fftSize, bandCount) {
-                const nyquist = sampleRate / 2;
-                const minHz = 60.0;
-                const maxHz = Math.min(nyquist, 12000.0);
-                const logMin = Math.log(minHz);
-                const logMax = Math.log(maxHz);
-                const bins = [];
-                for (let i = 0; i < bandCount; i++) {
-                    const t0 = i / bandCount;
-                    const t1 = (i + 1) / bandCount;
-                    const f0 = Math.exp(logMin + (logMax - logMin) * t0);
-                    const f1 = Math.exp(logMin + (logMax - logMin) * t1);
-                    const b0 = Math.max(1, Math.floor((f0 / nyquist) * (fftSize / 2)));
-                    const b1 = Math.max(b0 + 1, Math.ceil((f1 / nyquist) * (fftSize / 2)));
-                    bins.push([b0, b1]);
+            sendYoutubeState(state, error = null) {
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.currentYoutubeItem) {
+                    return;
                 }
-                return bins;
-            },
-
-            softCompress(x) {
-                const k = 2.0;
-                return (k * x) / (1.0 + k * x);
-            },
-
-            sampleBands() {
-                this.analyser.getByteFrequencyData(this.freqData);
-                const bands = [];
-                for (let i = 0; i < this.bandBins.length; i++) {
-                    const [start, end] = this.bandBins[i];
-                    let sum = 0.0;
-                    let count = 0;
-                    const max = Math.min(end, this.freqData.length);
-                    for (let j = start; j < max; j++) {
-                        sum += this.freqData[j];
-                        count += 1;
+                if (!this.youtubePlayerMatchesCurrent()) {
+                    this.reloadCurrentYoutubeItem();
+                    return;
+                }
+                let offsetMs = 0;
+                let durationMs = null;
+                if (this.ytPlayer && this.ytPlayer.getCurrentTime) {
+                    offsetMs = Math.floor(this.ytPlayer.getCurrentTime() * 1000);
+                }
+                if (this.ytPlayer && this.ytPlayer.getDuration) {
+                    const durationSeconds = this.ytPlayer.getDuration();
+                    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+                        durationMs = Math.floor(durationSeconds * 1000);
                     }
-                    const avg = count > 0 ? sum / count : 0.0;
-                    const norm = avg / 255.0;
-                    bands.push(Math.min(1.0, this.softCompress(norm * 3.0)));
                 }
-                return bands;
-            },
-
-            sampleRms() {
-                this.analyser.getFloatTimeDomainData(this.timeData);
-                let sum = 0.0;
-                for (let i = 0; i < this.timeData.length; i++) {
-                    const v = this.timeData[i];
-                    sum += v * v;
-                }
-                const rms = Math.sqrt(sum / this.timeData.length);
-                return Math.min(1.0, this.softCompress(rms * 3.0));
+                this.ws.send(JSON.stringify({
+                    event: 'player_state',
+                    item_id: this.currentYoutubeItem.itemId,
+                    state,
+                    offset_ms: offsetMs,
+                    duration_ms: durationMs,
+                    autoplay_blocked: this.autoplayBlocked,
+                    error,
+                }));
             }
         }
     }
 </script>
 
 <div x-data="player()" class="max-w-lg mx-auto pt-8 sm:pt-16">
-
-    {% if token.is_empty() %}
-    <!-- ═══ LANDING ═══ -->
-
-    <div class="stagger stagger-1 mb-14">
-        <h1 class="text-3xl sm:text-4xl text-green-500 tracking-tight">late.sh</h1>
-        <p class="text-gray-500 mt-2">a cozy terminal clubhouse for developers</p>
-    </div>
-
-    <div class="stagger stagger-2 mb-12">
-        <button @click="copy('ssh late.sh')"
-            class="group w-full text-left border border-gray-700 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/40">
-            <div class="flex items-center justify-between gap-4">
-                <span class="text-lg min-w-0 truncate">
-                    <span class="text-gray-600">$ </span>
-                    <span class="text-gray-100">ssh late.sh</span>
-                    <span class="cursor-blink text-green-500 ml-px">&#9612;</span>
-                </span>
-                <span class="shrink-0 text-right text-xs">
-                    <span x-cloak x-show="copied !== 'ssh late.sh'"
-                        class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
-                    <span x-cloak x-show="copied === 'ssh late.sh'" class="text-green-600">copied</span>
-                </span>
-            </div>
-            <div class="mt-2 text-xs text-gray-600">
-                if it fails, generate a key first: <span class="text-gray-400">ssh-keygen -t ed25519</span>
-            </div>
-        </button>
-    </div>
-
-    <div class="stagger stagger-3 mb-4">
-        <button @click="copy('curl -fsSL https://cli.late.sh/install.sh | bash')"
-            class="group w-full text-left border border-gray-800 hover:border-green-950 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
-            <div class="flex items-center justify-between gap-4">
-                <span class="text-sm sm:text-base text-gray-300 min-w-0 truncate">
-                    <span class="text-gray-600">$ </span>
-                    <span class="text-gray-100">curl -fsSL https://cli.late.sh/install.sh | bash</span>
-                </span>
-                <span class="shrink-0 text-right text-xs">
-                    <span x-cloak x-show="copied !== 'curl -fsSL https://cli.late.sh/install.sh | bash'"
-                        class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
-                    <span x-cloak x-show="copied === 'curl -fsSL https://cli.late.sh/install.sh | bash'" class="text-green-600">copied</span>
-                </span>
-            </div>
-            <div class="mt-2 text-xs text-gray-600">
-                installs the local `late` companion CLI
-            </div>
-        </button>
-    </div>
-
-    <div class="stagger stagger-3 mb-12">
-        <button @click="copy('git clone https://github.com/mpiorowski/late-sh && cd late-sh && cargo build --release --bin late')"
-            class="group w-full text-left border border-gray-800 hover:border-green-950 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
-            <div class="flex items-center justify-between gap-4">
-                <span class="text-xs sm:text-sm text-gray-300 min-w-0 truncate">
-                    <span class="text-gray-600">$ </span>
-                    <span class="text-gray-100">git clone https://github.com/mpiorowski/late-sh &amp;&amp; cd late-sh &amp;&amp; cargo build --release</span>
-                </span>
-                <span class="shrink-0 text-right text-xs">
-                    <span x-cloak x-show="copied !== 'git clone https://github.com/mpiorowski/late-sh && cd late-sh && cargo build --release --bin late'"
-                        class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
-                    <span x-cloak x-show="copied === 'git clone https://github.com/mpiorowski/late-sh && cd late-sh && cargo build --release --bin late'"
-                        class="text-green-600">copied</span>
-                </span>
-            </div>
-            <div class="mt-2 text-xs text-gray-600">
-                or build the companion CLI from source
-            </div>
-        </button>
-    </div>
-
-    <div class="stagger stagger-4 mb-14 text-sm leading-loose">
-        <div class="text-gray-500"><span class="text-gray-700">&#9500;&#9472;</span> lofi radio &amp; genre voting</div>
-        <div class="text-gray-500"><span class="text-gray-700">&#9500;&#9472;</span> the arcade <span class="text-gray-700">(2048, sudoku, nonograms, solitaire)</span></div>
-        <div class="text-gray-500"><span class="text-gray-700">&#9500;&#9472;</span> collaborative artboard</div>
-        <div class="text-gray-500"><span class="text-gray-700">&#9500;&#9472;</span> daily challenges &amp; streaks</div>
-        <div class="text-gray-500"><span class="text-gray-700">&#9500;&#9472;</span> live chat</div>
-        <div class="text-gray-500"><span class="text-gray-700">&#9500;&#9472;</span> share &amp; discuss news</div>
-        <div class="text-gray-500"><span class="text-gray-700">&#9492;&#9472;</span> multiplayer games <span class="text-gray-700">(coming soon)</span></div>
-    </div>
-
-    <div class="stagger stagger-5 mb-4 text-xs leading-relaxed">
-        <div class="text-gray-600 mb-3"><span class="text-gray-700">#</span> artboard</div>
-        <div class="text-gray-500">a shared <span class="text-green-600">ASCII canvas</span>. paint, erase, sign your work.</div>
-        <div class="text-gray-500">each cell remembers who placed it.</div>
-        <div class="text-gray-600 mt-3">snapshots are saved daily and monthly,</div>
-        <div class="text-gray-600">so the history sticks around as the board keeps changing.</div>
-    </div>
-
-    <div class="stagger stagger-5 mb-14">
-        <a href="/gallery"
-            class="group block w-full text-left border border-gray-700 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/40">
-            <div class="flex items-center justify-between gap-4">
-                <span class="text-lg min-w-0 truncate">
-                    <span class="text-gray-100">/gallery</span>
-                </span>
-                <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">browse &rarr;</span>
-            </div>
-            <div class="mt-2 text-xs text-gray-600">
-                full-screen viewer with pan, zoom, and per-cell author info
-            </div>
-        </a>
-    </div>
-
-    <div class="stagger stagger-5 mb-4 text-xs leading-relaxed">
-        <div class="text-gray-600 mb-3"><span class="text-gray-700">#</span> work</div>
-        <div class="text-gray-500">who's around, what they build, who's <span class="text-green-600">open to gigs</span>.</div>
-        <div class="text-gray-500">one profile per person, posted from the TUI.</div>
-        <div class="text-gray-600 mt-3">headline, status, skills, links &mdash; plus an</div>
-        <div class="text-gray-600">optional bio, late.fetch readout, and showcase.</div>
-        <div class="text-gray-600 mt-3">to post yours, <span class="text-gray-400">ssh late.sh</span>, open the work room, press <span class="text-gray-400">i</span>.</div>
-    </div>
-
-    <div class="stagger stagger-5 mb-14">
-        <a href="/profiles"
-            class="group block w-full text-left border border-gray-700 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/40">
-            <div class="flex items-center justify-between gap-4">
-                <span class="text-lg min-w-0 truncate">
-                    <span class="text-gray-100">/profiles</span>
-                </span>
-                <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">browse &rarr;</span>
-            </div>
-            <div class="mt-2 text-xs text-gray-600">
-                everyone's work profiles, open gigs first
-            </div>
-        </a>
-    </div>
-
-    <div class="stagger stagger-5 mb-4 text-xs leading-relaxed">
-        <div class="text-gray-600 mb-3"><span class="text-gray-700">#</span> play</div>
-        <div class="text-gray-500">a <span class="text-green-600">read-only peek</span> at the TUI in your browser.</div>
-        <div class="text-gray-500">tab around, see what's inside.</div>
-        <div class="text-gray-600 mt-3">no typing, no chat, no games &mdash; just a window</div>
-        <div class="text-gray-600">into a shared demo session.</div>
-        <div class="text-gray-600 mt-3">for the real thing, <span class="text-gray-400">ssh late.sh</span>.</div>
-    </div>
-
-    <div class="stagger stagger-5 mb-14">
-        <a href="/play"
-            class="group block w-full text-left border border-gray-700 hover:border-green-900 px-5 py-4 transition-colors duration-200 bg-gray-900/40">
-            <div class="flex items-center justify-between gap-4">
-                <span class="text-lg min-w-0 truncate">
-                    <span class="text-gray-100">/play</span>
-                </span>
-                <span class="shrink-0 text-xs text-gray-700 group-hover:text-green-600 transition-colors">peek &rarr;</span>
-            </div>
-            <div class="mt-2 text-xs text-gray-600">
-                live demo session, navigation only
-            </div>
-        </a>
-    </div>
-
-    <div class="stagger stagger-5 mb-14 text-xs leading-relaxed">
-        <div class="text-gray-600 mb-3"><span class="text-gray-700">#</span> identity</div>
-        <div class="text-gray-500">no passwords. no OAuth. no accounts.</div>
-        <div class="text-gray-500">your <span class="text-green-600">ssh key</span> is your identity.</div>
-        <div class="text-gray-600 mt-3">chats, scores, and streaks are tied to your</div>
-        <div class="text-gray-600">public key fingerprint. same key, same data,</div>
-        <div class="text-gray-600">any machine.</div>
-    </div>
-
-    <div class="stagger stagger-5 mb-8 text-xs leading-relaxed">
-        <div class="text-gray-600 mb-3"><span class="text-gray-700">#</span> privacy</div>
-        <div class="text-gray-500">we store your key <span class="text-green-600">fingerprint</span>, not the full public key.</div>
-        <div class="text-gray-500">no IP logging. no tracking. no analytics.</div>
-        <div class="text-gray-600 mt-3">chat messages and game scores are stored in</div>
-        <div class="text-gray-600">postgres, tied only to your fingerprint.</div>
-        <div class="text-gray-600 mt-3">don't trust us? use a throwaway key:</div>
-    </div>
-
-    <div class="stagger stagger-5 mb-14">
-        <button @click="copy('ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway late.sh')"
-            class="group w-full text-left border border-gray-800 hover:border-green-950 px-5 py-4 transition-colors duration-200 bg-gray-900/20">
-            <div class="flex items-center justify-between gap-4">
-                <span class="text-xs text-gray-300 min-w-0 truncate">
-                    <span class="text-gray-600">$ </span>
-                    <span class="text-gray-100">ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway late.sh</span>
-                </span>
-                <span class="shrink-0 text-right text-xs">
-                    <span x-cloak x-show="copied !== 'ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway late.sh'"
-                        class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
-                    <span x-cloak x-show="copied === 'ssh-keygen -t ed25519 -f ~/.ssh/late_throwaway && ssh -o IdentitiesOnly=yes -i ~/.ssh/late_throwaway late.sh'"
-                        class="text-green-600">copied</span>
-                </span>
-            </div>
-            <div class="mt-2 text-xs text-gray-600">
-                generates a disposable key &mdash; zero risk, full experience
-            </div>
-        </button>
-    </div>
-
-    <div class="stagger stagger-5 border-t border-gray-800 pt-5 text-xs text-gray-600"
-        hx-get="/status?pairing=false" hx-trigger="load, every 5s" hx-swap="innerHTML">
-    </div>
-
-    {% else %}
-    <!-- ═══ AUDIO PAIRING ═══ -->
 
     <div class="mb-10">
         <h1 class="text-2xl text-green-500 tracking-tight">late.sh</h1>
@@ -629,13 +720,13 @@
         <template x-if="status === 'buffering'">
             <div class="flex items-center gap-2.5 text-yellow-500">
                 <span class="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
-                buffering stream...
+                <span x-text="audioMode === 'youtube' ? 'loading video...' : 'buffering stream...'"></span>
             </div>
         </template>
         <template x-if="status === 'playing'">
             <div class="flex items-center gap-2.5 text-green-500">
                 <span class="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
-                streaming
+                <span x-text="audioMode === 'youtube' ? 'playing YouTube' : 'streaming'"></span>
             </div>
         </template>
         <template x-if="status === 'disconnected'">
@@ -647,17 +738,21 @@
     </div>
 
     <div class="mb-10 border-l-2 border-gray-800 pl-4"
-        hx-get="/status?pairing=true" hx-trigger="load, every 5s" hx-swap="innerHTML">
+        hx-get="/pair/status" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    </div>
+
+    <div x-cloak x-show="audioMode === 'youtube'" class="mb-8">
+        <div id="yt-player" class="w-[320px] max-w-full aspect-video bg-black"></div>
     </div>
 
     <div class="space-y-3" x-cloak>
         <button @click="startPlayback"
-            x-show="status === 'ready' || status === 'disconnected' || status === 'buffering'"
-            :disabled="status === 'buffering'"
-            class="w-full text-left border px-4 py-3 text-sm transition-colors duration-200" :class="status === 'buffering'
+            x-show="!(audioMode === 'icecast' && !webIcecastEnabled) && status !== 'playing' && (status === 'ready' || status === 'disconnected' || status === 'buffering' || autoplayBlocked)"
+            :disabled="status === 'buffering' && !autoplayBlocked"
+            class="w-full text-left border px-4 py-3 text-sm transition-colors duration-200" :class="(status === 'buffering' && !autoplayBlocked)
                     ? 'border-gray-800 text-gray-600 cursor-wait'
                     : 'border-gray-700 hover:border-green-900 text-gray-300 hover:text-green-500 bg-gray-900/40'"
-            x-text="status === 'buffering' ? '[ buffering... ]' : '[ start audio ]'">
+            x-text="autoplayBlocked ? '[ tap to play ]' : (status === 'buffering' ? '[ buffering... ]' : '[ start audio ]')">
         </button>
 
         <button @click="disconnect" x-show="status === 'playing'"
@@ -687,12 +782,29 @@
                 </span>
             </div>
             <div class="mt-2 text-xs text-gray-600">
-                skip the browser &mdash; the companion CLI plays audio locally
+                skip the browser on macOS, Linux, or Termux
+            </div>
+        </button>
+
+        <button @click="copy('irm https://cli.late.sh/install.ps1 | iex')"
+            class="group w-full text-left mt-3 px-4 py-3 transition-colors duration-200 border border-gray-800 hover:border-green-950 bg-gray-900/20">
+            <div class="flex items-center justify-between gap-4">
+                <span class="text-xs text-gray-400 min-w-0 truncate">
+                    <span class="text-gray-600">PS&gt; </span>
+                    <span class="text-gray-300">irm https://cli.late.sh/install.ps1 | iex</span>
+                </span>
+                <span class="shrink-0 text-right text-xs">
+                    <span x-cloak x-show="copied !== 'irm https://cli.late.sh/install.ps1 | iex'"
+                        class="text-gray-700 group-hover:text-gray-500 transition-colors">copy</span>
+                    <span x-cloak x-show="copied === 'irm https://cli.late.sh/install.ps1 | iex'"
+                        class="text-green-600">copied</span>
+                </span>
+            </div>
+            <div class="mt-2 text-xs text-gray-600">
+                skip the browser on Windows PowerShell
             </div>
         </button>
     </div>
-
-    {% endif %}
 
     <audio x-ref="audio" preload="none" crossorigin="anonymous" class="hidden"></audio>
 </div>

@@ -3,7 +3,9 @@ use std::collections::VecDeque;
 use ratatui_textarea::{Input, TextArea, WrapMode};
 use uuid::Uuid;
 
+use crate::app::chat::state::{MentionAutocomplete, MentionMatch};
 use crate::app::common::composer;
+use crate::moderation::command::mod_help_lines;
 
 const MAX_LOG_LINES: usize = 1000;
 const COMMAND_SEPARATOR: &str = "───────────";
@@ -13,6 +15,8 @@ pub struct ModModalState {
     log: VecDeque<ModLogLine>,
     scroll: usize,
     screen_start: usize,
+    mention_ac: MentionAutocomplete,
+    has_opened: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,17 +41,21 @@ impl ModModalState {
             log: VecDeque::new(),
             scroll: 0,
             screen_start: 0,
+            mention_ac: MentionAutocomplete::default(),
+            has_opened: false,
         }
     }
 
     pub fn open(&mut self, can_moderate: bool) {
         composer::set_themed_textarea_cursor_visible(&mut self.command_input, true);
-        if self.log.is_empty() {
-            if can_moderate {
-                self.append_info("type help for commands");
-            } else {
-                self.append_error("access denied: moderator or admin only");
-            }
+        if self.has_opened {
+            return;
+        }
+        self.has_opened = true;
+        if can_moderate {
+            self.append_help();
+        } else {
+            self.append_error("access denied: moderator or admin only");
         }
     }
 
@@ -74,6 +82,7 @@ impl ModModalState {
 
     pub fn clear_command(&mut self) {
         self.command_input = new_command_input();
+        self.mention_ac = MentionAutocomplete::default();
     }
 
     pub fn clear_screen(&mut self) {
@@ -83,6 +92,85 @@ impl ModModalState {
 
     pub fn input(&mut self, input: Input) {
         self.command_input.input(input);
+    }
+
+    pub fn is_autocomplete_active(&self) -> bool {
+        self.mention_ac.active
+    }
+
+    pub fn autocomplete_matches(&self) -> &[MentionMatch] {
+        &self.mention_ac.matches
+    }
+
+    pub fn autocomplete_selected(&self) -> usize {
+        self.mention_ac.selected
+    }
+
+    pub fn autocomplete_query(&self) -> Option<(usize, char, String)> {
+        let text = self.command_text();
+        let bytes = text.as_bytes();
+        for i in (0..bytes.len()).rev() {
+            if matches!(bytes[i], b'@' | b'#') {
+                if i == 0 || bytes[i - 1].is_ascii_whitespace() {
+                    return Some((i, bytes[i] as char, text[i + 1..].to_string()));
+                }
+                break;
+            }
+            if bytes[i].is_ascii_whitespace() {
+                break;
+            }
+        }
+        None
+    }
+
+    pub fn update_autocomplete_matches(
+        &mut self,
+        trigger_offset: usize,
+        query: String,
+        matches: Vec<MentionMatch>,
+    ) {
+        if matches.is_empty() {
+            self.mention_ac = MentionAutocomplete::default();
+            return;
+        }
+        self.mention_ac.active = true;
+        self.mention_ac.query = query;
+        self.mention_ac.trigger_offset = trigger_offset;
+        self.mention_ac.selected = self
+            .mention_ac
+            .selected
+            .min(matches.len().saturating_sub(1));
+        self.mention_ac.matches = matches;
+    }
+
+    pub fn ac_move_selection(&mut self, delta: isize) {
+        if !self.mention_ac.active || self.mention_ac.matches.is_empty() {
+            return;
+        }
+        let len = self.mention_ac.matches.len() as isize;
+        let cur = self.mention_ac.selected as isize;
+        self.mention_ac.selected = (cur + delta).clamp(0, len - 1) as usize;
+    }
+
+    pub fn ac_confirm(&mut self) {
+        if !self.mention_ac.active || self.mention_ac.matches.is_empty() {
+            return;
+        }
+        let selected = &self.mention_ac.matches[self.mention_ac.selected];
+        let text = self.command_text();
+        let next = format!(
+            "{}{}{} ",
+            &text[..self.mention_ac.trigger_offset],
+            selected.prefix,
+            selected.name
+        );
+        self.command_input = new_command_input();
+        self.command_input.insert_str(next);
+        self.mention_ac = MentionAutocomplete::default();
+    }
+
+    pub fn ac_dismiss(&mut self) {
+        self.mention_ac = MentionAutocomplete::default();
     }
 
     pub fn append_input(&mut self, command: &str) {
@@ -107,6 +195,12 @@ impl ModModalState {
 
     pub fn append_error(&mut self, line: impl Into<String>) {
         self.push_log(line.into(), ModLogKind::Error);
+    }
+
+    fn append_help(&mut self) {
+        for line in mod_help_lines(None) {
+            self.append_info(line);
+        }
     }
 
     pub fn append_result(&mut self, success: bool, lines: Vec<String>) {
@@ -179,6 +273,44 @@ mod tests {
     }
 
     #[test]
+    fn first_moderator_open_displays_command_help_once() {
+        let mut state = ModModalState::new();
+
+        state.open(true);
+
+        assert!(
+            state
+                .log()
+                .iter()
+                .any(|line| line.text == "rename-room <#oldname> <#newname>"),
+            "first open should display command help: {:?}",
+            state.log()
+        );
+        let first_len = state.log().len();
+
+        state.open(true);
+
+        assert_eq!(
+            state.log().len(),
+            first_len,
+            "subsequent opens should not replay help"
+        );
+    }
+
+    #[test]
+    fn first_non_moderator_open_displays_access_denied() {
+        let mut state = ModModalState::new();
+
+        state.open(false);
+
+        assert_eq!(state.log().len(), 1);
+        assert_eq!(
+            state.log().front().unwrap().text,
+            "access denied: moderator or admin only"
+        );
+    }
+
+    #[test]
     fn command_input_adds_separator_between_runs() {
         let mut state = ModModalState::new();
 
@@ -192,5 +324,56 @@ mod tests {
                 .iter()
                 .any(|line| line.kind == ModLogKind::Separator && line.text == COMMAND_SEPARATOR)
         );
+    }
+
+    #[test]
+    fn autocomplete_query_detects_at_prefixed_current_token() {
+        let mut state = ModModalState::new();
+        state.command_input.insert_str("ban server @ali");
+
+        assert_eq!(
+            state.autocomplete_query(),
+            Some((11, '@', "ali".to_string()))
+        );
+    }
+
+    #[test]
+    fn autocomplete_query_detects_hash_prefixed_current_token() {
+        let mut state = ModModalState::new();
+        state.command_input.insert_str("ban #rust");
+
+        assert_eq!(
+            state.autocomplete_query(),
+            Some((4, '#', "rust".to_string()))
+        );
+    }
+
+    #[test]
+    fn autocomplete_query_ignores_at_without_word_boundary() {
+        let mut state = ModModalState::new();
+        state.command_input.insert_str("ban server nope@ali");
+
+        assert_eq!(state.autocomplete_query(), None);
+    }
+
+    #[test]
+    fn autocomplete_confirm_replaces_query_with_selected_username() {
+        let mut state = ModModalState::new();
+        state.command_input.insert_str("ban server @ali");
+        state.update_autocomplete_matches(
+            11,
+            "ali".to_string(),
+            vec![MentionMatch {
+                name: "alice".to_string(),
+                online: true,
+                prefix: "@",
+                description: None,
+            }],
+        );
+
+        state.ac_confirm();
+
+        assert_eq!(state.command_text(), "ban server @alice");
+        assert!(!state.is_autocomplete_active());
     }
 }

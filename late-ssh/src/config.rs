@@ -42,6 +42,7 @@ pub struct Config {
     pub ws_pair_rate_limit_window_secs: u64,
     pub web_tunnel: WebTunnelConfig,
     pub ai: AiConfig,
+    pub youtube_api_key: Option<String>,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -119,6 +120,10 @@ impl Config {
             "ai: @bot chat responder model and status"
         );
         tracing::info!(
+            has_key = self.youtube_api_key.is_some(),
+            "youtube: Data API validation key status"
+        );
+        tracing::info!(
             username = %self.web_tunnel.username,
             token_len = self.web_tunnel.token.len(),
             "web-tunnel: browser TUI display route"
@@ -192,6 +197,7 @@ impl Config {
                 api_key: ai_api_key,
                 model: required("LATE_AI_MODEL")?,
             },
+            youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
         })
     }
 }

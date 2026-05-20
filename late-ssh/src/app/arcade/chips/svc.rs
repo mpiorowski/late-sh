@@ -12,8 +12,7 @@ impl ChipService {
         Self { db }
     }
 
-    /// Ensure a chips row exists and grant the daily stipend if not already granted today.
-    /// Called on SSH login.
+    /// Ensure a chips row exists for the user. Called on SSH login.
     pub async fn ensure_chips(&self, user_id: Uuid) -> anyhow::Result<UserChips> {
         let client = self.db.get().await?;
         UserChips::ensure(&client, user_id).await

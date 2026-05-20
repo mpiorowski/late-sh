@@ -16,3 +16,5 @@ server_key.pub
 *.bkp
 *.dtmp
 *.drawio
+
+late-ssh/cache/

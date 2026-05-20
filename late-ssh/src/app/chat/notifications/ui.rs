@@ -19,19 +19,7 @@ const ITEM_HEIGHT: u16 = 4;
 const PREVIEW_ROWS: usize = 2;
 
 pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &NotificationListView<'_>) {
-    let selected = if view.items.is_empty() {
-        0
-    } else {
-        view.selected_index.min(view.items.len() - 1) + 1
-    };
-    let title = format!(" Mentions ({selected}/{}) ", view.items.len());
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(Style::default().fg(theme::BORDER()));
-
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
+    let inner_area = area;
 
     if view.items.is_empty() {
         let text = Text::from("No mentions yet.");

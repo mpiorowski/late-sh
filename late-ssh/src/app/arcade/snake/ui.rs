@@ -13,7 +13,7 @@ use crate::app::arcade::ui::{
 };
 use crate::app::common::theme;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let bottom = GameBottomBar {
         status: status_line(vec![
             ("score", state.score.to_string(), theme::AMBER_GLOW()),
@@ -32,7 +32,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         tip: Some(tip_line("Snake by github.com/AndreLobato")),
     };
 
-    let board_area = draw_game_frame(frame, area, "Snake", bottom, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "Snake", bottom, show_bottom_bar);
     let board_rect = centered_rect(
         board_area,
         state.field.width as u16 * 2,

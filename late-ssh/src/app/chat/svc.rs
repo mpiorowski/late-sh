@@ -206,6 +206,15 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    OpenProfileResolved {
+        user_id: Uuid,
+        target_user_id: Uuid,
+        target_username: String,
+    },
+    OpenProfileFailed {
+        user_id: Uuid,
+        message: String,
+    },
     RoomJoined {
         user_id: Uuid,
         room_id: Uuid,
@@ -1246,11 +1255,16 @@ impl ChatService {
         );
     }
 
-    pub fn toggle_message_pin_task(&self, message_id: Uuid, is_admin: bool) {
+    pub fn toggle_message_pin_task(
+        &self,
+        message_id: Uuid,
+        is_admin: bool,
+        pinned_tx: watch::Sender<Vec<ChatMessage>>,
+    ) {
         let service = self.clone();
         tokio::spawn(
             async move {
-                let result: Result<()> = async {
+                let result: Result<Vec<ChatMessage>> = async {
                     if !is_admin {
                         anyhow::bail!("admin-only");
                     }
@@ -1259,15 +1273,19 @@ impl ChatService {
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("message not found"))?;
                     ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
-                    Ok(())
+                    let pinned = ChatMessage::list_pinned(&client, PINNED_MESSAGES_LIMIT).await?;
+                    Ok(pinned)
                 }
                 .await;
-                if let Err(e) = result {
-                    late_core::error_span!(
+                match result {
+                    Ok(pinned) => {
+                        let _ = pinned_tx.send(pinned);
+                    }
+                    Err(e) => late_core::error_span!(
                         "chat_pin_failed",
                         error = ?e,
                         "failed to toggle message pin"
-                    );
+                    ),
                 }
             }
             .instrument(info_span!(
@@ -1343,6 +1361,43 @@ impl ChatService {
         ChatRoomMember::join(&client, room.id, user_id).await?;
         ChatRoomMember::join(&client, room.id, target.id).await?;
         Ok(room.id)
+    }
+
+    pub fn open_profile_by_username_task(&self, user_id: Uuid, target_username: String) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.open_profile_by_username_task",
+            user_id = %user_id,
+            target = %target_username
+        );
+        tokio::spawn(
+            async move {
+                match service.resolve_profile_target(&target_username).await {
+                    Ok((target_user_id, name)) => {
+                        let _ = service.evt_tx.send(ChatEvent::OpenProfileResolved {
+                            user_id,
+                            target_user_id,
+                            target_username: name,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::OpenProfileFailed {
+                            user_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn resolve_profile_target(&self, target_username: &str) -> Result<(Uuid, String)> {
+        let client = self.db.get().await?;
+        let target = User::find_by_username(&client, target_username)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("user '{}' not found", target_username))?;
+        Ok((target.id, target.username))
     }
 
     pub fn list_room_members_task(&self, user_id: Uuid, room_id: Uuid) {

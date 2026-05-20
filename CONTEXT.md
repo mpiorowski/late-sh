@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-11 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`)
+- Last updated: 2026-05-17 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`; Audio details in `late-ssh/src/app/audio/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Dashboard, Chat, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent feeds, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub modal for leaderboard/dailies/shop/events surfaces, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Arcade behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable right-side panels: the global app sidebar (now playing, activity, visualizer, bonsai) plus the Arcade lobby leaderboard sidebar, both default-on. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub modal for leaderboard/dailies/shop/events surfaces, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Arcade behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai) with on/off/custom per-screen visibility, the Home room-list rail, and the general-room lounge info strip (top boxes plus wire); `v` then `v` cycles persisted combinations of those panels. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -245,7 +245,7 @@ flowchart LR
 - `ProfileService` (in `app/profile/svc.rs`) exposes per-user `watch` snapshots backed by service-owned maps (`subscribe_snapshot(user_id)`).
 - `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, daily completion statuses, extended all-time/monthly high scores (Tetris, 2048, Snake), monthly chip earners, monthly Arcade champion points, and chip leaders (top balances). Compact Hub leaderboard panels render top rows plus calculation hints and an "around you" slice when the current user is outside the visible top list; Arcade Wins uses daily puzzle weighting (easy/draw-1 = 1, medium = 3, hard/draw-3 = 5). Chat username glyphs come from bonsai state.
 - `Hub` (in `app/hub`) is the global modal opened by Ctrl+G. It owns cross-product surfaces such as Leaderboard, Dailies, Shop, and Events. It may summarize data from Arcade, Rooms, and economy services, but those domains keep their own runtime/service ownership.
-- `ChipService` (in `app/arcade/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` grants the daily 500-chip stipend on login, `grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips on daily puzzle completion. Daily Arcade services hold a `ChipService` clone and call it in `record_win_task()`.
+- `ChipService` (in `app/arcade/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` creates new chip rows with 1000 chips, `grant_daily_bonus_task(user_id, difficulty_key)` awards 50/100/150 chips on daily puzzle completion. Daily Arcade services hold a `ChipService` clone and call it in `record_win_task()`.
 - `Activity` (in `app/activity`) owns the structured global user-action event type, channel helpers, and `ActivityPublisher` username lookup helper. `ActivityEvent` carries `user_id`, `username`, display `action`, structured `ActivityKind`, category, and timestamp. Dashboard/sidebar display drains the same global broadcast stream through `ActivityFilter::dashboard()`. Future daily-challenge systems should subscribe to this channel and consume every event in order rather than adding per-feature challenge hooks.
 - `RoomsService` (in `app/rooms/svc.rs`) owns persistent game-room creation/listing/deletion over `game_rooms` + associated `chat_rooms`, publishes `RoomsSnapshot` via `watch`, and emits `RoomsEvent` success/failure banners.
 - `BlackjackTableManager` / `BlackjackService` own process-local per-room Blackjack runtime state. Detailed Rooms/Blackjack contracts live in `late-ssh/src/app/rooms/CONTEXT.md`.
@@ -326,6 +326,10 @@ The stored-permit regression is locked down by `ssh::tests::stale_permit_does_no
 - **Does not address lock contention** — the app mutex is still shared between `data()` and the render task; see §8.5 A. This change only closes the input-to-frame cadence gap, not the lock-held-across-tick stall.
 
 ### 2.7 Audio infrastructure
+
+`late-ssh/src/app/audio/CONTEXT.md` owns the audio domain: Icecast house
+radio, browser/CLI source arbitration, the YouTube queue + booth, visualizer
+behavior, parked work, and deferred backlog.
 
 ```mermaid
 flowchart LR
@@ -513,7 +517,8 @@ late-sh/
 **Web routes (late-web, port 3000):**
 - `GET /` - Landing page: late.sh branding, `ssh late.sh` CTA, CLI install/build copy actions, and links to gallery/play/profiles
 - `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume control, Web Audio analyzer for TUI visualizer
-- `GET /status?pairing={bool}` - HTMX fragment: now-playing track + listener count (fetched from SSH API internally). `pairing=false` for landing footer, `pairing=true` for pairing detail view. Polled every 5s.
+- `GET /status` - HTMX fragment: now-playing track + listener count for the landing footer. Polled every 5s.
+- `GET /pair/status` - HTMX fragment: now-playing track + artist + listener count for the audio pairing page. Polled every 5s.
 - `GET /chat/{token}` - Browser chat page; connects to `late-ssh` `/api/ws/chat`
 - `GET /dashboard`, `/dashboard/now-playing`, `/dashboard/status` - Internal/demo dashboard and HTMX partials
 - `GET /gallery?key=...` - Read-only Artboard snapshot gallery backed by saved DB snapshots
@@ -547,7 +552,7 @@ late-sh/
 
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_arcade_sidebar` (bool, default-on when absent; legacy `show_games_sidebar` is still read), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int ≥ 0; 0 = no throttle) |
+| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_dashboard_header` (bool, default-on when absent; controls general-room lounge info top boxes plus wire), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
@@ -564,7 +569,7 @@ late-sh/
 | BonsaiTree | `bonsai_trees` | `user_id` UNIQUE, growth_points, last_watered DATE, seed BIGINT, is_alive BOOLEAN |
 | BonsaiGrave | `bonsai_graveyard` | `user_id` FK (not unique — multiple deaths), survived_days, died_at |
 | BonsaiDailyCare | `bonsai_daily_care` | `UNIQUE(user_id, care_date)`, UTC daily care row with watered flag, generated branch goal, cut branch ids, and one-shot water/prune penalty flags |
-| UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (floor=100), `last_stipend_date` DATE |
+| UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (new users start at 1000; busted-player floor restore is 100), `last_stipend_date` DATE |
 | Showcase | `showcases` | `user_id` FK; `title` 1-120, `url` 1-2000, `description` 1-800, `tags` TEXT[] (lowercased, ≤8). Listed newest-first, edit/delete restricted to author or admin |
 | ShowcaseFeedRead | `showcase_feed_reads` | `user_id` PK/FK, `last_read_at` timestamp cursor for per-user Showcase unread counts |
 | WorkProfile | `work_profiles` | `user_id` UNIQUE FK; `slug` UNIQUE (`w_` + 12 lowercase alnum), `headline`, status (`open`, `casual`, `not-looking`), type/location, links, skills, summary. Listed latest-update-first, edit/delete restricted to author or admin |
@@ -574,10 +579,10 @@ late-sh/
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Chat`, `Arcade`, `Rooms`, `Artboard` (cycle: `Dashboard -> Chat -> Arcade -> Rooms -> Artboard -> Dashboard`; News, Mentions, Discover, Showcase, and Work are synthetic room-like entries within Chat, not separate screens. News, Mentions, Showcase, and Work each carry persisted unread state; Showcase is backed by `showcases`, and Work is one public work profile per user backed by `work_profiles`.)
+- `Screen`: `Dashboard`, `Arcade`, `Rooms`, `Artboard` (cycle: `Dashboard -> Arcade -> Rooms -> Artboard -> Dashboard`; `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, Discover, Showcase, and Work are synthetic room-like entries within Home chat, not separate screens. News, Mentions, Showcase, and Work each carry persisted unread state; Showcase is backed by `showcases`, and Work is one public work profile per user backed by `work_profiles`.)
 - `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
-- `GameKind`: Rust enum in `late-core::models::game_room`; currently `Blackjack`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
+- `GameKind`: Rust enum in `late-core::models::game_room`; currently `Blackjack`, `Poker`, and `TicTacToe`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
 
 ### 4.4 Error model
 
@@ -627,6 +632,7 @@ Known gaps/risks:
 - **Single-replica assumption:** Several structures are purely in-memory and not shared across processes (see multi-replica notes below)
 - **SSH pod drain window:** `infra/service-ssh.tf` sets `termination_grace_period_seconds = 21600` (6h) so rolling updates can stop new connections while allowing existing SSH sessions to drain for a long window before Kubernetes sends SIGKILL.
 - **SSH ingress reload risk:** `ssh late.sh` currently reaches `late-ssh` through RKE2 ingress-nginx TCP passthrough (`infra/ssh-tcp.tf`, port `22 -> service-ssh-sv:2222::PROXY`). Long-lived SSH sessions can be dropped after any ingress-nginx config reload because old workers are terminated after `worker_shutdown_timeout` (observed 2026-04-29 after cert-manager renewed `service-web-tls`: reload at `19:56:37Z`, mass SSH/WS disconnect at `20:00:38Z`, matching the 240s timeout). Future infra improvement: stop routing SSH through ingress-nginx; use a dedicated TCP LoadBalancer/NodePort/host proxy for SSH so HTTP/TLS reloads cannot kill SSH sessions. Short-term mitigation: increase ingress-nginx `worker-shutdown-timeout`, but that only delays the disconnect.
+- **Postgres primary CPU saturation from discover-room fanout:** Observed 2026-05-14 in Kubernetes: CNPG primary `postgres-1` was healthy but pinned near its `1` CPU limit, while the node still had spare CPU. `pg_stat_activity` showed `service-ssh` (`10.42.0.47`) running 8 concurrent `app` sessions on the same public topic-room discover query. The old query joined `chat_rooms -> chat_room_members -> chat_messages` and then used `COUNT(DISTINCT ...)`, producing an estimated ~4.48M joined rows before aggregation. Preferred fix is query shape first: aggregate member/message counts separately (current `ChatRoom::list_discover_public_topic_rooms` uses `LATERAL` aggregates), then raise the CNPG CPU limit from `1` to `2` only for headroom. Secondary log noise during the same check: repeated `idx_users_username_lower` duplicate-key errors from profile updates; do not mistake those for the main CPU source unless active queries point there.
 - **IPv6 ingress status:** RKE2/CNI `hostPort` exposes the current ingress-nginx path for IPv4 only; do not switch the main ingress controller to `hostNetwork` without a rollout plan. Public IPv6 is handled by the separate `kube-system/ipv6-proxy` HAProxy DaemonSet in `infra/ipv6-proxy.tf`, binding `2a01:4f9:c013:2ae1::1` on `80`, `443`, and `22`; HTTP(S) forwards to localhost ingress hostPorts, while SSH forwards to `service-ssh-sv:2222` with PROXY protocol. Verified working externally on 2026-05-03; `Network is unreachable` during `ssh -6 late.sh` means the client lacks IPv6 egress.
 - **Stateful VT parsing in `late-ssh/src/app/input.rs`:** SSH input now runs through a persistent `vte::Parser`, so CSI/SS3 sequences and bracketed paste survive split russh reads instead of assuming the whole escape sequence lands in one chunk. That removes the old split-paste failure where `[200~` / `[201~` residue or embedded newlines could leak through as live keystrokes. The app still keeps two pragmatic layers on top: `is_likely_paste` heuristically treats large printable unmarked chunks as paste for terminals without bracketed paste, and `sanitize_paste_markers`/`strip_paste_markers` still scrub stored residue defensively when copying URLs from older polluted state. Standalone `Esc` is resolved on a short tick delay so split escape sequences are not mistaken for cancel keys.
 
@@ -736,13 +742,14 @@ Currently the SSH app assumes a single process. These in-memory structures would
 5. Failure: If the paired client disconnects, visualizer decays (rms * 0.96 per tick) and paired state disappears. If SSH disconnects, the session token unregisters on drop.
 
 **Chat flows:**
-Chat send/edit/delete, ignore, roster/help overlays, replies, dashboard favorites, autocomplete, synthetic entries, and chat rendering flows live in `late-ssh/src/app/chat/CONTEXT.md`.
+Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorites, autocomplete, synthetic entries, and chat rendering flows live in `late-ssh/src/app/chat/CONTEXT.md`.
 
 **Vote round switch:**
 1. Trigger: VoteService background tick (5s) detects switch interval (default 60 min) elapsed since last switch
 2. Processing: `switch_to_winner()` → pick genre with most votes (or keep current) → clear all votes → increment `round_id` → send `vibe.set <genre>` to Liquidsoap
 3. Side effects: All clients detect `round_id` change → clear `my_vote`. Liquidsoap switches playlist.
-4. Failure: Liquidsoap TCP failure logged but round still switches locally.
+4. UI: `VoteSnapshot::remaining_until_switch()` derives a live countdown from `next_switch_in` and `updated_at`; the right sidebar vibe/vote line renders when the current vote round ends.
+5. Failure: Liquidsoap TCP failure logged but round still switches locally.
 
 ### 8.4 Easy-to-break gotchas
 
@@ -899,7 +906,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace --all-targets
 ```
 
-Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc while iterating, but keep the workspace gate above as the canonical repo-level check.
+The human owner may use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc while iterating, but the workspace gate above remains the canonical repo-level check.
 
 ### 10.4 Debugging checklist
 
@@ -919,37 +926,24 @@ Use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc w
 
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
-| **Dashboard** | 1 | Active | Now playing + vibe voting + `/music` hint + dashboard chat (The Lounge Hub) |
-| **Chat** | 2 | Active | Full room-list chat screen with DMs, public/private rooms, mentions, News, Showcase, Work, and Discover synthetic entries. Detailed commands, keybindings, service flow, and gotchas live in `late-ssh/src/app/chat/CONTEXT.md`. |
-| **Arcade** | 3 | Active | The Arcade lobby, high-score games, daily puzzle games, chips, and leaderboard/sidebar surfaces. Detailed behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; Blackjack/Poker/Tic-Tac-Toe live in Rooms. |
-| **Rooms** | 4 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
-| **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
+| **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, optional general-room lounge info, chat center for other rooms/synthetic entries, activity, and room shortcuts. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
+| **Arcade** | 2 | Active | The Arcade lobby, high-score games, daily puzzle games, chips, and leaderboard/sidebar surfaces. Detailed behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; Blackjack/Poker/Tic-Tac-Toe live in Rooms. |
+| **Rooms** | 3 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
+| **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 
 ### Layout
 
 ```
-┌─ late.sh ──────────────────────────────────────────────────────────┐
-│                                            │ ┌─ Visualizer ──────┐ │
-│            Main Content Area               │ │ █ █ █ █ █ █ █ █ │ │
-│         (screen-dependent)                 │ └───────────────────┘ │
-│                                            │ ┌─ Now Playing ─────┐ │
-│                                            │ │ Artist - Title    │ │
-│                                            │ │ 0:57 ──●──── 3:15 │ │
-│                                            │ └───────────────────┘ │
-│                                            │ ┌─ Activity ────────┐ │
-│                                            │ │ ● 12 online ? keys│ │
-│                                            │ │ @user  2m         │ │
-│ ┌──────────────────────────────────────┐   │ │ joined chat       │ │
-│ │ ✓ Voted for Lofi                     │   │ └───────────────────┘ │
-│ └──────────────────────────────────────┘   │ ┌─ Bonsai (42d) ───┐ │
-│                                            │ │    .@@@.          │ │
-│                                            │ │  .@@@@@@@.        │ │
-│                                            │ │   /   \           │ │
-│                                            │ │   |   |           │ │
-│                                            │ │   .|.             │ │
-│                                            │ │  [===]            │ │
-│                                            │ │            w care │ │
-│                                            │ └───────────────────┘ │
+┌─ late.sh | 1 2 3 4 | Home ─────────────────────────────────────────┐
+│ ┌ room rail ┐ │                                      │ 14:37       │
+│ │ favorites │ │ Home center:                         │ ─────────── │
+│ │ core      │ │ - #general dashboard surface          │ visualizer  │
+│ │ updates   │ │ - selected room chat center           │ ─────────── │
+│ │ dms       │ │ - synthetic rss/news/work/etc         │ b1/b2/b3    │
+│ │ + browse  │ │                                      │ ─────────── │
+│ │ f favorite│ │                                      │ bonsai      │
+│ └───────────┘ │                                      │ ─────────── │
+│               │                                      │             │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -982,11 +976,10 @@ Content invariants worth preserving when editing `data.rs`:
 | `j` / `k` / `↑` / `↓` | Help modal | Scroll current slide (uncapped — past the last line is blank space) |
 | `Esc` / `q` / `?` | Help modal | Close (returns to the underlying screen, including the settings modal if it was open) |
 | `Tab` | Global | Cycle screens |
-| `1` | Global | Jump to Dashboard |
-| `2` | Global | Jump to Chat |
-| `3` | Global | Jump to Arcade |
-| `4` | Global | Jump to Rooms |
-| `5` | Global | Jump to Artboard |
+| `1` | Global | Jump to Home / Dashboard |
+| `2` | Global | Jump to Arcade |
+| `3` | Global | Jump to Rooms |
+| `4` | Global | Jump to Artboard |
 | `m` | Global | Toggle mute on paired client |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
@@ -997,23 +990,25 @@ Content invariants worth preserving when editing `data.rs`:
 | `x` | Bonsai modal prune mode | Cut branch under cursor; wrong cuts cost -10 growth, all daily cuts preserve current shape |
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
-| `L` / `C` / `A` / `Z` | Dashboard | Vote genre |
-| `b` then `1` / `2` / `3` / `4` | Dashboard | Activate a dashboard chord: featured room game, current daily game, current News wire article, or `#announcements` |
-| `P` | Dashboard / Chat | Show browser-pairing QR (copies pairing URL) |
-| `B` | Dashboard / Chat | Open CLI install/build-source modal |
-| Dashboard chat keys | Dashboard | See `late-ssh/src/app/chat/CONTEXT.md`. |
+| `v` then `1` / `2` / `3` | Home | Vote Lofi / Ambient / Classic. Suffixes also accept `l`, `a`, `c`. |
+| `v` then `v` | Home | Cycle persisted Home panel visibility: all on, left rail off, right rail off, lounge info off, pair combinations, all off. |
+| `b` then `1` / `2` / `3` | Home | Enter one of the top hot multiplayer rooms shown in the right rail. |
+| `P` | Home | Open combined install + pair modal: curl / `nix run` / build-from-source CLI options on top, pairing QR underneath. |
+| Home chat keys | Home | See `late-ssh/src/app/chat/CONTEXT.md`. |
 | `Enter` | Arcade lobby | Launch selected game |
 | `Esc` | Active Arcade game | Exit back to Arcade lobby |
 | Arcade game keys | Arcade | See `late-ssh/src/app/arcade/CONTEXT.md` and each game's info panel. |
-| Chat keys | Chat / Dashboard chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, and icon picker behavior. |
+| Chat keys | Home / Rooms embedded chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
 | `Ctrl+O` | Global | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+L` | Global (no modal owns input) | Toggle the terminal-help modal ("Why I cannot copy/open/click links?"). Also closes other top-level modals before opening. |
 | `Tab` / `Shift+Tab` | Terminal-help modal | Switch between Copy / Links / Selection / Notifications tabs |
 | `j` / `k` / `↑` / `↓` | Terminal-help modal | Scroll the current tab |
 | `Esc` / `q` / `Ctrl+L` | Terminal-help modal | Close |
-| `↑` / `↓` / `j` / `k` | Settings modal | Move between rows (Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Arcade sidebar, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format) |
+| `Tab` / `Shift+Tab` | Settings modal | Switch tabs: Settings, Bio, Themes, RSS, Account, and hidden Special when available |
+| `↑` / `↓` / `j` / `k` | Settings modal | Move within the active tab. Settings rows include Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Room list, Lounge info, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
 | `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/system fields/bio, cycle a setting, or open the country/timezone picker |
+| `a` / `d` / `r` | Settings modal RSS tab | Add, delete, or refresh private RSS/Atom subscriptions |
 | `Alt+Enter` / `Ctrl+J` | Settings modal (bio editing) | Insert newline |
 | `?` | Settings modal | Open help modal on top |
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |

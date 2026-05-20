@@ -35,9 +35,10 @@ use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
-use late_ssh::session::{PairControlMessage, PairedClientRegistry, SessionRegistry};
+use late_ssh::paired_clients::{PairControlMessage, PairedClientRegistry};
+use late_ssh::session::SessionRegistry;
 use late_ssh::state::State;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{Semaphore, broadcast, watch};
@@ -105,6 +106,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
             api_key: None,
             model: "gemini-3.1-pro-preview".to_string(),
         },
+        youtube_api_key: None,
     }
 }
 
@@ -169,7 +171,13 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
         config,
-        db,
+        db: db.clone(),
+        audio_service: late_ssh::app::audio::svc::AudioService::new(
+            db.clone(),
+            None,
+            late_ssh::paired_clients::PairedClientRegistry::new(),
+            Arc::new(Mutex::new(HashMap::new())),
+        ),
         vote_service,
         chat_service,
         notification_service,
@@ -201,6 +209,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         leaderboard_service,
         now_playing_rx,
         activity_feed: activity_tx,
+        activity_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
         paired_client_registry: PairedClientRegistry::new(),
         web_chat_registry: late_ssh::web::WebChatRegistry::new(),
@@ -223,6 +232,12 @@ pub fn make_app_with_chat_service(
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
+        audio_service: late_ssh::app::audio::svc::AudioService::new(
+            db.clone(),
+            None,
+            late_ssh::paired_clients::PairedClientRegistry::new(),
+            Arc::new(Mutex::new(HashMap::new())),
+        ),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),
@@ -302,9 +317,11 @@ pub fn make_app_with_chat_service(
         my_vote: None,
         active_users: None,
         activity_feed_rx: None,
+        initial_activity: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
+        initial_audio_source: late_core::models::user::AudioSource::default(),
     })
     .expect("app");
     app.skip_splash_for_tests();
@@ -321,11 +338,22 @@ pub fn make_app_with_paired_client(
 ) {
     let registry = PairedClientRegistry::new();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    registry.register(session_token.to_string(), tx);
+    registry.register(
+        session_token.to_string(),
+        tx,
+        uuid::Uuid::now_v7(),
+        late_core::models::user::AudioSource::default(),
+    );
 
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
+        audio_service: late_ssh::app::audio::svc::AudioService::new(
+            db.clone(),
+            None,
+            late_ssh::paired_clients::PairedClientRegistry::new(),
+            Arc::new(Mutex::new(HashMap::new())),
+        ),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),
@@ -405,9 +433,11 @@ pub fn make_app_with_paired_client(
         my_vote: None,
         active_users: None,
         activity_feed_rx: None,
+        initial_activity: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
+        initial_audio_source: late_core::models::user::AudioSource::default(),
     })
     .expect("app");
     app.skip_splash_for_tests();
@@ -446,8 +476,7 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
         .expect("join general room");
 
     let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow-it"));
-    app.handle_input(b"2");
-    wait_for_render_contains(&mut app, " Rooms ").await;
+    wait_for_render_contains(&mut app, "lounge").await;
     app.handle_input(b"i");
     wait_for_render_contains(&mut app, "Compose (Enter send").await;
     (test_db, app)
@@ -455,6 +484,7 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
 
 pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
     let deadline = Instant::now() + Duration::from_secs(3);
+    let mut last_plain = String::new();
     while Instant::now() < deadline {
         app.tick();
         app.reset_render();
@@ -463,9 +493,10 @@ pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
         if plain.contains(needle) {
             return;
         }
+        last_plain = plain;
         sleep(Duration::from_millis(30)).await;
     }
-    panic!("timed out waiting for render to contain {needle:?}");
+    panic!("timed out waiting for render to contain {needle:?}; last render:\n{last_plain}");
 }
 
 pub async fn assert_render_not_contains_for(app: &mut App, needle: &str, duration: Duration) {

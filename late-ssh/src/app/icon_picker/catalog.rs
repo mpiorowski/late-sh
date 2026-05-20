@@ -64,7 +64,6 @@ const COMMON_KAOMOJI: &[(&str, &str)] = &[
     ("(>⩊<)", "excited laugh"),
     ("(„• ᴗ •„)", "cute blush"),
     ("(*￣▽￣)b", "thumbs up good"),
-    ("¯\\_(ツ)_/¯", "shruggie shrug"),
     ("(´,,•ω•,,)♡", "love affection"),
     ("(⁄ ⁄•⁄ω⁄•⁄ ⁄)", "blush shy"),
     ("(⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄)", "embarrassed flustered"),
@@ -102,6 +101,9 @@ const COMMON_KAOMOJI: &[(&str, &str)] = &[
     ("ꉂ(˵˃ ᗜ ˂˵)", "happy laugh"),
     ("(˶°▄°˶)", "skeptical"),
     ("(｡ᵕ °ㅁ° ).ᐟ.ᐟ.ᐟ", "shocked"),
+    ("ᕙ(  •̀ ᗜ •́  )ᕗ", "strong flex"),
+    ("✧｡◝(ᵔᗜᵔ)◜✧*｡", "happy excited"),
+    ("♡⸜(ˆᗜˆ˵ )⸝♡", "love"),
 ];
 
 const COMMON_NERD_NAMES: &[&str] = &[

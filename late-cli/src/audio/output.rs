@@ -24,6 +24,10 @@ struct PlaybackOutputState {
     source_channels: usize,
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
+    /// When false, the user has selected a non-Icecast source (today: only
+    /// YouTube). The CLI can't decode it, so we emit silence regardless of
+    /// `muted`. Driven by `SetPlaybackSource` over the pair WS.
+    source_is_icecast: Arc<AtomicBool>,
     source_frame: Vec<f32>,
 }
 
@@ -32,6 +36,7 @@ pub(super) struct BuiltOutputStream {
     pub(super) sample_rate: u32,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_output_stream(
     spec: AudioSpec,
     queue: PlaybackQueueReader,
@@ -39,6 +44,7 @@ pub(super) fn build_output_stream(
     played_samples: Arc<AtomicU64>,
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
+    source_is_icecast: Arc<AtomicBool>,
     profile: AudioBackendProfile,
 ) -> Result<BuiltOutputStream> {
     let host = cpal::default_host();
@@ -68,6 +74,7 @@ pub(super) fn build_output_stream(
         source_channels: spec.channels,
         muted,
         volume_percent,
+        source_is_icecast,
         source_frame: vec![0.0; spec.channels],
     };
 
@@ -163,7 +170,11 @@ fn write_output_data<T>(output: &mut [T], channels: usize, state: &mut PlaybackO
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
-    let muted = state.muted.load(Ordering::Relaxed);
+    // `muted` is the user's intent (`m` keybind). `source_is_icecast` is the
+    // structural gate: a Youtube preference means the CLI has nothing real to
+    // play, so we emit silence even if the user toggled unmuted.
+    let muted =
+        state.muted.load(Ordering::Relaxed) || !state.source_is_icecast.load(Ordering::Relaxed);
     let linear = state.volume_percent.load(Ordering::Relaxed) as f32 / 100.0;
     let volume = linear * linear;
     let source_channels = state.source_channels;

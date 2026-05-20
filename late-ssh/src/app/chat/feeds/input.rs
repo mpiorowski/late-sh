@@ -28,13 +28,13 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             if let Some(banner) = app.chat.feeds.share_selected() {
                 app.banner = Some(banner);
             } else {
-                app.banner = Some(Banner::error("No feed entry selected."));
+                app.banner = Some(Banner::error("No RSS entry selected."));
             }
             true
         }
         b'r' | b'R' => {
             app.chat.feeds.poll_now();
-            app.banner = Some(Banner::success("Refreshing feeds..."));
+            app.banner = Some(Banner::success("Refreshing RSS..."));
             true
         }
         b'd' | b'D' => {

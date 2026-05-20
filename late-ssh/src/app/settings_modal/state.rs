@@ -2,7 +2,9 @@ use std::cell::Cell;
 
 use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::rss_feed::RssFeed;
-use late_core::models::user::sanitize_username_input;
+use late_core::models::user::{
+    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, sanitize_username_input,
+};
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
@@ -29,18 +31,6 @@ pub const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current
 pub enum PickerKind {
     Country,
     Timezone,
-    Room,
-}
-
-/// Snapshot of one room the user is a member of, flattened to the minimum
-/// the modal needs to render + filter. Built by the caller (dashboard/chat
-/// code has access to slug/kind/DM peer usernames), so this module stays
-/// decoupled from `ChatRoom` and `usernames` lookups.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RoomOption {
-    pub id: Uuid,
-    /// Display label: e.g. `"#general"`, `"#rust-nerds"`, `"@alice"`.
-    pub label: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,8 +42,10 @@ pub enum Row {
     Langs,
     Theme,
     BackgroundColor,
-    DashboardHeader,
     RightSidebar,
+    RoomListSidebar,
+    LoungeInfo,
+    WireBox,
     Country,
     Timezone,
     DirectMessages,
@@ -65,7 +57,7 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 17] = [
+    pub const ALL: [Row; 19] = [
         Row::Username,
         Row::Ide,
         Row::Terminal,
@@ -73,8 +65,10 @@ impl Row {
         Row::Langs,
         Row::Theme,
         Row::BackgroundColor,
-        Row::DashboardHeader,
         Row::RightSidebar,
+        Row::RoomListSidebar,
+        Row::LoungeInfo,
+        Row::WireBox,
         Row::Country,
         Row::Timezone,
         Row::DirectMessages,
@@ -129,14 +123,12 @@ impl SystemField {
 /// Top-level tab in the settings modal. `Settings` holds every compact row
 /// (identity/appearance/location/notifications); `Themes` is a fast browser
 /// for the expanded theme catalog; `Bio` is a separate full-width pane with
-/// the markdown editor + preview; `Favorites` manages the dashboard
-/// quick-switch room list.
+/// the markdown editor + preview.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
     Bio,
     Themes,
-    Favorites,
     Account,
     Feeds,
     /// Hidden until the user has filled out at least one of bio, country,
@@ -145,11 +137,10 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 7] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Settings,
         Tab::Bio,
         Tab::Themes,
-        Tab::Favorites,
         Tab::Feeds,
         Tab::Account,
         Tab::Special,
@@ -160,9 +151,8 @@ impl Tab {
             Tab::Settings => "Settings",
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
-            Tab::Favorites => "Favorites",
             Tab::Account => "Account",
-            Tab::Feeds => "Feeds",
+            Tab::Feeds => "RSS",
             Tab::Special => "Special",
         }
     }
@@ -242,13 +232,9 @@ pub struct SettingsModalState {
     editing_bio: bool,
     bio_input: TextArea<'static>,
     picker: PickerState,
-    /// Catalog of rooms the user can pick favorites from. Re-supplied on
-    /// every modal open so we always reflect current membership.
-    available_rooms: Vec<RoomOption>,
-    /// Cursor in the Favorites tab: 0..favorites.len() selects a favorite,
-    /// the final slot (favorites.len()) selects the "Add favorite…" row.
-    favorites_index: usize,
     delete_account: DeleteAccountDialogState,
+    right_sidebar_custom_open: bool,
+    right_sidebar_custom_index: usize,
     feeds: Vec<RssFeed>,
     feed_index: usize,
     editing_feed_url: bool,
@@ -284,9 +270,9 @@ impl SettingsModalState {
             editing_bio: false,
             bio_input: new_bio_textarea(false),
             picker: PickerState::default(),
-            available_rooms: Vec::new(),
-            favorites_index: 0,
             delete_account: DeleteAccountDialogState::new(),
+            right_sidebar_custom_open: false,
+            right_sidebar_custom_index: 0,
             feeds: Vec::new(),
             feed_index: 0,
             editing_feed_url: false,
@@ -305,15 +291,8 @@ impl SettingsModalState {
         &mut self.gem
     }
 
-    pub fn open_from_profile(
-        &mut self,
-        profile: &Profile,
-        available_rooms: Vec<RoomOption>,
-        _modal_width: u16,
-    ) {
+    pub fn open_from_profile(&mut self, profile: &Profile) {
         self.draft = profile.clone();
-        prune_favorites_against_loaded_rooms(&mut self.draft.favorite_room_ids, &available_rooms);
-        self.available_rooms = available_rooms;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.sync_theme_index_to_draft();
@@ -324,8 +303,9 @@ impl SettingsModalState {
         self.editing_bio = false;
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
-        self.favorites_index = 0;
         self.delete_account = DeleteAccountDialogState::new();
+        self.right_sidebar_custom_open = false;
+        self.right_sidebar_custom_index = 0;
         self.feed_service.list_task(self.user_id);
     }
 
@@ -420,6 +400,49 @@ impl SettingsModalState {
 
     pub fn selected_row(&self) -> Row {
         Row::ALL[self.row_index]
+    }
+
+    pub fn right_sidebar_custom_open(&self) -> bool {
+        self.right_sidebar_custom_open
+    }
+
+    pub fn open_right_sidebar_custom(&mut self) {
+        self.right_sidebar_custom_open = true;
+        self.right_sidebar_custom_index = 0;
+    }
+
+    pub fn close_right_sidebar_custom(&mut self) {
+        self.right_sidebar_custom_open = false;
+    }
+
+    pub fn right_sidebar_custom_index(&self) -> usize {
+        self.right_sidebar_custom_index
+    }
+
+    pub fn move_right_sidebar_custom(&mut self, delta: isize) {
+        let last = (RIGHT_SIDEBAR_SCREEN_COUNT as isize - 1).max(0);
+        self.right_sidebar_custom_index =
+            (self.right_sidebar_custom_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn right_sidebar_screen_enabled(&self, screen_number: u8) -> bool {
+        self.draft.right_sidebar_screens.contains(&screen_number)
+    }
+
+    pub fn toggle_right_sidebar_custom_screen(&mut self) {
+        let screen_number = (self.right_sidebar_custom_index + 1) as u8;
+        if let Some(index) = self
+            .draft
+            .right_sidebar_screens
+            .iter()
+            .position(|screen| *screen == screen_number)
+        {
+            self.draft.right_sidebar_screens.remove(index);
+        } else {
+            self.draft.right_sidebar_screens.push(screen_number);
+            self.draft.right_sidebar_screens.sort_unstable();
+        }
+        self.save();
     }
 
     pub fn delete_account_dialog(&self) -> &DeleteAccountDialogState {
@@ -829,25 +852,10 @@ impl SettingsModalState {
         filter_timezones(&self.picker.query)
     }
 
-    /// Rooms the user is a member of but hasn't favorited yet, filtered by
-    /// the picker's current query. Returns references into `available_rooms`
-    /// so we don't clone the label on every keystroke.
-    pub fn filtered_rooms(&self) -> Vec<&RoomOption> {
-        let query = self.picker.query.trim().to_ascii_lowercase();
-        let favorited: std::collections::HashSet<&Uuid> =
-            self.draft.favorite_room_ids.iter().collect();
-        self.available_rooms
-            .iter()
-            .filter(|room| !favorited.contains(&room.id))
-            .filter(|room| query.is_empty() || room.label.to_ascii_lowercase().contains(&query))
-            .collect()
-    }
-
     pub fn picker_len(&self) -> usize {
         match self.picker.kind {
             Some(PickerKind::Country) => self.filtered_countries().len(),
             Some(PickerKind::Timezone) => self.filtered_timezones().len(),
-            Some(PickerKind::Room) => self.filtered_rooms().len(),
             None => 0,
         }
     }
@@ -888,19 +896,6 @@ impl SettingsModalState {
                 let options = self.filtered_countries();
                 if let Some(country) = options.get(self.picker.selected_index) {
                     self.draft.country = Some(country.code.to_string());
-                    mutated = true;
-                }
-            }
-            Some(PickerKind::Room) => {
-                let chosen_id = self
-                    .filtered_rooms()
-                    .get(self.picker.selected_index)
-                    .map(|room| room.id);
-                if let Some(id) = chosen_id {
-                    self.draft.favorite_room_ids.push(id);
-                    // Leave cursor on the freshly-added entry so follow-up
-                    // reorders feel continuous.
-                    self.favorites_index = self.draft.favorite_room_ids.len().saturating_sub(1);
                     mutated = true;
                 }
             }
@@ -1142,6 +1137,14 @@ impl SettingsModalState {
         self.bio_input.move_cursor(CursorMove::WordForward);
     }
 
+    pub fn bio_cursor_home(&mut self) {
+        self.bio_input.move_cursor(CursorMove::Head);
+    }
+
+    pub fn bio_cursor_end(&mut self) {
+        self.bio_input.move_cursor(CursorMove::End);
+    }
+
     pub fn bio_paste(&mut self) {
         let yank = self.bio_input.yank_text();
         insert_bio_text_limited(&mut self.bio_input, &yank);
@@ -1153,77 +1156,6 @@ impl SettingsModalState {
 
     pub fn bio_clear(&mut self) {
         self.bio_input = new_bio_textarea(self.editing_bio);
-    }
-
-    pub fn favorites(&self) -> &[Uuid] {
-        &self.draft.favorite_room_ids
-    }
-
-    pub fn available_rooms(&self) -> &[RoomOption] {
-        &self.available_rooms
-    }
-
-    /// Number of navigable slots on the Favorites tab: every pinned room
-    /// plus the trailing "Add favorite…" row.
-    pub fn favorites_slot_count(&self) -> usize {
-        self.draft.favorite_room_ids.len() + 1
-    }
-
-    pub fn favorites_index(&self) -> usize {
-        self.favorites_index
-    }
-
-    pub fn favorites_index_is_add_row(&self) -> bool {
-        self.favorites_index == self.draft.favorite_room_ids.len()
-    }
-
-    pub fn room_label(&self, room_id: Uuid) -> Option<&str> {
-        self.available_rooms
-            .iter()
-            .find(|room| room.id == room_id)
-            .map(|room| room.label.as_str())
-    }
-
-    pub fn move_favorites_cursor(&mut self, delta: isize) {
-        let last = self.favorites_slot_count().saturating_sub(1) as isize;
-        self.favorites_index = (self.favorites_index as isize + delta).clamp(0, last) as usize;
-    }
-
-    /// Swap the selected favorite with its neighbor (positive `delta` moves
-    /// toward the end of the list). No-op on the "Add favorite…" row.
-    pub fn reorder_selected_favorite(&mut self, delta: isize) {
-        if self.favorites_index_is_add_row() {
-            return;
-        }
-        let len = self.draft.favorite_room_ids.len();
-        if len < 2 {
-            return;
-        }
-        let from = self.favorites_index;
-        let to = (from as isize + delta).clamp(0, len as isize - 1) as usize;
-        if to == from {
-            return;
-        }
-        self.draft.favorite_room_ids.swap(from, to);
-        self.favorites_index = to;
-        self.save();
-    }
-
-    pub fn remove_selected_favorite(&mut self) {
-        if self.favorites_index_is_add_row() {
-            return;
-        }
-        let idx = self.favorites_index;
-        if idx >= self.draft.favorite_room_ids.len() {
-            return;
-        }
-        self.draft.favorite_room_ids.remove(idx);
-        // Keep the cursor stable: if the deleted entry was the last pinned
-        // room, fall back onto the "Add favorite…" row.
-        if idx >= self.draft.favorite_room_ids.len() {
-            self.favorites_index = self.draft.favorite_room_ids.len();
-        }
-        self.save();
     }
 
     pub fn move_feed_cursor(&mut self, delta: isize) {
@@ -1357,13 +1289,13 @@ impl SettingsModalState {
         loop {
             match self.feed_event_rx.try_recv() {
                 Ok(FeedEvent::FeedAdded { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed connected."));
+                    banner = Some(Banner::success("RSS connected."));
                 }
                 Ok(FeedEvent::FeedDeleted { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("Feed removed."));
+                    banner = Some(Banner::success("RSS removed."));
                 }
                 Ok(FeedEvent::FeedFailed { user_id, error }) if user_id == self.user_id => {
-                    banner = Some(Banner::error(&format!("Feed failed: {error}")));
+                    banner = Some(Banner::error(&format!("RSS failed: {error}")));
                 }
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,
@@ -1395,12 +1327,22 @@ impl SettingsModalState {
                 self.draft.enable_background_color ^= true;
                 true
             }
-            Row::DashboardHeader => {
+            Row::RightSidebar => {
+                self.draft.right_sidebar_mode = self.draft.right_sidebar_mode.cycle(forward);
+                self.draft.show_right_sidebar =
+                    self.draft.right_sidebar_mode != RightSidebarMode::Off;
+                true
+            }
+            Row::RoomListSidebar => {
+                self.draft.show_room_list_sidebar ^= true;
+                true
+            }
+            Row::LoungeInfo => {
                 self.draft.show_dashboard_header ^= true;
                 true
             }
-            Row::RightSidebar => {
-                self.draft.show_right_sidebar ^= true;
+            Row::WireBox => {
+                self.draft.show_dashboard_wire ^= true;
                 true
             }
             Row::DirectMessages => {
@@ -1462,8 +1404,11 @@ impl SettingsModalState {
                 ),
                 enable_background_color: self.draft.enable_background_color,
                 show_dashboard_header: self.draft.show_dashboard_header,
+                show_dashboard_wire: self.draft.show_dashboard_wire,
                 show_right_sidebar: self.draft.show_right_sidebar,
-                show_arcade_sidebar: self.draft.show_arcade_sidebar,
+                right_sidebar_mode: self.draft.right_sidebar_mode,
+                right_sidebar_screens: self.draft.right_sidebar_screens.clone(),
+                show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
             },
@@ -1483,19 +1428,6 @@ fn cycle_notify_format(current: Option<&str>, forward: bool) -> &'static str {
         (idx + OPTIONS.len() - 1) % OPTIONS.len()
     };
     OPTIONS[next]
-}
-
-fn prune_favorites_against_loaded_rooms(favorite_room_ids: &mut Vec<Uuid>, rooms: &[RoomOption]) {
-    if rooms.is_empty() {
-        return;
-    }
-
-    // Drop favorites the user is no longer a member of so the modal never
-    // shows ghost entries. Preserve order of the survivors. An empty room
-    // catalog means chat membership has not loaded yet, not that every room
-    // was left.
-    let member_ids: std::collections::HashSet<Uuid> = rooms.iter().map(|room| room.id).collect();
-    favorite_room_ids.retain(|id| member_ids.contains(id));
 }
 
 fn toggle_kind(kinds: &mut Vec<String>, kind: &str) {
@@ -1698,38 +1630,5 @@ mod tests {
         move_bio_cursor_to_end(&mut input);
 
         assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
-    }
-
-    #[test]
-    fn empty_room_catalog_preserves_favorites() {
-        let first = Uuid::from_u128(1);
-        let second = Uuid::from_u128(2);
-        let mut favorites = vec![first, second];
-
-        prune_favorites_against_loaded_rooms(&mut favorites, &[]);
-
-        assert_eq!(favorites, vec![first, second]);
-    }
-
-    #[test]
-    fn loaded_room_catalog_prunes_unjoined_favorites() {
-        let first = Uuid::from_u128(1);
-        let second = Uuid::from_u128(2);
-        let third = Uuid::from_u128(3);
-        let mut favorites = vec![first, second, third];
-        let rooms = vec![
-            RoomOption {
-                id: third,
-                label: "#third".to_string(),
-            },
-            RoomOption {
-                id: first,
-                label: "#first".to_string(),
-            },
-        ];
-
-        prune_favorites_against_loaded_rooms(&mut favorites, &rooms);
-
-        assert_eq!(favorites, vec![first, third]);
     }
 }

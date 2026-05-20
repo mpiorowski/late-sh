@@ -28,19 +28,23 @@ function Fail {
 }
 
 function Get-Target {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-
-    switch ($arch) {
-        "X64" {
-            return "x86_64-pc-windows-msvc"
-        }
-        "Arm64" {
-            Fail "unsupported architecture: ARM64 (native ARM64 build is not published yet)"
-        }
-        default {
-            Fail "unsupported architecture: $arch"
-        }
+    $arch = $env:PROCESSOR_ARCHITEW6432
+    if ([string]::IsNullOrWhiteSpace($arch)) {
+        $arch = $env:PROCESSOR_ARCHITECTURE
     }
+    if ([string]::IsNullOrWhiteSpace($arch)) {
+        Fail "could not determine CPU architecture"
+    }
+
+    $arch = $arch.Trim().ToUpperInvariant()
+    if ($arch -eq "AMD64" -or $arch -eq "X64" -or $arch -eq "X86_64") {
+        return "x86_64-pc-windows-msvc"
+    }
+    if ($arch -eq "ARM64") {
+        Fail "unsupported architecture: ARM64 (native ARM64 build is not published yet)"
+    }
+
+    Fail "unsupported architecture: $arch"
 }
 
 function Get-Prefix {

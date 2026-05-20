@@ -289,6 +289,19 @@ impl State {
         }
     }
 
+    pub fn composer_cursor_home(&mut self) {
+        if !self.processing {
+            self.composer
+                .move_cursor(ratatui_textarea::CursorMove::Head);
+        }
+    }
+
+    pub fn composer_cursor_end(&mut self) {
+        if !self.processing {
+            self.composer.move_cursor(ratatui_textarea::CursorMove::End);
+        }
+    }
+
     pub fn delete_selected(&mut self) {
         if let Some(item) = self.articles.get(self.selected_index()) {
             let is_owner = item.article.user_id == self.user_id;

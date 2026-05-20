@@ -12,7 +12,7 @@ use crate::app::arcade::ui::{
 };
 use crate::app::common::theme;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let filled = state
         .grid
         .iter()
@@ -49,7 +49,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         tip: None,
     };
 
-    let board_area = draw_game_frame(frame, area, "Sudoku", bottom, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "Sudoku", bottom, show_bottom_bar);
 
     let board_rect = centered_rect(
         board_area,

@@ -82,6 +82,12 @@ Windows PowerShell (x64):
 irm https://cli.late.sh/install.ps1 | iex
 ```
 
+Nix / NixOS:
+
+```bash
+nix run github:mpiorowski/late-sh#late
+```
+
 Or build it from source:
 
 ```bash

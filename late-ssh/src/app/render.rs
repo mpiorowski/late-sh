@@ -11,10 +11,13 @@ use ratatui::{
     widgets::{Block, Borders, Clear},
 };
 
-use late_core::models::leaderboard::{DailyCompletionStatus, DailyGame, LeaderboardData};
+use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::user::RightSidebarMode;
 
 use super::{
-    artboard, bonsai, chat,
+    artboard,
+    audio::{client_state::ClientAudioState, viz::Visualizer},
+    bonsai, chat,
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
@@ -24,9 +27,7 @@ use super::{
     settings_modal,
     state::{App, NotificationMode},
     terminal_help_modal,
-    visualizer::Visualizer,
 };
-use crate::session::ClientAudioState;
 
 fn sanitize_notification_field(input: &str) -> String {
     input
@@ -70,15 +71,31 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
     }
 }
 
-fn arcade_sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
+/// Map a top-level screen to its 1-based slot in `right_sidebar_screens`.
+pub(crate) fn screen_number(screen: Screen) -> u8 {
+    match screen {
+        Screen::Dashboard => 1,
+        Screen::Arcade => 2,
+        Screen::Rooms => 3,
+        Screen::Artboard => 4,
     }
 }
 
-fn dashboard_header_enabled(
+/// Resolve whether the right sidebar should render on `screen` given a profile
+/// (or draft) sidebar mode and per-screen visibility set.
+pub(crate) fn resolve_right_sidebar_enabled(
+    mode: RightSidebarMode,
+    screens: &[u8],
+    screen: Screen,
+) -> bool {
+    match mode {
+        RightSidebarMode::On => true,
+        RightSidebarMode::Off => false,
+        RightSidebarMode::Custom => screens.contains(&screen_number(screen)),
+    }
+}
+
+fn room_list_sidebar_enabled(
     show_settings: bool,
     draft_enabled: bool,
     profile_enabled: bool,
@@ -90,31 +107,28 @@ fn dashboard_header_enabled(
     }
 }
 
-fn dashboard_daily_statuses(
-    completion: &DailyCompletionStatus,
-) -> [dashboard::ui::DashboardDailyStatus; 4] {
-    [
-        dashboard::ui::DashboardDailyStatus {
-            game: DailyGame::Sudoku,
-            completed_today: completion.completed(DailyGame::Sudoku),
-            launch_key: 's',
-        },
-        dashboard::ui::DashboardDailyStatus {
-            game: DailyGame::Nonogram,
-            completed_today: completion.completed(DailyGame::Nonogram),
-            launch_key: 'n',
-        },
-        dashboard::ui::DashboardDailyStatus {
-            game: DailyGame::Solitaire,
-            completed_today: completion.completed(DailyGame::Solitaire),
-            launch_key: 'o',
-        },
-        dashboard::ui::DashboardDailyStatus {
-            game: DailyGame::Minesweeper,
-            completed_today: completion.completed(DailyGame::Minesweeper),
-            launch_key: 'm',
-        },
-    ]
+fn lounge_info_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
+    if show_settings {
+        draft_enabled
+    } else {
+        profile_enabled
+    }
+}
+
+fn dashboard_wire_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
+    if show_settings {
+        draft_enabled
+    } else {
+        profile_enabled
+    }
+}
+
+fn dashboard_home_selected(
+    general_room_id: Option<uuid::Uuid>,
+    selected_room_id: Option<uuid::Uuid>,
+    synthetic_selected: bool,
+) -> bool {
+    general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
 }
 
 struct DrawContext<'a> {
@@ -147,6 +161,7 @@ struct DrawContext<'a> {
     visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
+    vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
@@ -155,7 +170,7 @@ struct DrawContext<'a> {
     is_admin: bool,
     is_moderator: bool,
     show_right_sidebar: bool,
-    show_arcade_sidebar: bool,
+    show_room_list_sidebar: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
@@ -176,9 +191,17 @@ struct DrawContext<'a> {
     splash_hint: &'a str,
     show_web_chat_qr: bool,
     web_chat_qr_url: Option<&'a str>,
-    show_cli_install_modal: bool,
+    show_pair_modal: bool,
+    pair_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    booth_modal_open: bool,
+    booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
+    booth_snapshot: crate::app::audio::svc::QueueSnapshot,
+    booth_submit_enabled: bool,
+    youtube_source_count: usize,
+    icecast_source_count: usize,
+    paired_browser_source: late_core::models::user::AudioSource,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
@@ -187,6 +210,8 @@ struct DrawContext<'a> {
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
+    top_rooms: &'a [dashboard::ui::DashboardRoomCard],
+    home_selected: bool,
 }
 
 impl App {
@@ -230,78 +255,85 @@ impl App {
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
-            self.settings_modal_state.draft().show_right_sidebar,
-            self.profile_state.profile().show_right_sidebar,
+            resolve_right_sidebar_enabled(
+                self.settings_modal_state.draft().right_sidebar_mode,
+                &self.settings_modal_state.draft().right_sidebar_screens,
+                self.screen,
+            ),
+            resolve_right_sidebar_enabled(
+                self.profile_state.profile().right_sidebar_mode,
+                &self.profile_state.profile().right_sidebar_screens,
+                self.screen,
+            ),
         );
-        let show_dashboard_header = dashboard_header_enabled(
+        let show_room_list_sidebar = room_list_sidebar_enabled(
+            self.show_settings,
+            self.settings_modal_state.draft().show_room_list_sidebar,
+            self.profile_state.profile().show_room_list_sidebar,
+        );
+        let show_lounge_info = lounge_info_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
         );
-        let show_arcade_sidebar = arcade_sidebar_enabled(
+        let show_dashboard_wire = dashboard_wire_enabled(
             self.show_settings,
-            self.settings_modal_state.draft().show_arcade_sidebar,
-            self.profile_state.profile().show_arcade_sidebar,
+            self.settings_modal_state.draft().show_dashboard_wire,
+            self.profile_state.profile().show_dashboard_wire,
         );
         let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
             .as_mut()
             .and_then(|rx| rx.borrow_and_update().clone());
-        let banner = self.active_banner().cloned();
+        let paired_client = self.paired_client_state();
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
+        let vote_ends_in = vote_snapshot.remaining_until_switch();
+        let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
-        let now_playing_text = now_playing.as_ref().map(|np| np.track.to_string());
-        let vote_next_switch_in = vote_snapshot
-            .next_switch_in
-            .saturating_sub(vote_snapshot.updated_at.elapsed());
         let visualizer = &self.visualizer;
-        let paired_client_state = self.paired_client_state();
         let chat_usernames = self.chat.usernames();
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let message_reactions = self.chat.message_reactions();
-        let dashboard_active_room = self.dashboard_active_room_id();
-        let dashboard_strip_pins = self.dashboard_strip_pins();
-        let dashboard_featured_room =
-            dashboard::ui::featured_dashboard_room(&self.rooms_snapshot, &self.room_game_registry);
+        let shell_active_room = self.chat.selected_room_id;
+        let synthetic_selected = self.chat.feeds_selected
+            || self.chat.news_selected
+            || self.chat.notifications_selected
+            || self.chat.discover_selected
+            || self.chat.showcase_selected
+            || self.chat.work_selected;
+        let home_selected = dashboard_home_selected(
+            self.chat.general_room_id(),
+            shell_active_room,
+            synthetic_selected,
+        );
+        let top_rooms =
+            dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 3);
         let online_count = self
             .active_users
             .as_ref()
             .map(|active_users| active_users.lock_recover().len())
             .unwrap_or(0);
-        let dashboard_daily_completion = self
-            .leaderboard
-            .user_daily_statuses
-            .get(&self.user_id)
-            .cloned()
-            .unwrap_or_default();
-        let dashboard_daily_statuses = dashboard_daily_statuses(&dashboard_daily_completion);
         let dashboard_cycle_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
         let dashboard_wire_articles = self.chat.news.all_articles();
-        let dashboard_messages = dashboard_active_room
+        let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
-        let dashboard_selected_news_message = dashboard_active_room
+        let dashboard_selected_news_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_view = dashboard::ui::DashboardRenderInput {
-            now_playing: now_playing_text.as_deref(),
-            vote_counts: &vote_snapshot.counts,
-            current_genre: vote_snapshot.current_genre,
-            next_switch_in: vote_next_switch_in,
-            my_vote: vote_my_vote,
-            show_header: show_dashboard_header,
-            favorites_strip: dashboard_strip_pins.as_deref(),
-            pinned_messages: self.chat.pinned_messages(),
-            featured_room: dashboard_featured_room.as_ref(),
-            box_prefix_armed: self.dashboard_box_prefix_armed,
-            daily_statuses: &dashboard_daily_statuses,
+            activity: &self.activity,
+            online_count,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
+            show_lounge_info,
+            show_dashboard_wire,
+            pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
@@ -322,6 +354,7 @@ impl App {
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
+                inline_images: &self.chat.inline_image_cache,
             },
         };
         let news_view = chat::news::ui::ArticleListView {
@@ -398,7 +431,9 @@ impl App {
             usernames: chat_usernames,
             countries: chat_countries,
             message_reactions,
+            inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
+            favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
@@ -445,6 +480,7 @@ impl App {
                     usernames: chat_usernames,
                     countries: chat_countries,
                     message_reactions,
+                    inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
                     selected_message_id: self.chat.selected_message_id,
                     highlighted_message_id: self.chat.highlighted_message_id,
@@ -495,7 +531,13 @@ impl App {
                         leaderboard: &self.leaderboard,
                         visualizer,
                         now_playing: now_playing.as_ref(),
-                        paired_client: paired_client_state.as_ref(),
+                        paired_client: paired_client.as_ref(),
+                        vote_view: crate::app::vote::ui::VoteCardView {
+                            vote_counts: &vote_snapshot.counts,
+                            current_genre: vote_snapshot.current_genre,
+                            my_vote: vote_my_vote,
+                            ends_in: vote_ends_in,
+                        },
                         sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
@@ -504,7 +546,7 @@ impl App {
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
                         show_right_sidebar,
-                        show_arcade_sidebar,
+                        show_room_list_sidebar,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
@@ -525,9 +567,17 @@ impl App {
                         splash_hint: &self.splash_hint,
                         show_web_chat_qr: self.show_web_chat_qr,
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
-                        show_cli_install_modal: self.show_cli_install_modal,
+                        show_pair_modal: self.show_pair_modal,
+                        pair_url: &self.connect_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
+                        booth_modal_open: self.booth_modal_state.is_open(),
+                        booth_modal_state: &self.booth_modal_state,
+                        booth_snapshot: self.audio.queue_snapshot(),
+                        booth_submit_enabled: self.audio.booth_submit_enabled(),
+                        youtube_source_count: self.audio.youtube_source_count(),
+                        icecast_source_count: self.audio.icecast_source_count(),
+                        paired_browser_source: self.paired_browser_source,
                         chat_state: &self.chat,
                         user_id: self.user_id,
                         news_modal,
@@ -536,6 +586,8 @@ impl App {
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
+                        top_rooms: &top_rooms,
+                        home_selected,
                     },
                 )
             })
@@ -697,9 +749,29 @@ impl App {
 
         match screen {
             Screen::Dashboard => {
-                dashboard::ui::draw_dashboard(frame, content_area, ctx.dashboard_view)
+                const HOME_RAIL_WIDTH: u16 = 24;
+                let (rail_area, center_area) =
+                    if ctx.show_room_list_sidebar && content_area.width > HOME_RAIL_WIDTH + 20 {
+                        let split = Layout::horizontal([
+                            Constraint::Length(HOME_RAIL_WIDTH),
+                            Constraint::Fill(1),
+                        ])
+                        .split(content_area);
+                        (Some(split[0]), split[1])
+                    } else {
+                        (None, content_area)
+                    };
+
+                if let Some(rail_area) = rail_area {
+                    chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
+                }
+
+                if ctx.home_selected {
+                    dashboard::ui::draw_dashboard(frame, center_area, ctx.dashboard_view);
+                } else {
+                    chat::ui::draw_chat_center(frame, center_area, ctx.chat_view);
+                }
             }
-            Screen::Chat => chat::ui::draw_chat(frame, content_area, ctx.chat_view),
             Screen::Artboard => {
                 if let Some(state) = ctx.dartboard_state {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
@@ -718,7 +790,6 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
-                    show_sidebar: ctx.show_arcade_sidebar,
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
@@ -750,15 +821,25 @@ impl App {
                     game_selection: ctx.game_selection,
                     is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
-                    show_audio_shortcuts: matches!(screen, Screen::Dashboard | Screen::Chat),
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
+                    vote: crate::app::vote::ui::VoteCardView {
+                        vote_counts: ctx.vote_view.vote_counts,
+                        current_genre: ctx.vote_view.current_genre,
+                        my_vote: ctx.vote_view.my_vote,
+                        ends_in: ctx.vote_view.ends_in,
+                    },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
+                    top_rooms: ctx.top_rooms,
+                    queue_snapshot: &ctx.booth_snapshot,
+                    youtube_source_count: ctx.youtube_source_count,
+                    icecast_source_count: ctx.icecast_source_count,
+                    paired_browser_source: ctx.paired_browser_source,
                 },
             );
         }
@@ -848,8 +929,8 @@ impl App {
             super::common::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
         }
 
-        if ctx.show_cli_install_modal {
-            super::common::cli_install::draw(frame, inner);
+        if ctx.show_pair_modal {
+            super::common::pair_modal::draw(frame, inner, ctx.pair_url);
         }
 
         if ctx.room_search_modal_open {
@@ -859,6 +940,17 @@ impl App {
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
+            );
+        }
+
+        if ctx.booth_modal_open {
+            crate::app::audio::booth::ui::draw(
+                frame,
+                inner,
+                ctx.booth_modal_state,
+                &ctx.booth_snapshot,
+                ctx.booth_submit_enabled,
+                ctx.is_admin || ctx.is_moderator,
             );
         }
 
@@ -881,10 +973,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
     let tabs = [
         (Screen::Dashboard, "1"),
-        (Screen::Chat, "2"),
-        (Screen::Arcade, "3"),
-        (Screen::Rooms, "4"),
-        (Screen::Artboard, "5"),
+        (Screen::Arcade, "2"),
+        (Screen::Rooms, "3"),
+        (Screen::Artboard, "4"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -902,8 +993,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     let page_title = match screen {
-        Screen::Dashboard => "Dashboard",
-        Screen::Chat => "Chat",
+        Screen::Dashboard => "Home",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",
@@ -919,6 +1009,14 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     if screen == Screen::Rooms {
         append_rooms_title_extras(&mut spans, ctx);
+    }
+
+    if screen == Screen::Dashboard {
+        append_home_title_extras(&mut spans, ctx);
+    }
+
+    if screen == Screen::Arcade && ctx.is_playing_game {
+        append_arcade_title_extras(&mut spans, ctx);
     }
 
     if screen == Screen::Artboard {
@@ -958,6 +1056,27 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     Line::from(spans)
+}
+
+fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
+    spans.push(Span::styled("· ", Style::default().fg(theme::TEXT_DIM())));
+    spans.push(Span::styled(
+        format!(
+            "{} ",
+            crate::app::arcade::ui::game_title(ctx.game_selection)
+        ),
+        Style::default().fg(theme::TEXT_BRIGHT()),
+    ));
+}
+
+fn append_home_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
+    if let Some(label) = chat::ui::home_title_room_label(&ctx.chat_view) {
+        spans.push(Span::styled("· ", Style::default().fg(theme::TEXT_DIM())));
+        spans.push(Span::styled(
+            format!("{label} "),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ));
+    }
 }
 
 fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
@@ -1059,9 +1178,10 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, arcade_sidebar_enabled, desktop_notification_bytes, mentions_hud_title,
-        sidebar_enabled,
+        NotificationMode, dashboard_home_selected, desktop_notification_bytes, lounge_info_enabled,
+        mentions_hud_title, room_list_sidebar_enabled, sidebar_enabled,
     };
+    use uuid::Uuid;
 
     #[test]
     fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
@@ -1130,15 +1250,42 @@ mod tests {
     }
 
     #[test]
-    fn arcade_sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
-        assert!(!arcade_sidebar_enabled(true, false, true));
-        assert!(arcade_sidebar_enabled(true, true, false));
+    fn room_list_sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
+        assert!(!room_list_sidebar_enabled(true, false, true));
+        assert!(room_list_sidebar_enabled(true, true, false));
     }
 
     #[test]
-    fn arcade_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
-        assert!(arcade_sidebar_enabled(false, false, true));
-        assert!(!arcade_sidebar_enabled(false, true, false));
+    fn room_list_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
+        assert!(room_list_sidebar_enabled(false, false, true));
+        assert!(!room_list_sidebar_enabled(false, true, false));
+    }
+
+    #[test]
+    fn lounge_info_enabled_prefers_settings_draft_while_modal_is_open() {
+        assert!(!lounge_info_enabled(true, false, true));
+        assert!(lounge_info_enabled(true, true, false));
+    }
+
+    #[test]
+    fn lounge_info_enabled_uses_saved_profile_when_modal_is_closed() {
+        assert!(lounge_info_enabled(false, false, true));
+        assert!(!lounge_info_enabled(false, true, false));
+    }
+
+    #[test]
+    fn dashboard_home_selected_for_general_room_without_synthetic_entry() {
+        let general = Uuid::from_u128(1);
+        assert!(dashboard_home_selected(Some(general), Some(general), false));
+    }
+
+    #[test]
+    fn dashboard_home_selected_rejects_synthetic_and_non_general_rooms() {
+        let general = Uuid::from_u128(1);
+        let topic = Uuid::from_u128(2);
+        assert!(!dashboard_home_selected(Some(general), Some(general), true));
+        assert!(!dashboard_home_selected(Some(general), Some(topic), false));
+        assert!(!dashboard_home_selected(None, Some(topic), false));
     }
 
     #[test]

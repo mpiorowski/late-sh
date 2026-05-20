@@ -452,11 +452,16 @@ impl ClientHandler {
             return Ok(token);
         }
 
+        let user_id =
+            self.user.as_ref().map(|u| u.id).ok_or_else(|| {
+                anyhow::anyhow!("cli session requested before user authenticated")
+            })?;
+
         let session_token = crate::session::new_session_token();
         let (session_tx, session_rx) = tokio::sync::mpsc::channel(64);
         self.state
             .session_registry
-            .register(session_token.clone(), session_tx)
+            .register(session_token.clone(), session_tx, user_id)
             .await;
         self.session_token = Some(session_token.clone());
         self.session_rx = Some(session_rx);
@@ -571,6 +576,7 @@ impl russh::server::Handler for ClientHandler {
                 active.username = user.username.clone();
                 active.fingerprint = Some(fingerprint.clone());
                 active.peer_ip = self.peer_ip;
+                active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
                 active.last_login_at = std::time::Instant::now();
             } else {
                 active_users.insert(
@@ -579,6 +585,7 @@ impl russh::server::Handler for ClientHandler {
                         username: user.username.clone(),
                         fingerprint: Some(fingerprint.clone()),
                         peer_ip: self.peer_ip,
+                        audio_source: late_core::models::user::extract_audio_source(&user.settings),
                         sessions: Vec::new(),
                         connection_count: 1,
                         last_login_at: std::time::Instant::now(),
@@ -786,11 +793,11 @@ impl russh::server::Handler for ClientHandler {
             }
         };
 
-        // Grant daily chip stipend on login
+        // Ensure the user's chip balance row exists.
         let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
             Ok(chips) => chips.balance,
             Err(e) => {
-                tracing::warn!(error = ?e, "failed to grant daily chip stipend");
+                tracing::warn!(error = ?e, "failed to ensure chip balance");
                 0
             }
         };
@@ -814,6 +821,7 @@ impl russh::server::Handler for ClientHandler {
             rows: row_height as u16,
 
             // Services / data sources
+            audio_service: self.state.audio_service.clone(),
             vote_service,
             chat_service,
             notification_service: self.state.notification_service.clone(),
@@ -864,6 +872,7 @@ impl russh::server::Handler for ClientHandler {
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
+            initial_activity: self.state.activity_history.lock_recover().clone(),
             user_id,
             permissions: AuthzPermissions::new(
                 user.is_admin || self.state.config.force_admin,
@@ -878,6 +887,7 @@ impl russh::server::Handler for ClientHandler {
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
+            initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
 
             // Server state
             is_draining: self.state.is_draining.clone(),
@@ -1363,35 +1373,6 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
     Ok((user, is_new_user))
 }
 
-#[cfg(test)]
-async fn has_active_server_ban(
-    client: &tokio_postgres::Client,
-    user: &User,
-    fingerprint: &str,
-    peer_ip: Option<IpAddr>,
-) -> Result<bool> {
-    if ServerBan::find_active_for_user_id(client, user.id)
-        .await?
-        .is_some()
-    {
-        return Ok(true);
-    }
-    if ServerBan::find_active_for_fingerprint(client, fingerprint)
-        .await?
-        .is_some()
-    {
-        return Ok(true);
-    }
-    let Some(peer_ip) = peer_ip else {
-        return Ok(false);
-    };
-    Ok(
-        ServerBan::find_active_for_ip_address(client, &peer_ip.to_string())
-            .await?
-            .is_some(),
-    )
-}
-
 async fn has_active_server_ban_before_user_lookup(
     client: &tokio_postgres::Client,
     fingerprint: &str,
@@ -1423,10 +1404,6 @@ fn reject_publickey_only() -> Auth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use late_core::{
-        models::server_ban::{ServerBan, ServerBanActivation},
-        test_utils::{create_test_user, test_db},
-    };
     use std::str::FromStr;
 
     #[test]
@@ -1444,105 +1421,6 @@ mod tests {
             }
             _ => panic!("expected reject auth"),
         }
-    }
-
-    #[tokio::test]
-    async fn has_active_server_ban_matches_user_fingerprint_and_ip() {
-        let test_db = test_db().await;
-        let client = test_db.db.get().await.expect("db client");
-        let actor = create_test_user(&test_db.db, "ban_actor").await;
-        let target = create_test_user(&test_db.db, "ban_target").await;
-        let fingerprint_target = create_test_user(&test_db.db, "ban_fp_target").await;
-        let ip_target = create_test_user(&test_db.db, "ban_ip_target").await;
-        let banned_ip = IpAddr::from_str("203.0.113.10").expect("test ip");
-
-        assert!(
-            !has_active_server_ban(&client, &target, &target.fingerprint, None)
-                .await
-                .expect("ban lookup")
-        );
-
-        ServerBan::activate(
-            &client,
-            ServerBanActivation {
-                target_user_id: target.id,
-                fingerprint: Some(&target.fingerprint),
-                ip_address: None,
-                snapshot_username: Some(&target.username),
-                actor_user_id: actor.id,
-                reason: "test ban",
-                expires_at: None,
-            },
-        )
-        .await
-        .expect("activate server ban");
-
-        assert!(
-            has_active_server_ban(&client, &target, &target.fingerprint, None)
-                .await
-                .expect("ban lookup")
-        );
-
-        assert!(
-            !has_active_server_ban(
-                &client,
-                &fingerprint_target,
-                &fingerprint_target.fingerprint,
-                None
-            )
-            .await
-            .expect("pre-fingerprint ban lookup")
-        );
-        ServerBan::activate(
-            &client,
-            ServerBanActivation {
-                target_user_id: fingerprint_target.id,
-                fingerprint: Some(&fingerprint_target.fingerprint),
-                ip_address: None,
-                snapshot_username: Some(&fingerprint_target.username),
-                actor_user_id: actor.id,
-                reason: "test fingerprint ban",
-                expires_at: None,
-            },
-        )
-        .await
-        .expect("activate fingerprint ban");
-        assert!(
-            has_active_server_ban(
-                &client,
-                &fingerprint_target,
-                &fingerprint_target.fingerprint,
-                None
-            )
-            .await
-            .expect("fingerprint ban lookup")
-        );
-
-        assert!(
-            !has_active_server_ban(&client, &ip_target, &ip_target.fingerprint, Some(banned_ip))
-                .await
-                .expect("pre-ip ban lookup")
-        );
-        let banned_ip_text = banned_ip.to_string();
-        ServerBan::activate(
-            &client,
-            ServerBanActivation {
-                target_user_id: ip_target.id,
-                fingerprint: Some(&ip_target.fingerprint),
-                ip_address: Some(&banned_ip_text),
-                snapshot_username: Some(&ip_target.username),
-                actor_user_id: actor.id,
-                reason: "test ip ban",
-                expires_at: None,
-            },
-        )
-        .await
-        .expect("activate ip ban");
-        assert!(
-            has_active_server_ban(&client, &ip_target, &ip_target.fingerprint, Some(banned_ip))
-                .await
-                .expect("ip ban lookup")
-        );
     }
 
     #[test]

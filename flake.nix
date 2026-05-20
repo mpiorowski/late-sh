@@ -20,6 +20,7 @@
   }:
     {
       overlays.default = final: prev: {
+        late = self.packages.${final.stdenv.hostPlatform.system}.late;
         late-sh = self.packages.${final.stdenv.hostPlatform.system}.late-sh;
       };
     }
@@ -59,12 +60,32 @@
     in {
       formatter = pkgs.alejandra;
 
-      packages = {
+      packages = rec {
+        late = pkgs.callPackage ./default.nix {
+          rustPlatform = rustMinimalPlatform;
+          gitRev = self.rev or self.dirtyRev or null;
+          packageName = "late";
+          packageDescription = "Companion CLI for late.sh";
+          mainProgram = "late";
+          cargoBuildFlags = ["-p" "late-cli" "--bin" "late"];
+        };
         late-sh = pkgs.callPackage ./default.nix {
           rustPlatform = rustMinimalPlatform;
           gitRev = self.rev or self.dirtyRev or null;
         };
-        default = self.packages.${system}.late-sh;
+        default = late-sh;
+      };
+
+      apps = rec {
+        late = flake-utils.lib.mkApp {
+          drv = self.packages.${system}.late;
+          exePath = "/bin/late";
+        };
+        late-sh = flake-utils.lib.mkApp {
+          drv = self.packages.${system}.late-sh;
+          exePath = "/bin/late-ssh";
+        };
+        default = late-sh;
       };
 
       checks.late-sh = self.packages.${system}.late-sh.overrideAttrs ({...}: {

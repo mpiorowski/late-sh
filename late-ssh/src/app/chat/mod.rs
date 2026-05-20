@@ -1,9 +1,11 @@
 pub mod discover;
 pub mod feeds;
 pub mod input;
+pub(crate) mod list_ui;
 pub mod news;
 pub mod notifications;
 pub mod showcase;
+pub(crate) mod special_badges;
 pub mod state;
 pub mod svc;
 pub mod ui;

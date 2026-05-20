@@ -21,10 +21,15 @@ fn empty_bottom_bar() -> GameBottomBar {
     }
 }
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: bool) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     if !state.has_puzzles() {
-        let board_area =
-            draw_game_frame(frame, area, "Nonograms", empty_bottom_bar(), show_sidebar);
+        let board_area = draw_game_frame(
+            frame,
+            area,
+            "Nonograms",
+            empty_bottom_bar(),
+            show_bottom_bar,
+        );
         frame.render_widget(
             Paragraph::new("No nonogram packs loaded. Run `gen_nonograms` first.")
                 .alignment(Alignment::Center),
@@ -34,8 +39,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
     }
 
     let Some(puzzle) = state.puzzle() else {
-        let board_area =
-            draw_game_frame(frame, area, "Nonograms", empty_bottom_bar(), show_sidebar);
+        let board_area = draw_game_frame(
+            frame,
+            area,
+            "Nonograms",
+            empty_bottom_bar(),
+            show_bottom_bar,
+        );
         frame.render_widget(
             Paragraph::new("Selected nonogram puzzle is missing from the loaded pack.")
                 .alignment(Alignment::Center),
@@ -73,7 +83,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_sidebar: boo
         tip: None,
     };
 
-    let board_area = draw_game_frame(frame, area, "Nonograms", bottom, show_sidebar);
+    let board_area = draw_game_frame(frame, area, "Nonograms", bottom, show_bottom_bar);
 
     let max_col_clues = puzzle.col_clues.iter().map(|c| c.len()).max().unwrap_or(0) as u16;
     let max_row_clues = puzzle.row_clues.iter().map(|c| c.len()).max().unwrap_or(0) as u16;

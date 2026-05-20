@@ -26,7 +26,6 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             ParsedInput::PageDown => {
                 return handle_active_room_scroll(app, -active_room_page_step(app));
             }
-            ParsedInput::End => return handle_active_room_scroll(app, isize::MIN),
             ParsedInput::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => return handle_active_room_scroll(app, 1),
                 MouseEventKind::ScrollDown => return handle_active_room_scroll(app, -1),

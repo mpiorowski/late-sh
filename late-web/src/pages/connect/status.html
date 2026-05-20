@@ -1,4 +1,3 @@
-{% if pairing %}
 {% if now_playing_title.is_some() %}
 <div>
     <div class="text-white text-sm">{{ now_playing_title.as_deref().unwrap_or_default() }}</div>
@@ -10,21 +9,5 @@
 {% if listeners_count.is_some() %}
 <div class="text-xs text-gray-700 mt-2">
     <span class="text-green-700">{{ listeners_count.unwrap_or_default() }}</span> listening
-</div>
-{% endif %}
-{% else %}
-<div class="flex items-center justify-between gap-4">
-    {% if now_playing_title.is_some() %}
-    <div class="truncate min-w-0">
-        <span class="text-gray-700">&#9834; </span>
-        <span class="text-gray-500">{{ now_playing_title.as_deref().unwrap_or_default() }}</span>
-    </div>
-    {% endif %}
-    {% if listeners_count.is_some() %}
-    <div class="shrink-0">
-        <span class="text-green-700">{{ listeners_count.unwrap_or_default() }}</span>
-        <span class="text-gray-700">online</span>
-    </div>
-    {% endif %}
 </div>
 {% endif %}

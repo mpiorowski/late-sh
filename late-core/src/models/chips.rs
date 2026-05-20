@@ -6,6 +6,7 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 pub const CHIP_FLOOR: i64 = 100;
+pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 
 /// Map a difficulty key to its chip bonus.
 pub fn difficulty_bonus(key: &str) -> i64 {
@@ -43,7 +44,7 @@ impl UserChips {
                  VALUES ($1, $2)
                  ON CONFLICT (user_id) DO NOTHING
                  RETURNING *",
-                &[&user_id, &CHIP_FLOOR],
+                &[&user_id, &INITIAL_CHIP_BALANCE],
             )
             .await;
         match row {
@@ -203,5 +204,6 @@ mod tests {
     #[test]
     fn constants() {
         assert_eq!(CHIP_FLOOR, 100);
+        assert_eq!(INITIAL_CHIP_BALANCE, 1_000);
     }
 }

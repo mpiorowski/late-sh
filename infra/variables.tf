@@ -161,6 +161,16 @@ variable "AI_ENABLED" {
 }
 
 # =============================================================================
+# YouTube Data API
+# =============================================================================
+
+variable "YOUTUBE_API_KEY" {
+  description = "YouTube Data API key for queue submit validation."
+  type        = string
+  sensitive   = true
+}
+
+# =============================================================================
 # Vote
 # =============================================================================
 
@@ -193,4 +203,20 @@ variable "S3_ENDPOINT" {
 variable "DB_BACKUPS_BUCKET" {
   description = "S3 bucket name for CloudNativePG backups."
   type        = string
+}
+
+variable "FILES_BUCKET" {
+  description = "S3/R2 bucket name for public uploaded files."
+  type        = string
+}
+
+variable "FILES_PUBLIC_BASE_URL" {
+  description = "Public base URL for uploaded files."
+  type        = string
+}
+
+variable "FILES_S3_REGION" {
+  description = "S3/R2 signing region for uploaded files. Cloudflare R2 uses auto."
+  type        = string
+  default     = "auto"
 }

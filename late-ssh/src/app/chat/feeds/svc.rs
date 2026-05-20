@@ -397,19 +397,19 @@ impl FeedService {
     async fn fetch_feed_body(&self, url: &str) -> Result<String> {
         let response = tokio::time::timeout(FETCH_TIMEOUT, self.http_client.get(url).send_traced())
             .await
-            .context("feed fetch timed out")??;
+            .context("RSS fetch timed out")??;
         if !response.status().is_success() {
-            anyhow::bail!("feed returned HTTP {}", response.status());
+            anyhow::bail!("RSS returned HTTP {}", response.status());
         }
         if let Some(len) = response.content_length()
             && len > FEED_MAX_BYTES
         {
-            anyhow::bail!("feed body exceeds {} bytes", FEED_MAX_BYTES);
+            anyhow::bail!("RSS body exceeds {} bytes", FEED_MAX_BYTES);
         }
 
         let bytes = response.bytes().await?;
         if bytes.len() as u64 > FEED_MAX_BYTES {
-            anyhow::bail!("feed body exceeds {} bytes", FEED_MAX_BYTES);
+            anyhow::bail!("RSS body exceeds {} bytes", FEED_MAX_BYTES);
         }
         Ok(String::from_utf8_lossy(&bytes).to_string())
     }
@@ -433,10 +433,10 @@ struct ParsedEntry {
 fn normalize_feed_url(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     let parsed =
-        reqwest::Url::parse(trimmed).context("feed URL must include http:// or https://")?;
+        reqwest::Url::parse(trimmed).context("RSS URL must include http:// or https://")?;
     match parsed.scheme() {
         "http" | "https" => Ok(parsed.to_string()),
-        _ => anyhow::bail!("feed URL must use http:// or https://"),
+        _ => anyhow::bail!("RSS URL must use http:// or https://"),
     }
 }
 

@@ -9,7 +9,7 @@ use late_core::models::{
     chat_room::ChatRoom,
     profile::{Profile, ProfileParams},
     server_ban::ServerBan,
-    user::{User, UserParams},
+    user::{RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, UserParams},
 };
 use late_core::test_utils::create_test_user;
 use late_ssh::app::profile::svc::{ProfileEvent, ProfileService};
@@ -93,8 +93,11 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             theme_id: None,
             enable_background_color: false,
             show_dashboard_header: false,
+            show_dashboard_wire: false,
             show_right_sidebar: true,
-            show_arcade_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
         },
@@ -121,6 +124,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
 
     assert_eq!(updated.username, "night-owl");
     assert!(!updated.show_dashboard_header);
+    assert!(!updated.show_dashboard_wire);
 }
 
 #[tokio::test]
@@ -159,8 +163,11 @@ async fn edit_profile_normalizes_username_before_persisting() {
             theme_id: None,
             enable_background_color: false,
             show_dashboard_header: true,
+            show_dashboard_wire: true,
             show_right_sidebar: true,
-            show_arcade_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
         },
@@ -219,8 +226,11 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             theme_id: None,
             enable_background_color: false,
             show_dashboard_header: true,
+            show_dashboard_wire: true,
             show_right_sidebar: true,
-            show_arcade_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
         },
@@ -421,13 +431,16 @@ async fn delete_account_terminates_active_sessions() {
     let token = "delete-session-token".to_string();
     let (tx, mut rx) = mpsc::channel(1);
 
-    registry.register(token.clone(), tx).await;
+    registry
+        .register(token.clone(), tx, uuid::Uuid::now_v7())
+        .await;
     active_users.lock().expect("active users").insert(
         user.id,
         ActiveUser {
             username: user.username.clone(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token,
                 fingerprint: Some(user.fingerprint.clone()),

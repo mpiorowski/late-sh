@@ -1,8 +1,8 @@
-pub mod cli_install;
 pub mod composer;
 pub mod markdown;
 pub(crate) mod mentions;
 pub mod overlay;
+pub mod pair_modal;
 pub mod primitives;
 pub mod qr;
 pub mod readline;

@@ -17,13 +17,7 @@ pub struct DiscoverListView<'a> {
 const ITEM_HEIGHT: u16 = 5;
 
 pub fn draw_discover_list(frame: &mut Frame, area: Rect, view: &DiscoverListView<'_>) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Discover ")
-        .border_style(Style::default().fg(theme::BORDER()));
-
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
+    let inner_area = area;
 
     if view.loading {
         let text = Text::from("Loading rooms...");

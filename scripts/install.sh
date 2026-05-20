@@ -33,6 +33,17 @@ is_termux() {
   [[ -n "${TERMUX_VERSION:-}" ]] || [[ "${PREFIX:-}" == "/data/data/com.termux/files/usr" ]]
 }
 
+is_windows_shell() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 detect_target() {
   local os arch
 
@@ -61,6 +72,12 @@ detect_target() {
       ;;
     Darwin)
       printf '%s\n' "${arch}-apple-darwin"
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      if [[ "$arch" != "x86_64" ]]; then
+        fail "unsupported Windows architecture: $arch (native ARM64 build is not published yet)"
+      fi
+      printf '%s\n' "x86_64-pc-windows-msvc"
       ;;
     *)
       fail "unsupported operating system: $os"
@@ -118,7 +135,8 @@ verify_checksum() {
 install_binary() {
   local src="$1"
   local dest_dir="$2"
-  local dest_path="${dest_dir}/${LATE_BIN_NAME}"
+  local dest_name="${3:-$LATE_BIN_NAME}"
+  local dest_path="${dest_dir}/${dest_name}"
 
   mkdir -p "$dest_dir"
 
@@ -132,8 +150,39 @@ install_binary() {
   printf '%s\n' "$dest_path"
 }
 
+normalize_shell_path() {
+  local path="$1"
+
+  if is_windows_shell && command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$path"
+    return
+  fi
+
+  printf '%s\n' "$path"
+}
+
+windows_install_target_dir() {
+  local local_app_data
+
+  if [[ -n "${LOCALAPPDATA:-}" ]]; then
+    local_app_data="$(normalize_shell_path "$LOCALAPPDATA")"
+  elif [[ -n "${USERPROFILE:-}" ]]; then
+    local_app_data="$(normalize_shell_path "${USERPROFILE}\\AppData\\Local")"
+  else
+    local_app_data="${HOME}/AppData/Local"
+  fi
+
+  printf '%s\n' "${local_app_data}/Programs/late"
+}
+
 install_target_dir() {
-  if is_termux; then
+  local target="$1"
+
+  if [[ -n "${LATE_INSTALL_DIR:-}" ]]; then
+    normalize_shell_path "$LATE_INSTALL_DIR"
+  elif [[ "$target" == *-windows-* ]]; then
+    windows_install_target_dir
+  elif is_termux; then
     printf '%s\n' "${PREFIX:-/data/data/com.termux/files/usr}/bin"
   elif [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     printf '%s\n' "/usr/local/bin"
@@ -208,6 +257,7 @@ Options:
 Environment:
   LATE_INSTALL_BASE_URL   Override distribution host
   LATE_INSTALL_VERSION    Use a specific version instead of latest
+  LATE_INSTALL_DIR        Override the install directory
 EOF
         exit 0
         ;;
@@ -236,6 +286,8 @@ main() {
     log "detected WSL; installing the Linux build"
   elif is_termux; then
     log "detected Termux; installing the Android build"
+  elif [[ "$target" == *-windows-* ]]; then
+    log "detected Windows shell; installing the Windows build"
   fi
 
   case "$version" in
@@ -268,11 +320,11 @@ main() {
     log "warning: checksum file unavailable at ${checksum_url}; continuing without verification"
   fi
 
-  target_dir="$(install_target_dir)"
+  target_dir="$(install_target_dir "$target")"
 
   log_verbose "target_dir=${target_dir}"
-  dest_path="$(install_binary "${tmp_dir}/${binary_name}" "$target_dir")"
-  log "installed ${LATE_BIN_NAME} to ${dest_path}"
+  dest_path="$(install_binary "${tmp_dir}/${binary_name}" "$target_dir" "$binary_name")"
+  log "installed ${binary_name} to ${dest_path}"
 
   case ":${PATH}:" in
     *":${target_dir}:"*)
@@ -286,7 +338,11 @@ main() {
       ;;
   esac
 
-  log "run 'late --help' to verify the install"
+  if [[ "$target" == *-windows-* ]]; then
+    log "run 'late.exe --help' to verify the install"
+  else
+    log "run 'late --help' to verify the install"
+  fi
 }
 
 main "$@"

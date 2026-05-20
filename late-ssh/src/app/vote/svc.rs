@@ -6,15 +6,15 @@ use tokio::sync::{Mutex, broadcast, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
-use super::liquidsoap;
 use crate::app::activity::event::ActivityEvent;
+use crate::app::audio::liquidsoap::LiquidsoapController;
 use crate::metrics;
 use crate::state::ActiveUsers;
 
 #[derive(Clone)]
 pub struct VoteService {
     db: Db,
-    liquidsoap_addr: String,
+    liquidsoap: LiquidsoapController,
     switch_interval: Duration,
     snapshot_tx: watch::Sender<VoteSnapshot>,
     snapshot_rx: watch::Receiver<VoteSnapshot>,
@@ -114,6 +114,13 @@ pub struct VoteSnapshot {
     pub round_id: u64,
 }
 
+impl VoteSnapshot {
+    pub fn remaining_until_switch(&self) -> Duration {
+        self.next_switch_in
+            .saturating_sub(self.updated_at.elapsed())
+    }
+}
+
 impl Default for VoteSnapshot {
     fn default() -> Self {
         Self {
@@ -148,7 +155,7 @@ impl VoteService {
         let (event_tx, _) = broadcast::channel(256);
         Self {
             db,
-            liquidsoap_addr,
+            liquidsoap: LiquidsoapController::new(liquidsoap_addr),
             switch_interval,
             snapshot_tx,
             snapshot_rx,
@@ -237,13 +244,13 @@ impl VoteService {
     }
 
     fn send_command(&self, command: &str) {
-        let addr = self.liquidsoap_addr.clone();
+        let liquidsoap = self.liquidsoap.clone();
         let cmd = command.to_string();
-        let span_addr = addr.clone();
+        let span_addr = liquidsoap.addr().to_string();
         let span_cmd = cmd.clone();
         tokio::spawn(
             async move {
-                if let Err(err) = liquidsoap::send_command(&addr, &cmd).await {
+                if let Err(err) = liquidsoap.send_command(&cmd).await {
                     late_core::error_span!(
                         "liquidsoap_command_failed",
                         error = ?err,
@@ -454,5 +461,16 @@ mod tests {
         assert_eq!(snapshot.round_id, 0);
         assert_eq!(snapshot.current_genre, Genre::Lofi);
         assert!(snapshot.next_switch_in <= Duration::from_secs(60));
+    }
+
+    #[test]
+    fn vote_snapshot_remaining_until_switch_never_exceeds_snapshot_interval() {
+        let snapshot = VoteSnapshot {
+            next_switch_in: Duration::from_secs(10),
+            updated_at: Instant::now(),
+            ..VoteSnapshot::default()
+        };
+
+        assert!(snapshot.remaining_until_switch() <= Duration::from_secs(10));
     }
 }

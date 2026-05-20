@@ -19,7 +19,10 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::profile::Profile;
 
 use crate::{
-    app::activity::event::ActivityEvent,
+    app::activity::{
+        channel::ACTIVITY_HISTORY_MAX_EVENTS, event::ActivityEvent, filter::ActivityFilter,
+    },
+    app::audio::{client_state::ClientAudioState, viz::Visualizer},
     app::{
         chat,
         chat::news::svc::ArticleService,
@@ -28,15 +31,12 @@ use crate::{
         common::primitives::{Banner, Screen},
         help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
-        profile_modal, settings_modal,
-        visualizer::Visualizer,
-        vote,
+        profile_modal, settings_modal, vote,
         vote::svc::{Genre, VoteService},
     },
     authz::Permissions,
-    session::{
-        ClientAudioState, PairControlMessage, PairedClientRegistry, SessionMessage, SessionRegistry,
-    },
+    paired_clients::{PairControlMessage, PairedClientRegistry},
+    session::{SessionMessage, SessionRegistry},
     state::ActiveUsers,
     web::WebChatRegistry,
 };
@@ -78,6 +78,32 @@ impl NotificationMode {
     }
 }
 
+fn seed_activity_from_history(
+    mut activity: VecDeque<ActivityEvent>,
+    activity_feed_rx: Option<&mut broadcast::Receiver<ActivityEvent>>,
+) -> VecDeque<ActivityEvent> {
+    let Some(rx) = activity_feed_rx else {
+        return activity;
+    };
+    let newest_seed_at = activity.back().map(|event| event.at);
+    let activity_filter = ActivityFilter::dashboard();
+
+    while let Ok(event) = rx.try_recv() {
+        if newest_seed_at.is_some_and(|at| event.at <= at) {
+            continue;
+        }
+        if !activity_filter.includes(&event) {
+            continue;
+        }
+        activity.push_back(event);
+        while activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {
+            activity.pop_front();
+        }
+    }
+
+    activity
+}
+
 const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
 const CURSOR_SHAPE_STEADY_UNDERLINE: &[u8] = b"\x1b[4 q";
 
@@ -111,6 +137,7 @@ pub struct SessionConfig {
     pub rows: u16,
 
     /// Services / data sources
+    pub audio_service: crate::app::audio::svc::AudioService,
     pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
@@ -162,6 +189,7 @@ pub struct SessionConfig {
     pub now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub active_users: Option<ActiveUsers>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    pub initial_activity: VecDeque<ActivityEvent>,
     pub user_id: Uuid,
     pub permissions: Permissions,
     pub artboard_banned: bool,
@@ -178,6 +206,10 @@ pub struct SessionConfig {
 
     /// Display config
     pub initial_theme_id: String,
+    /// Initial audio source for the paired browser, loaded from
+    /// `users.settings.audio_source` (default `Icecast`). v+x mutates this and
+    /// persists the new value.
+    pub initial_audio_source: late_core::models::user::AudioSource,
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -216,8 +248,8 @@ pub struct App {
     pub(super) terminal: Terminal<CrosstermBackend<SharedBuffer>>,
     pub(super) shared: SharedBuffer,
     pub(super) visualizer: Visualizer,
-    pub(super) browser_viz_buffer: VecDeque<VizFrame>,
-    pub(super) last_browser_viz_at: Option<Instant>,
+    pub(super) viz_frame_buffer: VecDeque<VizFrame>,
+    pub(super) last_viz_frame_at: Option<Instant>,
 
     /// Session / connection
     pub(super) connect_url: String,
@@ -226,13 +258,14 @@ pub struct App {
     pub(super) web_chat_registry: Option<WebChatRegistry>,
     pub(crate) show_web_chat_qr: bool,
     pub(crate) web_chat_qr_url: Option<String>,
-    pub(crate) show_cli_install_modal: bool,
+    pub(crate) show_pair_modal: bool,
     pub(super) session_token: String,
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) activity: VecDeque<ActivityEvent>,
+    pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
@@ -249,24 +282,16 @@ pub struct App {
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
+    pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
+    /// Server-authoritative audio source for the paired playback surface.
+    /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
+    /// the DB, and pushes `SetPlaybackSource` to browsers and YouTube-capable
+    /// CLI control-plane clients. On browser pair-up the current value is
+    /// replayed so a refresh lands in the right mode.
+    pub(crate) paired_browser_source: late_core::models::user::AudioSource,
 
-    /// Which favorite room the dashboard's chat card is currently showing,
-    /// when the user has 2+ favorites pinned. Clamped on read against the
-    /// current profile list so it stays valid after adds/removes. Session-
-    /// local — not persisted.
-    pub(crate) dashboard_favorite_index: usize,
-    /// Previously-active favorite index, so `,` can jump back to the last
-    /// pin Vim-alternate-buffer style. Session-local.
-    pub(crate) dashboard_previous_favorite_index: Option<usize>,
-    /// `true` while the user has pressed `g` on the dashboard and we're
-    /// waiting for a digit to complete a jump (Vim-style two-key prefix).
-    /// Any non-digit keystroke disarms and falls through to its normal
-    /// handling.
-    pub(crate) dashboard_g_prefix_armed: bool,
-    /// `true` after `b` on the dashboard, waiting for a dashboard box slot
-    /// key (`1` for the featured room, `2` for dailies, `3` for wire,
-    /// `4` for announcements).
-    pub(crate) dashboard_box_prefix_armed: bool,
+    pub(crate) vote_prefix_armed: bool,
+    pub(crate) hot_room_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -359,30 +384,9 @@ impl App {
         self.show_bonsai_modal = false;
     }
 
-    /// Resolves which room the dashboard's chat card should display, given
-    /// the user's pinned favorites:
-    /// - 0 pins → `#general`
-    /// - 1 pin → that pin (or `#general` if it was left)
-    /// - 2+ pins → favorites[index], clamped against the current list
-    ///
-    /// The strip only renders in the 2+ case; see [`Self::dashboard_strip_pins`].
-    pub(crate) fn dashboard_active_room_id(&self) -> Option<uuid::Uuid> {
-        let pins = &self.profile_state.profile().favorite_room_ids;
-        let general = self.chat.general_room_id();
-        match pins.len() {
-            0 => general,
-            1 => self.resolve_joined_room(pins[0]).or(general),
-            len => {
-                let idx = self.dashboard_favorite_index.min(len - 1);
-                self.resolve_joined_room(pins[idx]).or(general)
-            }
-        }
-    }
-
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
         match self.screen {
-            Screen::Dashboard => self.dashboard_active_room_id(),
-            Screen::Chat => self.chat.selected_room_id,
+            Screen::Dashboard => self.chat.selected_room_id,
             Screen::Rooms => self
                 .rooms_active_room
                 .as_ref()
@@ -401,119 +405,6 @@ impl App {
         }
     }
 
-    /// Pins to render in the dashboard quick-switch strip. `None` when fewer
-    /// than two favorites are pinned — there's nothing to switch between, so
-    /// the strip is hidden entirely.
-    pub(crate) fn dashboard_strip_pins(&self) -> Option<Vec<(uuid::Uuid, String, bool, i64)>> {
-        let pins = &self.profile_state.profile().favorite_room_ids;
-        if pins.len() < 2 {
-            return None;
-        }
-        let catalog = self.chat.favorite_room_options();
-        let active = self.dashboard_active_room_id();
-        let pills: Vec<(uuid::Uuid, String, bool, i64)> = pins
-            .iter()
-            .filter_map(|id| {
-                catalog
-                    .iter()
-                    .find(|option| option.id == *id)
-                    .map(|option| {
-                        let is_active = Some(option.id) == active;
-                        let unread = if is_active {
-                            0
-                        } else {
-                            self.chat
-                                .unread_counts
-                                .get(&option.id)
-                                .copied()
-                                .unwrap_or(0)
-                        };
-                        (option.id, option.label.clone(), is_active, unread)
-                    })
-            })
-            .collect();
-        // If membership churn leaves <2 resolvable pins, hide the strip
-        // rather than show a lonely pill.
-        if pills.len() < 2 { None } else { Some(pills) }
-    }
-
-    /// Cycle the dashboard's active favorite. Wraps both directions. No-op
-    /// when fewer than two pins are present.
-    pub(crate) fn cycle_dashboard_favorite(&mut self, delta: isize) {
-        let len = self.profile_state.profile().favorite_room_ids.len();
-        if len < 2 {
-            return;
-        }
-        let len_isize = len as isize;
-        let current = self.dashboard_favorite_index.min(len - 1) as isize;
-        let next = ((current + delta).rem_euclid(len_isize)) as usize;
-        if next != current as usize {
-            self.dashboard_previous_favorite_index = Some(current as usize);
-        }
-        self.dashboard_favorite_index = next;
-    }
-
-    /// Jump directly to `slot` (0-indexed) in the favorites list. Used by
-    /// the `g<digit>` prefix. No-op when <2 pins or the slot is out of
-    /// range. Records the current pin as the "last" target so `,` bounces
-    /// back afterward.
-    pub(crate) fn jump_dashboard_favorite(&mut self, slot: usize) {
-        let len = self.profile_state.profile().favorite_room_ids.len();
-        if len < 2 || slot >= len {
-            return;
-        }
-        let current = self.dashboard_favorite_index.min(len - 1);
-        if slot == current {
-            return;
-        }
-        self.dashboard_previous_favorite_index = Some(current);
-        self.dashboard_favorite_index = slot;
-    }
-
-    pub(crate) fn select_dashboard_favorite_room(&mut self, room_id: Uuid) {
-        let Some(slot) = self
-            .profile_state
-            .profile()
-            .favorite_room_ids
-            .iter()
-            .position(|id| *id == room_id)
-        else {
-            return;
-        };
-        self.jump_dashboard_favorite(slot);
-    }
-
-    /// Vim-alternate-buffer style jump: swap the current and previous
-    /// active pin. No-op when fewer than two pins are present or there's
-    /// no prior pin to jump back to (first tap of this session).
-    pub(crate) fn toggle_dashboard_last_favorite(&mut self) {
-        let len = self.profile_state.profile().favorite_room_ids.len();
-        if len < 2 {
-            return;
-        }
-        let Some(prev) = self.dashboard_previous_favorite_index else {
-            return;
-        };
-        let prev = prev.min(len - 1);
-        let current = self.dashboard_favorite_index.min(len - 1);
-        if prev == current {
-            return;
-        }
-        self.dashboard_previous_favorite_index = Some(current);
-        self.dashboard_favorite_index = prev;
-    }
-
-    /// Returns `room_id` if the user is currently a member of it; `None`
-    /// otherwise. Used to guard against a pin that survived in the profile
-    /// but vanished from the joined-rooms snapshot (left via `/leave`, etc).
-    fn resolve_joined_room(&self, room_id: uuid::Uuid) -> Option<uuid::Uuid> {
-        self.chat
-            .favorite_room_options()
-            .iter()
-            .any(|option| option.id == room_id)
-            .then_some(room_id)
-    }
-
     pub fn show_splash_for_tests(&mut self, hint: impl Into<String>) {
         self.show_splash = true;
         self.show_settings = false;
@@ -522,7 +413,7 @@ impl App {
         self.splash_hint = hint.into();
     }
 
-    pub fn new(config: SessionConfig) -> anyhow::Result<Self> {
+    pub fn new(mut config: SessionConfig) -> anyhow::Result<Self> {
         let (cols, rows) = if config.cols == 0 || config.rows == 0 {
             tracing::warn!(
                 config.cols,
@@ -534,6 +425,9 @@ impl App {
             (config.cols, config.rows)
         };
         tracing::debug!(cols, rows, "initializing app");
+
+        let activity =
+            seed_activity_from_history(config.initial_activity, config.activity_feed_rx.as_mut());
 
         let shared = SharedBuffer::default();
         let backend = CrosstermBackend::new(shared.clone());
@@ -693,11 +587,7 @@ impl App {
             config.feed_service.clone(),
             config.user_id,
         );
-        settings_modal_state.open_from_profile(
-            &initial_profile,
-            Vec::new(),
-            settings_modal::ui::MODAL_WIDTH,
-        );
+        settings_modal_state.open_from_profile(&initial_profile);
         let mut app = Self {
             running: true,
             size: (cols, rows),
@@ -725,21 +615,22 @@ impl App {
             terminal,
             shared,
             visualizer: Visualizer::new(),
-            browser_viz_buffer: VecDeque::new(),
-            last_browser_viz_at: None,
+            viz_frame_buffer: VecDeque::new(),
+            last_viz_frame_at: None,
             connect_url: format!("{}/{}", config.web_url, config.session_token),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,
             web_chat_registry: config.web_chat_registry,
             show_web_chat_qr: false,
             web_chat_qr_url: None,
-            show_cli_install_modal: false,
-            session_token: config.session_token,
+            show_pair_modal: false,
+            session_token: config.session_token.clone(),
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
             active_users: active_users.clone(),
             activity_feed_rx: config.activity_feed_rx,
-            activity: VecDeque::new(),
+            activity,
+            audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -765,10 +656,10 @@ impl App {
             rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
-            dashboard_favorite_index: 0,
-            dashboard_previous_favorite_index: None,
-            dashboard_g_prefix_armed: false,
-            dashboard_box_prefix_armed: false,
+            booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
+            paired_browser_source: config.initial_audio_source,
+            vote_prefix_armed: false,
+            hot_room_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
@@ -825,9 +716,9 @@ impl App {
         if app.screen == Screen::Artboard {
             app.enter_dartboard();
         }
-        if app.screen == Screen::Dashboard {
-            app.chat.request_pinned_messages();
-        }
+        app.chat
+            .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+        app.chat.sync_selection();
         app.sync_visible_chat_room();
         Ok(app)
     }
@@ -966,13 +857,9 @@ impl App {
 
         self.screen = screen;
 
-        if self.screen == Screen::Chat {
+        if matches!(self.screen, Screen::Dashboard) {
             self.chat.request_list();
             self.chat.sync_selection();
-        }
-
-        if self.screen == Screen::Dashboard {
-            self.chat.request_pinned_messages();
         }
 
         if self.screen == Screen::Artboard {
@@ -1014,6 +901,50 @@ impl App {
             return false;
         };
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
+    }
+
+    /// Push the currently-stored audio source to all paired entries. Called
+    /// when a browser registers so every playback surface reflects the
+    /// persisted choice plus the current surface policy: browser Icecast only
+    /// when no CLI is paired, and embedded CLI webview only when no real
+    /// browser is paired.
+    pub fn replay_paired_browser_source(&self) {
+        let Some(registry) = self.paired_client_registry.as_ref() else {
+            return;
+        };
+        registry.broadcast_playback_source_for_token(&self.session_token);
+    }
+
+    /// Flip the per-user audio source preference. Persisted server-side; the
+    /// `persist_audio_source` task then pushes `SetPlaybackSource` to every
+    /// paired entry (CLI and browser) for this user. Works whether a browser
+    /// is paired or not — the preference is meaningful even with only a CLI,
+    /// because the CLI gates its Icecast decoder on the received source.
+    pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
+        use late_core::models::user::AudioSource;
+        let next = match self.paired_browser_source {
+            AudioSource::Icecast => AudioSource::Youtube,
+            AudioSource::Youtube => AudioSource::Icecast,
+        };
+        self.paired_browser_source = next;
+        if let Some(active_users) = &self.active_users
+            && let Some(active) = active_users.lock_recover().get_mut(&self.user_id)
+        {
+            active.audio_source = next;
+        }
+        self.audio.persist_audio_source(next);
+        next
+    }
+
+    pub fn request_paired_clipboard_image_upload(&mut self, room_id: Option<Uuid>) -> bool {
+        let Some(registry) = &self.paired_client_registry else {
+            return false;
+        };
+        if registry.request_clipboard_image(&self.session_token) {
+            self.chat.begin_pending_clipboard_image_upload(room_id);
+            return true;
+        }
+        false
     }
 
     pub fn paired_client_state(&self) -> Option<ClientAudioState> {
@@ -1156,6 +1087,39 @@ mod tests {
             NotificationMode::from_format(Some("garbage")),
             NotificationMode::Both
         );
+    }
+
+    #[test]
+    fn seed_activity_from_history_drops_events_already_in_history() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+        let event = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
+        tx.send(event.clone()).expect("send activity");
+        let mut history = VecDeque::new();
+        history.push_back(event);
+
+        let activity = seed_activity_from_history(history, Some(&mut rx));
+
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].username, "alice");
+    }
+
+    #[test]
+    fn seed_activity_from_history_keeps_events_newer_than_history() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+        let old = ActivityEvent::joined(uuid::Uuid::nil(), "alice");
+        let mut history = VecDeque::new();
+        history.push_back(old);
+        let mut fresh = ActivityEvent::joined(uuid::Uuid::from_u128(1), "bob");
+        fresh.at = history.back().map_or(fresh.at, |event| {
+            event.at + std::time::Duration::from_secs(1)
+        });
+        tx.send(fresh).expect("send activity");
+
+        let activity = seed_activity_from_history(history, Some(&mut rx));
+
+        assert_eq!(activity.len(), 2);
+        assert_eq!(activity[0].username, "alice");
+        assert_eq!(activity[1].username, "bob");
     }
 
     #[test]

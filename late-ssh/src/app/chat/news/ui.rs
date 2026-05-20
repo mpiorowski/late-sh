@@ -1,3 +1,4 @@
+use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::chat::ui_text::{NewsPayload, format_news_ascii_art_for_display};
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
@@ -35,25 +36,10 @@ const MODAL_MAX_WIDTH: u16 = 160;
 const MODAL_MIN_WIDTH: u16 = 24;
 
 pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'_>) {
-    let selected = if view.articles.is_empty() {
-        0
-    } else {
-        view.selected_index.min(view.articles.len() - 1) + 1
-    };
-    let title = if view.mine_only {
-        format!(" News Feed · mine ({selected}/{}) ", view.articles.len())
-    } else {
-        format!(" News Feed ({selected}/{}) ", view.articles.len())
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(Style::default().fg(theme::BORDER()));
-
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let list_area = inner_area;
+    let (status_area, list_area) = filtered_list_areas(area, view.mine_only);
+    if let Some(status_area) = status_area {
+        draw_mine_only_status(frame, status_area, "news");
+    }
 
     if view.articles.is_empty() {
         let text = Text::from("No news yet. Press 'i' to share a link.");
@@ -370,7 +356,7 @@ fn normalize_inline_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn split_summary_bullets(text: &str) -> Vec<String> {
+pub(crate) fn split_summary_bullets(text: &str) -> Vec<String> {
     text.replace("\\n", "\n")
         .lines()
         .map(str::trim)

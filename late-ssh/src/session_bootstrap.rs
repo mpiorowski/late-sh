@@ -1,4 +1,7 @@
-use late_core::models::{artboard_ban::ArtboardBan, user::User};
+use late_core::{
+    MutexRecover,
+    models::{artboard_ban::ArtboardBan, user::User},
+};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::app::activity::event::ActivityEvent;
@@ -124,7 +127,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     let initial_chip_balance = match state.chip_service.ensure_chips(user_id).await {
         Ok(chips) => chips.balance,
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to grant daily chip stipend");
+            tracing::warn!(error = ?e, "failed to ensure chip balance");
             0
         }
     };
@@ -145,6 +148,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     SessionConfig {
         cols,
         rows,
+        audio_service: state.audio_service.clone(),
         vote_service: state.vote_service.clone(),
         chat_service: state.chat_service.clone(),
         notification_service: state.notification_service.clone(),
@@ -190,6 +194,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         now_playing_rx: Some(state.now_playing_rx.clone()),
         active_users: Some(state.active_users.clone()),
         activity_feed_rx,
+        initial_activity: state.activity_history.lock_recover().clone(),
         user_id,
         permissions: Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator),
         artboard_banned: artboard_ban.is_some(),
@@ -199,6 +204,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         is_new_user,
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
+        initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
         is_draining: state.is_draining.clone(),
     }
 }

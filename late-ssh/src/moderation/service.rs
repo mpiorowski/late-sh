@@ -4,8 +4,9 @@ use dartboard_core::Canvas;
 use late_core::{
     db::Db,
     models::{
-        artboard::Snapshot as ArtboardSnapshot,
+        artboard::{Snapshot as ArtboardSnapshot, SnapshotSummary as ArtboardSnapshotSummary},
         artboard_ban::{ArtboardBan, ArtboardBanListItem},
+        audio_ban::{AudioBan, AudioBanListItem},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         game_room::GameRoom,
@@ -24,8 +25,9 @@ use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvena
 use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
-    ArtboardAction, BanListScope, ModCommand, RoleAction, RoomModAction, ServerUserAction,
-    mod_help_lines, normalize_mod_slug, parse_mod_command, strip_user_prefix,
+    ArtboardAction, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand, RoleAction,
+    RoomModAction, ServerUserAction, mod_help_lines, normalize_mod_slug, parse_mod_command,
+    strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -113,8 +115,12 @@ impl ModerationService {
         match command {
             ModCommand::Help { topic } => Ok(mod_help_lines(topic.as_deref())),
             ModCommand::User { username } => self.user_detail(permissions, &username).await,
-            ModCommand::Bans { scope, limit } => self.list_bans(permissions, scope, limit).await,
-            ModCommand::Audit { limit } => self.list_audit(permissions, limit).await,
+            ModCommand::RoomInfo { slug } => self.room_detail(permissions, &slug).await,
+            ModCommand::Bans { scope, page } => self.list_bans(permissions, scope, page).await,
+            ModCommand::Audit { page } => self.list_audit(permissions, page).await,
+            ModCommand::ArtboardSnapshots { page } => {
+                self.list_artboard_snapshots(permissions, page).await
+            }
             ModCommand::RenameRoom { slug, new_slug } => {
                 self.rename_room(actor_user_id, permissions, &slug, &new_slug)
                     .await
@@ -182,6 +188,22 @@ impl ModerationService {
                 self.artboard_restore(actor_user_id, permissions, date, reason)
                     .await
             }
+            ModCommand::Audio {
+                action,
+                username,
+                duration,
+                reason,
+            } => {
+                self.audio(
+                    actor_user_id,
+                    permissions,
+                    action,
+                    &username,
+                    duration,
+                    reason,
+                )
+                .await
+            }
             ModCommand::Role { action, username } => {
                 self.role(actor_user_id, permissions, action, &username)
                     .await
@@ -195,6 +217,7 @@ impl ModerationService {
         let user = find_user_by_mod_name(&client, username).await?;
         let server_ban = ServerBan::find_active_for_user_id(&client, user.id).await?;
         let artboard_ban = ArtboardBan::find_active_for_user(&client, user.id).await?;
+        let audio_ban = AudioBan::find_active_for_user(&client, user.id).await?;
         Ok(vec![
             format!("@{}", user.username),
             format!("id: {}", user.id),
@@ -204,6 +227,30 @@ impl ModerationService {
             format!("last_seen: {}", user.last_seen.format("%Y-%m-%d %H:%M UTC")),
             format!("server_banned: {}", server_ban.is_some()),
             format!("artboard_banned: {}", artboard_ban.is_some()),
+            format!("audio_banned: {}", audio_ban.is_some()),
+        ])
+    }
+
+    async fn room_detail(&self, permissions: Permissions, slug: &str) -> Result<Vec<String>> {
+        ensure_mod_surface(permissions)?;
+        let client = self.db.get().await?;
+        let room = find_room_by_mod_slug(&client, slug).await?;
+        let member_count: i64 = client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM chat_room_members WHERE room_id = $1",
+                &[&room.id],
+            )
+            .await?
+            .get(0);
+        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        Ok(vec![
+            format!("#{room_slug}"),
+            format!("id: {}", room.id),
+            format!("kind: {}", room.kind),
+            format!("visibility: {}", room.visibility),
+            format!("auto_join: {}", room.auto_join),
+            format!("permanent: {}", room.permanent),
+            format!("members: {member_count}"),
         ])
     }
 
@@ -211,19 +258,28 @@ impl ModerationService {
         &self,
         permissions: Permissions,
         scope: BanListScope,
-        limit: i64,
+        page: i64,
     ) -> Result<Vec<String>> {
         ensure_mod_surface(permissions)?;
         let client = self.db.get().await?;
+        let offset = page_offset(page);
         match scope {
             BanListScope::All => {
-                let server = ServerBan::active_with_usernames(&client, limit).await?;
-                let artboard = ArtboardBan::active_with_usernames(&client, limit).await?;
-                let room = RoomBan::active_with_usernames(&client, limit).await?;
-                if server.is_empty() && artboard.is_empty() && room.is_empty() {
+                let server =
+                    ServerBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
+                let artboard =
+                    ArtboardBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset)
+                        .await?;
+                let audio =
+                    AudioBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
+                let room =
+                    RoomBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
+                if server.is_empty() && artboard.is_empty() && audio.is_empty() && room.is_empty() {
                     return Ok(vec!["no active bans".to_string()]);
                 }
-                let mut lines = vec![format!("active bans (limit {limit} per section)")];
+                let mut lines = vec![format!(
+                    "active bans (page {page}, {LIST_PAGE_SIZE} per section)"
+                )];
                 append_section(
                     &mut lines,
                     "server bans",
@@ -242,34 +298,56 @@ impl ModerationService {
                 );
                 append_section(
                     &mut lines,
+                    "audio bans",
+                    audio.iter().map(format_audio_ban_item).collect::<Vec<_>>(),
+                );
+                append_section(
+                    &mut lines,
                     "room bans",
                     room.iter().map(format_room_ban_item).collect::<Vec<_>>(),
                 );
                 Ok(lines)
             }
             BanListScope::Server => {
-                let items = ServerBan::active_with_usernames(&client, limit).await?;
+                let items =
+                    ServerBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
                 Ok(single_section(
-                    "active server bans",
+                    &format!("active server bans (page {page})"),
                     "no active server bans",
                     items.iter().map(format_server_ban_item).collect(),
                 ))
             }
             BanListScope::Artboard => {
-                let items = ArtboardBan::active_with_usernames(&client, limit).await?;
+                let items =
+                    ArtboardBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset)
+                        .await?;
                 Ok(single_section(
-                    "active artboard bans",
+                    &format!("active artboard bans (page {page})"),
                     "no active artboard bans",
                     items.iter().map(format_artboard_ban_item).collect(),
+                ))
+            }
+            BanListScope::Audio => {
+                let items =
+                    AudioBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
+                Ok(single_section(
+                    &format!("active audio bans (page {page})"),
+                    "no active audio bans",
+                    items.iter().map(format_audio_ban_item).collect(),
                 ))
             }
             BanListScope::Room { slug } => {
                 let room = find_room_by_mod_slug(&client, &slug).await?;
                 let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
-                let items =
-                    RoomBan::active_for_room_with_usernames(&client, room.id, limit).await?;
+                let items = RoomBan::active_for_room_with_usernames_page(
+                    &client,
+                    room.id,
+                    LIST_PAGE_SIZE,
+                    offset,
+                )
+                .await?;
                 Ok(single_section(
-                    &format!("active room bans for #{room_slug}"),
+                    &format!("active room bans for #{room_slug} (page {page})"),
                     &format!("no active room bans for #{room_slug}"),
                     items.iter().map(format_room_ban_item).collect(),
                 ))
@@ -277,15 +355,42 @@ impl ModerationService {
         }
     }
 
-    async fn list_audit(&self, permissions: Permissions, limit: i64) -> Result<Vec<String>> {
+    async fn list_audit(&self, permissions: Permissions, page: i64) -> Result<Vec<String>> {
         ensure_has(permissions, Caps::VIEW_STAFF_INFO)?;
         let client = self.db.get().await?;
-        let items = ModerationAuditLog::recent_with_usernames(&client, limit).await?;
+        let items = ModerationAuditLog::recent_with_usernames_page(
+            &client,
+            LIST_PAGE_SIZE,
+            page_offset(page),
+        )
+        .await?;
         if items.is_empty() {
             return Ok(vec!["no audit log entries".to_string()]);
         }
-        let mut lines = vec![format!("recent audit log entries (limit {limit})")];
+        let mut lines = vec![format!(
+            "recent audit log entries (page {page}, {LIST_PAGE_SIZE} per page)"
+        )];
         lines.extend(items.iter().map(format_audit_log_item));
+        Ok(lines)
+    }
+
+    async fn list_artboard_snapshots(
+        &self,
+        permissions: Permissions,
+        page: i64,
+    ) -> Result<Vec<String>> {
+        ensure_mod_surface(permissions)?;
+        let client = self.db.get().await?;
+        let items =
+            ArtboardSnapshot::list_archive_summaries(&client, LIST_PAGE_SIZE, page_offset(page))
+                .await?;
+        if items.is_empty() {
+            return Ok(vec!["no artboard snapshots".to_string()]);
+        }
+        let mut lines = vec![format!(
+            "artboard snapshots (page {page}, {LIST_PAGE_SIZE} per page)"
+        )];
+        lines.extend(items.iter().map(format_artboard_snapshot_summary));
         Ok(lines)
     }
 
@@ -668,6 +773,63 @@ impl ModerationService {
         )])
     }
 
+    async fn audio(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: AudioAction,
+        username: &str,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        let mut client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        let target_tier = tier_for_user(&target);
+        let cap = match action {
+            AudioAction::Ban => Caps::BAN_FROM_AUDIO,
+            AudioAction::Unban => Caps::UNBAN_FROM_AUDIO,
+        };
+        ensure_can(permissions, cap, target_tier)?;
+        let expires_at = matches!(action, AudioAction::Ban)
+            .then(|| duration.map(|d| Utc::now() + d))
+            .flatten();
+        let tx = client.transaction().await?;
+        match action {
+            AudioAction::Ban => {
+                AudioBan::activate(&tx, target.id, actor_user_id, &reason, expires_at).await?;
+            }
+            AudioAction::Unban => {
+                AudioBan::delete_for_user(&tx, target.id).await?;
+            }
+        }
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(false),
+            actor_user_id,
+            action.audit_name(),
+            "user",
+            Some(target.id),
+            json!({ "reason": reason }),
+        )
+        .await?;
+        tx.commit().await?;
+        let banned = matches!(action, AudioAction::Ban);
+        let _ = self.event_tx.send(ModerationEvent::AudioAction {
+            actor_user_id,
+            target_user_id: target.id,
+            action,
+            banned,
+            expires_at,
+            reason,
+        });
+        Ok(vec![format!(
+            "{} @{}",
+            action.past_tense(),
+            target.username
+        )])
+    }
+
     async fn artboard_restore(
         &self,
         actor_user_id: Uuid,
@@ -898,6 +1060,24 @@ fn format_server_ban_item(item: &ServerBanListItem) -> String {
     )
 }
 
+fn format_audio_ban_item(item: &AudioBanListItem) -> String {
+    let target = item
+        .target_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.target_user_id.to_string());
+    let actor = item
+        .actor_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.actor_user_id.to_string());
+    format!(
+        "- {target} by {actor} expires: {} reason: {}",
+        format_expires_at(item.ban.expires_at),
+        format_reason(&item.ban.reason)
+    )
+}
+
 fn format_artboard_ban_item(item: &ArtboardBanListItem) -> String {
     let target = item
         .target_username
@@ -974,6 +1154,21 @@ fn format_audit_log_item(item: &ModerationAuditLogListItem) -> String {
     )
 }
 
+fn format_artboard_snapshot_summary(item: &ArtboardSnapshotSummary) -> String {
+    let kind = if item.board_key.starts_with("monthly:") {
+        "monthly"
+    } else if item.board_key.starts_with("daily:") {
+        "daily"
+    } else {
+        "snapshot"
+    };
+    format!(
+        "- {kind} {} updated: {}",
+        item.board_key,
+        item.updated.format("%Y-%m-%d %H:%M UTC")
+    )
+}
+
 fn format_expires_at(expires_at: Option<chrono::DateTime<Utc>>) -> String {
     expires_at
         .map(|expires_at| expires_at.format("%Y-%m-%d %H:%M UTC").to_string())
@@ -1001,6 +1196,10 @@ fn previous_utc_day() -> NaiveDate {
 
 fn daily_artboard_key(date: NaiveDate) -> String {
     format!("daily:{date}")
+}
+
+fn page_offset(page: i64) -> i64 {
+    (page.saturating_sub(1)) * LIST_PAGE_SIZE
 }
 
 fn is_unique_violation(error: &anyhow::Error) -> bool {

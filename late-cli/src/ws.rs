@@ -1,16 +1,24 @@
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
+    env, fs,
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     time::Duration,
 };
 use tokio::{sync::broadcast, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use super::audio::VizSample;
+use super::{audio::VizSample, clipboard};
 
 pub(super) struct PairClientInfo {
     pub(super) ssh_mode: &'static str,
@@ -22,6 +30,7 @@ pub(super) struct PlaybackState<'a> {
     pub(super) sample_rate: u32,
     pub(super) muted: &'a AtomicBool,
     pub(super) volume_percent: &'a AtomicU8,
+    pub(super) source_is_icecast: &'a AtomicBool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +39,276 @@ enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
+    RequestClipboardImage,
+    SetPlaybackSource {
+        source: PairAudioSource,
+        #[serde(default = "default_embedded_webview_enabled")]
+        embedded_webview_enabled: bool,
+    },
+}
+
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum PairAudioSource {
+    Icecast,
+    Youtube,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube"];
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+const CLIENT_CAPABILITIES: &[&str] = &[];
+
+const fn default_embedded_webview_enabled() -> bool {
+    true
+}
+
+pub(super) struct WebviewPlaybackController {
+    api_base_url: String,
+    token: String,
+    child: Option<Child>,
+    wants_youtube: bool,
+}
+
+impl WebviewPlaybackController {
+    pub(super) fn new(api_base_url: String, token: String) -> Self {
+        Self {
+            api_base_url,
+            token,
+            child: None,
+            wants_youtube: false,
+        }
+    }
+
+    fn apply_playback_source(
+        &mut self,
+        source: PairAudioSource,
+        embedded_webview_enabled: bool,
+    ) -> Result<()> {
+        match (source, embedded_webview_enabled) {
+            (PairAudioSource::Youtube, true) => self.enter_youtube(),
+            (PairAudioSource::Youtube, false) => self.enter_browser_youtube(),
+            (PairAudioSource::Icecast, _) => self.enter_icecast(),
+        }
+    }
+
+    fn enter_youtube(&mut self) -> Result<()> {
+        self.wants_youtube = true;
+        if self.helper_is_running() {
+            return Ok(());
+        }
+
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(err) => {
+                warn!(error = %err, "failed to locate current late executable for webview helper");
+                return Ok(());
+            }
+        };
+        let stderr = match webview_helper_stderr() {
+            Ok(stderr) => stderr,
+            Err(err) => {
+                warn!(error = %err, "failed to open embedded YouTube webview helper log");
+                return Ok(());
+            }
+        };
+        let child = match Command::new(exe)
+            .arg("webview-pair")
+            .env("LATE_API_BASE_URL", &self.api_base_url)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(stderr)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(err) => {
+                warn!(error = %err, "failed to spawn embedded YouTube webview helper");
+                return Ok(());
+            }
+        };
+        let mut child = child;
+        if let Err(err) = write_helper_token(&mut child, &self.token) {
+            warn!(error = %err, "failed to pass token to embedded YouTube webview helper");
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
+        self.child = Some(child);
+        info!("started embedded YouTube webview helper");
+        Ok(())
+    }
+
+    fn enter_browser_youtube(&mut self) -> Result<()> {
+        if !self.wants_youtube && self.child.is_none() {
+            return Ok(());
+        }
+        self.wants_youtube = false;
+        self.stop_helper();
+        info!("using paired browser for YouTube playback");
+        Ok(())
+    }
+
+    fn enter_icecast(&mut self) -> Result<()> {
+        if !self.wants_youtube && self.child.is_none() {
+            return Ok(());
+        }
+        self.wants_youtube = false;
+        self.stop_helper();
+        info!("resumed native Icecast playback");
+        Ok(())
+    }
+
+    fn helper_is_running(&mut self) -> bool {
+        let Some(child) = self.child.as_mut() else {
+            return false;
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                warn!(?status, "embedded YouTube webview helper exited");
+                self.child = None;
+                false
+            }
+            Ok(None) => true,
+            Err(err) => {
+                warn!(error = %err, "failed to inspect embedded YouTube webview helper");
+                self.child = None;
+                false
+            }
+        }
+    }
+
+    fn stop_helper(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if let Err(err) = child.kill() {
+            warn!(error = %err, "failed to stop embedded YouTube webview helper");
+            return;
+        }
+        let _ = child.wait();
+        info!("stopped embedded YouTube webview helper");
+    }
+}
+
+fn webview_helper_stderr() -> Result<Stdio> {
+    let path = webview_helper_log_path();
+    ensure_webview_log_dir(&path)?;
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(&path)
+        .with_context(|| format!("failed to open webview helper log at {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+    }
+    Ok(Stdio::from(file))
+}
+
+fn write_helper_token(child: &mut Child, token: &str) -> Result<()> {
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("webview helper stdin pipe was not available")?;
+    stdin
+        .write_all(token.as_bytes())
+        .context("failed to write webview helper token")?;
+    stdin
+        .write_all(b"\n")
+        .context("failed to terminate webview helper token")?;
+    Ok(())
+}
+
+fn webview_helper_log_path() -> PathBuf {
+    #[cfg(unix)]
+    {
+        if let Some(base) = nonempty_os_env("XDG_STATE_HOME") {
+            return PathBuf::from(base).join("late").join("webview.log");
+        }
+        if let Some(home) = nonempty_os_env("HOME") {
+            return PathBuf::from(home)
+                .join(".local")
+                .join("state")
+                .join("late")
+                .join("webview.log");
+        }
+        if let Some(base) = nonempty_os_env("XDG_RUNTIME_DIR") {
+            return PathBuf::from(base).join("late").join("webview.log");
+        }
+        env::temp_dir()
+            .join(format!("late-{}", effective_user_id()))
+            .join("webview.log")
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(base) = nonempty_os_env("LOCALAPPDATA") {
+            return PathBuf::from(base).join("late").join("webview.log");
+        }
+        if let Some(profile) = nonempty_os_env("USERPROFILE") {
+            return PathBuf::from(profile)
+                .join("AppData")
+                .join("Local")
+                .join("late")
+                .join("webview.log");
+        }
+        return env::temp_dir().join("late").join("webview.log");
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        env::temp_dir().join("late").join("webview.log")
+    }
+}
+
+fn nonempty_os_env(key: &str) -> Option<std::ffi::OsString> {
+    env::var_os(key).filter(|value| !value.is_empty())
+}
+
+fn ensure_webview_log_dir(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("webview helper log path has no parent directory")?;
+    fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create webview helper log directory at {}",
+            parent.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        let metadata = fs::symlink_metadata(parent).with_context(|| {
+            format!(
+                "failed to inspect webview helper log directory at {}",
+                parent.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            anyhow::bail!(
+                "webview helper log directory is not a real directory: {}",
+                parent.display()
+            );
+        }
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn effective_user_id() -> u32 {
+    // SAFETY: geteuid has no preconditions and does not modify memory.
+    unsafe { nix::libc::geteuid() }
+}
+
+impl Drop for WebviewPlaybackController {
+    fn drop(&mut self) {
+        self.stop_helper();
+    }
 }
 
 pub(super) async fn run_viz_ws(
@@ -38,13 +317,14 @@ pub(super) async fn run_viz_ws(
     client: &PairClientInfo,
     frames: &mut broadcast::Receiver<VizSample>,
     playback: &PlaybackState<'_>,
+    webview: &mut WebviewPlaybackController,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
-    debug!(%ws_url, "connecting pair websocket");
+    debug!("connecting pair websocket");
     let (mut ws, _) = tokio::time::timeout(Duration::from_secs(10), connect_async(&ws_url))
         .await
-        .with_context(|| format!("timed out connecting to pair websocket at {ws_url}"))?
-        .with_context(|| format!("failed to connect to pair websocket at {ws_url}"))?;
+        .context("timed out connecting to pair websocket")?
+        .context("failed to connect to pair websocket")?;
     info!("pair websocket established");
     let mut heartbeat = interval(Duration::from_secs(1));
     send_client_state(&mut ws, client, playback).await?;
@@ -79,10 +359,19 @@ pub(super) async fn run_viz_ws(
                     break;
                 };
                 match msg? {
-                    Message::Text(text)
-                        if apply_pair_control(&text, playback.muted, playback.volume_percent)? =>
-                    {
-                        send_client_state(&mut ws, client, playback).await?;
+                    Message::Text(text) => {
+                        let should_send_state = handle_pair_control(
+                            &text,
+                            &mut ws,
+                            playback.muted,
+                            playback.volume_percent,
+                            playback.source_is_icecast,
+                            webview,
+                        )
+                        .await?;
+                        if should_send_state {
+                            send_client_state(&mut ws, client, playback).await?;
+                        }
                     }
                     Message::Close(_) => break,
                     _ => {}
@@ -106,6 +395,7 @@ async fn send_client_state(
         "client_kind": "cli",
         "ssh_mode": client.ssh_mode,
         "platform": client.platform,
+        "capabilities": CLIENT_CAPABILITIES,
         "muted": playback.muted.load(Ordering::Relaxed),
         "volume_percent": playback.volume_percent.load(Ordering::Relaxed),
     });
@@ -113,24 +403,95 @@ async fn send_client_state(
     Ok(())
 }
 
-fn apply_pair_control(text: &str, muted: &AtomicBool, volume_percent: &AtomicU8) -> Result<bool> {
-    match serde_json::from_str::<PairControlMessage>(text)? {
+async fn handle_pair_control(
+    text: &str,
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    muted: &AtomicBool,
+    volume_percent: &AtomicU8,
+    source_is_icecast: &AtomicBool,
+    webview: &mut WebviewPlaybackController,
+) -> Result<bool> {
+    let control = match serde_json::from_str::<PairControlMessage>(text) {
+        Ok(control) => control,
+        Err(_) => {
+            warn!(payload = %text, "ignoring unsupported pair websocket event");
+            return Ok(false);
+        }
+    };
+    match control {
+        audio_control @ (PairControlMessage::ToggleMute
+        | PairControlMessage::VolumeUp
+        | PairControlMessage::VolumeDown) => {
+            apply_audio_pair_control(audio_control, muted, volume_percent);
+            Ok(true)
+        }
+        PairControlMessage::SetPlaybackSource {
+            source,
+            embedded_webview_enabled,
+        } => {
+            let is_icecast = matches!(source, PairAudioSource::Icecast);
+            let previous = source_is_icecast.swap(is_icecast, Ordering::Relaxed);
+            if previous != is_icecast {
+                info!(
+                    source = ?source,
+                    "applied playback source change"
+                );
+            }
+            webview.apply_playback_source(source, embedded_webview_enabled)?;
+            Ok(false)
+        }
+        PairControlMessage::RequestClipboardImage => {
+            send_clipboard_image(ws).await?;
+            Ok(false)
+        }
+    }
+}
+
+fn apply_audio_pair_control(
+    control: PairControlMessage,
+    muted: &AtomicBool,
+    volume_percent: &AtomicU8,
+) {
+    match control {
         PairControlMessage::ToggleMute => {
             let now_muted = muted.fetch_xor(true, Ordering::Relaxed) ^ true;
             info!(muted = now_muted, "applied paired mute toggle");
-            Ok(true)
         }
         PairControlMessage::VolumeUp => {
             let new_volume = bump_volume(volume_percent, 5);
             info!(volume_percent = new_volume, "applied paired volume up");
-            Ok(true)
         }
         PairControlMessage::VolumeDown => {
             let new_volume = bump_volume(volume_percent, -5);
             info!(volume_percent = new_volume, "applied paired volume down");
-            Ok(true)
         }
+        PairControlMessage::SetPlaybackSource { .. }
+        | PairControlMessage::RequestClipboardImage => {}
     }
+}
+
+async fn send_clipboard_image(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> Result<()> {
+    let image_result = tokio::task::spawn_blocking(clipboard::image_png_bytes)
+        .await
+        .map_err(|err| anyhow::anyhow!("clipboard image task failed: {err}"))?;
+    let payload = match image_result {
+        Ok(bytes) => json!({
+            "event": "clipboard_image",
+            "data_base64": STANDARD.encode(bytes),
+        }),
+        Err(err) => json!({
+            "event": "clipboard_image_failed",
+            "message": err.to_string(),
+        }),
+    };
+    ws.send(Message::Text(payload.to_string().into())).await?;
+    Ok(())
 }
 
 fn bump_volume(volume_percent: &AtomicU8, delta: i16) -> u8 {
@@ -211,10 +572,10 @@ mod tests {
         let muted = AtomicBool::new(false);
         let volume_percent = AtomicU8::new(100);
 
-        apply_pair_control(r#"{"event":"toggle_mute"}"#, &muted, &volume_percent).unwrap();
+        apply_audio_pair_control(PairControlMessage::ToggleMute, &muted, &volume_percent);
         assert!(muted.load(Ordering::Relaxed));
 
-        apply_pair_control(r#"{"event":"toggle_mute"}"#, &muted, &volume_percent).unwrap();
+        apply_audio_pair_control(PairControlMessage::ToggleMute, &muted, &volume_percent);
         assert!(!muted.load(Ordering::Relaxed));
     }
 
@@ -223,10 +584,10 @@ mod tests {
         let muted = AtomicBool::new(false);
         let volume_percent = AtomicU8::new(50);
 
-        apply_pair_control(r#"{"event":"volume_up"}"#, &muted, &volume_percent).unwrap();
+        apply_audio_pair_control(PairControlMessage::VolumeUp, &muted, &volume_percent);
         assert_eq!(volume_percent.load(Ordering::Relaxed), 55);
 
-        apply_pair_control(r#"{"event":"volume_down"}"#, &muted, &volume_percent).unwrap();
+        apply_audio_pair_control(PairControlMessage::VolumeDown, &muted, &volume_percent);
         assert_eq!(volume_percent.load(Ordering::Relaxed), 50);
     }
 }

@@ -1,11 +1,11 @@
 use std::time::Instant;
 
-use late_core::audio::VizFrame;
-
 use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
+use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
-use crate::session::{BrowserVizFrame, SessionMessage};
+use crate::session::SessionMessage;
+use late_core::models::user::AudioSource;
 
 impl App {
     pub fn tick(&mut self) {
@@ -31,6 +31,25 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        // Poll image upload results.
+        if let Some(result) = self.chat.poll_image_upload() {
+            let target_room_id = self.chat.take_image_upload_target_room_id();
+            match result {
+                Ok(url) => {
+                    if let Some(room_id) = target_room_id.or(self.chat.selected_room_id) {
+                        self.chat.start_composing_in_room(room_id);
+                        self.chat.composer_push_str(&url);
+                    }
+                    self.banner = Some(crate::app::common::primitives::Banner::success(
+                        "Image uploaded - press Enter to send",
+                    ));
+                }
+                Err(msg) => {
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&msg));
+                }
+            }
+        }
+        self.chat.poll_inline_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state
                 .append_result(output.success, output.lines);
@@ -38,15 +57,24 @@ impl App {
         self.sync_visible_chat_room();
         if self.chat.pending_chat_screen_switch {
             self.chat.pending_chat_screen_switch = false;
-            self.set_screen(Screen::Chat);
+            self.set_screen(Screen::Dashboard);
+        }
+        if let Some((user_id, username)) = self.chat.take_requested_open_profile() {
+            self.profile_modal_state.open(user_id, username);
+            self.show_profile_modal = true;
         }
         if let Some(b) = self.vote.tick() {
+            self.banner = Some(b);
+        }
+        if let Some(b) = self.audio.tick() {
             self.banner = Some(b);
         }
         // News state is ticked inside chat.tick()
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
         }
+        self.chat
+            .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
         if let Some(b) = self.settings_modal_state.tick() {
             self.banner = Some(b);
         }
@@ -58,23 +86,36 @@ impl App {
             && !self.profile_state.profile().username.is_empty()
         {
             if self.profile_state.profile().show_settings_on_connect {
-                self.settings_modal_state.open_from_profile(
-                    self.profile_state.profile(),
-                    self.chat.favorite_room_options(),
-                    crate::app::settings_modal::ui::MODAL_WIDTH,
-                );
+                self.settings_modal_state
+                    .open_from_profile(self.profile_state.profile());
             } else {
                 self.show_settings = false;
             }
         }
 
-        let mut updated = false;
         for msg in messages {
             match msg {
                 SessionMessage::Heartbeat => {}
                 SessionMessage::Viz(viz) => {
-                    self.push_browser_frame(viz);
-                    updated = true;
+                    self.push_viz_frame(viz);
+                }
+                SessionMessage::ClipboardImage { data } => {
+                    let Some(upload) = self.chat.take_pending_clipboard_image_upload() else {
+                        tracing::warn!("ignoring unsolicited paired clipboard image");
+                        continue;
+                    };
+                    if let Some(banner) = self.chat.start_image_upload_in_room(data, upload.room_id)
+                    {
+                        self.banner = Some(banner);
+                    } else {
+                        self.banner = Some(crate::app::common::primitives::Banner::success(
+                            "Clipboard image found - uploading...",
+                        ));
+                    }
+                }
+                SessionMessage::ClipboardImageFailed { message } => {
+                    self.chat.clear_pending_clipboard_image_upload();
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&message));
                 }
                 SessionMessage::Terminate { reason } => {
                     tracing::info!(reason, "session terminated by control message");
@@ -82,11 +123,9 @@ impl App {
                 }
                 SessionMessage::ArtboardBanChanged { banned, expires_at } => {
                     self.set_artboard_banned(banned, expires_at);
-                    updated = true;
                 }
                 SessionMessage::PermissionsChanged { permissions } => {
                     self.set_permissions(permissions);
-                    updated = true;
                 }
                 SessionMessage::RoomRemoved {
                     room_id,
@@ -98,7 +137,9 @@ impl App {
                     self.banner = Some(crate::app::common::primitives::Banner::error(&format!(
                         "{message}: #{slug}"
                     )));
-                    updated = true;
+                }
+                SessionMessage::BrowserPaired => {
+                    self.replay_paired_browser_source();
                 }
             }
         }
@@ -163,31 +204,40 @@ impl App {
                     continue;
                 }
                 self.activity.push_back(event);
-                if self.activity.len() > 7 {
+                if self.activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {
                     self.activity.pop_front();
                 }
             }
         }
 
-        if updated {
-            if let Some(frame) = self.browser_viz_buffer.back().cloned() {
-                self.visualizer.update(&frame);
-            }
+        // Browser-audible audio is synthetic-only. If a CLI is paired and the
+        // user is in Icecast mode, the CLI owns Icecast and sends real
+        // VizFrames, so don't mask those with the browser's procedural path.
+        let has_browser = self
+            .paired_client_state()
+            .map(|state| state.client_kind == crate::app::audio::client_state::ClientKind::Browser)
+            .unwrap_or(false);
+        let browser_owns_icecast = self
+            .paired_client_registry
+            .as_ref()
+            .map(|registry| registry.web_icecast_enabled(&self.session_token))
+            .unwrap_or(false);
+        let procedural = has_browser
+            && (self.paired_browser_source == AudioSource::Youtube || browser_owns_icecast);
+        self.visualizer.set_procedural_active(procedural);
+        if procedural {
+            self.visualizer.tick_procedural();
         } else {
             self.visualizer.tick_idle();
         }
     }
 
-    fn push_browser_frame(&mut self, frame: BrowserVizFrame) {
-        self.last_browser_viz_at = Some(Instant::now());
-        let viz = VizFrame {
-            bands: frame.bands,
-            rms: frame.rms,
-            track_pos_ms: frame.position_ms,
-        };
-        self.browser_viz_buffer.push_back(viz);
-        while self.browser_viz_buffer.len() > 75 {
-            self.browser_viz_buffer.pop_front();
+    fn push_viz_frame(&mut self, frame: late_core::audio::VizFrame) {
+        self.last_viz_frame_at = Some(Instant::now());
+        self.visualizer.update(&frame);
+        self.viz_frame_buffer.push_back(frame);
+        while self.viz_frame_buffer.len() > 75 {
+            self.viz_frame_buffer.pop_front();
         }
     }
 }

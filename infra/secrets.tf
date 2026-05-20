@@ -15,7 +15,7 @@ resource "kubernetes_secret_v1" "regcred" {
 }
 
 # =============================================================================
-# S3 Credentials (for CloudNativePG backups)
+# S3 Credentials (for CloudNativePG backups and public file uploads)
 # =============================================================================
 
 resource "kubernetes_secret_v1" "s3_credentials" {
@@ -61,6 +61,22 @@ resource "kubernetes_secret_v1" "ai_credentials" {
 
   data = {
     api_key = var.AI_API_KEY
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
+# YouTube Data API
+# =============================================================================
+
+resource "kubernetes_secret_v1" "youtube_credentials" {
+  metadata {
+    name = "youtube-credentials"
+  }
+
+  data = {
+    api_key = var.YOUTUBE_API_KEY
   }
 
   type = "Opaque"

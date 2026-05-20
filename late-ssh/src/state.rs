@@ -10,6 +10,7 @@ use crate::app::arcade::sudoku::svc::SudokuService;
 use crate::app::arcade::tetris::svc::TetrisService;
 use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
+use crate::app::audio::svc::AudioService;
 use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::feeds::svc::FeedService;
 use crate::app::chat::news::svc::ArticleService;
@@ -24,11 +25,14 @@ use crate::app::rooms::registry::RoomGameRegistry;
 use crate::app::rooms::svc::RoomsService;
 use crate::app::vote::svc::VoteService;
 use crate::config::Config;
-use crate::session::{PairedClientRegistry, SessionRegistry};
+use crate::paired_clients::PairedClientRegistry;
+use crate::session::SessionRegistry;
 use crate::web::WebChatRegistry;
-use late_core::{api_types::NowPlaying, db::Db, rate_limit::IpRateLimiter};
+use late_core::{
+    api_types::NowPlaying, db::Db, models::user::AudioSource, rate_limit::IpRateLimiter,
+};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     net::IpAddr,
     sync::{Arc, Mutex},
     time::Instant,
@@ -48,18 +52,21 @@ pub struct ActiveUser {
     pub username: String,
     pub fingerprint: Option<String>,
     pub peer_ip: Option<IpAddr>,
+    pub audio_source: AudioSource,
     pub sessions: Vec<ActiveSession>,
     pub connection_count: usize,
     pub last_login_at: Instant,
 }
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
+pub type ActivityHistory = Arc<Mutex<VecDeque<ActivityEvent>>>;
 
 #[derive(Clone)]
 pub struct State {
     pub config: Config,
     pub db: Db,
     pub ai_service: AiService,
+    pub audio_service: AudioService,
     pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
@@ -88,6 +95,7 @@ pub struct State {
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
+    pub activity_history: ActivityHistory,
     pub now_playing_rx: watch::Receiver<Option<NowPlaying>>,
     pub session_registry: SessionRegistry,
     pub paired_client_registry: PairedClientRegistry,
