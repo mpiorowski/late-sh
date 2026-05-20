@@ -8,6 +8,12 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+const REAL_BAND_ATTACK: f32 = 0.62;
+const REAL_BAND_RELEASE: f32 = 0.28;
+const REAL_RMS_ATTACK: f32 = 0.5;
+const REAL_RMS_RELEASE: f32 = 0.22;
+const IDLE_BAND_DECAY: f32 = 0.94;
+
 pub struct Visualizer {
     bands: [f32; 8],
     rms: f32,
@@ -43,10 +49,21 @@ impl Visualizer {
     }
 
     pub fn update(&mut self, frame: &VizFrame) {
+        let had_viz = self.has_viz;
         self.has_viz = true;
-        self.rms = frame.rms;
+        let target_rms = frame.rms.clamp(0.0, 1.0);
+        self.rms = if had_viz {
+            Self::smooth_value(self.rms, target_rms, REAL_RMS_ATTACK, REAL_RMS_RELEASE)
+        } else {
+            target_rms
+        };
         for (i, band) in frame.bands.iter().enumerate() {
-            self.bands[i] = band.clamp(0.0, 1.0);
+            let target = band.clamp(0.0, 1.0);
+            self.bands[i] = if had_viz {
+                Self::smooth_value(self.bands[i], target, REAL_BAND_ATTACK, REAL_BAND_RELEASE)
+            } else {
+                target
+            };
         }
 
         // Beat detection: a relative spike above the running average triggers
@@ -72,6 +89,9 @@ impl Visualizer {
             return;
         }
         self.rms = (self.rms * 0.96).max(0.0);
+        for band in &mut self.bands {
+            *band = (*band * IDLE_BAND_DECAY).max(0.0);
+        }
         self.beat = (self.beat * 0.9).max(0.0);
     }
 
@@ -105,11 +125,16 @@ impl Visualizer {
         out
     }
 
-    fn procedural_block(fill: f32) -> &'static str {
+    fn vertical_block(fill: f32) -> &'static str {
         // 9-step sub-cell vertical block: ' ' through '█' in 1/8 increments.
         const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
         let idx = (fill.clamp(0.0, 1.0) * 8.0).round() as usize;
         BLOCKS[idx.min(8)]
+    }
+
+    fn smooth_value(current: f32, target: f32, attack: f32, release: f32) -> f32 {
+        let factor = if target > current { attack } else { release };
+        (current + (target - current) * factor).clamp(0.0, 1.0)
     }
 
     /// Borderless visualizer for the merged shell. Renders bars only when
@@ -165,7 +190,6 @@ impl Visualizer {
         // Thin bars with small gaps: n bars + (n-1) gaps = width
         // So 2n - 1 = width, n = (width + 1) / 2
         let band_count = width.div_ceil(2).max(1);
-        let band_width = 1usize;
         let gap = 1usize;
 
         let mut bands = self.resample(&self.bands, band_count);
@@ -176,22 +200,22 @@ impl Visualizer {
 
         let mut lines = Vec::with_capacity(height);
         for row in 0..height {
-            let level = height - row;
+            let cell_from_bottom = (height - row - 1) as f32;
             let mut spans: Vec<Span> = Vec::with_capacity(band_count * 2);
 
             for (i, &band) in bands.iter().enumerate().take(band_count) {
                 let band = band.clamp(0.0, 1.0);
-                let bar_height = (band * height as f32).floor() as usize;
-                let bar_height = bar_height.min(height);
-                let filled = level <= bar_height;
+                let bar_height_cells = band * height as f32;
+                let fill = (bar_height_cells - cell_from_bottom).clamp(0.0, 1.0);
 
-                let (ch, style) = if filled {
-                    ('█', Style::default().fg(theme::AMBER()))
+                if fill <= 0.0 {
+                    spans.push(Span::raw(" "));
                 } else {
-                    (' ', Style::default())
-                };
-
-                spans.push(Span::styled(ch.to_string().repeat(band_width), style));
+                    spans.push(Span::styled(
+                        Self::vertical_block(fill),
+                        Self::real_bar_style(fill, band),
+                    ));
+                }
                 if gap > 0 && i + 1 < band_count {
                     spans.push(Span::raw(" ".repeat(gap)));
                 }
@@ -201,6 +225,16 @@ impl Visualizer {
         }
 
         lines
+    }
+
+    fn real_bar_style(fill: f32, band: f32) -> Style {
+        if band > 0.78 && fill > 0.5 {
+            Style::default().fg(theme::AMBER_GLOW())
+        } else if fill < 0.5 || band < 0.35 {
+            Style::default().fg(theme::AMBER_DIM())
+        } else {
+            Style::default().fg(theme::AMBER())
+        }
     }
 
     fn build_procedural_lines(&self, area: Rect) -> Vec<Line<'static>> {
@@ -234,7 +268,7 @@ impl Visualizer {
                 if fill <= 0.0 {
                     spans.push(Span::raw(" "));
                 } else {
-                    spans.push(Span::styled(Self::procedural_block(fill), style));
+                    spans.push(Span::styled(Self::vertical_block(fill), style));
                 }
 
                 if gap > 0 && i + 1 < band_count {
@@ -397,9 +431,11 @@ mod tests {
         let mut viz = Visualizer::new();
         viz.has_viz = true;
         viz.rms = 1.0;
+        viz.bands = [1.0; 8];
         viz.tick_idle();
         assert!(viz.rms < 1.0);
         assert!(viz.rms > 0.0);
+        assert!(viz.bands.iter().all(|band| *band < 1.0 && *band > 0.0));
     }
 
     #[test]
@@ -453,6 +489,27 @@ mod tests {
     }
 
     #[test]
+    fn update_smooths_real_viz_after_first_frame() {
+        let mut viz = Visualizer::new();
+        viz.update(&VizFrame {
+            bands: [1.0; 8],
+            rms: 1.0,
+            track_pos_ms: 0,
+        });
+        assert_eq!(viz.bands, [1.0; 8]);
+        assert_eq!(viz.rms, 1.0);
+
+        viz.update(&VizFrame {
+            bands: [0.0; 8],
+            rms: 0.0,
+            track_pos_ms: 100,
+        });
+
+        assert!(viz.bands.iter().all(|band| *band < 1.0 && *band > 0.0));
+        assert!(viz.rms < 1.0 && viz.rms > 0.0);
+    }
+
+    #[test]
     fn render_inline_uses_procedural_path_when_active() {
         let width = 17;
         let height = 6;
@@ -475,6 +532,34 @@ mod tests {
             }
         }
         // Procedural path renders bars, NOT the idle "no audio paired" copy.
+        assert!(rendered.contains('█'));
+        assert!(!rendered.contains("no audio paired"));
+    }
+
+    #[test]
+    fn render_inline_uses_real_viz_after_update() {
+        let width = 17;
+        let height = 4;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut viz = Visualizer::new();
+        viz.update(&VizFrame {
+            bands: [1.0, 0.8, 0.6, 0.4, 0.2, 0.0, 0.5, 0.9],
+            rms: 0.7,
+            track_pos_ms: 1234,
+        });
+
+        terminal
+            .draw(|frame| viz.render_inline(frame, Rect::new(0, 0, width, height)))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let mut rendered = String::new();
+        for y in 0..height {
+            for x in 0..width {
+                rendered.push_str(buffer[(x, y)].symbol());
+            }
+        }
         assert!(rendered.contains('█'));
         assert!(!rendered.contains("no audio paired"));
     }

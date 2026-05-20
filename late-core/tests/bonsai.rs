@@ -122,7 +122,7 @@ async fn concurrent_water_attempts_only_grant_growth_once() {
         handles.push(tokio::spawn(async move {
             let client = db.get().await.expect("db client");
             barrier.wait().await;
-            Tree::water_and_add_growth_if_available(&client, user_id, today, false)
+            Tree::water_and_add_growth_if_available(&client, user_id, today)
                 .await
                 .expect("water")
         }));

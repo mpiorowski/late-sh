@@ -5,6 +5,7 @@ use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
 use crate::session::SessionMessage;
+use late_core::models::user::AudioSource;
 
 impl App {
     pub fn tick(&mut self) {
@@ -96,7 +97,7 @@ impl App {
             match msg {
                 SessionMessage::Heartbeat => {}
                 SessionMessage::Viz(viz) => {
-                    self.push_browser_frame(viz);
+                    self.push_viz_frame(viz);
                 }
                 SessionMessage::ClipboardImage { data } => {
                     let Some(upload) = self.chat.take_pending_clipboard_image_upload() else {
@@ -211,13 +212,20 @@ impl App {
             }
         }
 
-        // Browser audio is synthetic-only. The web page no longer sends real
-        // frequency frames for either Icecast or YouTube, so animate whenever a
-        // browser is paired as this session's audio surface.
-        let procedural = self
+        // Browser-audible audio is synthetic-only. If a CLI is paired and the
+        // user is in Icecast mode, the CLI owns Icecast and sends real
+        // VizFrames, so don't mask those with the browser's procedural path.
+        let has_browser = self
             .paired_client_state()
             .map(|state| state.client_kind == crate::app::audio::client_state::ClientKind::Browser)
             .unwrap_or(false);
+        let browser_owns_icecast = self
+            .paired_client_registry
+            .as_ref()
+            .map(|registry| registry.web_icecast_enabled(&self.session_token))
+            .unwrap_or(false);
+        let procedural = has_browser
+            && (self.paired_browser_source == AudioSource::Youtube || browser_owns_icecast);
         self.visualizer.set_procedural_active(procedural);
         if procedural {
             self.visualizer.tick_procedural();
@@ -226,11 +234,12 @@ impl App {
         }
     }
 
-    fn push_browser_frame(&mut self, frame: late_core::audio::VizFrame) {
-        self.last_browser_viz_at = Some(Instant::now());
-        self.browser_viz_buffer.push_back(frame);
-        while self.browser_viz_buffer.len() > 75 {
-            self.browser_viz_buffer.pop_front();
+    fn push_viz_frame(&mut self, frame: late_core::audio::VizFrame) {
+        self.last_viz_frame_at = Some(Instant::now());
+        self.visualizer.update(&frame);
+        self.viz_frame_buffer.push_back(frame);
+        while self.viz_frame_buffer.len() > 75 {
+            self.viz_frame_buffer.pop_front();
         }
     }
 }

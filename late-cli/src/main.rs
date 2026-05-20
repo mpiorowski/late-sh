@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::{
     env,
+    io::BufRead,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
@@ -15,18 +16,28 @@ mod identity;
 mod pty;
 mod raw_mode;
 mod ssh;
+mod webview;
 mod ws;
 
 use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
 use identity::ensure_client_identity_at;
-use raw_mode::RawModeGuard;
+use raw_mode::{RawModeGuard, enable_ansi_output_if_tty};
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
-use ws::{PairClientInfo, PlaybackState, client_platform_label, run_viz_ws};
+use ws::{
+    PairClientInfo, PlaybackState, WebviewPlaybackController, client_platform_label, run_viz_ws,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = Config::from_args(env::args().skip(1))?;
+    let raw_args: Vec<String> = env::args().skip(1).collect();
+    match raw_args.first().map(String::as_str) {
+        Some("webview-spike") => return run_webview_spike_subcommand(&raw_args[1..]),
+        Some("webview-pair") => return run_webview_pair_subcommand(&raw_args[1..]),
+        _ => {}
+    }
+
+    let config = Config::from_args(raw_args)?;
     init_logging(config.verbose)?;
     debug!(?config, "resolved cli config");
     // OpenSSH mode can use normal OpenSSH identity discovery, including
@@ -39,6 +50,9 @@ async fn main() -> Result<()> {
     };
     // In OpenSSH mode the system ssh client owns the terminal, so PIN,
     // passphrase, and touch prompts keep OpenSSH's normal echo behavior.
+    if config.ssh_mode.uses_cli_raw_mode() {
+        enable_ansi_output_if_tty();
+    }
     let _raw_mode = config
         .ssh_mode
         .uses_cli_raw_mode()
@@ -96,6 +110,58 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn run_webview_spike_subcommand(args: &[String]) -> Result<()> {
+    let video_id = args
+        .first()
+        .context("usage: late webview-spike <video_id>")?;
+    init_logging(true)?;
+    webview::run_spike(video_id)
+}
+
+fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
+    if !args.is_empty() {
+        anyhow::bail!("usage: late webview-pair (token is read from stdin)");
+    }
+    let token = read_webview_pair_token_from_stdin()?;
+    let api_base_url =
+        env::var("LATE_API_BASE_URL").unwrap_or_else(|_| config::DEFAULT_API_BASE_URL.to_string());
+    init_logging(true)?;
+    webview::run_relay(None, move |proxy, ipc_rx| {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(err) => {
+                error!(error = %err, "failed to build webview pair runtime");
+                let _ = proxy.send_event(webview::WebviewCommand::Shutdown);
+                return;
+            }
+        };
+        rt.block_on(async move {
+            if let Err(err) = webview::pair::run(&api_base_url, &token, proxy, ipc_rx).await {
+                error!(error = %err, "webview pair task ended with error");
+            }
+        });
+    })
+}
+
+fn read_webview_pair_token_from_stdin() -> Result<String> {
+    let mut token = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut token)
+        .context("failed to read webview pair token from stdin")?;
+    let token = token.trim_end_matches(['\r', '\n']).to_string();
+    if token.is_empty() {
+        anyhow::bail!("webview pair token was empty");
+    }
+    if token.chars().any(char::is_whitespace) {
+        anyhow::bail!("webview pair token was invalid");
+    }
+    Ok(token)
+}
+
 async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBuf>) -> Result<()> {
     // Authenticate first, while OpenSSH still has direct access to the
     // terminal. Audio and WebSocket pairing start only after the token exec
@@ -147,10 +213,12 @@ fn spawn_ws_pairing(
     let played_samples = Arc::clone(&audio.played_samples);
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
+    let source_is_icecast = Arc::clone(&audio.source_is_icecast);
     // Copy scalar state before spawning so the task does not capture the
     // borrowed AudioRuntime reference.
     let sample_rate = audio.sample_rate;
     let mut frames = audio.analyzer_tx.subscribe();
+    let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
 
     tokio::spawn(async move {
         let playback = PlaybackState {
@@ -158,12 +226,20 @@ fn spawn_ws_pairing(
             sample_rate,
             muted: &muted,
             volume_percent: &volume_percent,
+            source_is_icecast: &source_is_icecast,
         };
         let mut retries = 0;
         const MAX_RETRIES: usize = 10;
         loop {
-            if let Err(err) =
-                run_viz_ws(&api_base_url, &token, &client, &mut frames, &playback).await
+            if let Err(err) = run_viz_ws(
+                &api_base_url,
+                &token,
+                &client,
+                &mut frames,
+                &playback,
+                &mut webview,
+            )
+            .await
             {
                 retries += 1;
                 if retries > MAX_RETRIES {

@@ -256,6 +256,7 @@ impl GhostService {
                 username: bot.username.clone(),
                 fingerprint: None,
                 peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),

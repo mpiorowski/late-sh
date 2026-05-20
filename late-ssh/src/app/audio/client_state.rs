@@ -26,6 +26,7 @@ pub enum ClientSshMode {
     #[serde(rename = "openssh")]
     OpenSsh,
     Old,
+    Webview,
     #[default]
     Unknown,
 }
@@ -36,6 +37,7 @@ impl ClientSshMode {
             Self::Native => Some("native"),
             Self::OpenSsh => Some("openssh"),
             Self::Old => Some("old"),
+            Self::Webview => None,
             Self::Unknown => None,
         }
     }
@@ -99,6 +101,12 @@ impl ClientAudioState {
                 .any(|capability| capability == "clipboard_image")
     }
 
+    pub fn supports_youtube_playback(&self) -> bool {
+        self.capabilities
+            .iter()
+            .any(|capability| capability == "youtube")
+    }
+
     pub(crate) fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {
         if self.client_kind != ClientKind::Cli {
             return None;
@@ -117,5 +125,12 @@ mod tests {
         let mode: ClientSshMode = serde_json::from_str(r#""openssh""#).unwrap();
         assert_eq!(mode, ClientSshMode::OpenSsh);
         assert_eq!(mode.metric_label(), Some("openssh"));
+    }
+
+    #[test]
+    fn client_ssh_mode_parses_webview() {
+        let mode: ClientSshMode = serde_json::from_str(r#""webview""#).unwrap();
+        assert_eq!(mode, ClientSshMode::Webview);
+        assert_eq!(mode.metric_label(), None);
     }
 }

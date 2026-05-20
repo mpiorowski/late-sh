@@ -93,7 +93,6 @@ impl Tree {
         client: &Client,
         user_id: Uuid,
         today: NaiveDate,
-        unlimited: bool,
     ) -> Result<bool> {
         let row = client
             .query_opt(
@@ -109,9 +108,9 @@ impl Tree {
                      updated = current_timestamp
                  WHERE user_id = $1
                    AND is_alive = true
-                   AND ($4 OR last_watered IS DISTINCT FROM $2)
+                   AND last_watered IS DISTINCT FROM $2
                  RETURNING user_id",
-                &[&user_id, &today, &MAX_GROWTH_POINTS, &unlimited],
+                &[&user_id, &today, &MAX_GROWTH_POINTS],
             )
             .await?;
         Ok(row.is_some())
@@ -225,16 +224,21 @@ impl DailyCare {
         Ok(Self::from(row))
     }
 
-    pub async fn mark_watered(client: &Client, user_id: Uuid, care_date: NaiveDate) -> Result<()> {
-        client
-            .execute(
+    pub async fn mark_watered(
+        client: &Client,
+        user_id: Uuid,
+        care_date: NaiveDate,
+    ) -> Result<bool> {
+        let row = client
+            .query_opt(
                 "UPDATE bonsai_daily_care
                  SET watered = true, updated = current_timestamp
-                 WHERE user_id = $1 AND care_date = $2",
+                 WHERE user_id = $1 AND care_date = $2 AND watered = false
+                 RETURNING user_id",
                 &[&user_id, &care_date],
             )
             .await?;
-        Ok(())
+        Ok(row.is_some())
     }
 
     pub async fn add_cut_branch(

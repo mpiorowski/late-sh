@@ -705,7 +705,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  ?                 open this help section",
         "",
         "How growth works",
-        "  watering gives +10 growth",
+        "  watering gives +10 growth and 200 chips once per day",
         "  it also grows slowly while connected",
         "  after 7 dry days it dies",
         "  missed daily wrong-branch cuts cost -10 growth",

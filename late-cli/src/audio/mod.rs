@@ -28,6 +28,12 @@ pub(super) struct AudioRuntime {
     pub(super) stop: Arc<AtomicBool>,
     pub(super) muted: Arc<AtomicBool>,
     pub(super) volume_percent: Arc<AtomicU8>,
+    /// True when the user's audio_source preference is Icecast and the CLI
+    /// should actually emit samples. False when the user picked YouTube — the
+    /// CLI can't decode YouTube, so we silence the output without touching the
+    /// user-controlled `muted` flag. Driven by `SetPlaybackSource` over the
+    /// pair WS.
+    pub(super) source_is_icecast: Arc<AtomicBool>,
     pub(super) enabled: bool,
 }
 
@@ -93,6 +99,10 @@ impl AudioRuntime {
         let stop = Arc::new(AtomicBool::new(false));
         let muted = Arc::new(AtomicBool::new(false));
         let volume_percent = Arc::new(AtomicU8::new(30));
+        // Default to Icecast (play). The server's pair-WS connect always
+        // sends SetPlaybackSource right after register, which flips this if
+        // the user's persisted preference is Youtube.
+        let source_is_icecast = Arc::new(AtomicBool::new(true));
         let (analyzer_tx, _) = broadcast::channel(32);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
@@ -103,6 +113,7 @@ impl AudioRuntime {
             Arc::clone(&played_samples),
             Arc::clone(&muted),
             Arc::clone(&volume_percent),
+            Arc::clone(&source_is_icecast),
             profile,
         )?;
         let output_sample_rate = stream.sample_rate;
@@ -137,6 +148,7 @@ impl AudioRuntime {
             stop,
             muted,
             volume_percent,
+            source_is_icecast,
             enabled: true,
         })
     }
@@ -151,6 +163,7 @@ impl AudioRuntime {
             stop: Arc::new(AtomicBool::new(false)),
             muted: Arc::new(AtomicBool::new(false)),
             volume_percent: Arc::new(AtomicU8::new(0)),
+            source_is_icecast: Arc::new(AtomicBool::new(true)),
             enabled: false,
         }
     }

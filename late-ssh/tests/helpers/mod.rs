@@ -180,6 +180,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             db.clone(),
             None,
             late_ssh::paired_clients::PairedClientRegistry::new(),
+            Arc::new(Mutex::new(HashMap::new())),
         ),
         vote_service,
         chat_service,
@@ -241,6 +242,7 @@ pub fn make_app_with_chat_service(
             db.clone(),
             None,
             late_ssh::paired_clients::PairedClientRegistry::new(),
+            Arc::new(Mutex::new(HashMap::new())),
         ),
         vote_service: VoteService::new(
             db.clone(),
@@ -360,6 +362,7 @@ pub fn make_app_with_paired_client(
             db.clone(),
             None,
             late_ssh::paired_clients::PairedClientRegistry::new(),
+            Arc::new(Mutex::new(HashMap::new())),
         ),
         vote_service: VoteService::new(
             db.clone(),

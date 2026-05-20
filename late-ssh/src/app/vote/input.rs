@@ -37,17 +37,11 @@ pub fn handle_vote_suffix(app: &mut App, byte: u8) -> bool {
         }
         b'x' | b'X' => {
             use late_core::models::user::AudioSource;
-            match app.toggle_paired_playback_source() {
-                Some(AudioSource::Youtube) => {
-                    app.banner = Some(Banner::success("Paired browser audio: YouTube"));
-                }
-                Some(AudioSource::Icecast) => {
-                    app.banner = Some(Banner::success("Paired browser audio: Icecast"));
-                }
-                None => {
-                    app.banner = Some(Banner::error("No paired browser"));
-                }
-            }
+            let banner = match app.toggle_paired_playback_source() {
+                AudioSource::Youtube => "Audio source: YouTube",
+                AudioSource::Icecast => "Audio source: Icecast",
+            };
+            app.banner = Some(Banner::success(banner));
             true
         }
         // b'z' | b'Z' => {

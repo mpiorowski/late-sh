@@ -7,13 +7,14 @@ use std::{
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use late_core::{
+    MutexRecover,
     db::Db,
     models::{
         audio_ban::AudioBan,
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
-        user::User,
+        user::{AudioSource, User},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -21,14 +22,16 @@ use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
 
 use super::youtube::YoutubeClient;
-use crate::paired_clients::PairedClientRegistry;
+use crate::{paired_clients::PairedClientRegistry, state::ActiveUsers};
 
 const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 10;
 const SUBMISSION_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
 const FALLBACK_DEBOUNCE: Duration = Duration::from_secs(10);
 const PLAYBACK_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
+const MIN_VIDEO_DURATION_MS: i32 = 30_000;
 const SKIP_VOTE_PERCENT: usize = 30;
 const SKIP_VOTE_MIN: u32 = 2;
 
@@ -41,6 +44,7 @@ pub struct AudioService {
     snapshot_tx: watch::Sender<QueueSnapshot>,
     state: Arc<Mutex<QueueState>>,
     paired_clients: PairedClientRegistry,
+    active_users: ActiveUsers,
 }
 
 #[derive(Default)]
@@ -214,14 +218,18 @@ pub struct SubmitQueueResponse {
     pub position_in_queue: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlayerPlaybackState {
     Playing,
     Paused,
     Buffering,
+    Unstarted,
+    Cued,
     Ended,
     Error,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -243,6 +251,7 @@ impl AudioService {
         db: Db,
         youtube_api_key: Option<String>,
         paired_clients: PairedClientRegistry,
+        active_users: ActiveUsers,
     ) -> Self {
         let (ws_tx, _) = broadcast::channel(512);
         let (event_tx, _) = broadcast::channel(256);
@@ -260,6 +269,7 @@ impl AudioService {
             snapshot_tx,
             state: Arc::new(Mutex::new(QueueState::default())),
             paired_clients,
+            active_users,
         }
     }
 
@@ -267,9 +277,8 @@ impl AudioService {
         self.snapshot_tx.subscribe()
     }
 
-    /// True once the YouTube Data API key is configured. The booth disables
-    /// public submissions when this returns false; staff `/audio` keeps
-    /// working through the trusted path.
+    /// True once the YouTube Data API key is configured. Server-side YouTube
+    /// metadata is required for both booth submissions and staff `/audio`.
     pub fn booth_submit_enabled(&self) -> bool {
         self.youtube.has_api_key()
     }
@@ -298,7 +307,22 @@ impl AudioService {
             );
         }
 
-        shutdown.cancelled().await;
+        let mut reconcile = tokio::time::interval(RECONCILE_INTERVAL);
+        reconcile.tick().await;
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = reconcile.tick() => {
+                    if let Err(err) = self.periodic_reconcile().await {
+                        late_core::error_span!(
+                            "audio_periodic_reconcile_failed",
+                            error = ?err,
+                            "failed to reconcile audio queue state from database"
+                        );
+                    }
+                }
+            }
+        }
         self.cancel_timers().await;
         tracing::info!("audio service shutting down");
     }
@@ -313,12 +337,27 @@ impl AudioService {
         user_id: Uuid,
         url: &str,
     ) -> Result<SubmitQueueResponse> {
-        let video = super::youtube::trusted_video_from_url(url)?;
+        let video = self.youtube.validate_url(url).await?;
+        self.submit_video(user_id, video, false).await
+    }
+
+    /// Submit a video whose YouTube metadata has already been validated.
+    ///
+    /// Normal user-facing paths should use `submit_url` or
+    /// `submit_trusted_url` so the server validates the URL through the
+    /// YouTube Data API before inserting a queue row. This entry point exists
+    /// for service-level callers/tests that already have trusted metadata and
+    /// need to exercise the queue state machine without a network dependency.
+    pub async fn submit_validated_video(
+        &self,
+        user_id: Uuid,
+        video: super::youtube::YoutubeVideo,
+    ) -> Result<SubmitQueueResponse> {
         self.submit_video(user_id, video, false).await
     }
 
     pub async fn set_trusted_youtube_fallback(&self, user_id: Uuid, url: &str) -> Result<()> {
-        let video = super::youtube::trusted_video_from_url(url)?;
+        let video = self.youtube.validate_url(url).await?;
         let mut state = self.state.lock().await;
         let client = self.db.get().await?;
         let source = MediaSource::upsert_youtube_fallback(
@@ -349,6 +388,10 @@ impl AudioService {
         video: super::youtube::YoutubeVideo,
         enforce_rate_limit: bool,
     ) -> Result<SubmitQueueResponse> {
+        if !video.is_stream && video.duration_ms.is_none() {
+            anyhow::bail!("YouTube video duration is unavailable");
+        }
+
         let mut state = self.state.lock().await;
 
         let item = {
@@ -510,18 +553,17 @@ impl AudioService {
     /// Cast or change a vote (+1/-1) on a queued item. Rejects votes against
     /// the currently-playing track and against non-queued items. Returns the
     /// new aggregate score on success.
-    pub async fn persist_audio_source(
-        &self,
-        user_id: Uuid,
-        source: late_core::models::user::AudioSource,
-    ) -> Result<()> {
+    pub async fn persist_audio_source(&self, user_id: Uuid, source: AudioSource) -> Result<()> {
         let client = self.db.get().await?;
-        late_core::models::user::User::set_audio_source(&client, user_id, source).await?;
+        let previous = User::audio_source(&client, user_id).await?;
+        User::set_audio_source(&client, user_id, source).await?;
         drop(client);
-        // Mirror the new value into the paired-client registry so
-        // `total_youtube_listeners` / `has_youtube_listener` stay in sync.
-        let left_youtube = self.paired_clients.set_audio_source(user_id, source);
-        if left_youtube {
+        self.update_active_audio_source(user_id, source);
+        // Mirror the new value into the paired-client registry so connected
+        // clients receive SetPlaybackSource. Counts/thresholds come from the
+        // active user's persisted preference, not from paired-client presence.
+        self.paired_clients.set_audio_source(user_id, source);
+        if previous == AudioSource::Youtube && source != AudioSource::Youtube {
             // The user is no longer hearing YouTube — strip any pending
             // skip-vote they cast, then re-evaluate in case the threshold
             // dropped to meet remaining votes.
@@ -535,35 +577,32 @@ impl AudioService {
         Ok(())
     }
 
-    pub async fn read_audio_source(
-        &self,
-        user_id: Uuid,
-    ) -> Result<late_core::models::user::AudioSource> {
+    pub async fn read_audio_source(&self, user_id: Uuid) -> Result<AudioSource> {
         let client = self.db.get().await?;
-        late_core::models::user::User::audio_source(&client, user_id).await
+        User::audio_source(&client, user_id).await
     }
 
-    /// Live count of paired browsers currently pinned to YouTube. Drives the
-    /// sidebar's youtube-block listener tag.
-    pub fn youtube_listener_count(&self) -> usize {
-        self.paired_clients.total_youtube_listeners()
+    /// Count of active users whose persisted audio source is YouTube. This
+    /// drives the sidebar badge and skip-vote denominator.
+    pub fn youtube_source_count(&self) -> usize {
+        active_audio_source_counts(&self.active_users).0
     }
 
-    /// Live count of paired browsers currently pinned to Icecast. CLI is
-    /// excluded by design — only counts browsers that are actively rendering
-    /// the radio.
-    pub fn icecast_listener_count(&self) -> usize {
-        self.paired_clients.total_icecast_listeners()
+    /// Count of active users whose persisted audio source is Icecast/default.
+    pub fn icecast_source_count(&self) -> usize {
+        active_audio_source_counts(&self.active_users).1
+    }
+
+    fn update_active_audio_source(&self, user_id: Uuid, source: AudioSource) {
+        if let Some(active) = self.active_users.lock_recover().get_mut(&user_id) {
+            active.audio_source = source;
+        }
     }
 
     /// Spawn a background persist for the user's audio-source preference.
     /// On failure publishes `AudioSourcePersistFailed` so the session's
     /// `AudioState::tick` can surface a banner.
-    pub fn persist_audio_source_task(
-        &self,
-        user_id: Uuid,
-        source: late_core::models::user::AudioSource,
-    ) {
+    pub fn persist_audio_source_task(&self, user_id: Uuid, source: AudioSource) {
         let service = self.clone();
         tokio::spawn(async move {
             if let Err(err) = service.persist_audio_source(user_id, source).await {
@@ -615,26 +654,31 @@ impl AudioService {
     /// Cast a skip-vote for the currently-playing track. Returns the new
     /// progress; if the threshold has been hit, advances the queue.
     ///
-    /// Gated on the caller having at least one paired browser actively pinned
-    /// to the YouTube source — only listeners hearing the track can vote to
-    /// skip it. Threshold denominator is also restricted to YouTube
-    /// listeners across all tokens.
-    pub async fn cast_skip_vote(
-        &self,
-        user_id: Uuid,
-        session_token: &str,
-    ) -> Result<CastSkipResult> {
-        if !self.paired_clients.has_youtube_listener(session_token) {
-            anyhow::bail!("switch to youtube to skip-vote");
-        }
+    /// Gated on the caller's persisted audio source being YouTube. Threshold
+    /// denominator is the persisted YouTube-source user count, not live
+    /// pair/browser presence.
+    pub async fn cast_skip_vote(&self, user_id: Uuid) -> Result<CastSkipResult> {
         {
             let client = self.db.get().await?;
+            if User::audio_source(&client, user_id).await? != AudioSource::Youtube {
+                anyhow::bail!("switch to youtube to skip-vote");
+            }
             if AudioBan::is_active_for_user(&client, user_id).await? {
                 anyhow::bail!("audio ban: skip-vote blocked");
             }
         }
 
         let mut state = self.state.lock().await;
+        if state.current_item_id.is_none()
+            && !self
+                .adopt_current_playing_from_db_with_guard(
+                    &mut state,
+                    "skip vote found empty memory",
+                )
+                .await?
+        {
+            anyhow::bail!("nothing is playing");
+        }
         let Some(current_id) = state.current_item_id else {
             anyhow::bail!("nothing is playing");
         };
@@ -650,15 +694,21 @@ impl AudioService {
 
         state.skip_votes.insert(user_id);
         let votes = state.skip_votes.len() as u32;
-        let threshold = skip_threshold(self.paired_clients.total_youtube_listeners());
+        let threshold = skip_threshold(self.youtube_source_count());
         let fired = votes >= threshold;
 
         if fired {
             let client = self.db.get().await?;
-            let _ =
-                MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
-                    .await?;
+            let changed = MediaQueueItem::mark_skipped(&client, current_id, Utc::now()).await?;
             drop(client);
+            if changed == 0 {
+                self.reconcile_after_stale_current_with_guard(
+                    &mut state,
+                    "skip vote hit stale current",
+                )
+                .await?;
+                anyhow::bail!("track changed; try again");
+            }
             state.current_item_id = None;
             state.skip_votes.clear();
             self.cancel_playback(&mut state);
@@ -686,7 +736,7 @@ impl AudioService {
             return Ok(());
         }
         let votes = state.skip_votes.len() as u32;
-        let threshold = skip_threshold(self.paired_clients.total_youtube_listeners());
+        let threshold = skip_threshold(self.youtube_source_count());
         if votes < threshold {
             self.publish_queue_update_with_guard(&mut state).await?;
             return Ok(());
@@ -698,9 +748,16 @@ impl AudioService {
             self.publish_queue_update_with_guard(&mut state).await?;
             return Ok(());
         }
-        let _ = MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
-            .await?;
+        let changed = MediaQueueItem::mark_skipped(&client, current_id, Utc::now()).await?;
         drop(client);
+        if changed == 0 {
+            return self
+                .reconcile_after_stale_current_with_guard(
+                    &mut state,
+                    "skip threshold re-eval hit stale current",
+                )
+                .await;
+        }
         state.current_item_id = None;
         state.skip_votes.clear();
         self.cancel_playback(&mut state);
@@ -749,10 +806,10 @@ impl AudioService {
         });
     }
 
-    pub fn cast_skip_vote_task(&self, user_id: Uuid, session_token: String) {
+    pub fn cast_skip_vote_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
-            match service.cast_skip_vote(user_id, &session_token).await {
+            match service.cast_skip_vote(user_id).await {
                 Ok(result) => {
                     if result.fired {
                         service.publish_event(AudioEvent::BoothSkipFired { user_id });
@@ -779,13 +836,30 @@ impl AudioService {
     /// so the next track starts with a clean slate.
     pub async fn force_skip(&self) -> Result<()> {
         let mut state = self.state.lock().await;
+        if state.current_item_id.is_none()
+            && !self
+                .adopt_current_playing_from_db_with_guard(
+                    &mut state,
+                    "force skip found empty memory",
+                )
+                .await?
+        {
+            anyhow::bail!("nothing is playing");
+        }
         let Some(current_id) = state.current_item_id else {
             anyhow::bail!("nothing is playing");
         };
         let client = self.db.get().await?;
-        let _ = MediaQueueItem::update_status(&client, current_id, MediaQueueItem::STATUS_SKIPPED)
-            .await?;
+        let changed = MediaQueueItem::mark_skipped(&client, current_id, Utc::now()).await?;
         drop(client);
+        if changed == 0 {
+            self.reconcile_after_stale_current_with_guard(
+                &mut state,
+                "force skip hit stale current",
+            )
+            .await?;
+            anyhow::bail!("track changed; try again");
+        }
         state.current_item_id = None;
         state.skip_votes.clear();
         self.cancel_playback(&mut state);
@@ -904,33 +978,37 @@ impl AudioService {
         });
     }
 
-    pub fn reevaluate_skip_threshold_task(&self) {
-        let service = self.clone();
-        tokio::spawn(async move {
-            if let Err(err) = service.reevaluate_skip_threshold().await {
-                late_core::error_span!(
-                    "audio_skip_reeval_failed",
-                    error = ?err,
-                    "failed to re-evaluate skip threshold"
-                );
-            }
-        });
-    }
-
     pub async fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
+        tracing::debug!(
+            item_id = %report.item_id,
+            state = ?report.state,
+            offset_ms = ?report.offset_ms,
+            duration_ms = ?report.duration_ms,
+            autoplay_blocked = report.autoplay_blocked,
+            error = ?report.error,
+            "received YouTube player_state report"
+        );
         match report.state {
-            PlayerPlaybackState::Ended => self.finish_item_from_player(report).await,
             PlayerPlaybackState::Error => {
-                let reason = report
-                    .error
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or("browser reported playback error");
-                self.fail_item(report.item_id, reason).await
+                tracing::warn!(
+                    item_id = %report.item_id,
+                    error = ?report.error,
+                    "browser reported playback error; server will not advance the shared queue"
+                );
+                Ok(())
             }
             PlayerPlaybackState::Playing
             | PlayerPlaybackState::Paused
-            | PlayerPlaybackState::Buffering => {
+            | PlayerPlaybackState::Buffering
+            | PlayerPlaybackState::Ended => {
+                if report.state == PlayerPlaybackState::Ended {
+                    tracing::debug!(
+                        item_id = %report.item_id,
+                        offset_ms = ?report.offset_ms,
+                        duration_ms = ?report.duration_ms,
+                        "browser reported ended; server playback timer owns queue advancement"
+                    );
+                }
                 if report.autoplay_blocked {
                     tracing::warn!(
                         item_id = %report.item_id,
@@ -938,10 +1016,19 @@ impl AudioService {
                         "browser reported autoplay blocked"
                     );
                 }
-                self.record_browser_duration(report.item_id, report.duration_ms)
-                    .await?;
                 Ok(())
             }
+            PlayerPlaybackState::Unstarted | PlayerPlaybackState::Cued => {
+                if report.autoplay_blocked {
+                    tracing::warn!(
+                        item_id = %report.item_id,
+                        offset_ms = ?report.offset_ms,
+                        "browser reported autoplay blocked"
+                    );
+                }
+                Ok(())
+            }
+            PlayerPlaybackState::Unknown => Ok(()),
         }
     }
 
@@ -1014,6 +1101,25 @@ impl AudioService {
         let now = Utc::now();
 
         if let Some(item) = MediaQueueItem::current_playing(&client).await? {
+            if !item_has_required_server_metadata(&item) {
+                tracing::warn!(
+                    item_id = %item.id,
+                    video_id = %item.external_id,
+                    duration_ms = ?item.duration_ms,
+                    is_stream = item.is_stream,
+                    "failing resumed media queue item without server-side YouTube duration"
+                );
+                let _ = MediaQueueItem::mark_failed(
+                    &client,
+                    item.id,
+                    now,
+                    "missing or invalid server-side YouTube duration",
+                )
+                .await?;
+                drop(client);
+                return self.advance_to_next_with_guard(&mut state).await;
+            }
+
             if item_is_still_playable(&item, now) {
                 state.current_item_id = Some(item.id);
                 state.skip_votes.clear();
@@ -1028,56 +1134,39 @@ impl AudioService {
             let _ = MediaQueueItem::mark_played(&client, item.id, now).await?;
         }
 
+        drop(client);
         self.advance_to_next_with_guard(&mut state).await
     }
 
     async fn finish_item_due_to_timer(&self, item_id: Uuid) -> Result<()> {
-        tracing::info!(%item_id, "media queue item reached playback limit");
+        tracing::info!(%item_id, "server playback timer reached media queue item limit");
         self.finish_item(item_id).await
-    }
-
-    async fn finish_item_from_player(&self, report: PlayerStateReport) -> Result<()> {
-        self.record_browser_duration(report.item_id, report.duration_ms)
-            .await?;
-
-        {
-            let state = self.state.lock().await;
-            if state.current_item_id != Some(report.item_id) {
-                return Ok(());
-            }
-        }
-
-        self.finish_item(report.item_id).await
     }
 
     async fn finish_item(&self, item_id: Uuid) -> Result<()> {
         let mut state = self.state.lock().await;
         if state.current_item_id != Some(item_id) {
+            tracing::debug!(
+                %item_id,
+                current_item_id = ?state.current_item_id,
+                "ignoring finish for non-current media queue item"
+            );
             return Ok(());
         }
 
         let client = self.db.get().await?;
         let changed = MediaQueueItem::mark_played(&client, item_id, Utc::now()).await?;
         if changed == 0 {
+            drop(client);
+            self.reconcile_after_stale_current_with_guard(
+                &mut state,
+                "finish item hit stale current",
+            )
+            .await?;
             return Ok(());
         }
-        state.current_item_id = None;
-        state.skip_votes.clear();
-        self.cancel_playback(&mut state);
-        self.advance_to_next_with_guard(&mut state).await
-    }
-
-    async fn fail_item(&self, item_id: Uuid, reason: &str) -> Result<()> {
-        let mut state = self.state.lock().await;
-        if state.current_item_id != Some(item_id) {
-            return Ok(());
-        }
-
-        let client = self.db.get().await?;
-        let changed = MediaQueueItem::mark_failed(&client, item_id, Utc::now(), reason).await?;
-        if changed == 0 {
-            return Ok(());
-        }
+        drop(client);
+        tracing::info!(%item_id, "marked media queue item played");
         state.current_item_id = None;
         state.skip_votes.clear();
         self.cancel_playback(&mut state);
@@ -1085,19 +1174,118 @@ impl AudioService {
     }
 
     async fn advance_to_next_with_guard(&self, state: &mut QueueState) -> Result<()> {
-        let client = self.db.get().await?;
-        if let Some((next, _score)) = MediaQueueItem::first_queued(&client).await? {
-            self.cancel_fallback(state);
-            let Some(item) = MediaQueueItem::mark_playing(&client, next.id, Utc::now()).await?
-            else {
-                tracing::warn!(
-                    item_id = %next.id,
-                    "mark_playing returned no row; another playing row likely holds the slot - skipping advance"
-                );
-                self.schedule_fallback(state);
-                self.publish_queue_update_with_guard(state).await?;
+        loop {
+            let client = self.db.get().await?;
+            if let Some(current) = MediaQueueItem::current_playing(&client).await? {
+                if !item_has_required_server_metadata(&current) {
+                    tracing::warn!(
+                        item_id = %current.id,
+                        video_id = %current.external_id,
+                        duration_ms = ?current.duration_ms,
+                        is_stream = current.is_stream,
+                        "failing current media queue item without server-side YouTube duration"
+                    );
+                    let _ = MediaQueueItem::mark_failed(
+                        &client,
+                        current.id,
+                        Utc::now(),
+                        "missing or invalid server-side YouTube duration",
+                    )
+                    .await?;
+                    drop(client);
+                    continue;
+                }
+                drop(client);
+                self.adopt_playing_item_with_guard(state, current, "advance found DB current")
+                    .await?;
                 return Ok(());
+            }
+
+            let Some((next, _score)) = MediaQueueItem::first_queued(&client).await? else {
+                drop(client);
+                break;
             };
+
+            self.cancel_fallback(state);
+            let item = match MediaQueueItem::mark_playing(&client, next.id, Utc::now()).await {
+                Ok(Some(item)) => item,
+                Ok(None) => {
+                    tracing::warn!(
+                        item_id = %next.id,
+                        "mark_playing returned no row; reconciling before fallback"
+                    );
+                    drop(client);
+                    if self
+                        .adopt_current_playing_from_db_with_guard(state, "mark_playing lost race")
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                    self.schedule_fallback(state);
+                    self.publish_queue_update_with_guard(state).await?;
+                    return Ok(());
+                }
+                Err(err) if is_single_playing_unique_violation(&err) => {
+                    tracing::warn!(
+                        item_id = %next.id,
+                        error = ?err,
+                        "mark_playing hit singleton constraint; reconciling with DB current"
+                    );
+                    drop(client);
+                    if self
+                        .adopt_current_playing_from_db_with_guard(
+                            state,
+                            "mark_playing singleton conflict",
+                        )
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                    return Err(err);
+                }
+                Err(err) => return Err(err),
+            };
+            if !item_has_required_server_metadata(&item) {
+                tracing::warn!(
+                    item_id = %item.id,
+                    video_id = %item.external_id,
+                    duration_ms = ?item.duration_ms,
+                    is_stream = item.is_stream,
+                    "failing media queue item without server-side YouTube duration"
+                );
+                let changed = MediaQueueItem::mark_failed(
+                    &client,
+                    item.id,
+                    Utc::now(),
+                    "missing or invalid server-side YouTube duration",
+                )
+                .await?;
+                drop(client);
+                if changed == 0 {
+                    tracing::warn!(
+                        item_id = %item.id,
+                        "failed invalid media queue item changed no rows; checking DB current"
+                    );
+                    if self
+                        .adopt_current_playing_from_db_with_guard(
+                            state,
+                            "invalid queued item failed stale current",
+                        )
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                }
+                continue;
+            }
+            drop(client);
+            tracing::info!(
+                item_id = %item.id,
+                video_id = %item.external_id,
+                duration_ms = ?item.duration_ms,
+                is_stream = item.is_stream,
+                "promoted queued media item to playing"
+            );
             state.current_item_id = Some(item.id);
             state.skip_votes.clear();
             state.mode = AudioMode::Youtube;
@@ -1118,11 +1306,137 @@ impl AudioService {
         Ok(())
     }
 
+    async fn adopt_current_playing_from_db_with_guard(
+        &self,
+        state: &mut QueueState,
+        reason: &'static str,
+    ) -> Result<bool> {
+        let client = self.db.get().await?;
+        let current = MediaQueueItem::current_playing(&client).await?;
+        let Some(current) = current else {
+            drop(client);
+            return Ok(false);
+        };
+        if !item_has_required_server_metadata(&current) {
+            tracing::warn!(
+                item_id = %current.id,
+                video_id = %current.external_id,
+                duration_ms = ?current.duration_ms,
+                is_stream = current.is_stream,
+                reason,
+                "failing current media queue item without server-side YouTube duration"
+            );
+            let _ = MediaQueueItem::mark_failed(
+                &client,
+                current.id,
+                Utc::now(),
+                "missing or invalid server-side YouTube duration",
+            )
+            .await?;
+            drop(client);
+            return Ok(false);
+        }
+        drop(client);
+        self.adopt_playing_item_with_guard(state, current, reason)
+            .await?;
+        Ok(true)
+    }
+
+    async fn adopt_playing_item_with_guard(
+        &self,
+        state: &mut QueueState,
+        item: MediaQueueItem,
+        reason: &'static str,
+    ) -> Result<()> {
+        let previous = state.current_item_id;
+        let same_current = previous == Some(item.id);
+        let needs_rebind =
+            !same_current || state.mode != AudioMode::Youtube || state.playback_cancel.is_none();
+        if !needs_rebind {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            reason,
+            previous_item_id = ?previous,
+            db_item_id = %item.id,
+            video_id = %item.external_id,
+            duration_ms = ?item.duration_ms,
+            is_stream = item.is_stream,
+            "reconciling audio queue state from database"
+        );
+        self.cancel_fallback(state);
+        if !same_current {
+            state.skip_votes.clear();
+        }
+        state.current_item_id = Some(item.id);
+        state.mode = AudioMode::Youtube;
+        self.schedule_playback_timer(state, &item);
+        self.publish_source_change(AudioMode::Youtube);
+        self.publish_load_video(&item);
+        self.publish_queue_update_with_guard(state).await
+    }
+
+    async fn reconcile_after_stale_current_with_guard(
+        &self,
+        state: &mut QueueState,
+        reason: &'static str,
+    ) -> Result<()> {
+        if self
+            .adopt_current_playing_from_db_with_guard(state, reason)
+            .await?
+        {
+            return Ok(());
+        }
+
+        let previous = state.current_item_id.take();
+        tracing::warn!(
+            reason,
+            previous_item_id = ?previous,
+            "clearing stale audio current; no playing row found in database"
+        );
+        state.skip_votes.clear();
+        self.cancel_playback(state);
+        self.advance_to_next_with_guard(state).await
+    }
+
+    async fn periodic_reconcile(&self) -> Result<()> {
+        let mut state = self.state.lock().await;
+        if self
+            .adopt_current_playing_from_db_with_guard(&mut state, "periodic reconcile")
+            .await?
+        {
+            return Ok(());
+        }
+
+        if state.current_item_id.is_some() {
+            return self
+                .reconcile_after_stale_current_with_guard(
+                    &mut state,
+                    "periodic reconcile found stale memory",
+                )
+                .await;
+        }
+
+        let client = self.db.get().await?;
+        let has_queued = MediaQueueItem::first_queued(&client).await?.is_some();
+        drop(client);
+        if has_queued {
+            self.advance_to_next_with_guard(&mut state).await?;
+        }
+        Ok(())
+    }
+
     async fn publish_queue_update_with_guard(&self, state: &mut QueueState) -> Result<()> {
         state.sequence = state.sequence.saturating_add(1);
         let mut snapshot = self.load_snapshot(state.mode).await?;
         snapshot.skip_progress = self.compute_skip_progress(state, snapshot.current.as_ref());
-        let _ = self.snapshot_tx.send(snapshot.clone());
+        // `send` fails without active receivers and would leave the watch at
+        // its constructor's empty value. Startup often publishes before any
+        // SSH session has opened the booth, so replace the retained value even
+        // when receiver_count == 0; later subscribers then see the real DB
+        // queue immediately after a restart.
+        self.snapshot_tx.send_replace(snapshot.clone());
         let _ = self.ws_tx.send(AudioWsMessage::QueueUpdate {
             current: snapshot.current,
             queue: snapshot.queue,
@@ -1143,7 +1457,7 @@ impl AudioService {
             return None;
         }
         let votes = state.skip_votes.len() as u32;
-        let threshold = skip_threshold(self.paired_clients.total_youtube_listeners());
+        let threshold = skip_threshold(self.youtube_source_count());
         Some(SkipProgress { votes, threshold })
     }
 
@@ -1216,6 +1530,12 @@ impl AudioService {
 
         let duration = playback_duration(item);
         if duration.is_zero() {
+            tracing::warn!(
+                item_id = %item.id,
+                duration_ms = item.duration_ms,
+                is_stream = item.is_stream,
+                "not scheduling zero-duration media queue timer"
+            );
             return;
         }
 
@@ -1225,6 +1545,15 @@ impl AudioService {
             .unwrap_or_default();
         let sleep_for = duration.saturating_sub(elapsed);
         let item_id = item.id;
+        tracing::info!(
+            %item_id,
+            duration_ms = duration.as_millis(),
+            elapsed_ms = elapsed.as_millis(),
+            sleep_for_ms = sleep_for.as_millis(),
+            db_duration_ms = item.duration_ms,
+            is_stream = item.is_stream,
+            "scheduling server media queue playback timer"
+        );
         let item_for_heartbeat = item.clone();
         let service = self.clone();
         let (tx, rx) = oneshot::channel();
@@ -1256,29 +1585,6 @@ impl AudioService {
                 _ = rx => {}
             }
         });
-    }
-
-    async fn record_browser_duration(&self, item_id: Uuid, duration_ms: Option<u64>) -> Result<()> {
-        let Some(duration_ms) = duration_ms.and_then(|value| i32::try_from(value).ok()) else {
-            return Ok(());
-        };
-        if duration_ms <= 0 {
-            return Ok(());
-        }
-
-        let client = self.db.get().await?;
-        if let Some(item) = MediaQueueItem::find_by_id(&client, item_id).await?
-            && item.duration_ms.is_none()
-            && item.status == MediaQueueItem::STATUS_PLAYING
-            && let Some(updated) =
-                MediaQueueItem::set_duration_if_missing(&client, item_id, duration_ms).await?
-        {
-            let mut state = self.state.lock().await;
-            if state.current_item_id == Some(item_id) {
-                self.schedule_playback_timer(&mut state, &updated);
-            }
-        }
-        Ok(())
     }
 
     fn schedule_fallback(&self, state: &mut QueueState) {
@@ -1365,23 +1671,54 @@ fn playback_duration(item: &MediaQueueItem) -> Duration {
         .unwrap_or(STREAM_CAP)
 }
 
+fn item_has_required_server_metadata(item: &MediaQueueItem) -> bool {
+    item.is_stream || playback_known_duration(item).is_some()
+}
+
 fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
     item.duration_ms
+        .filter(|duration_ms| *duration_ms >= MIN_VIDEO_DURATION_MS)
         .and_then(|duration_ms| u64::try_from(duration_ms).ok())
         .map(Duration::from_millis)
         .filter(|duration| !duration.is_zero())
 }
 
-fn skip_threshold(paired_total: usize) -> u32 {
-    let value = paired_total.saturating_mul(SKIP_VOTE_PERCENT).div_ceil(100) as u32;
+fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize) {
+    let active_users = active_users.lock_recover();
+    let youtube = active_users
+        .values()
+        .filter(|user| user.audio_source == AudioSource::Youtube)
+        .count();
+    let icecast = active_users.len().saturating_sub(youtube);
+    (youtube, icecast)
+}
+
+fn skip_threshold(youtube_source_total: usize) -> u32 {
+    let value = youtube_source_total
+        .saturating_mul(SKIP_VOTE_PERCENT)
+        .div_ceil(100) as u32;
     value.max(SKIP_VOTE_MIN)
+}
+
+fn is_single_playing_unique_violation(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .and_then(|pg| pg.as_db_error())
+            .is_some_and(|db| {
+                db.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION
+                    && db.constraint() == Some("idx_media_queue_single_playing")
+            })
+            || cause.to_string().contains("idx_media_queue_single_playing")
+    })
 }
 
 fn booth_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
         "Banned from submitting audio".to_string()
-    } else if text.contains("invalid url") || text.contains("youtube") && text.contains("not found")
+    } else if text.contains("invalid url")
+        || (text.contains("youtube") && text.contains("not found"))
     {
         "Invalid YouTube URL".to_string()
     } else if text.contains("rate limit") || text.contains("submission rate limit") {
@@ -1390,7 +1727,10 @@ fn booth_submit_error_message(err: &anyhow::Error) -> String {
         "Video is not public".to_string()
     } else if text.contains("not embeddable") {
         "Video is not embeddable".to_string()
-    } else if text.contains("api key") || text.contains("youtube data api") {
+    } else if text.contains("api key")
+        || text.contains("api_key")
+        || text.contains("youtube data api")
+    {
         "YouTube validation failed - try again".to_string()
     } else {
         "Failed to submit".to_string()
@@ -1403,8 +1743,8 @@ fn booth_vote_error_message(err: &anyhow::Error) -> String {
         "Banned from voting".to_string()
     } else if text.contains("voting closed") {
         "Voting closed - track started".to_string()
-    } else if text.contains("pair a client") {
-        "Pair a client to skip-vote".to_string()
+    } else if text.contains("switch to youtube") {
+        "Switch to YouTube to skip-vote".to_string()
     } else if text.contains("nothing is playing") {
         "Nothing is playing".to_string()
     } else if text.contains("queue item not found")
@@ -1445,8 +1785,24 @@ fn trusted_submit_error_message(err: &anyhow::Error) -> String {
     } else if text.contains("invalid url")
         || text.contains("unsupported youtube url")
         || text.contains("invalid youtube video id")
+        || (text.contains("youtube") && text.contains("not found"))
     {
         "Invalid YouTube URL".to_string()
+    } else if text.contains("not public") {
+        "Video is not public".to_string()
+    } else if text.contains("not embeddable") {
+        "Video is not embeddable".to_string()
+    } else if text.contains("upcoming stream") {
+        "Upcoming streams are not supported".to_string()
+    } else if text.contains("duration is unavailable") {
+        "Video duration is unavailable".to_string()
+    } else if text.contains("at least 30 seconds") {
+        "Video must be at least 30 seconds".to_string()
+    } else if text.contains("api key")
+        || text.contains("api_key")
+        || text.contains("youtube data api")
+    {
+        "YouTube validation failed - check server API key".to_string()
     } else if text.contains("rate limit") {
         "Slow down - too many submissions".to_string()
     } else {
@@ -1500,7 +1856,7 @@ mod tests {
 
     #[test]
     fn skip_threshold_floors_at_two_and_uses_thirty_percent_ceil() {
-        // Small rooms collapse to the floor: at least two paired listeners
+        // Small rooms collapse to the floor: at least two YouTube-pref users
         // must agree before a skip fires.
         assert_eq!(skip_threshold(0), 2);
         assert_eq!(skip_threshold(1), 2);

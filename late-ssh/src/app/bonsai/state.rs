@@ -18,7 +18,6 @@ const GROWTH_TICK_INTERVAL: usize = 15 * 60 * 10; // 15fps * 600s = 9000 ticks
 pub struct BonsaiState {
     pub user_id: Uuid,
     pub svc: BonsaiService,
-    pub is_admin: bool,
 
     // Cached tree state (refreshed on water/respawn)
     pub growth_points: i32,
@@ -36,7 +35,7 @@ pub struct BonsaiState {
 }
 
 impl BonsaiState {
-    pub fn new(user_id: Uuid, svc: BonsaiService, tree: Tree, is_admin: bool) -> Self {
+    pub fn new(user_id: Uuid, svc: BonsaiService, tree: Tree) -> Self {
         let today = chrono::Utc::now().date_naive();
         let created_date = tree.created.date_naive();
         let age_days = (today - created_date).num_days().max(0);
@@ -44,7 +43,6 @@ impl BonsaiState {
         Self {
             user_id,
             svc,
-            is_admin,
             growth_points: tree.growth_points,
             last_watered: tree.last_watered,
             seed: tree.seed,
@@ -78,14 +76,14 @@ impl BonsaiState {
         }
     }
 
-    /// Water the tree. Returns points granted (0 if already watered today or dead).
-    pub fn water(&mut self) -> i32 {
+    /// Water the tree. Returns growth points granted, or None if already watered today or dead.
+    pub fn water(&mut self) -> Option<i32> {
         if !self.is_alive {
-            return 0;
+            return None;
         }
         let today = BonsaiService::today();
-        if !self.is_admin && self.last_watered == Some(today) {
-            return 0; // Already watered
+        if self.last_watered == Some(today) {
+            return None; // Already watered
         }
 
         let bonus = if let Some(last) = self.last_watered {
@@ -97,8 +95,8 @@ impl BonsaiState {
         self.last_watered = Some(today);
         self.watered_this_session = true;
 
-        self.svc.water_task(self.user_id, self.is_admin);
-        gained
+        self.svc.water_task(self.user_id);
+        Some(gained)
     }
 
     /// Respawn a dead tree
@@ -133,12 +131,7 @@ impl BonsaiState {
 
     /// Can water right now?
     pub fn can_water(&self) -> bool {
-        can_water_on(
-            self.is_alive,
-            self.last_watered,
-            BonsaiService::today(),
-            self.is_admin,
-        )
+        can_water_on(self.is_alive, self.last_watered, BonsaiService::today())
     }
 
     /// Cut/prune the tree — drops one growth stage, changes visual variant.
@@ -233,13 +226,8 @@ fn is_wilting_state(is_alive: bool, age_days: i64, days_since_watered: Option<i6
     is_alive && days_since_watered.map_or(age_days >= 2, |days| days >= 2)
 }
 
-fn can_water_on(
-    is_alive: bool,
-    last_watered: Option<NaiveDate>,
-    today: NaiveDate,
-    is_admin: bool,
-) -> bool {
-    is_alive && (is_admin || last_watered != Some(today))
+fn can_water_on(is_alive: bool, last_watered: Option<NaiveDate>, today: NaiveDate) -> bool {
+    is_alive && last_watered != Some(today)
 }
 
 fn share_label(is_alive: bool, age_days: i64) -> String {
@@ -360,22 +348,16 @@ mod tests {
         let today = BonsaiService::today();
 
         assert_eq!(days_since_watered_on(None, today), None);
-        assert!(can_water_on(true, None, today, false));
+        assert!(can_water_on(true, None, today));
 
         assert_eq!(days_since_watered_on(Some(today), today), Some(0));
-        assert!(!can_water_on(true, Some(today), today, false));
-        assert!(can_water_on(true, Some(today), today, true));
+        assert!(!can_water_on(true, Some(today), today));
 
         assert_eq!(
             days_since_watered_on(Some(today - Duration::days(1)), today),
             Some(1)
         );
-        assert!(can_water_on(
-            true,
-            Some(today - Duration::days(1)),
-            today,
-            false
-        ));
+        assert!(can_water_on(true, Some(today - Duration::days(1)), today));
     }
 
     #[test]

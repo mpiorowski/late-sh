@@ -1687,6 +1687,7 @@ async fn mod_rename_user_command_updates_username_active_user_and_audits() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: Vec::new(),
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -1797,6 +1798,7 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: Some(peer_ip),
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
@@ -1880,6 +1882,7 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: Some(peer_ip),
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
@@ -2000,6 +2003,7 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
@@ -2403,6 +2407,7 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
@@ -2473,6 +2478,7 @@ async fn grant_mod_command_updates_active_session_permissions() {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),

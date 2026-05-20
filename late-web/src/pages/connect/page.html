@@ -30,6 +30,7 @@
             audioRetries: 0,
             userOverrideMode: 'icecast',
             serverAudioMode: 'icecast',
+            webIcecastEnabled: true,
             unmuteOnNextPlay: false,
 
             init() {
@@ -38,13 +39,13 @@
                 this.$refs.audio.muted = this.muted;
 
                 this.$refs.audio.addEventListener('error', (e) => {
-                    if (this.status === 'disconnected') return;
+                    if (this.status === 'disconnected' || !this.webIcecastEnabled) return;
                     console.error('Audio stream error', e);
                     this.handleAudioError();
                 });
 
                 this.$refs.audio.addEventListener('ended', () => {
-                    if (this.status === 'disconnected') return;
+                    if (this.status === 'disconnected' || !this.webIcecastEnabled) return;
                     console.warn('Audio stream ended unexpectedly');
                     this.handleAudioError();
                 });
@@ -66,6 +67,9 @@
             },
 
             handleAudioError() {
+                if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) {
+                    return;
+                }
                 this.audioRetries++;
                 if (this.audioRetries > 10) {
                     console.error('Audio stream failed 10 times consecutively, giving up.');
@@ -77,7 +81,7 @@
                 console.log(`Reconnecting audio stream... (attempt ${this.audioRetries})`);
 
                 setTimeout(() => {
-                    if (this.status === 'disconnected' || this.audioMode !== 'icecast') {
+                    if (this.status === 'disconnected' || this.audioMode !== 'icecast' || !this.webIcecastEnabled) {
                         return;
                     }
                     const audio = this.$refs.audio;
@@ -85,11 +89,11 @@
                     audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
                     audio.load();
                     audio.play().then(() => {
-                        if (this.audioMode !== 'icecast') return;
+                        if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) return;
                         this.audioRetries = 0;
                         this.status = 'playing';
                     }).catch(e => {
-                        if (this.audioMode !== 'icecast') return;
+                        if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) return;
                         console.error("Playback restart failed:", e);
                         this.handleAudioError();
                     });
@@ -148,7 +152,7 @@
                         case 'queue_update':
                             break;
                         case 'set_playback_source':
-                            this.applyUserPlaybackSource(payload.source);
+                            this.applyUserPlaybackSource(payload.source, payload.web_icecast_enabled);
                             break;
                     }
                 };
@@ -198,15 +202,21 @@
                     return;
                 }
 
+                if (!this.webIcecastEnabled) {
+                    this.stopIcecastAudio();
+                    this.status = 'ready';
+                    return;
+                }
+
                 const audio = this.$refs.audio;
                 const separator = this.audioUrl.includes('?') ? '&' : '?';
                 audio.src = `${this.audioUrl}${separator}t=${Date.now()}`;
                 audio.play().then(() => {
-                    if (this.audioMode !== 'icecast') return;
+                    if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) return;
                     this.audioRetries = 0;
                     this.status = 'playing';
                 }).catch(e => {
-                    if (this.audioMode !== 'icecast') return;
+                    if (this.audioMode !== 'icecast' || !this.webIcecastEnabled) return;
                     console.error("Playback failed:", e);
                     this.handleAudioError();
                 });
@@ -228,6 +238,14 @@
                 }
 
                 this.status = 'disconnected';
+            },
+
+            stopIcecastAudio() {
+                const audio = this.$refs.audio;
+                if (!audio) return;
+                audio.pause();
+                audio.removeAttribute('src');
+                audio.load();
             },
 
             toggleLocalMute() {
@@ -274,13 +292,22 @@
             // Apply a server-pushed user preference. The TUI's v+x keybind
             // flips the value in the DB and broadcasts `set_playback_source`;
             // we just apply whatever the server tells us, no local toggling.
-            applyUserPlaybackSource(source) {
+            applyUserPlaybackSource(source, webIcecastEnabled = null) {
                 if (source !== 'icecast' && source !== 'youtube') {
                     return;
                 }
+                const previousWebIcecastEnabled = this.webIcecastEnabled;
+                if (typeof webIcecastEnabled === 'boolean') {
+                    this.webIcecastEnabled = webIcecastEnabled;
+                }
                 this.userOverrideMode = source;
-                if (this.audioMode !== source) {
+
+                const webIcecastPolicyChanged = previousWebIcecastEnabled !== this.webIcecastEnabled;
+                if (this.audioMode !== source || (source === 'icecast' && webIcecastPolicyChanged)) {
                     this.applySourceMode(source);
+                } else if (source === 'icecast' && !this.webIcecastEnabled) {
+                    this.stopIcecastAudio();
+                    this.status = 'ready';
                 }
             },
 
@@ -311,8 +338,7 @@
                         // (queue transitions) must not reset status — the iframe
                         // is already showing/playing and we want loadYoutubeVideo
                         // to take it from there.
-                        const audio = this.$refs.audio;
-                        audio.pause();
+                        this.stopIcecastAudio();
                         this.status = this.audioEnabled ? 'buffering' : 'ready';
                     }
                     this.ensureYoutubePlayer();
@@ -332,7 +358,12 @@
                     if (this.ytPlayer && this.ytPlayer.pauseVideo) {
                         this.ytPlayer.pauseVideo();
                     }
-                    if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
+                    this.autoplayBlocked = false;
+                    this.unmuteOnNextPlay = false;
+                    if (!this.webIcecastEnabled) {
+                        this.stopIcecastAudio();
+                        this.status = 'ready';
+                    } else if (this.audioEnabled || this.status === 'playing' || this.status === 'buffering') {
                         this.startPlayback();
                     } else {
                         this.status = 'ready';
@@ -429,6 +460,10 @@
             },
 
             playYoutubeItem(item) {
+                if (this.userOverrideMode === 'icecast') {
+                    this.pendingYoutubeItem = item;
+                    return;
+                }
                 if (!this.ytPlayer || !this.ytReady || !this.ytPlayer.loadVideoById) {
                     return;
                 }
@@ -454,6 +489,9 @@
 
             detectAutoplayBlocked(item) {
                 const flagBlocked = () => {
+                    if (this.userOverrideMode === 'icecast') {
+                        return;
+                    }
                     if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
                         return;
                     }
@@ -473,6 +511,9 @@
                 };
 
                 const tryMutedRecovery = () => {
+                    if (this.userOverrideMode === 'icecast') {
+                        return;
+                    }
                     if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
                         return;
                     }
@@ -490,6 +531,9 @@
                     // If even muted autoplay doesn't get us to PLAYING within
                     // 1.5s, fall back to the [ tap to play ] flow.
                     window.setTimeout(() => {
+                        if (this.userOverrideMode === 'icecast') {
+                            return;
+                        }
                         if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
                             return;
                         }
@@ -507,6 +551,9 @@
                 // attempt the muted-autoplay recovery before resorting to the
                 // tap-to-play button.
                 window.setTimeout(() => {
+                    if (this.userOverrideMode === 'icecast') {
+                        return;
+                    }
                     if (!this.ytPlayer || !this.ytPlayer.getPlayerState || !window.YT) {
                         return;
                     }
@@ -533,6 +580,17 @@
                 }
                 if (!this.youtubePlayerMatchesCurrent()) {
                     this.reloadCurrentYoutubeItem();
+                    return;
+                }
+                if (this.userOverrideMode === 'icecast') {
+                    if ((state === window.YT.PlayerState.PLAYING || state === window.YT.PlayerState.BUFFERING)
+                        && this.ytPlayer && this.ytPlayer.pauseVideo
+                    ) {
+                        this.ytPlayer.pauseVideo();
+                    }
+                    if (!this.webIcecastEnabled) {
+                        this.status = 'ready';
+                    }
                     return;
                 }
                 if (state === window.YT.PlayerState.PLAYING) {
@@ -574,6 +632,9 @@
             },
 
             reloadCurrentYoutubeItem() {
+                if (this.userOverrideMode === 'icecast') {
+                    return;
+                }
                 if (!this.currentYoutubeItem || !this.ytPlayer || !this.ytPlayer.loadVideoById) {
                     return;
                 }
@@ -591,6 +652,9 @@
 
             verifyYoutubeLoad(item) {
                 window.setTimeout(() => {
+                    if (this.userOverrideMode === 'icecast') {
+                        return;
+                    }
                     if (!this.isSameYoutubeItem(this.currentYoutubeItem, item)) {
                         return;
                     }
@@ -683,7 +747,7 @@
 
     <div class="space-y-3" x-cloak>
         <button @click="startPlayback"
-            x-show="status !== 'playing' && (status === 'ready' || status === 'disconnected' || status === 'buffering' || autoplayBlocked)"
+            x-show="!(audioMode === 'icecast' && !webIcecastEnabled) && status !== 'playing' && (status === 'ready' || status === 'disconnected' || status === 'buffering' || autoplayBlocked)"
             :disabled="status === 'buffering' && !autoplayBlocked"
             class="w-full text-left border px-4 py-3 text-sm transition-colors duration-200" :class="(status === 'buffering' && !autoplayBlocked)
                     ? 'border-gray-800 text-gray-600 cursor-wait'
