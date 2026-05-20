@@ -849,6 +849,8 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
+            self.cat_state.cancel_play();
+            self.show_cat_modal = false;
         }
     }
 

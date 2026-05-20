@@ -30,10 +30,10 @@ impl CatMood {
         match self {
             CatMood::Happy => "^.^",
             CatMood::Content => "o.o",
-            CatMood::Bored => "-.o",
-            CatMood::Hungry => ">.>",
+            CatMood::Bored => "-.-",
+            CatMood::Hungry => "o.o",
             CatMood::Thirsty => "o_o",
-            CatMood::Sad => "T.T",
+            CatMood::Sad => "T_T",
         }
     }
 }

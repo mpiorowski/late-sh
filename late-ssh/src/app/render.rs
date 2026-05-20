@@ -835,7 +835,6 @@ impl App {
                     },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
-                    cat: ctx.cat,
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,

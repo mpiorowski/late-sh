@@ -9,16 +9,12 @@ use ratatui::{
 use super::state::{CatMood, CatNeedStatus, CatNeeds, CatPlayState, CatState, PLAY_RUN_NEEDED};
 use crate::app::common::theme;
 
-const MODAL_W: u16 = 72;
-const MODAL_H: u16 = 26;
+const MODAL_W: u16 = 64;
+const MODAL_H: u16 = 16;
 
 pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
     let area = centered_rect(MODAL_W, MODAL_H, frame.area());
     frame.render_widget(Clear, area);
-
-    let mood = state.mood();
-    let needs = state.needs();
-    let mood_color = mood_color(mood);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -29,65 +25,74 @@ pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ));
-
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let rows = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(2),
-        Constraint::Length(5),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(inner);
-
-    if let Some(play) = state.play_session() {
-        draw_play_scene(frame, rows[0], state, play, mood, mood_color);
-        draw_play_status(frame, rows[1], play);
-        draw_play_panel(frame, rows[2], play);
-        draw_footer(frame, rows[4], true);
-    } else {
-        draw_scene(frame, rows[0], state, needs, mood, mood_color);
-        draw_status(frame, rows[1], state, needs, mood, mood_color);
-        draw_needs(frame, rows[2], needs);
-        draw_footer(frame, rows[4], false);
+    match state.play_session() {
+        Some(play) => draw_play(frame, inner, state, play),
+        None => draw_home(frame, inner, state),
     }
 }
 
-fn draw_scene(
-    frame: &mut Frame,
-    area: Rect,
-    state: &CatState,
-    needs: CatNeeds,
-    mood: CatMood,
-    mood_color: Color,
-) {
-    if area.height < 7 || area.width < 20 {
+// --- home -----------------------------------------------------------------
+
+fn draw_home(frame: &mut Frame, inner: Rect, state: &CatState) {
+    let mood = state.mood();
+    let needs = state.needs();
+    let rows = Layout::vertical([
+        Constraint::Length(1), // breathing room
+        Constraint::Length(6), // cat scene + floor
+        Constraint::Length(4), // care stations
+        Constraint::Length(1), // spacer
+        Constraint::Length(1), // mood line
+        Constraint::Length(1), // footer
+    ])
+    .split(inner);
+
+    draw_scene(frame, rows[1], state, needs, mood);
+    draw_stations(frame, rows[2], needs);
+    draw_mood_line(frame, rows[4], state, mood);
+    draw_footer(frame, rows[5], false);
+}
+
+/// The cat ambles on a floor, drifting toward whichever bowl still needs care.
+fn draw_scene(frame: &mut Frame, area: Rect, state: &CatState, needs: CatNeeds, mood: CatMood) {
+    let w = area.width as usize;
+    let h = area.height as usize;
+    if w < 12 || h < 4 {
         return;
     }
 
     let tick = state.animation_ticks();
     let cat = cat_art(mood, tick);
-    let cat_width = cat.iter().map(|line| line.len()).max().unwrap_or(0);
-    let cat_x = cat_x(mood, tick, area.width as usize, cat_width);
-    let cat_y = cat_y(mood, tick, area.height as usize, cat.len());
+    let cat_w = cat
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
 
-    let mut lines = Vec::new();
-    for y in 0..area.height as usize {
-        if y >= cat_y && y < cat_y + cat.len() {
-            lines.push(indented(cat[y - cat_y].clone(), cat_x, mood_color));
-        } else if y + 4 == area.height as usize {
-            lines.push(prop_line_one(needs));
-        } else if y + 3 == area.height as usize {
-            lines.push(prop_line_two(needs));
-        } else if y + 2 == area.height as usize {
-            lines.push(prop_line_three(needs));
-        } else if y + 1 == area.height as usize {
+    let floor_row = h - 1;
+    let jump = cat_jump(mood, tick);
+    let cat_bottom = floor_row.saturating_sub(1 + jump);
+    let cat_top = cat_bottom.saturating_sub(cat.len().saturating_sub(1));
+    let cat_left = cat_left(needs, tick, w, cat_w);
+    let mood_col = mood_color(mood);
+
+    let mut lines = Vec::with_capacity(h);
+    for y in 0..h {
+        if y == floor_row {
             lines.push(Line::from(Span::styled(
-                "_".repeat(area.width as usize),
+                "_".repeat(w),
                 Style::default().fg(theme::BORDER_DIM()),
             )));
+        } else if y >= cat_top && y <= cat_bottom {
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(cat_left)),
+                Span::styled(
+                    cat[y - cat_top].clone(),
+                    Style::default().fg(mood_col).add_modifier(Modifier::BOLD),
+                ),
+            ]));
         } else {
             lines.push(Line::from(""));
         }
@@ -96,184 +101,194 @@ fn draw_scene(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_play_scene(
+fn draw_stations(frame: &mut Frame, area: Rect, needs: CatNeeds) {
+    let cols = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+    ])
+    .split(area);
+
+    draw_station(frame, cols[0], "food", needs.food, StationArt::Kibble);
+    draw_station(frame, cols[1], "water", needs.water, StationArt::Water);
+    draw_station(frame, cols[2], "play", needs.play, StationArt::Yarn);
+}
+
+#[derive(Clone, Copy)]
+enum StationArt {
+    Kibble,
+    Water,
+    Yarn,
+}
+
+fn draw_station(
     frame: &mut Frame,
     area: Rect,
-    state: &CatState,
-    play: &CatPlayState,
-    mood: CatMood,
-    mood_color: Color,
+    label: &'static str,
+    status: CatNeedStatus,
+    kind: StationArt,
 ) {
-    if area.height < 7 || area.width < 20 {
+    if area.width < 9 || area.height < 4 {
+        return;
+    }
+    let color = status_color(status);
+    let [top, base] = station_art(kind, status);
+
+    let lines = vec![
+        Line::from(Span::styled(top, Style::default().fg(color))).centered(),
+        Line::from(Span::styled(base, Style::default().fg(color))).centered(),
+        Line::from(Span::styled(label, Style::default().fg(theme::TEXT_DIM()))).centered(),
+        Line::from(Span::styled(
+            status.label(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ))
+        .centered(),
+    ];
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Two-line glyph per care station. A full bowl / wound yarn means done.
+fn station_art(kind: StationArt, status: CatNeedStatus) -> [String; 2] {
+    match kind {
+        StationArt::Kibble => bowl('*', status),
+        StationArt::Water => bowl('~', status),
+        StationArt::Yarn => ["  .---.  ".to_string(), " ( (@) ) ".to_string()],
+    }
+}
+
+fn bowl(fill: char, status: CatNeedStatus) -> [String; 2] {
+    let inside = if status == CatNeedStatus::Done {
+        fill.to_string().repeat(7)
+    } else {
+        " ".repeat(7)
+    };
+    [format!("({inside})"), " \\_____/ ".to_string()]
+}
+
+fn draw_mood_line(frame: &mut Frame, area: Rect, state: &CatState, mood: CatMood) {
+    let line = if let Some(feedback) = state.action_feedback {
+        Line::from(Span::styled(
+            feedback,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        Line::from(vec![
+            Span::styled(
+                mood.label(),
+                Style::default()
+                    .fg(mood_color(mood))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            dot(),
+            Span::styled(mood_message(mood), Style::default().fg(theme::TEXT_DIM())),
+        ])
+    };
+    frame.render_widget(Paragraph::new(line.centered()), area);
+}
+
+// --- play -----------------------------------------------------------------
+
+fn draw_play(frame: &mut Frame, inner: Rect, state: &CatState, play: &CatPlayState) {
+    let rows = Layout::vertical([
+        Constraint::Length(1), // breathing room
+        Constraint::Fill(1),   // play field
+        Constraint::Length(1), // run meter
+        Constraint::Length(1), // message
+        Constraint::Length(1), // footer
+    ])
+    .split(inner);
+
+    draw_play_field(frame, rows[1], state, play);
+    draw_play_meter(frame, rows[2], play);
+    draw_play_message(frame, rows[3], play);
+    draw_footer(frame, rows[4], true);
+}
+
+fn draw_play_field(frame: &mut Frame, area: Rect, state: &CatState, play: &CatPlayState) {
+    let w = area.width as usize;
+    let h = area.height as usize;
+    if w < 12 || h < 5 {
         return;
     }
 
-    let width = area.width as usize;
-    let height = area.height as usize;
-    let mut grid = vec![vec![' '; width]; height];
-
-    for x in 0..width {
-        grid[height - 1][x] = '_';
+    let mut grid = vec![vec![' '; w]; h];
+    for cell in grid[h - 1].iter_mut() {
+        *cell = '_';
     }
 
-    let toy_col = field_col(play.toy_x, width);
-    let toy_row = field_row(play.toy_y, height);
-    put_char(&mut grid, toy_row, toy_col, '*');
+    let toy_col = field_col(play.toy_x, w);
+    let toy_row = field_row(play.toy_y, h);
+    put_char(
+        &mut grid,
+        toy_row,
+        toy_col,
+        toy_glyph(state.animation_ticks()),
+    );
 
+    let mood = state.mood();
     let cat = cat_art(mood, state.animation_ticks());
-    let cat_width = cat.iter().map(|line| line.len()).max().unwrap_or(0);
-    let cat_col = field_col(play.cat_x, width).saturating_sub(cat_width / 2);
-    let cat_row = field_row(play.cat_y, height)
-        .min(height.saturating_sub(cat.len() + 1))
-        .max(1);
-    for (row_offset, line) in cat.iter().enumerate() {
-        put_text(&mut grid, cat_row + row_offset, cat_col, line);
+    let cat_w = cat
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let cat_col = field_col(play.cat_x, w).saturating_sub(cat_w / 2);
+    let cat_row = field_row(play.cat_y, h).min(h.saturating_sub(cat.len() + 1));
+    for (offset, line) in cat.iter().enumerate() {
+        put_text(&mut grid, cat_row + offset, cat_col, line);
     }
 
+    let mood_col = mood_color(mood);
     let lines = grid
         .into_iter()
-        .enumerate()
-        .map(|(row, chars)| styled_play_line(row, &chars, mood_color))
+        .map(|chars| styled_play_line(&chars, mood_col))
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_play_status(frame: &mut Frame, area: Rect, play: &CatPlayState) {
-    let summary = Line::from(vec![
-        Span::styled("run: ", Style::default().fg(theme::TEXT_FAINT())),
+fn draw_play_meter(frame: &mut Frame, area: Rect, play: &CatPlayState) {
+    let width = 26usize;
+    let filled =
+        (play.run_energy.min(PLAY_RUN_NEEDED) as usize * width) / PLAY_RUN_NEEDED.max(1) as usize;
+
+    let line = Line::from(vec![
+        Span::styled("run  ", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled("[", Style::default().fg(theme::BORDER_DIM())),
+        Span::styled("#".repeat(filled), Style::default().fg(theme::AMBER_GLOW())),
         Span::styled(
-            format!("{}/{}", play.run_energy, PLAY_RUN_NEEDED),
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
+            "-".repeat(width - filled),
+            Style::default().fg(theme::BORDER_DIM()),
         ),
-        dot(),
+        Span::styled("]", Style::default().fg(theme::BORDER_DIM())),
         Span::styled(
-            format!("pounces {}", play.pounces),
-            Style::default().fg(theme::TEXT_DIM()),
+            format!("   pounces {}", play.pounces),
+            Style::default().fg(theme::TEXT_FAINT()),
         ),
     ]);
-    frame.render_widget(Paragraph::new(summary), area);
+    frame.render_widget(Paragraph::new(line.centered()), area);
+}
 
-    let lower = Rect {
-        y: area.y + 1,
-        height: 1,
-        ..area
-    };
+fn draw_play_message(frame: &mut Frame, area: Rect, play: &CatPlayState) {
     frame.render_widget(
         Paragraph::new(
             Line::from(Span::styled(
-                play.message.to_string(),
+                play.message,
                 Style::default()
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),
             ))
             .centered(),
         ),
-        lower,
-    );
-}
-
-fn draw_play_panel(frame: &mut Frame, area: Rect, play: &CatPlayState) {
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("toy x", Style::default().fg(theme::TEXT_FAINT())),
-            Span::raw("  "),
-            meter(play.toy_x),
-        ]),
-        Line::from(vec![
-            Span::styled("toy y", Style::default().fg(theme::TEXT_FAINT())),
-            Span::raw("  "),
-            meter(play.toy_y),
-        ]),
-        Line::from(vec![
-            Span::styled("run", Style::default().fg(theme::TEXT_FAINT())),
-            Span::raw("  "),
-            progress_meter(play.run_energy, PLAY_RUN_NEEDED),
-        ]),
-        Line::from(vec![
-            Span::styled("goal", Style::default().fg(theme::TEXT_FAINT())),
-            Span::raw("  "),
-            Span::styled(
-                "keep away until full",
-                Style::default()
-                    .fg(theme::TEXT_DIM())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]),
-        Line::from(""),
-    ];
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn draw_status(
-    frame: &mut Frame,
-    area: Rect,
-    state: &CatState,
-    needs: CatNeeds,
-    mood: CatMood,
-    mood_color: Color,
-) {
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("mood: ", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(
-                mood.label(),
-                Style::default().fg(mood_color).add_modifier(Modifier::BOLD),
-            ),
-            dot(),
-            Span::styled(
-                mood_message(mood).to_string(),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ])),
         area,
     );
-
-    let feedback = state
-        .action_feedback
-        .map(str::to_string)
-        .unwrap_or_else(|| next_action_message(needs).to_string());
-    let line = Line::from(Span::styled(
-        feedback,
-        Style::default()
-            .fg(if state.action_feedback.is_some() {
-                theme::AMBER()
-            } else {
-                theme::TEXT_FAINT()
-            })
-            .add_modifier(if state.action_feedback.is_some() {
-                Modifier::BOLD
-            } else {
-                Modifier::ITALIC
-            }),
-    ))
-    .centered();
-    let lower = Rect {
-        y: area.y + 1,
-        height: 1,
-        ..area
-    };
-    frame.render_widget(Paragraph::new(line), lower);
 }
 
-fn draw_needs(frame: &mut Frame, area: Rect, needs: CatNeeds) {
-    let lines = vec![
-        need_line("food", needs.food, "f feed", "once today"),
-        need_line("water", needs.water, "w water", "once today"),
-        need_line("play", needs.play, "p play", "chase game"),
-    ];
-
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn draw_footer(frame: &mut Frame, area: Rect, play_active: bool) {
-    let line = if play_active {
+fn draw_footer(frame: &mut Frame, area: Rect, playing: bool) {
+    let line = if playing {
         Line::from(vec![
             key("hjkl"),
-            text(" move"),
-            gap(),
-            key("wasd"),
             text(" move"),
             gap(),
             key("space"),
@@ -299,40 +314,83 @@ fn draw_footer(frame: &mut Frame, area: Rect, play_active: bool) {
             key("q"),
             text(" close"),
         ])
-    }
-    .centered();
-    frame.render_widget(Paragraph::new(line), area);
+    };
+    frame.render_widget(Paragraph::new(line.centered()), area);
 }
 
+// --- cat art --------------------------------------------------------------
+
+/// The classic three-line cat. Eyes and mouth shift with mood; the tail
+/// flicks and the cat blinks on a slow cycle.
 fn cat_art(mood: CatMood, tick: usize) -> Vec<String> {
-    let tail = if matches!(mood, CatMood::Happy | CatMood::Content) && tick % 24 < 12 {
-        "~"
+    let blink = tick % 68 < 3 && !matches!(mood, CatMood::Bored | CatMood::Sad);
+    let eyes = if blink { "-.-" } else { mood.eyes() };
+    let mouth = mood_mouth(mood);
+
+    let (top_tail, body_tail) = if tick % 26 >= 21 {
+        (')', '/') // flicked up
     } else {
-        "-"
-    };
-    let paws = if mood == CatMood::Happy && tick % 16 < 8 {
-        "  / \\  "
-    } else if mood == CatMood::Sad {
-        "  /_\\  "
-    } else {
-        "  / \\  "
-    };
-    let body = match mood {
-        CatMood::Happy => " /| |\\ ",
-        CatMood::Content => " /|_|\\ ",
-        CatMood::Bored => " /| |\\ ",
-        CatMood::Hungry => " /|_|\\ ",
-        CatMood::Thirsty => " /|_|\\ ",
-        CatMood::Sad => " /|_|\\ ",
+        (' ', '~') // resting
     };
 
     vec![
-        " /\\_/\\ ".to_string(),
-        format!("( {} ){tail}", mood.eyes()),
-        body.to_string(),
-        paws.to_string(),
+        format!(" /\\_/\\ {top_tail}"),
+        format!("( {eyes} ){body_tail}"),
+        format!(" > {mouth} <  "),
     ]
 }
+
+fn mood_mouth(mood: CatMood) -> char {
+    match mood {
+        CatMood::Happy => 'w',
+        CatMood::Content => '^',
+        CatMood::Bored => '.',
+        CatMood::Hungry => 'o',
+        CatMood::Thirsty => 'u',
+        CatMood::Sad => '_',
+    }
+}
+
+/// Left column for the cat: parked by the bowl that needs care, or strolling
+/// when every need is met.
+fn cat_left(needs: CatNeeds, tick: usize, width: usize, cat_w: usize) -> usize {
+    let travel = width.saturating_sub(cat_w);
+    if travel == 0 {
+        return 0;
+    }
+
+    let station = |idx: usize| (width * (2 * idx + 1) / 6).saturating_sub(cat_w / 2);
+    let parked = if needs.food.is_missing() {
+        station(0)
+    } else if needs.water.is_missing() {
+        station(1)
+    } else if needs.play.is_missing() {
+        station(2)
+    } else {
+        return (1 + ping_pong(tick / 4, travel.saturating_sub(2))).min(travel);
+    };
+
+    let sway = usize::from((tick / 10) % 2 == 0);
+    (parked + sway).min(travel)
+}
+
+fn cat_jump(mood: CatMood, tick: usize) -> usize {
+    match mood {
+        CatMood::Happy => match tick % 22 {
+            0..=2 => 2,
+            3..=5 => 1,
+            _ => 0,
+        },
+        CatMood::Content => usize::from(tick % 54 < 3),
+        _ => 0,
+    }
+}
+
+fn toy_glyph(tick: usize) -> char {
+    if tick % 8 < 4 { '*' } else { '+' }
+}
+
+// --- layout helpers -------------------------------------------------------
 
 fn centered_rect(w: u16, h: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([Constraint::Length(h.min(area.height))])
@@ -344,57 +402,10 @@ fn centered_rect(w: u16, h: u16, area: Rect) -> Rect {
     horizontal[0]
 }
 
-fn cat_x(mood: CatMood, tick: usize, area_width: usize, cat_width: usize) -> usize {
-    let travel = area_width.saturating_sub(cat_width + 2);
-    if travel == 0 {
-        return 0;
-    }
-    match mood {
-        CatMood::Happy => 1 + ping_pong(tick / 2, travel),
-        CatMood::Content => area_width.saturating_sub(cat_width) / 2 + small_wiggle(tick),
-        CatMood::Bored => area_width.saturating_sub(cat_width) / 3,
-        CatMood::Hungry => area_width.saturating_sub(cat_width) / 4,
-        CatMood::Thirsty => area_width.saturating_sub(cat_width) / 2,
-        CatMood::Sad => area_width.saturating_sub(cat_width) / 2,
-    }
-    .min(travel)
-}
-
-fn cat_y(mood: CatMood, tick: usize, area_height: usize, cat_height: usize) -> usize {
-    let prop_rows = 4usize;
-    let base = area_height
-        .saturating_sub(prop_rows)
-        .saturating_sub(cat_height);
-    let jump = match mood {
-        CatMood::Happy => {
-            if tick % 18 < 5 {
-                2
-            } else if tick % 18 < 8 {
-                1
-            } else {
-                0
-            }
-        }
-        CatMood::Content => {
-            if tick % 36 < 4 {
-                1
-            } else {
-                0
-            }
-        }
-        _ => 0,
-    };
-    base.saturating_sub(jump)
-}
-
 fn ping_pong(tick: usize, width: usize) -> usize {
     let period = width.saturating_mul(2).max(1);
     let pos = tick % period;
     if pos <= width { pos } else { period - pos }
-}
-
-fn small_wiggle(tick: usize) -> usize {
-    usize::from(tick % 30 < 15)
 }
 
 fn field_col(value: i16, width: usize) -> usize {
@@ -431,157 +442,35 @@ fn put_text(grid: &mut [Vec<char>], row: usize, col: usize, text: &str) {
     }
 }
 
-fn styled_play_line(row: usize, chars: &[char], mood_color: Color) -> Line<'static> {
+fn styled_play_line(chars: &[char], mood_col: Color) -> Line<'static> {
     let spans = chars
         .iter()
         .copied()
         .map(|ch| {
             let style = match ch {
-                '*' => Style::default()
+                '*' | '+' => Style::default()
                     .fg(theme::AMBER_GLOW())
                     .add_modifier(Modifier::BOLD),
                 '_' => Style::default().fg(theme::BORDER_DIM()),
                 ' ' => Style::default(),
-                _ => Style::default().fg(mood_color),
+                _ => Style::default().fg(mood_col).add_modifier(Modifier::BOLD),
             };
             Span::styled(ch.to_string(), style)
         })
         .collect::<Vec<_>>();
-    if row == 0 {
-        Line::from(spans).centered()
-    } else {
-        Line::from(spans)
-    }
+    Line::from(spans)
 }
 
-fn meter(value: i16) -> Span<'static> {
-    let width = 18usize;
-    let filled = ((value.clamp(0, 1000) as usize) * width) / 1000;
-    let mut text = String::with_capacity(width + 2);
-    text.push('[');
-    for idx in 0..width {
-        text.push(if idx == filled.min(width.saturating_sub(1)) {
-            '|'
-        } else {
-            '-'
-        });
-    }
-    text.push(']');
-    Span::styled(text, Style::default().fg(theme::TEXT_DIM()))
-}
-
-fn progress_meter(value: u16, max: u16) -> Span<'static> {
-    let width = 18usize;
-    let filled = ((value.min(max) as usize) * width) / max.max(1) as usize;
-    let mut text = String::with_capacity(width + 2);
-    text.push('[');
-    for idx in 0..width {
-        text.push(if idx < filled { '#' } else { '-' });
-    }
-    text.push(']');
-    Span::styled(text, Style::default().fg(theme::AMBER_DIM()))
-}
-
-fn indented(text: String, spaces: usize, color: Color) -> Line<'static> {
-    Line::from(vec![
-        Span::raw(" ".repeat(spaces)),
-        Span::styled(
-            text,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-    ])
-}
-
-fn prop_line_one(needs: CatNeeds) -> Line<'static> {
-    Line::from(vec![
-        Span::raw("  "),
-        text("food "),
-        prop("["),
-        prop_fill(needs.food, "####", "....", "    "),
-        prop("]"),
-        Span::raw("     "),
-        text("water "),
-        prop("["),
-        prop_fill(needs.water, "~~~~", "....", "    "),
-        prop("]"),
-        Span::raw("     "),
-        text("yarn "),
-        prop_fill(needs.play, "@@@", " o ", "   "),
-    ])
-}
-
-fn prop_line_two(needs: CatNeeds) -> Line<'static> {
-    Line::from(vec![
-        Span::raw("  "),
-        prop(".----.       .----.       .---."),
-        Span::raw("       "),
-        Span::styled(
-            if needs.all_required_done() {
-                "daily care done"
-            } else {
-                "daily care open"
-            },
-            Style::default().fg(if needs.all_required_done() {
-                theme::SUCCESS()
-            } else {
-                theme::TEXT_DIM()
-            }),
-        ),
-    ])
-}
-
-fn prop_line_three(_needs: CatNeeds) -> Line<'static> {
-    Line::from(vec![
-        Span::raw("  "),
-        prop("'----'       '----'       '---'"),
-    ])
-}
-
-fn need_line(
-    label: &'static str,
-    status: CatNeedStatus,
-    action: &'static str,
-    cadence: &'static str,
-) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("{label:<5}"),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            format!("{:<4}", status.label()),
-            Style::default()
-                .fg(status_color(status))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        key(action),
-        Span::raw("  "),
-        Span::styled(cadence.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
+// --- palette --------------------------------------------------------------
 
 fn mood_message(mood: CatMood) -> &'static str {
     match mood {
-        CatMood::Happy => "all needs met",
+        CatMood::Happy => "all needs met today",
         CatMood::Content => "mostly cared for",
-        CatMood::Bored => "needs play",
-        CatMood::Hungry => "needs food",
-        CatMood::Thirsty => "needs water",
-        CatMood::Sad => "needs care",
-    }
-}
-
-fn next_action_message(needs: CatNeeds) -> &'static str {
-    if needs.food.is_missing() {
-        "food bowl is waiting"
-    } else if needs.water.is_missing() {
-        "water bowl is low"
-    } else if needs.play.is_missing() {
-        "the yarn is untouched"
-    } else {
-        "care done for today"
+        CatMood::Bored => "wants to play",
+        CatMood::Hungry => "the food bowl is empty",
+        CatMood::Thirsty => "the water bowl is low",
+        CatMood::Sad => "needs some care",
     }
 }
 
@@ -601,26 +490,6 @@ fn status_color(status: CatNeedStatus) -> Color {
         CatNeedStatus::Due => theme::AMBER(),
         CatNeedStatus::Overdue => theme::ERROR(),
     }
-}
-
-fn prop_fill(
-    status: CatNeedStatus,
-    done: &'static str,
-    due: &'static str,
-    late: &'static str,
-) -> Span<'static> {
-    Span::styled(
-        match status {
-            CatNeedStatus::Done => done,
-            CatNeedStatus::Due => due,
-            CatNeedStatus::Overdue => late,
-        },
-        Style::default().fg(status_color(status)),
-    )
-}
-
-fn prop(label: &'static str) -> Span<'static> {
-    Span::styled(label, Style::default().fg(theme::BORDER_DIM()))
 }
 
 fn key(label: &str) -> Span<'static> {

@@ -18,7 +18,6 @@ use crate::app::audio::{
     viz::Visualizer,
 };
 use crate::app::bonsai::state::BonsaiState;
-use crate::app::cat::state::CatState;
 use crate::app::dashboard::ui::DashboardRoomCard;
 use crate::app::vote::ui::VoteCardView;
 use late_core::models::user::AudioSource;
@@ -32,7 +31,6 @@ pub struct SidebarProps<'a> {
     pub vote: VoteCardView<'a>,
     pub online_count: usize,
     pub bonsai: &'a BonsaiState,
-    pub cat: &'a CatState,
     pub audio_beat: f32,
     pub connect_url: &'a str,
     pub activity: &'a VecDeque<ActivityEvent>,
@@ -84,8 +82,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // Reserve as if the tree is always Blossom (the tallest: 15 art rows + 1
     // footer). Sized down would clip mature trees; sized up wastes rail.
     const BONSAI_MIN_HEIGHT: u16 = 16;
-    // Cat: 3 art rows + 1 footer row.
-    const CAT_HEIGHT: u16 = 4;
 
     let fixed_without_active = TIME_HEIGHT
         + RULE_HEIGHT
@@ -94,10 +90,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         + MUSIC_STAGE_HEIGHT
         + RULE_HEIGHT;
     let active_tables_budget = ACTIVE_TABLES_HEIGHT + RULE_HEIGHT;
-    let cat_budget = CAT_HEIGHT + RULE_HEIGHT;
     let show_active_tables =
-        fixed_without_active + active_tables_budget + cat_budget + BONSAI_MIN_HEIGHT <= area.height;
-    let show_cat = fixed_without_active + cat_budget + BONSAI_MIN_HEIGHT <= area.height;
+        fixed_without_active + active_tables_budget + BONSAI_MIN_HEIGHT <= area.height;
 
     // Vertical real estate, top to bottom. Active tables are lower priority
     // than bonsai: hide them before squeezing the tree below its visible size.
@@ -111,10 +105,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     ];
     if show_active_tables {
         constraints.push(Constraint::Length(ACTIVE_TABLES_HEIGHT)); // active tables
-        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-    }
-    if show_cat {
-        constraints.push(Constraint::Length(CAT_HEIGHT)); // cat
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
     }
     constraints.push(Constraint::Fill(1)); // bonsai
@@ -154,20 +144,15 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
     draw_horizontal_rule(frame, inset(layout[5]));
 
-    let mut next_idx = 6usize;
+    let mut bonsai_idx = 6;
     if show_active_tables {
-        draw_active_tables(frame, inset(layout[next_idx]), props.top_rooms);
-        draw_horizontal_rule(frame, inset(layout[next_idx + 1]));
-        next_idx += 2;
-    }
-    if show_cat {
-        crate::app::cat::ui::draw_cat_inline(frame, inset(layout[next_idx]), props.cat);
-        draw_horizontal_rule(frame, inset(layout[next_idx + 1]));
-        next_idx += 2;
+        draw_active_tables(frame, inset(layout[6]), props.top_rooms);
+        draw_horizontal_rule(frame, inset(layout[7]));
+        bonsai_idx = 8;
     }
     crate::app::bonsai::ui::draw_bonsai_inline(
         frame,
-        inset(layout[next_idx]),
+        inset(layout[bonsai_idx]),
         props.bonsai,
         props.audio_beat,
     );

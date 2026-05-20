@@ -34,7 +34,7 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &CatState) {
             Style::default().fg(color),
         )),
         Line::from(Span::styled(
-            format!("{pad} >   < "),
+            format!("{pad} > {} < ", mouth(mood)),
             Style::default().fg(color),
         )),
     ];
@@ -65,6 +65,17 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &CatState) {
     }
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn mouth(mood: CatMood) -> char {
+    match mood {
+        CatMood::Happy => 'w',
+        CatMood::Content => '^',
+        CatMood::Bored => '.',
+        CatMood::Hungry => 'o',
+        CatMood::Thirsty => 'u',
+        CatMood::Sad => '_',
+    }
 }
 
 fn mood_color(mood: CatMood) -> Color {

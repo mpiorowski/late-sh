@@ -1957,6 +1957,12 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
         {
+            if !app.permissions.can_access_mod_surface() {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Cat companion is staff-only",
+                ));
+                return true;
+            }
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_settings = false;
